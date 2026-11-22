@@ -97,6 +97,37 @@ export type PluginLogPage = S['PluginLogPage'];
 /** GET /api/v1/system；listen/data_dir 仅 admin，plugins_enabled 是布尔，无 built_at */
 export type SystemInfo = S['SystemInfo'];
 
+export type DisguiseMode = 'drop' | 'nginx_404' | 'nginx_403' | 'blank_404' | 'custom_html';
+
+export interface PanelAccessSettings {
+  listen_host: string;
+  port: number;
+  listen: string;
+  tls_mode: string;
+  entry_path: string;
+  effective_entry_path: string;
+  entry_gate_active: boolean;
+  disguise: DisguiseMode;
+  disguise_html: string;
+  panel_domain: string;
+  auto_disable_on_domain: boolean;
+  bypass_reason?: string;
+  port_changed?: boolean;
+  revision: number;
+  updated_at: string;
+}
+
+export interface PanelAccessUpdateRequest {
+  port?: number;
+  entry_path?: string;
+  generate_random_entry_path?: boolean;
+  disguise?: DisguiseMode;
+  disguise_html?: string;
+  panel_domain?: string;
+  auto_disable_on_domain?: boolean;
+  expected_revision?: number;
+}
+
 /* ------------------------------------------------------------------ 小组件结果形状（manifest 1.3，插件负责，宿主不校验） */
 
 export type Level = 'ok' | 'warn' | 'bad';

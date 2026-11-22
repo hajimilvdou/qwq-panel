@@ -33,6 +33,7 @@ const doctorDBCommand = "__doctor-db"
 type doctorOptions struct {
 	ConfigPath string
 	DataDir    string
+	Listen     string
 	Sandbox    bool
 	Preinstall bool
 }
@@ -46,6 +47,7 @@ func runDoctor(args []string, env doctor.Env, stdout, stderr io.Writer) int {
 	var o doctorOptions
 	fs.StringVar(&o.ConfigPath, "config", config.DefaultPath, "bootstrap configuration file")
 	fs.StringVar(&o.DataDir, "data-dir", "", "data directory (default: data_dir from the configuration)")
+	fs.StringVar(&o.Listen, "listen", "", "override listen host:port for --preinstall port check")
 	fs.BoolVar(&o.Sandbox, "sandbox", true, "include the plugin sandbox checks")
 	fs.BoolVar(&o.Preinstall, "preinstall", false, "only the platform and port checks the installer runs")
 	if err := fs.Parse(args); err != nil {
@@ -73,7 +75,11 @@ func collectDoctor(ctx context.Context, env doctor.Env, o doctorOptions) []docto
 	}
 	rs := doctor.Run(ctx, env, doctor.Options{DataDir: o.DataDir})
 	if o.Preinstall {
-		return append(rs, doctor.CheckPorts(ctx, env, cfg.HTTP.Listen))
+		listen := cfg.HTTP.Listen
+		if o.Listen != "" {
+			listen = o.Listen
+		}
+		return append(rs, doctor.CheckPorts(ctx, env, listen))
 	}
 	rs = append(rs, doctor.InstallChecks(ctx, env, doctor.InstallOptions{
 		ConfigPath: o.ConfigPath,

@@ -59,6 +59,9 @@ func (a *api) getSystem(w http.ResponseWriter, r *http.Request) {
 	}
 	if a.isAdmin(r.Context(), act) {
 		out.Listen = a.d.Config.HTTP.Listen
+		if a.d.Access != nil {
+			out.Listen = a.d.Access.Snapshot().ListenAddr()
+		}
 		out.DataDir = a.d.Config.DataDir
 	}
 	out.PluginsEnabled = a.pluginsEnabled(r)

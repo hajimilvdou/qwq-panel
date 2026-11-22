@@ -18,6 +18,7 @@ import (
 	"github.com/qwq-panel/qwq/internal/identity"
 	"github.com/qwq-panel/qwq/internal/netfacts"
 	"github.com/qwq-panel/qwq/internal/operations"
+	"github.com/qwq-panel/qwq/internal/panelaccess"
 	"github.com/qwq-panel/qwq/internal/platform/clock"
 	"github.com/qwq-panel/qwq/internal/platform/config"
 	"github.com/qwq-panel/qwq/internal/platform/ids"
@@ -70,6 +71,9 @@ type Deps struct {
 	NodeRevoker func(nodeID string)
 	// ClusterCAHash optionally provides the cluster root CA SPKI SHA-256 pin for enrollment tokens.
 	ClusterCAHash func() string
+	// Access manages the live panel listening port, secret entry path, disguise,
+	// and reverse-proxy domain auto-disable policy.
+	Access *panelaccess.Manager
 }
 
 // withDefaults validates the required services and fills the optional ones.
@@ -118,6 +122,21 @@ func (d *Deps) withDefaults() error {
 			return err
 		}
 		d.AgentSessions = svc
+	}
+	if d.Access == nil {
+		boot := d.Config.HTTP
+		if boot.Listen == "" {
+			boot = config.Default().HTTP
+		}
+		mgr, err := panelaccess.NewManager(context.Background(), panelaccess.Options{
+			DB:        d.DB,
+			Clock:     d.Clock,
+			Bootstrap: boot,
+		})
+		if err != nil {
+			return err
+		}
+		d.Access = mgr
 	}
 	return nil
 }
@@ -247,8 +266,10 @@ func (a *api) routes() []gateway.Route {
 		{Method: http.MethodGet, Pattern: "/api/v1/actions/{action_id}", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.getAction)},
 		// audit log (GAP-7)
 		{Method: http.MethodGet, Pattern: "/api/v1/audit", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.listAudit)},
-		// system overview (GAP-7)
+		// system overview (GAP-7) & live panel access / stealth disguise
 		{Method: http.MethodGet, Pattern: "/api/v1/system", Access: sessionOrService, Handler: http.HandlerFunc(a.getSystem)},
+		{Method: http.MethodGet, Pattern: "/api/v1/system/access", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.getSystemAccess)},
+		{Method: http.MethodPut, Pattern: "/api/v1/system/access", Access: gateway.AccessSession, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.putSystemAccess)},
 		// dual-stack network policy and MIT China routing rules (Track 05, ADR-0027)
 		{Method: http.MethodGet, Pattern: "/api/v1/network/facts", Access: sessionOrService, Handler: http.HandlerFunc(a.getNetworkFacts)},
 		{Method: http.MethodGet, Pattern: "/api/v1/network/policy", Access: sessionOrService, Handler: http.HandlerFunc(a.getNetworkPolicy)},

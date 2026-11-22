@@ -188,6 +188,23 @@ type HTTP struct {
 	PublicOrigins []string `json:"public_origins,omitempty"`
 	// TrustedProxies are the addresses or CIDRs whose X-Forwarded-For is trusted.
 	TrustedProxies []string `json:"trusted_proxies,omitempty"`
+	// EntryPath is an optional secret URL path segment ("密道", e.g. "jsnsjx4k")
+	// required to enter the panel when reached directly via IP:port. Empty
+	// disables the entry gate.
+	EntryPath string `json:"entry_path,omitempty"`
+	// Disguise controls the stealth response when a caller hits the panel port
+	// without the valid EntryPath: drop (default TCP RST/close with 0 bytes),
+	// nginx_404, nginx_403, blank_404, or custom_html.
+	Disguise string `json:"disguise,omitempty"`
+	// DisguiseHTML is the custom HTML body used when Disguise == "custom_html".
+	DisguiseHTML string `json:"disguise_html,omitempty"`
+	// PanelDomain is an optional reverse-proxy domain (e.g. "panel.example.com").
+	// When configured and AutoDisableOnDomain is true (default), EntryPath and
+	// Disguise are automatically disabled so visiting the domain opens the panel directly.
+	PanelDomain string `json:"panel_domain,omitempty"`
+	// AutoDisableOnDomain automatically turns off EntryPath and Disguise when a
+	// reverse-proxy domain is configured (defaults to true when omitted).
+	AutoDisableOnDomain *bool `json:"auto_disable_on_domain,omitempty"`
 }
 
 // Loopback reports whether the listener binds a loopback address only: the
@@ -328,6 +345,18 @@ func (c Config) Validate() error {
 		if err := checkOrigin(o); err != nil {
 			bad(fmt.Sprintf("http.public_origins[%d]", i), "%v", err)
 		}
+	}
+	if _, err := ValidateEntryPath(c.HTTP.EntryPath); err != nil {
+		bad("http.entry_path", "%v", err)
+	}
+	if _, err := NormalizeDisguise(c.HTTP.Disguise); err != nil {
+		bad("http.disguise", "%v", err)
+	}
+	if len(c.HTTP.DisguiseHTML) > MaxDisguiseHTMLBytes {
+		bad("http.disguise_html", "exceeds %d bytes", MaxDisguiseHTMLBytes)
+	}
+	if _, err := NormalizePanelDomain(c.HTTP.PanelDomain); err != nil {
+		bad("http.panel_domain", "%v", err)
 	}
 
 	t := c.HTTP.TLS

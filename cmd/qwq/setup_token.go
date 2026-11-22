@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qwq-panel/qwq/internal/panelaccess"
 	"github.com/qwq-panel/qwq/internal/platform/config"
 	"github.com/qwq-panel/qwq/internal/tlsmgr"
 )
@@ -47,11 +48,6 @@ previously issued, unused link. Exit status: 0 issued, 1 error, 2 usage,
 		fmt.Fprintf(stderr, "qwq setup-token: %v\n", err)
 		return 2
 	}
-	if *origin == "" {
-		*origin = defaultOrigin(cfg.HTTP)
-	}
-	*origin = strings.TrimRight(*origin, "/")
-
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn})).
@@ -62,6 +58,19 @@ previously issued, unused link. Exit status: 0 issued, 1 error, 2 usage,
 		return 1
 	}
 	defer closeDB()
+
+	listenAddr, effectiveEntryPath, _, panelDomain, bypassReason := panelaccess.ReadEffectiveFromDB(ctx, local.DB, cfg.HTTP)
+	effectiveHTTP := cfg.HTTP
+	effectiveHTTP.Listen = listenAddr
+	effectiveHTTP.PanelDomain = panelDomain
+	if *origin == "" {
+		if panelDomain != "" && bypassReason != "" {
+			*origin = "https://" + panelDomain
+		} else {
+			*origin = defaultOrigin(effectiveHTTP)
+		}
+	}
+	*origin = strings.TrimRight(*origin, "/")
 
 	initialized, err := local.Identity.SetupInitialized(ctx)
 	if err != nil {
@@ -77,7 +86,14 @@ previously issued, unused link. Exit status: 0 issued, 1 error, 2 usage,
 		fmt.Fprintf(stderr, "qwq setup-token: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "初始化链接（30 分钟内有效，只能使用一次）：\n  %s/setup#token=%s\n", *origin, token)
+	setupBase := *origin
+	if effectiveEntryPath != "" {
+		setupBase += "/" + effectiveEntryPath
+	}
+	fmt.Fprintf(stdout, "初始化链接（30 分钟内有效，只能使用一次）：\n  %s/setup#token=%s\n", setupBase, token)
+	if effectiveEntryPath != "" {
+		fmt.Fprintf(stdout, "面板安全密道：/%s（端口正确但密道不对时将自动触发无服务伪装）\n", effectiveEntryPath)
+	}
 	if cfg.HTTP.TLS.Mode == config.TLSSelfSigned {
 		if fp, err := tlsmgr.SelfSignedFingerprint(cfg.DataDir); err == nil {
 			fmt.Fprintf(stdout, "证书指纹（自签名模式请核对）：SHA256:%s\n", fp)

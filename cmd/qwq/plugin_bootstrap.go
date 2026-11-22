@@ -25,6 +25,7 @@ import (
 
 	"github.com/qwq-panel/qwq/internal/actor"
 	"github.com/qwq-panel/qwq/internal/authz"
+	"github.com/qwq-panel/qwq/internal/panelaccess"
 	"github.com/qwq-panel/qwq/internal/platform/config"
 	"github.com/qwq-panel/qwq/internal/storage"
 )
@@ -108,7 +109,12 @@ func defaultBootstrapSessionFactory(ctx context.Context, cfgPath string, stderr 
 		closeDB()
 	}
 
-	client, baseURL, hostHeader, err := buildLocalControllerClient(cfg)
+	listenAddr, effectiveEntryPath, _, _, _ := panelaccess.ReadEffectiveFromDB(ctx, local.DB, cfg.HTTP)
+	effectiveCfg := cfg
+	effectiveCfg.HTTP.Listen = listenAddr
+	effectiveCfg.HTTP.EntryPath = effectiveEntryPath
+
+	client, baseURL, hostHeader, err := buildLocalControllerClient(effectiveCfg)
 	if err != nil {
 		cleanup()
 		return nil, err
@@ -175,7 +181,11 @@ func buildLocalControllerClient(cfg config.Config) (*http.Client, string, string
 	default:
 		return nil, "", "", fmt.Errorf("unsupported TLS mode %q", cfg.HTTP.TLS.Mode)
 	}
-	return &http.Client{Transport: tr}, scheme + "://" + dialAddr, hostHeader, nil
+	baseURL := scheme + "://" + dialAddr
+	if ep := config.NormalizeEntryPath(cfg.HTTP.EntryPath); ep != "" {
+		baseURL += "/" + ep
+	}
+	return &http.Client{Transport: tr}, baseURL, hostHeader, nil
 }
 
 func loopbackAddr(listen string) string {

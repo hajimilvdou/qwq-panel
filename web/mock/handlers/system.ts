@@ -5,7 +5,24 @@
 import { checkRevision, invalid, MockProblem, noContent, notFound, ok, paginate, requireString, type Ctx, type RouteSpec } from '../http.ts';
 import { actorOf, changed, newId, nowIso, rev, runOperation, writeAudit } from '../store.ts';
 import { streamEvents } from '../events.ts';
-import type { AiProvider } from '../../shell/src/api/additions.ts';
+import type { AiProvider, DisguiseMode, PanelAccessSettings } from '../../shell/src/api/additions.ts';
+
+let mockAccess: PanelAccessSettings = {
+  listen_host: '127.0.0.1',
+  port: 43821,
+  listen: '127.0.0.1:43821',
+  tls_mode: 'self_signed',
+  entry_path: 'jsnsjx8k',
+  effective_entry_path: 'jsnsjx8k',
+  entry_gate_active: true,
+  disguise: 'drop',
+  disguise_html: '',
+  panel_domain: '',
+  auto_disable_on_domain: true,
+  bypass_reason: '',
+  revision: 1,
+  updated_at: new Date().toISOString(),
+};
 
 /** 普通用户看不到 base_url（缺口 2） */
 const providerDto = (ctx: Ctx, { api_key: _k, ...p }: AiProvider & { api_key?: string }): Partial<AiProvider> =>
@@ -44,8 +61,55 @@ export const systemRoutes: RouteSpec[] = [
         started_at: nowIso(db.startedAt),
         tls: { mode: 'self_signed', fingerprint: db.setup.tls_fingerprint, not_after: '2027-11-08T00:00:00Z' },
         plugins_enabled: [...db.plugins.values()].some((p) => p.active_version),
-        ...(user!.role === 'admin' ? { listen: '0.0.0.0:8443', data_dir: '/var/lib/qwq' } : {}),
+        ...(user!.role === 'admin' ? { listen: mockAccess.listen, data_dir: '/var/lib/qwq' } : {}),
       }),
+  },
+  {
+    method: 'GET',
+    pattern: '/api/v1/system/access',
+    handler: ({ user }) => {
+      if (user!.role !== 'admin') throw new MockProblem(403, 'PERMISSION_DENIED', '仅管理员可查看面板入口设置');
+      return ok(mockAccess);
+    },
+  },
+  {
+    method: 'PUT',
+    pattern: '/api/v1/system/access',
+    handler: ({ user, body }) => {
+      if (user!.role !== 'admin') throw new MockProblem(403, 'PERMISSION_DENIED', '仅管理员可修改面板入口设置');
+      const port = typeof body.port === 'number' ? body.port : mockAccess.port;
+      const portChanged = port !== mockAccess.port;
+      const entry_path =
+        body.generate_random_entry_path
+          ? Math.random().toString(36).slice(2, 12)
+          : typeof body.entry_path === 'string'
+            ? body.entry_path.trim().replace(/^\/+|\/+$/g, '')
+            : mockAccess.entry_path;
+      const disguise = (typeof body.disguise === 'string' ? body.disguise : mockAccess.disguise) as DisguiseMode;
+      const disguise_html = typeof body.disguise_html === 'string' ? body.disguise_html : mockAccess.disguise_html;
+      const panel_domain = typeof body.panel_domain === 'string' ? body.panel_domain.trim().toLowerCase() : mockAccess.panel_domain;
+      const auto_disable_on_domain =
+        typeof body.auto_disable_on_domain === 'boolean' ? body.auto_disable_on_domain : mockAccess.auto_disable_on_domain;
+      const bypass_reason = auto_disable_on_domain && panel_domain ? 'panel_domain' : '';
+      const effective_entry_path = bypass_reason ? '' : entry_path;
+      mockAccess = {
+        ...mockAccess,
+        port,
+        listen: `${mockAccess.listen_host}:${port}`,
+        entry_path,
+        effective_entry_path,
+        entry_gate_active: effective_entry_path !== '',
+        disguise,
+        disguise_html,
+        panel_domain,
+        auto_disable_on_domain,
+        bypass_reason,
+        port_changed: portChanged,
+        revision: mockAccess.revision + 1,
+        updated_at: nowIso(),
+      };
+      return ok(mockAccess);
+    },
   },
   { method: 'GET', pattern: '/api/v1/events', handler: (ctx) => streamEvents(ctx) },
 

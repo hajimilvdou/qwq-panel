@@ -2414,6 +2414,67 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/system/access:
+    get:
+      operationId: getSystemAccess
+      tags: [system]
+      summary: Read panel access port, secret entry path, disguise, and reverse-proxy domain settings
+      description: Returns the live panel listening port, secret entry path, stealth disguise policy, and reverse-proxy domain auto-disable state. Administrators only.
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/Fields'
+      responses:
+        '200':
+          description: Current panel access and disguise configuration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PanelAccessSettings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putSystemAccess
+      tags: [system]
+      summary: Update panel listening port, secret entry path, disguise page, or reverse-proxy domain
+      description: Updates live panel access settings with optimistic revision checks. Changing the port performs a live hot-rebind; setting a reverse-proxy domain automatically disables the secret entry path and disguise when auto_disable_on_domain is enabled. Administrators only.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Idempotent PUT protected by optimistic expected_revision check.
+      x-qwq-action-exempt: Direct host panel access and stealth disguise configuration; audited directly by the host API.
+      requestBody:
+        description: Desired panel access, secret entry path, disguise, and reverse-proxy domain settings.
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                port: { type: integer, format: int32, minimum: 1, maximum: 65535, description: TCP port the panel listens on. }
+                entry_path: { type: string, maxLength: 64, description: Secret entry path segment without slashes; empty disables the entry gate. }
+                generate_random_entry_path: { type: boolean, description: Generate a new cryptographically random secret entry path. }
+                disguise: { type: string, maxLength: 32, enum: [drop, nginx_404, nginx_403, blank_404, custom_html], description: Stealth response mode when the entry path is missing or wrong. }
+                disguise_html: { type: string, maxLength: 65536, description: Custom disguise HTML used when disguise is custom_html. }
+                panel_domain: { type: string, maxLength: 253, description: Reverse-proxy domain for direct access; automatically disables entry path and disguise when auto_disable_on_domain is true. }
+                auto_disable_on_domain: { type: boolean, description: Automatically disable the secret entry path and disguise once a reverse-proxy domain is configured. }
+                expected_revision: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Optimistic concurrency revision from the previous GET /api/v1/system/access response. }
+      responses:
+        '200':
+          description: Updated panel access and disguise configuration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PanelAccessSettings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
   # ---------------------------------------------------------------- dual-stack network & China routing (ADR-0027)
   /api/v1/network/facts:
     get:
@@ -4980,6 +5041,40 @@ components:
         listen: { type: string, maxLength: 64, description: Listener address; administrators only. }
         data_dir: { type: string, maxLength: 512, description: Data directory; administrators only. }
         plugins_enabled: { type: boolean, description: Whether any plugin has an active version. }
+    PanelAccessSettings:
+      type: object
+      additionalProperties: false
+      description: Live panel access port, secret entry path, stealth disguise, and reverse-proxy domain state.
+      required:
+        - listen_host
+        - port
+        - listen
+        - tls_mode
+        - entry_path
+        - effective_entry_path
+        - entry_gate_active
+        - disguise
+        - disguise_html
+        - panel_domain
+        - auto_disable_on_domain
+        - revision
+        - updated_at
+      properties:
+        listen_host: { type: string, maxLength: 64, description: Bound listen IP or host. }
+        port: { type: integer, format: int32, minimum: 1, maximum: 65535, description: Active TCP listening port. }
+        listen: { type: string, maxLength: 80, description: Full host:port listen address. }
+        tls_mode: { type: string, maxLength: 32, description: Active TLS mode (self_signed, acme or proxy). }
+        entry_path: { type: string, maxLength: 64, description: Configured secret entry path segment without slashes. }
+        effective_entry_path: { type: string, maxLength: 64, description: Currently enforced secret entry path; empty when disabled or bypassed by a reverse-proxy domain. }
+        entry_gate_active: { type: boolean, description: Whether requests without the secret entry path are gated and disguised. }
+        disguise: { type: string, maxLength: 32, enum: [drop, nginx_404, nginx_403, blank_404, custom_html], description: Active disguise response mode. }
+        disguise_html: { type: string, maxLength: 65536, description: Custom disguise HTML body. }
+        panel_domain: { type: string, maxLength: 253, description: Configured reverse-proxy domain for direct access. }
+        auto_disable_on_domain: { type: boolean, description: Automatically disable the secret entry path and disguise when a reverse-proxy domain is configured. }
+        bypass_reason: { type: string, maxLength: 32, description: Reason the entry gate is currently bypassed (tls_proxy, panel_domain or public_origin). }
+        port_changed: { type: boolean, description: True when a PUT request rebound the listener to a new TCP port. }
+        revision: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Monotonic revision counter for optimistic concurrency checks. }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
     NodeList:
       description: A page of nodes.
       allOf:

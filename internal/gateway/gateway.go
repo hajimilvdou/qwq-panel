@@ -210,6 +210,7 @@ type Gateway struct {
 	clock   clock.Clock
 	ids     *ids.Generator
 	trusted []netip.Prefix
+	hostMu  sync.RWMutex
 	origins map[string]struct{} // normalized scheme://host[:port]
 	hosts   map[string]struct{} // normalized host[:port]
 
@@ -329,6 +330,23 @@ func (g *Gateway) buildChain() http.Handler {
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 	g.chain.ServeHTTP(rw, r)
+}
+
+// AllowHost dynamically adds a reverse-proxy domain to the Host/Origin allowlist
+// (only needed when PublicOrigins was non-empty; an empty allowlist already accepts
+// same-origin hosts).
+func (g *Gateway) AllowHost(domain string) {
+	d := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	if d == "" {
+		return
+	}
+	g.hostMu.Lock()
+	defer g.hostMu.Unlock()
+	if len(g.hosts) == 0 {
+		return
+	}
+	g.hosts[d] = struct{}{}
+	g.origins["https://"+d] = struct{}{}
 }
 
 // Close ends every open event stream. The HTTP server must still be shut down

@@ -23,6 +23,7 @@ import (
 	"github.com/qwq-panel/qwq/internal/api"
 	"github.com/qwq-panel/qwq/internal/capability/firewall"
 	"github.com/qwq-panel/qwq/internal/controller"
+	"github.com/qwq-panel/qwq/internal/panelaccess"
 	"github.com/qwq-panel/qwq/internal/platform/config"
 	"github.com/qwq-panel/qwq/internal/platform/logging"
 	"github.com/qwq-panel/qwq/internal/pluginhost/install"
@@ -189,9 +190,22 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// Load or seed live panel access settings (port, secret entry path, disguise,
+	// reverse-proxy domain) from SQLite so UI changes persist across restarts.
+	accessMgr, err := panelaccess.NewManager(life, panelaccess.Options{
+		DB:          c.DB(),
+		Clock:       c.Clock(),
+		Bootstrap:   cfg.HTTP,
+		OnAllowHost: c.Gateway().AllowHost,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "qwq serve-controller: init panel access settings: %v\n", err)
+		return 1
+	}
+
 	// Routes are registered before the listener exists: a duplicate or invalid
 	// route must fail startup, not the first request that hits it.
-	routes, err := registerPublicRoutes(c, pluginAPI, uploads, logger)
+	routes, err := registerPublicRoutesWithAccess(c, pluginAPI, uploads, accessMgr, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "qwq serve-controller: %v\n", err)
 		return 1
@@ -224,9 +238,14 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		}
 		rootHandler = pluginpublic.NewCustomDomainRouter(cfg.HTTP.PublicOrigins, trustedPrefixes, rt.PublicGateway(), rootHandler)
 	}
+	// Wrap the outermost HTTP handler with the stealth secret-entry-path gate &
+	// disguise handler so wrong-path probes emit zero qwq headers or fingerprints.
+	rootHandler = accessMgr.Wrap(rootHandler)
 
+	listenSnap := accessMgr.Snapshot()
+	useTLS := cfg.HTTP.TLS.Mode != config.TLSProxy
 	srv := &http.Server{
-		Addr:              cfg.HTTP.Listen,
+		Addr:              listenSnap.ListenAddr(),
 		Handler:           rootHandler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
@@ -235,6 +254,9 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		MaxHeaderBytes:    64 << 10,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 		BaseContext:       func(net.Listener) context.Context { return life },
+	}
+	if useTLS {
+		srv.TLSConfig = c.TLS().TLSConfig()
 	}
 	// Shutdown waits for handlers, but the two SSE streams only end when their
 	// broker closes; closing both as Shutdown begins keeps an open dashboard
@@ -246,27 +268,29 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		}
 	})
 
-	errCh := make(chan error, 1)
-	go func() {
-		ln, err := net.Listen("tcp", cfg.HTTP.Listen)
-		if err != nil {
-			errCh <- err
-			return
+	liveLn := newLiveHTTPListener(srv, useTLS, logger)
+	accessMgr.SetRebind(liveLn.Rebind)
+	boundAddr, err := liveLn.Start(listenSnap.ListenAddr())
+	if err != nil {
+		fmt.Fprintf(stderr, "qwq serve-controller: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "listening on %s (tls %s)\n", boundAddr, cfg.HTTP.TLS.Mode)
+	if useTLS {
+		if fp := c.TLS().Fingerprint(); fp != "" {
+			fmt.Fprintf(stdout, "certificate fingerprint sha256 %s\n", fp)
 		}
-		fmt.Fprintf(stdout, "listening on %s (tls %s)\n", ln.Addr(), cfg.HTTP.TLS.Mode)
-		if cfg.HTTP.TLS.Mode != config.TLSProxy {
-			srv.TLSConfig = c.TLS().TLSConfig()
-			if fp := c.TLS().Fingerprint(); fp != "" {
-				fmt.Fprintf(stdout, "certificate fingerprint sha256 %s\n", fp)
-			}
-			errCh <- srv.ServeTLS(ln, "", "")
-			return
-		}
-		errCh <- srv.Serve(ln)
-	}()
+	}
+	if listenSnap.EntryGateActive() {
+		logger.Info("panel secret entry gate enabled",
+			"disguise", listenSnap.EffectiveDisguise(),
+			"listen", boundAddr.String())
+	} else if reason := listenSnap.DomainAutoBypassReason(); reason != "" {
+		logger.Info("panel secret entry gate auto-disabled for domain/proxy mode", "reason", reason)
+	}
 
 	select {
-	case err := <-errCh:
+	case err := <-liveLn.errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(stderr, "qwq serve-controller: %v\n", err)
 			return 1
@@ -276,6 +300,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	}
 
 	logger.Info("shutting down")
+	liveLn.Close()
 	sctx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {
@@ -533,6 +558,10 @@ func newPrivilegedHelper(socket string, euid int, logger *slog.Logger) (*sandbox
 // controller's gateway and returns the number of routes. It must run before the
 // listener starts. plugins and uploads are nil on a host without an updater.
 func registerPublicRoutes(c *controller.Controller, plugins api.PluginManager, uploads *api.PluginUploads, logger *slog.Logger) (int, error) {
+	return registerPublicRoutesWithAccess(c, plugins, uploads, nil, logger)
+}
+
+func registerPublicRoutesWithAccess(c *controller.Controller, plugins api.PluginManager, uploads *api.PluginUploads, accessMgr *panelaccess.Manager, logger *slog.Logger) (int, error) {
 	if c == nil || c.Gateway() == nil {
 		return 0, errors.New("the controller has no gateway")
 	}
@@ -560,6 +589,7 @@ func registerPublicRoutes(c *controller.Controller, plugins api.PluginManager, u
 		AgentSessions:  agentSessions,
 		Plugins:        plugins,
 		PluginUploads:  uploads,
+		Access:         accessMgr,
 	}); err != nil {
 		return 0, fmt.Errorf("register the public API: %w", err)
 	}

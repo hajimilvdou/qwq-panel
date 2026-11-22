@@ -21,28 +21,86 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-const panelOrigin = "https://127.0.0.1:8443"
+// readPanelAccessConfig reads the panel's configured listener and secret entry
+// path from /etc/qwq/qwq.json (written with random high port + secret path by
+// install.sh).
+func readPanelAccessConfig(t *testing.T) (origin, entryPath string, port int) {
+	t.Helper()
+	raw, err := os.ReadFile("/etc/qwq/qwq.json")
+	if err != nil {
+		t.Fatalf("read /etc/qwq/qwq.json: %v", err)
+	}
+	var cfg struct {
+		HTTP struct {
+			Listen    string `json:"listen"`
+			EntryPath string `json:"entry_path"`
+			TLS       struct {
+				Mode string `json:"mode"`
+			} `json:"tls"`
+			PanelDomain string `json:"panel_domain"`
+		} `json:"http"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("parse /etc/qwq/qwq.json: %v", err)
+	}
+	listen := cfg.HTTP.Listen
+	if listen == "" {
+		listen = "127.0.0.1:8443"
+	}
+	host, portStr, err := net.SplitHostPort(listen)
+	if err != nil {
+		t.Fatalf("parse http.listen %q: %v", listen, err)
+	}
+	p, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parse port %q: %v", portStr, err)
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	scheme := "https"
+	if cfg.HTTP.TLS.Mode == "proxy" {
+		scheme = "http"
+	}
+	ep := strings.Trim(cfg.HTTP.EntryPath, "/")
+	if cfg.HTTP.TLS.Mode == "proxy" || cfg.HTTP.PanelDomain != "" {
+		ep = ""
+	}
+	return scheme + "://" + net.JoinHostPort(host, portStr), ep, p
+}
 
 // panel is a signed-in administrator session.
 type panel struct {
-	t      *testing.T
-	hc     *http.Client
-	cookie *http.Cookie
-	csrf   string
-	keys   int
-	plugin string
-	caps   []map[string]string
+	t         *testing.T
+	origin    string
+	entryPath string
+	port      int
+	hc        *http.Client
+	cookie    *http.Cookie
+	csrf      string
+	keys      int
+	plugin    string
+	caps      []map[string]string
+}
+
+func (p *panel) prefix() string {
+	if p.entryPath == "" {
+		return ""
+	}
+	return "/" + p.entryPath
 }
 
 func newHTTPClient() *http.Client {
@@ -53,13 +111,24 @@ func newHTTPClient() *http.Client {
 	}
 }
 
-// waitPanelReady waits until /readyz answers 200.
+// waitPanelReady waits until /readyz answers 200 on the configured listener.
 func waitPanelReady(t *testing.T) {
 	t.Helper()
+	origin, entryPath, _ := readPanelAccessConfig(t)
+	waitPanelReadyAt(t, origin, entryPath)
+}
+
+func waitPanelReadyAt(t *testing.T, origin, entryPath string) {
+	t.Helper()
 	hc := newHTTPClient()
+	prefix := ""
+	if entryPath != "" {
+		prefix = "/" + entryPath
+	}
+	readyURL := origin + prefix + "/readyz"
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		if resp, err := hc.Get(panelOrigin + "/readyz"); err == nil {
+		if resp, err := hc.Get(readyURL); err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				return
@@ -67,7 +136,7 @@ func waitPanelReady(t *testing.T) {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	t.Fatalf("the panel did not become ready; journal:\n%s", journalTail(controllerU))
+	t.Fatalf("the panel did not become ready at %s; journal:\n%s", readyURL, journalTail(controllerU))
 }
 
 var setupLinkRe = regexp.MustCompile(`/setup#token=(\S+)`)
@@ -77,12 +146,16 @@ var fingerprintRe = regexp.MustCompile(`SHA256:([0-9A-F:]+)`)
 // HTTP and returns the administrator session. A second setup-token exits 3.
 func setupPanel(t *testing.T) *panel {
 	t.Helper()
+	origin, entryPath, port := readPanelAccessConfig(t)
 	out := run(t, qwqCLI, "setup-token")
 	m := setupLinkRe.FindStringSubmatch(out)
 	if m == nil {
 		t.Fatalf("setup-token printed no link:\n%s", out)
 	}
-	p := &panel{t: t, hc: newHTTPClient(), plugin: pluginID, caps: acceptedCaps()}
+	if entryPath != "" && !strings.Contains(out, "/"+entryPath+"/setup#token=") {
+		t.Fatalf("setup-token link did not include secret entry path /%s:\n%s", entryPath, out)
+	}
+	p := &panel{t: t, origin: origin, entryPath: entryPath, port: port, hc: newHTTPClient(), plugin: pluginID, caps: acceptedCaps()}
 
 	var status struct {
 		Initialized    bool   `json:"initialized"`
@@ -136,11 +209,11 @@ func requireDataOwnedByQwq(t *testing.T) {
 
 func (p *panel) request(method, path string, body io.Reader, contentType string, idempotent bool) *http.Response {
 	p.t.Helper()
-	req, err := http.NewRequest(method, panelOrigin+path, body)
+	req, err := http.NewRequest(method, p.origin+p.prefix()+path, body)
 	if err != nil {
 		p.t.Fatal(err)
 	}
-	req.Header.Set("Origin", panelOrigin)
+	req.Header.Set("Origin", p.origin)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -462,4 +535,167 @@ func TestControllerEndToEnd(t *testing.T) {
 	p.kvRoundTrip("reboot", rev)
 	requireRunningPlugin(t, ctx, versionV1)
 	requireHostChannel(t)
+
+	p.verifyAccessStealthAndRebind(t)
+}
+
+func pickFreeTestPort(t *testing.T, avoid int) int {
+	t.Helper()
+	for i := 0; i < 32; i++ {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("pick free port: %v", err)
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		_ = ln.Close()
+		if port != avoid && port >= 1024 {
+			return port
+		}
+	}
+	t.Fatal("could not pick a free port different from current")
+	return 0
+}
+
+func (p *panel) verifyAccessStealthAndRebind(t *testing.T) {
+	t.Helper()
+	t.Log("=== panel access: random high port, stealth disguise, domain auto-bypass, live hot-rebind")
+
+	if p.port < 20000 || p.port > 59999 {
+		t.Fatalf("fresh install port = %d, want random high port in [20000, 59999]", p.port)
+	}
+	if len(p.entryPath) < 8 {
+		t.Fatalf("fresh install entry_path = %q, want random secret entry path", p.entryPath)
+	}
+
+	probeClient := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // self-signed e2e listener
+		},
+	}
+
+	// 1. Wrong-path requests in default "drop" mode must get aborted with zero HTTP response.
+	for _, wrongPath := range []string{"/", "/api/v1/setup", "/wrongpath"} {
+		if resp, err := probeClient.Get(p.origin + wrongPath); err == nil {
+			_ = resp.Body.Close()
+			t.Fatalf("drop mode unexpectedly returned HTTP %d for wrong path %s", resp.StatusCode, wrongPath)
+		}
+	}
+
+	// 2. Valid secret entry path redirects browser to stripped SPA path and sets neutral HttpOnly _g cookie.
+	resp, err := probeClient.Get(p.origin + "/" + p.entryPath + "/")
+	if err != nil {
+		t.Fatalf("valid entry path failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/" {
+		t.Fatalf("entry path status=%d location=%q, want 302 -> /", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	hasGateCookie := false
+	for _, c := range resp.Cookies() {
+		if c.Name == "_g" && c.HttpOnly && c.Value != "" {
+			hasGateCookie = true
+		}
+	}
+	if !hasGateCookie {
+		t.Fatal("valid entry path did not issue HttpOnly _g gate cookie")
+	}
+
+	// 3. Read current access settings via admin API.
+	type accessResp struct {
+		Port                int    `json:"port"`
+		EntryPath           string `json:"entry_path"`
+		EffectiveEntryPath  string `json:"effective_entry_path"`
+		EntryGateActive     bool   `json:"entry_gate_active"`
+		Disguise            string `json:"disguise"`
+		PanelDomain         string `json:"panel_domain"`
+		AutoDisableOnDomain bool   `json:"auto_disable_on_domain"`
+		BypassReason        string `json:"bypass_reason"`
+		PortChanged         bool   `json:"port_changed"`
+		Revision            int64  `json:"revision"`
+	}
+	var cur accessResp
+	p.decode(p.request(http.MethodGet, "/api/v1/system/access", nil, "", false), http.StatusOK, &cur)
+	if cur.Port != p.port || cur.EntryPath != p.entryPath || !cur.EntryGateActive || cur.Disguise != "drop" {
+		t.Fatalf("unexpected initial access settings: %+v", cur)
+	}
+
+	// 4. Switch disguise to nginx_404 and verify zero qwq fingerprint headers leak to F12/network tools.
+	putAccess := func(payload map[string]any) accessResp {
+		body, _ := json.Marshal(payload)
+		var out accessResp
+		p.decode(p.request(http.MethodPut, "/api/v1/system/access", bytes.NewReader(body), "application/json", false), http.StatusOK, &out)
+		return out
+	}
+	cur = putAccess(map[string]any{
+		"disguise":          "nginx_404",
+		"expected_revision": cur.Revision,
+	})
+	resp, err = probeClient.Get(p.origin + "/")
+	if err != nil {
+		t.Fatalf("nginx_404 probe failed: %v", err)
+	}
+	rawBody, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound || resp.Header.Get("Server") != "nginx" || !strings.Contains(string(rawBody), "404 Not Found") {
+		t.Fatalf("nginx_404 mismatch: status=%d server=%q body=%q", resp.StatusCode, resp.Header.Get("Server"), string(rawBody))
+	}
+	for _, forbidden := range []string{"X-Request-Id", "Content-Security-Policy", "X-Frame-Options", "Referrer-Policy", "Permissions-Policy", "Set-Cookie"} {
+		if v := resp.Header.Get(forbidden); v != "" {
+			t.Fatalf("nginx_404 leaked qwq header %s: %q", forbidden, v)
+		}
+	}
+
+	// 5. Configure a reverse-proxy domain -> secret entry path & disguise auto-disable.
+	cur = putAccess(map[string]any{
+		"panel_domain":           "panel.example.com",
+		"auto_disable_on_domain": true,
+		"expected_revision":      cur.Revision,
+	})
+	if cur.EntryGateActive || cur.BypassReason != "panel_domain" || cur.EffectiveEntryPath != "" {
+		t.Fatalf("panel_domain did not auto-disable entry gate: %+v", cur)
+	}
+	resp, err = probeClient.Get(p.origin + "/readyz")
+	if err != nil {
+		t.Fatalf("readyz after domain auto-disable failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("readyz without entry_path after domain auto-disable = %d, want 200", resp.StatusCode)
+	}
+
+	// 6. Clear domain, restore drop disguise, rotate secret path, and live hot-rebind to a new port.
+	newPort := pickFreeTestPort(t, p.port)
+	newEntry := "newgate99x"
+	cur = putAccess(map[string]any{
+		"port":              newPort,
+		"entry_path":        newEntry,
+		"disguise":          "drop",
+		"panel_domain":      "",
+		"expected_revision": cur.Revision,
+	})
+	if cur.Port != newPort || !cur.PortChanged || !cur.EntryGateActive || cur.EffectiveEntryPath != newEntry {
+		t.Fatalf("live hot-rebind response unexpected: %+v", cur)
+	}
+	p.port = newPort
+	p.entryPath = newEntry
+	p.origin = fmt.Sprintf("https://127.0.0.1:%d", newPort)
+	waitPanelReadyAt(t, p.origin, newEntry)
+	if resp, err := probeClient.Get(p.origin + "/"); err == nil {
+		_ = resp.Body.Close()
+		t.Fatalf("drop mode on rebound port %d returned HTTP %d", newPort, resp.StatusCode)
+	}
+
+	// 7. Restart controller and verify the SQLite-persisted port & secret path survive restarts.
+	run(t, "systemctl", "restart", controllerU)
+	waitPanelReadyAt(t, p.origin, newEntry)
+	var after accessResp
+	p.decode(p.request(http.MethodGet, "/api/v1/system/access", nil, "", false), http.StatusOK, &after)
+	if after.Port != newPort || after.EffectiveEntryPath != newEntry {
+		t.Fatalf("rebound settings did not persist across restart: %+v", after)
+	}
 }

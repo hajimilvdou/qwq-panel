@@ -342,7 +342,7 @@ func (g *Gateway) checkHostAndOrigin(r *http.Request) error {
 			}
 		}
 	}
-	if len(g.hosts) > 0 && !g.hostAllowed(host) && !isLoopbackHost(host) {
+	if !g.hostAllowed(host) && !isLoopbackHost(host) {
 		return csrfFailed("The Host header is not one of the configured public origins.")
 	}
 	// The plugin static prefix serves public content to the sandboxed plugin
@@ -385,7 +385,20 @@ func isPublicPluginPath(p string) bool {
 }
 
 func (g *Gateway) hostAllowed(host string) bool {
+	g.hostMu.RLock()
+	defer g.hostMu.RUnlock()
+	if len(g.hosts) == 0 {
+		return true
+	}
 	_, ok := g.hosts[strings.ToLower(host)]
+	if ok {
+		return true
+	}
+	// When the configured origin has no explicit port (e.g. panel.example.com),
+	// also accept host:port for the same hostname.
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		_, ok = g.hosts[strings.ToLower(h)]
+	}
 	return ok
 }
 
@@ -394,9 +407,12 @@ func (g *Gateway) originAllowed(origin, host string) bool {
 	if !ok {
 		return false
 	}
-	if len(g.origins) > 0 {
-		_, ok := g.origins[norm]
-		return ok
+	g.hostMu.RLock()
+	hasOrigins := len(g.origins) > 0
+	_, allowed := g.origins[norm]
+	g.hostMu.RUnlock()
+	if hasOrigins {
+		return allowed
 	}
 	// Without a configured allow-list only same-origin requests are accepted,
 	// plus loopback, which the setup flow uses over an SSH tunnel.

@@ -11,7 +11,7 @@
 
 不同于在传统面板外面生硬套一层聊天框，**qwq 的每一项宿主能力与插件功能，底层都原生按 AI Agent 标准建模**：
 
-- **内置 7 个结构化 Agent 原生工具接口**（`/api/v1/agent/{find_actions,describe_action,read,plan,execute,wait,cancel}`）与 **101 条严格校验的 OpenAPI v1 契约**：AI 不需要靠猜命令或硬编码 SSH 脚本，直接发现可用能力、读取参数 Schema 并精准调用。
+- **内置 7 个结构化 Agent 原生工具接口**（`/api/v1/agent/{find_actions,describe_action,read,plan,execute,wait,cancel}`）与 **103 条严格校验的 OpenAPI v1 契约**：AI 不需要靠猜命令或硬编码 SSH 脚本，直接发现可用能力、读取参数 Schema 并精准调用。
 - **先出计划（Plan），再执行（Execute）**：对防火墙、反代、证书、SSH 等变更，AI 可先生成结构化变更预览与影响说明；高危动作自动进入**人工一键审批（Approvals）**，确认后才落地，不瞎改系统。
 - **全链路幂等、可审计、可回滚**：每次 AI 操作都有独立 `Idempotency-Key`、完整操作流水（Operations / Jobs）与不可篡改审计日志，配合细粒度作用域的 **Service Account / 授权委托**，随时可控、随时可撤权。
 - **既支持内置原生 Agent 会话，也支持外部 CLI Agent（Claude Code / Codex / 自定义 MCP 等）安全接入**：不想研究 Nginx 配置、ACME 证书、nftables 规则或 Docker Compose 参数的小白，直接把需求告诉 AI 即可搞定。
@@ -22,8 +22,21 @@
 
 - **极简必装底座**：仅包含宿主控制器（`qwq`）、最小权限特权助手（`qwq-privileged` / `qwq-capability`）、内嵌 Web Shell，以及默认必装的基础安全插件 `security.basic`（防火墙 / 防失联改 SSH / 公钥管理 / 防爆破）。
 - **10 款按需选装官方插件**：全部独立打包为 Ed25519 签名的 `.qwqpkg` 插件包，安装时可交互勾选，装完后也能在面板内随时一键加装或卸载；每个插件运行在独立的 `systemd DynamicUser + seccomp + cgroup v2` 沙箱中。
-- **与现有环境零冲突共存**：绝不改动宿主机已有的 Nginx / Caddy / UFW / firewalld / 宝塔；默认仅监听 `127.0.0.1:8443`，推荐通过 SSH 隧道或自配反代访问。
+- **与现有环境零冲突共存**：绝不改动宿主机已有的 Nginx / Caddy / UFW / firewalld / 宝塔；首次安装自动分配**随机高位端口（20000–59999）+ 随机安全密道（如 `/jsnsjx8k2m`）**，默认仅监听 `127.0.0.1:<随机端口>`。
 - **可复现构建 + Ed25519 全链路验签**：每次发版在 GitHub Actions 同一提交构建两遍逐字节比对 `SHA256SUMS`，并由离线发布密钥签名。
+
+---
+
+## 🛡️ 反扫描防探测：随机高位端口 + 安全密道 + F12 级无服务伪装
+
+告别固定端口被全网扫描器一眼识别的隐患，**qwq 出厂即默认开启完整隐身防护**：
+
+- **首次安装随机生成接入信息**：`install.sh` 自动挑选空闲随机高位端口（`20000–59999`）并生成 10 位加密随机安全密道（如 `https://<地址>:<随机端口>/jsnsjx8k2m/`），全部清晰打印在终端（也支持 `--port` / `--entry-path` 手动指定）。
+- **F12 控制台级防探测伪装**：当恶意扫描器猜中端口但密道不对或缺失时，安全网关在**最外层**直接拦截，绝不泄露任何 `X-Request-Id`、`Content-Security-Policy`、`Set-Cookie` 等面板指纹：
+  - **`drop`（默认 · 无服务静默断开）**：HTTP/1.1 立即劫持连接发送 TCP RST（`SetLinger(0)`），HTTP/2 立即 `RST_STREAM`，**0 字节、0 状态码、0 响应头**，浏览器与 F12 控制台看到的表现与未开服务的端口完全一致；
+  - 也支持在面板内切换为 **`nginx_404`** / **`nginx_403`** / **`blank_404`** / **`custom_html`（自定义伪装页）**。
+- **面板内随时在线调整**：登录面板后在 **「设置 → 系统 → 面板入口与安全伪装」** 可直接修改监听端口（**在线热切换监听，无需重装**）、一键换新随机密道或自定义密道、切换伪装页模式。
+- **配置反代域名后自动关闭密道**：一旦为面板绑定反向代理域名（在面板内填写反代域名、`tls.mode == "proxy"` 或 `public_origins` 配置域名），安全密道与伪装自动关闭，**直接输入域名即可进入面板**，省去多余路径。
 
 ---
 
@@ -32,7 +45,7 @@
 从 [GitHub Releases](https://github.com/hajimilvdou/qwq-panel/releases) 下载对应版本的 `install.sh`（内置 Ed25519 发布公钥验签）并运行：
 
 ```bash
-VERSION=v0.1.1
+VERSION=v0.1.2
 curl -fsSL "https://github.com/hajimilvdou/qwq-panel/releases/download/${VERSION}/install.sh" -o install.sh
 sudo bash install.sh --version "${VERSION}"
 ```
@@ -41,7 +54,8 @@ sudo bash install.sh --version "${VERSION}"
 1. 自动识别 CPU 架构（`linux/amd64` / `linux/arm64`）与系统环境；
 2. 校验 `SHA256SUMS.sig` Ed25519 签名与文件 SHA-256；
 3. **自动识别原生/旧版系统**：Debian 12+ / Ubuntu 24.04+ 保持 100% 原生零补丁；若检测到 Ubuntu 22.04 或 Debian 11 缺少 `polkit >= 0.106`，自动下载并验签安装独立兼容补丁 `qwq-compat-polkit`，做到与原生完全一致的插件沙箱体验；
-4. 在终端弹出可选插件勾选菜单（也支持非交互参数）：
+4. 首次安装自动生成随机高位端口、随机安全密道与 `drop` 静默伪装，并打印完整接入信息与一次性初始化链接；
+5. 在终端弹出可选插件勾选菜单（也支持非交互参数）：
 
 ```bash
 # 仅安装极简底座 + security.basic
@@ -54,7 +68,7 @@ sudo bash install.sh --version "${VERSION}" --plugins monitor.basic,web.ingress,
 安装完成后，按终端打印的一次性初始化链接通过 SSH 隧道打开面板：
 
 ```bash
-ssh -L 8443:127.0.0.1:8443 root@<你的服务器IP>
+ssh -L <随机端口>:127.0.0.1:<随机端口> root@<你的服务器IP>
 ```
 
 ---

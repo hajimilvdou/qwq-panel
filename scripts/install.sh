@@ -4,8 +4,8 @@
 #  install.sh —— 安装或升级 qwq（随发布包分发，可重复幂等执行）
 # -----------------------------------------------------------------------------
 #  用法：
-#    sudo bash install.sh --offline qwq-vX.Y.Z-linux-amd64.tar.gz [--minimal | --plugins <csv|all> --plugin-dir <dir>]
-#    sudo bash install.sh --version vX.Y.Z [--mirror URL] [--minimal | --plugins <csv|all>]
+#    sudo bash install.sh --offline qwq-vX.Y.Z-linux-amd64.tar.gz [--minimal | --plugins <csv|all> --plugin-dir <dir>] [--port N] [--entry-path PATH]
+#    sudo bash install.sh --version vX.Y.Z [--mirror URL] [--minimal | --plugins <csv|all>] [--port N] [--entry-path PATH]
 #
 #  默认必装范围（Track 10 架构）：
 #    初始强制必装且仅必装：原面板底座（qwq / qwq-privileged / qwq-capability）+ 基础安全插件（security.basic）。
@@ -26,7 +26,6 @@ DEFAULT_MIRROR=https://github.com/hajimilvdou/qwq-panel/releases/download
 PREFIX=/opt/qwq
 UNIT_DIR=/etc/systemd/system
 ETC=/etc/qwq
-LISTEN_CHECK=https://127.0.0.1:8443/readyz
 
 readonly OPTIONAL_PLUGIN_IDS=(
   "monitor.basic"
@@ -62,6 +61,7 @@ usage() { sed -n '5,8p' "$0" | sed 's/^#  //' >&2; exit 2; }
 offline='' version='' mirror=$DEFAULT_MIRROR
 mode_minimal=0 csv_plugins='' offline_plugin_dir=''
 compat_patch_file='' no_compat_patch=0
+custom_port='' custom_entry_path='' has_custom_entry_path=0
 while (($#)); do
   case $1 in
     --offline)         offline=${2:?}; shift 2 ;;
@@ -72,6 +72,8 @@ while (($#)); do
     --plugin-dir)      offline_plugin_dir=${2:?}; shift 2 ;;
     --compat-patch)    compat_patch_file=${2:?}; shift 2 ;;
     --no-compat-patch) no_compat_patch=1; shift ;;
+    --port)            custom_port=${2:?}; shift 2 ;;
+    --entry-path)      custom_entry_path=${2:?}; has_custom_entry_path=1; shift 2 ;;
     -h|--help)         usage ;;
     *) echo "未知参数：$1" >&2; usage ;;
   esac
@@ -79,6 +81,18 @@ done
 [[ -n $offline || -n $version ]] || usage
 [[ -n $offline && -n $version ]] && { echo "--offline 与 --version 只能二选一" >&2; usage; }
 ((mode_minimal)) && [[ -n $csv_plugins ]] && { echo "--minimal 与 --plugins 不能同时指定" >&2; usage; }
+if [[ -n $custom_port ]]; then
+  [[ $custom_port =~ ^[0-9]+$ ]] && ((custom_port >= 1 && custom_port <= 65535)) || die "--port 必须是 1~65535 之间的整数"
+fi
+if ((has_custom_entry_path)); then
+  custom_entry_path=${custom_entry_path#/}
+  custom_entry_path=${custom_entry_path%/}
+  if [[ $custom_entry_path == "none" ]]; then
+    custom_entry_path=""
+  elif [[ -n $custom_entry_path && ! $custom_entry_path =~ ^[A-Za-z0-9_-]{4,48}$ ]]; then
+    die "--entry-path 必须为 4~48 位字母、数字、下划线或连字符（或传 none 关闭）"
+  fi
+fi
 
 # ── 平台 ─────────────────────────────────────────────────────────────────────
 [[ $EUID == 0 ]] || die "需要 root（sudo bash install.sh …）"
@@ -210,8 +224,64 @@ V=$(tr -d '[:space:]' <"$P/VERSION")
 [[ $V =~ ^[0-9A-Za-z._+-]+$ ]] || die "发布包 VERSION 非法"
 [[ -z $version || $version == "$V" || $version == "v$V" ]] || die "发布包版本 $V 与 --version $version 不一致"
 
+# ── 随机高位端口与安全密道生成（仅首次安装使用；已有配置保持不变）──────────
+port_in_use() {
+  local hex
+  printf -v hex '%04X' "$1"
+  awk -v h="$hex" 'NR>1 && $4=="0A" { split($2, a, ":"); if (toupper(a[2]) == h) { found=1; exit } } END { exit !found }' \
+    /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
+pick_random_high_port() {
+  local attempt=0 raw p
+  while ((attempt < 64)); do
+    attempt=$((attempt + 1))
+    raw=$(od -An -tu2 -N2 /dev/urandom 2>/dev/null | tr -d '[:space:]' || true)
+    if [[ $raw =~ ^[0-9]+$ ]]; then
+      p=$((20000 + raw % 40000))
+    else
+      p=$((20000 + (RANDOM * 32768 + RANDOM) % 40000))
+    fi
+    if ! port_in_use "$p"; then
+      echo "$p"
+      return 0
+    fi
+  done
+  echo 28443
+}
+
+generate_random_entry_path() {
+  local out="" chunk
+  while ((${#out} < 10)); do
+    chunk=$(dd if=/dev/urandom bs=64 count=1 2>/dev/null | LC_ALL=C tr -dc 'a-hjkmnp-z2-9' || true)
+    out+=$chunk
+  done
+  echo "${out:0:10}"
+}
+
+fresh_install=0
+init_port=""
+init_entry_path=""
+if [[ ! -f $ETC/qwq.json ]]; then
+  fresh_install=1
+  if [[ -n $custom_port ]]; then
+    init_port=$custom_port
+  else
+    init_port=$(pick_random_high_port)
+  fi
+  if ((has_custom_entry_path)); then
+    init_entry_path=$custom_entry_path
+  else
+    init_entry_path=$(generate_random_entry_path)
+  fi
+fi
+
 # ── 安装前检查（DEP-05：0 通过 / 1 警告 / 3 失败）──────────────────────────
-rc=0; "$P/bin/qwq" doctor --preinstall || rc=$?
+preinstall_args=(doctor --preinstall)
+if ((fresh_install)); then
+  preinstall_args+=(--listen "127.0.0.1:$init_port")
+fi
+rc=0; "$P/bin/qwq" "${preinstall_args[@]}" || rc=$?
 case $rc in
   0|1) ;;
   3) die "安装前检查失败，按上面的提示修复后重试" ;;
@@ -290,8 +360,29 @@ for k in "$R"/share/trust/*.pem; do
   fi
 done
 if [[ ! -f $ETC/qwq.json ]]; then
-  install -m0640 -o root -g qwq "$R/share/config/qwq.json.example" "$ETC/qwq.json"
+  cat >"$T/qwq.json" <<EOF
+{
+  "role": "standalone",
+  "data_dir": "/var/lib/qwq",
+  "run_dir": "/run/qwq",
+  "http": {
+    "listen": "127.0.0.1:${init_port}",
+    "entry_path": "${init_entry_path}",
+    "disguise": "drop",
+    "auto_disable_on_domain": true,
+    "tls": { "mode": "self_signed" }
+  },
+  "log": { "level": "info", "format": "json" },
+  "retention": { "operations": "90d", "audit": "365d", "sessions": "30d" }
+}
+EOF
+  install -m0640 -o root -g qwq "$T/qwq.json" "$ETC/qwq.json"
   changed=1
+  if [[ -n $init_entry_path ]]; then
+    log "已生成随机高位端口 ${init_port} 与随机安全密道 /${init_entry_path}（伪装模式：drop 静默断开）"
+  else
+    log "已生成随机高位端口 ${init_port}（已关闭安全密道）"
+  fi
 fi
 
 if command -v getenforce >/dev/null && [[ $(getenforce) == Enforcing ]]; then
@@ -397,12 +488,30 @@ for _ in $(seq 30); do
 done
 systemctl is-active --quiet qwq-controller.service ||
   die "qwq-controller 未能启动；查看 journalctl -u qwq-controller -n 50 与 qwq doctor"
+# 从 /etc/qwq/qwq.json 解析当前监听端口、安全密道与 TLS 模式，用于健康探测与接入指引
+cfg_listen=$(sed -nE 's/.*"listen"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$ETC/qwq.json" | head -n 1 || true)
+cfg_entry_path=$(sed -nE 's/.*"entry_path"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' "$ETC/qwq.json" | head -n 1 || true)
+cfg_panel_domain=$(sed -nE 's/.*"panel_domain"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' "$ETC/qwq.json" | head -n 1 || true)
+cfg_tls_mode=$(sed -nE 's/.*"mode"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$ETC/qwq.json" | head -n 1 || true)
+cfg_listen=${cfg_listen:-127.0.0.1:8443}
+cfg_port=${cfg_listen##*:}
+[[ $cfg_port =~ ^[0-9]+$ ]] || cfg_port=8443
+cfg_scheme=https
+[[ $cfg_tls_mode == "proxy" ]] && cfg_scheme=http
+cfg_entry_path=${cfg_entry_path#/}
+cfg_entry_path=${cfg_entry_path%/}
+if [[ -n $cfg_entry_path && $cfg_tls_mode != "proxy" && -z $cfg_panel_domain ]]; then
+  LISTEN_CHECK="${cfg_scheme}://127.0.0.1:${cfg_port}/${cfg_entry_path}/readyz"
+else
+  LISTEN_CHECK="${cfg_scheme}://127.0.0.1:${cfg_port}/readyz"
+fi
+
 if command -v curl >/dev/null; then
   for _ in $(seq 30); do
     curl -skf --max-time 2 "$LISTEN_CHECK" >/dev/null && break
     sleep 1
   done || true
-  curl -skf --max-time 2 "$LISTEN_CHECK" >/dev/null || echo "提示：$LISTEN_CHECK 暂无响应（若改过 http.listen 可忽略）" >&2
+  curl -skf --max-time 2 "$LISTEN_CHECK" >/dev/null || echo "提示：$LISTEN_CHECK 暂无响应（若已在面板内修改过端口或密道可忽略）" >&2
 fi
 
 # ── 激活默认必装安全插件（security.basic）与用户按需选装的官方插件 ──────────
@@ -451,10 +560,24 @@ case $rc in
   3) log "已初始化；忘记密码请用 sudo qwq recover" ;;
   *) echo "获取初始化链接失败，可稍后执行 sudo qwq setup-token" >&2 ;;
 esac
-cat <<'EOF'
+cat <<EOF
 
-面板默认只监听 127.0.0.1:8443；远程访问：
-  ssh -L 8443:127.0.0.1:8443 root@<服务器>   然后浏览器打开上面的链接
-如改为 0.0.0.0（见 /opt/qwq/current/share/config/qwq.json.example.md），
-请自行在宝塔「安全」页 / ufw / firewalld 放行端口，并核对上面打印的证书指纹。
+====================================================================
+  qwq 面板接入信息（已启用随机高位端口 + 随机安全密道防扫描保护）
+====================================================================
+  监听地址：${cfg_listen}
+  安全密道：${cfg_entry_path:+/${cfg_entry_path}}${cfg_entry_path:-（未启用）}
+  安全伪装：端口正确但密道错误时自动触发无服务伪装（默认 drop 静默断开）
+  本地 SSH 隧道访问：
+    ssh -L ${cfg_port}:127.0.0.1:${cfg_port} root@<服务器>
+    建立隧道后，在浏览器打开上方打印的初始化链接即可。
+
+  提示：
+  1. 登录面板后可在「设置 → 系统 → 面板入口与安全伪装」随时修改端口、
+     安全密道与伪装页模式（修改端口支持热切换，无需重装）。
+  2. 若为面板配置反向代理域名，系统会自动关闭安全密道与伪装，
+     直接访问域名即可进入面板。
+  3. 如改为 0.0.0.0 直连（见 /opt/qwq/current/share/config/qwq.json.example.md），
+     请自行在宝塔「安全」页 / ufw / firewalld 放行 TCP ${cfg_port} 端口，并核对证书指纹。
+====================================================================
 EOF
