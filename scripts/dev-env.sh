@@ -20,7 +20,8 @@ export GOPATH=$_c/gopath
 export GOMODCACHE=$_c/gomod
 export GOCACHE=$_c/gobuild
 export GOENV=$_c/go.env
-export GOTMPDIR=$_c/tmp
+export GOTMPDIR=${GOTMPDIR:-$_c/tmp}
+mkdir -p "$GOTMPDIR"
 export GOTOOLCHAIN=local
 export GOFLAGS=-modcacherw
 export CGO_ENABLED=0

@@ -130,17 +130,20 @@ func newTestHost(t *testing.T) *testHost {
 	// A published tree is 0555/0444; make the temporary roots writable again
 	// before t.TempDir removes them, so a non-root test run can clean up.
 	t.Cleanup(func() {
-		relaxTree(cfg.PluginsRoot)
-		relaxTree(cfg.StagingRoot)
+		relaxTree(root)
 	})
 	return &testHost{cfg: cfg, server: server, runner: runner}
 }
 
-// relaxTree removes the read-only modes of a published version tree.
+// relaxTree removes the read-only modes of a published version tree without
+// following symlinks (which would otherwise chmod target directories to 0600).
 func relaxTree(root string) {
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil //nolint:nilerr // best effort cleanup
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
 		}
 		if d.IsDir() {
 			_ = os.Chmod(path, 0o700)

@@ -17,6 +17,8 @@ concurrency:
 
 env:
   QWQ_DEV_HOME: ${{ github.workspace }}
+  # Keep t.TempDir() short so Linux Unix socket tests stay under the 107-byte sun_path cap.
+  GOTMPDIR: /tmp/qwq-t
 
 jobs:
   check:
