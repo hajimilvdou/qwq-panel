@@ -2,6 +2,7 @@
 /.tools/
 /.cache/
 /.claude/
+/go.work.sum
 
 # 私钥与本地连接配置（绝不提交）
 *.key

@@ -60,7 +60,8 @@ jobs:
           test -n "$PLUGIN_KEY" || { echo "release environment 缺少 secret QWQ_PLUGIN_SIGNING_KEY" >&2; exit 1; }
           PLUGIN_KEY_FILE="$RUNNER_TEMP/plugin-signing.key"
           trap 'rm -f "$PLUGIN_KEY_FILE"' EXIT
-          (umask 077 && printf '%s\n' "$PLUGIN_KEY" >"$PLUGIN_KEY_FILE")
+          (umask 077 && printf '%s\n' "$PLUGIN_KEY" | tr -d '\r' >"$PLUGIN_KEY_FILE")
+          rm -f go.work.sum
           export QWQ_PLUGIN_SIGNING_KEY="$PLUGIN_KEY_FILE"
           export QWQ_PLUGIN_TRUST_PUB="deployments/plugin-trust.pub"
           export QWQ_RELEASE_MIRROR="https://github.com/${{ github.repository }}/releases/download"
@@ -72,7 +73,10 @@ jobs:
           KEY: ${{ secrets.QWQ_RELEASE_SIGNING_KEY }}
         run: |
           test -n "$KEY" || { echo "release environment 缺少 secret QWQ_RELEASE_SIGNING_KEY" >&2; exit 1; }
-          openssl pkeyutl -sign -inkey <(printf '%s\n' "$KEY") -rawin -in dist/SHA256SUMS -out dist/SHA256SUMS.sig
+          KEY_FILE="$RUNNER_TEMP/release-signing.key"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          (umask 077 && printf '%s\n' "$KEY" | tr -d '\r' >"$KEY_FILE")
+          openssl pkeyutl -sign -inkey "$KEY_FILE" -rawin -in dist/SHA256SUMS -out dist/SHA256SUMS.sig
           openssl pkeyutl -verify -pubin -inkey deployments/release.pub -rawin \
             -in dist/SHA256SUMS -sigfile dist/SHA256SUMS.sig
       - name: publish
