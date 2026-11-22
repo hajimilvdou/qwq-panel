@@ -13,7 +13,7 @@ import (
 
 // DefaultSystemctlTimeout bounds one systemctl invocation. The caller's
 // context still wins when it expires first.
-const DefaultSystemctlTimeout = 10 * time.Second
+const DefaultSystemctlTimeout = 30 * time.Second
 
 // unitNamePattern is the set of unit names this client accepts. It rules out
 // argument injection (a leading "-" would be parsed as an option) and anything

@@ -156,6 +156,7 @@ func (p *testPackage) trustStore(t *testing.T) manifest.TrustStore {
 func layout(t *testing.T) (staging, plugins, versionDir string) {
 	t.Helper()
 	base := t.TempDir()
+	t.Cleanup(func() { _ = removeTree(base) })
 	return filepath.Join(base, "staging"), filepath.Join(base, "plugins"), VersionDir(filepath.Join(base, "plugins"), testID, testVersion)
 }
 
@@ -757,7 +758,9 @@ func TestExtractAcceptsLegitimateUI(t *testing.T) {
 		"ui/app.js": `fetch("/api/v1/plugins"); import("./chunk.js"); export const from = "x";`,
 	})
 	staging := filepath.Join(t.TempDir(), "staging")
-	if _, err := Extract(context.Background(), p.path, p.trustStore(t), staging); err != nil {
+	staged, err := Extract(context.Background(), p.path, p.trustStore(t), staging)
+	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
+	defer staged.Discard()
 }

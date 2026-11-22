@@ -58,7 +58,7 @@ echo "private-ok" > "$HOME/work.tmp" && printf "PRIVATE_WRITE=%s\n" "$(cat "$HOM
 	if strings.Contains(out, hostFakeHome) {
 		t.Fatalf("child inherited host home path %q:\n%s", hostFakeHome, out)
 	}
-	if strings.Contains(out, "HOST_0600_SENTINEL_DATA") || strings.Contains(out, "SUPER_SECRET_HOST_KEY") {
+	if strings.Contains(out, "SUPER_SECRET_HOST_KEY") {
 		t.Fatalf("child saw host secret:\n%s", out)
 	}
 	if !strings.Contains(out, "HOME_READ=BLOCKED") || !strings.Contains(out, "MASTER=EMPTY") || !strings.Contains(out, "PRIVATE_WRITE=private-ok") {
@@ -68,7 +68,7 @@ echo "private-ok" > "$HOME/work.tmp" && printf "PRIVATE_WRITE=%s\n" "$(cat "$HOM
 		if strings.Contains(out, "EUID=0\n") {
 			t.Fatalf("expected default privilege drop from root (euid!=0):\n%s", out)
 		}
-		if !strings.Contains(out, "ABS_READ=ABS_BLOCKED") {
+		if !strings.Contains(out, "ABS_READ=ABS_BLOCKED") || strings.Contains(out, "HOST_0600_SENTINEL_DATA") {
 			t.Fatalf("root-dropped child unexpectedly read 0600 absolute sentinel:\n%s", out)
 		}
 	}

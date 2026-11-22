@@ -205,11 +205,28 @@ func (s *Staged) Commit(finalDir string) error {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
+	// Moving a read-only (0555) directory across parents updates its ".." entry,
+	// which requires write permission on the moved directory for non-root users
+	// (e.g. unprivileged unit tests). Production runs as root in qwq-privileged.
+	relaxedForRename := false
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		if err := os.Chmod(s.dir, 0o755); err == nil {
+			relaxedForRename = true
+		}
+	}
 	if err := os.Rename(s.dir, finalDir); err != nil {
+		if relaxedForRename {
+			_ = os.Chmod(s.dir, DirMode)
+		}
 		if errors.Is(err, fs.ErrExist) {
 			return fmt.Errorf("%w: %s", ErrTargetExists, finalDir)
 		}
 		return fmt.Errorf("install: publishing %s: %w", finalDir, err)
+	}
+	if relaxedForRename {
+		if err := os.Chmod(finalDir, DirMode); err != nil {
+			return fmt.Errorf("install: restoring mode on %s: %w", finalDir, err)
+		}
 	}
 	s.committed = true
 	s.dir = finalDir
@@ -445,6 +462,9 @@ func removeTree(dir string) error {
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			return nil //nolint:nilerr // best effort, RemoveAll reports the failure
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
 		}
 		if d.IsDir() {
 			_ = os.Chmod(p, 0o700)
