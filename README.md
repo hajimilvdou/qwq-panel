@@ -57,7 +57,7 @@
 从 [GitHub Releases](https://github.com/hajimilvdou/qwq-panel/releases) 下载对应版本的 `install.sh`（内置 Ed25519 发布公钥验签）并运行：
 
 ```bash
-VERSION=v0.1.3
+VERSION=v0.1.4
 curl -fsSL "https://github.com/hajimilvdou/qwq-panel/releases/download/${VERSION}/install.sh" -o install.sh
 sudo bash install.sh --version "${VERSION}"
 ```
