@@ -3,7 +3,7 @@
   SessionList · 会话列表（状态点、未读、最后消息预览；顶部"新对话"）
 -->
 <script lang="ts">
-  import { Button, ErrorState, Skeleton } from '$ui';
+  import { Button, ErrorState, Icon, Skeleton } from '$ui';
   import type { AgentSession } from '$api/types';
   import { readMarks, statusMeta } from '$lib/ai/agent-sessions.svelte';
   import type { Resource } from '$lib/resource.svelte';
@@ -14,23 +14,62 @@
     list: Resource<AgentSession[]>;
     current?: string;
     onpick?: () => void;
+    onopenworkspace?: (tab?: 'prompts' | 'skills' | 'mcp' | 'registry') => void;
   }
-  let { list, current, onpick }: Props = $props();
+  let { list, current, onpick, onopenworkspace }: Props = $props();
 
-  const items = $derived(list.data ?? []);
+  let query = $state('');
+  const allItems = $derived(list.data ?? []);
+  const items = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return allItems;
+    return allItems.filter(
+      (s) =>
+        (s.title || '新的对话').toLowerCase().includes(q) ||
+        (s.last_message_preview || '').toLowerCase().includes(q),
+    );
+  });
 </script>
 
 <nav class="list" aria-label="会话">
   <div class="top">
     <Button variant="primary" icon="plus" wide href="/agent" onclick={onpick}>新建运维对话</Button>
+    {#if onopenworkspace}
+      <Button
+        variant="soft"
+        size="sm"
+        icon="apps"
+        wide
+        onclick={() => {
+          onpick?.();
+          onopenworkspace('prompts');
+        }}
+      >
+        MCP · 技能 · 提示词
+      </Button>
+    {/if}
+    {#if allItems.length > 0}
+      <div class="search-box">
+        <Icon name="search" size={14} />
+        <input
+          type="search"
+          class="search-in"
+          placeholder="搜索历史对话…"
+          aria-label="搜索历史对话"
+          bind:value={query}
+        />
+      </div>
+    {/if}
   </div>
 
   {#if list.status === 'loading' && !list.data}
     <div class="pad"><Skeleton lines={4} height={44} /></div>
   {:else if list.status === 'error' && !list.data}
     <ErrorState compact message={describeError(list.error).message} onretry={list.refresh} />
-  {:else if !items.length}
+  {:else if !allItems.length}
     <p class="none">还没有对话。</p>
+  {:else if !items.length}
+    <p class="none">没有匹配“{query}”的对话。</p>
   {:else}
     <ul>
       {#each items as s (s.session_id)}
@@ -70,7 +109,34 @@
     height: 100%;
   }
   .top {
+    display: grid;
+    gap: var(--s-2);
     padding: var(--s-3);
+  }
+  .search-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: var(--r-md);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    color: var(--text-3);
+  }
+  .search-box:focus-within {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+  .search-in {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--fs-xs);
   }
   .pad {
     padding: 0 var(--s-3);

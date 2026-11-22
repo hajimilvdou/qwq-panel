@@ -206,6 +206,11 @@ export class SessionStream {
     this.session = await this.api.update(this.id, { expected_revision: this.session.revision, title });
   }
 
+  async updateConfig(config: Record<string, unknown>): Promise<void> {
+    if (!this.session) return;
+    this.session = await this.api.update(this.id, { expected_revision: this.session.revision, config });
+  }
+
   /** 接管（ADR-0004 D9）：先停手，再降为只读 */
   async takeover(): Promise<void> {
     await this.cancel();

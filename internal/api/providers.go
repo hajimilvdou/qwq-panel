@@ -42,16 +42,19 @@ const (
 
 // aiProviderDTO is the AiProvider schema in its full (administrator) shape.
 type aiProviderDTO struct {
-	ProviderID string `json:"provider_id"`
-	Name       string `json:"name"`
-	Kind       string `json:"kind"`
-	BaseURL    string `json:"base_url"`
-	Model      string `json:"model"`
-	HasAPIKey  bool   `json:"has_api_key"`
-	IsDefault  bool   `json:"is_default"`
-	CreatedAt  string `json:"created_at"`
-	UpdatedAt  string `json:"updated_at"`
-	Revision   string `json:"revision"`
+	ProviderID       string   `json:"provider_id"`
+	Name             string   `json:"name"`
+	Kind             string   `json:"kind"`
+	BaseURL          string   `json:"base_url"`
+	Model            string   `json:"model"`
+	Models           []string `json:"models"`
+	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`
+	MaxContextTokens int64    `json:"max_context_tokens,omitempty"`
+	HasAPIKey        bool     `json:"has_api_key"`
+	IsDefault        bool     `json:"is_default"`
+	CreatedAt        string   `json:"created_at"`
+	UpdatedAt        string   `json:"updated_at"`
+	Revision         string   `json:"revision"`
 }
 
 // aiProviderReducedDTO is the projection every non-administrator gets: names
@@ -59,23 +62,32 @@ type aiProviderDTO struct {
 // so a low-privileged user cannot map the installation's model traffic
 // (GAPS 缺口 2).
 type aiProviderReducedDTO struct {
-	ProviderID string `json:"provider_id"`
-	Name       string `json:"name"`
-	Model      string `json:"model"`
-	HasAPIKey  bool   `json:"has_api_key"`
-	IsDefault  bool   `json:"is_default"`
+	ProviderID       string   `json:"provider_id"`
+	Name             string   `json:"name"`
+	Model            string   `json:"model"`
+	Models           []string `json:"models"`
+	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`
+	MaxContextTokens int64    `json:"max_context_tokens,omitempty"`
+	HasAPIKey        bool     `json:"has_api_key"`
+	IsDefault        bool     `json:"is_default"`
 }
 
 // newAIProviderDTO renders one provider for the given projection.
 func newAIProviderDTO(p *agentsession.AIProvider, admin bool) any {
+	models := p.Models
+	if models == nil {
+		models = []string{}
+	}
 	if !admin {
 		return aiProviderReducedDTO{
 			ProviderID: p.ID, Name: p.Name, Model: p.Model,
+			Models: models, ReasoningEffort: p.ReasoningEffort, MaxContextTokens: p.MaxContextTokens,
 			HasAPIKey: p.HasAPIKey(), IsDefault: p.IsDefault,
 		}
 	}
 	return aiProviderDTO{
 		ProviderID: p.ID, Name: p.Name, Kind: p.Kind, BaseURL: p.BaseURL, Model: p.Model,
+		Models: models, ReasoningEffort: p.ReasoningEffort, MaxContextTokens: p.MaxContextTokens,
 		HasAPIKey: p.HasAPIKey(), IsDefault: p.IsDefault,
 		CreatedAt: ts(p.CreatedAt), UpdatedAt: ts(p.UpdatedAt), Revision: p.Revision,
 	}
@@ -89,40 +101,54 @@ type aiProviderList struct {
 
 // aiProviderCreateRequest is the AiProviderCreateRequest schema.
 type aiProviderCreateRequest struct {
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
-	BaseURL   string `json:"base_url"`
-	Model     string `json:"model"`
-	IsDefault bool   `json:"is_default"`
+	Name             string   `json:"name"`
+	Kind             string   `json:"kind"`
+	BaseURL          string   `json:"base_url"`
+	Model            string   `json:"model"`
+	Models           []string `json:"models,omitempty"`
+	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`
+	MaxContextTokens int64    `json:"max_context_tokens,omitempty"`
+	IsDefault        bool     `json:"is_default"`
 }
 
 // aiProviderCreateArgs are the arguments of host.ai_providers.create: the
 // request body, verbatim (the route has no path parameters).
 type aiProviderCreateArgs struct {
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
-	BaseURL   string `json:"base_url"`
-	Model     string `json:"model"`
-	IsDefault bool   `json:"is_default"`
+	Name             string   `json:"name"`
+	Kind             string   `json:"kind"`
+	BaseURL          string   `json:"base_url"`
+	Model            string   `json:"model"`
+	Models           []string `json:"models,omitempty"`
+	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`
+	MaxContextTokens int64    `json:"max_context_tokens,omitempty"`
+	IsDefault        bool     `json:"is_default"`
 }
 
 // aiProviderUpdateRequest is the AiProviderUpdateRequest schema.
 type aiProviderUpdateRequest struct {
-	ExpectedRevision string  `json:"expected_revision"`
-	Name             *string `json:"name,omitempty"`
-	BaseURL          *string `json:"base_url,omitempty"`
-	Model            *string `json:"model,omitempty"`
-	IsDefault        *bool   `json:"is_default,omitempty"`
+	ExpectedRevision string    `json:"expected_revision"`
+	Name             *string   `json:"name,omitempty"`
+	Kind             *string   `json:"kind,omitempty"`
+	BaseURL          *string   `json:"base_url,omitempty"`
+	Model            *string   `json:"model,omitempty"`
+	Models           *[]string `json:"models,omitempty"`
+	ReasoningEffort  *string   `json:"reasoning_effort,omitempty"`
+	MaxContextTokens *int64    `json:"max_context_tokens,omitempty"`
+	IsDefault        *bool     `json:"is_default,omitempty"`
 }
 
 // aiProviderUpdateArgs are the arguments of host.ai_providers.update.
 type aiProviderUpdateArgs struct {
-	ProviderID       string  `json:"provider_id"`
-	ExpectedRevision string  `json:"expected_revision"`
-	Name             *string `json:"name,omitempty"`
-	BaseURL          *string `json:"base_url,omitempty"`
-	Model            *string `json:"model,omitempty"`
-	IsDefault        *bool   `json:"is_default,omitempty"`
+	ProviderID       string    `json:"provider_id"`
+	ExpectedRevision string    `json:"expected_revision"`
+	Name             *string   `json:"name,omitempty"`
+	Kind             *string   `json:"kind,omitempty"`
+	BaseURL          *string   `json:"base_url,omitempty"`
+	Model            *string   `json:"model,omitempty"`
+	Models           *[]string `json:"models,omitempty"`
+	ReasoningEffort  *string   `json:"reasoning_effort,omitempty"`
+	MaxContextTokens *int64    `json:"max_context_tokens,omitempty"`
+	IsDefault        *bool     `json:"is_default,omitempty"`
 }
 
 // aiProviderDeleteArgs are the arguments of host.ai_providers.delete.
@@ -192,19 +218,26 @@ func (a *api) listAIProviders(w http.ResponseWriter, r *http.Request) {
 
 // checkProviderFields validates a full create body against the domain rules,
 // so a bad value is a 400 before an operation is queued.
-func (a *api) checkProviderFields(name, kind, baseURL, model string) error {
+func (a *api) checkProviderFields(name, kind, baseURL, model string, models []string, effort string, maxCtx int64) error {
 	if _, err := agentsession.ValidateProviderName(name); err != nil {
 		return err
 	}
-	if kind != "" && kind != "openai_compatible" {
-		return problem.Validation(problem.Violation{
-			Pointer: "/kind", Code: "INVALID", Message: "kind must be openai_compatible.",
-		})
+	if _, err := agentsession.ValidateProviderKind(kind); err != nil {
+		return err
 	}
 	if _, err := agentsession.ValidateModelBaseURL(baseURL, "/base_url"); err != nil {
 		return err
 	}
 	if _, err := agentsession.ValidateProviderModel(model); err != nil {
+		return err
+	}
+	if _, err := agentsession.ValidateProviderModels(models); err != nil {
+		return err
+	}
+	if _, err := agentsession.ValidateReasoningEffort(effort, "/reasoning_effort"); err != nil {
+		return err
+	}
+	if _, err := agentsession.ValidateMaxContextTokens(maxCtx, "/max_context_tokens"); err != nil {
 		return err
 	}
 	return nil
@@ -217,6 +250,11 @@ func (a *api) checkProviderPatch(req aiProviderUpdateRequest) error {
 			return err
 		}
 	}
+	if req.Kind != nil {
+		if _, err := agentsession.ValidateProviderKind(*req.Kind); err != nil {
+			return err
+		}
+	}
 	if req.BaseURL != nil {
 		if _, err := agentsession.ValidateModelBaseURL(*req.BaseURL, "/base_url"); err != nil {
 			return err
@@ -224,6 +262,21 @@ func (a *api) checkProviderPatch(req aiProviderUpdateRequest) error {
 	}
 	if req.Model != nil {
 		if _, err := agentsession.ValidateProviderModel(*req.Model); err != nil {
+			return err
+		}
+	}
+	if req.Models != nil {
+		if _, err := agentsession.ValidateProviderModels(*req.Models); err != nil {
+			return err
+		}
+	}
+	if req.ReasoningEffort != nil {
+		if _, err := agentsession.ValidateReasoningEffort(*req.ReasoningEffort, "/reasoning_effort"); err != nil {
+			return err
+		}
+	}
+	if req.MaxContextTokens != nil {
+		if _, err := agentsession.ValidateMaxContextTokens(*req.MaxContextTokens, "/max_context_tokens"); err != nil {
 			return err
 		}
 	}
@@ -248,7 +301,7 @@ func (a *api) createAIProvider(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	if err := a.checkProviderFields(req.Name, req.Kind, req.BaseURL, req.Model); err != nil {
+	if err := a.checkProviderFields(req.Name, req.Kind, req.BaseURL, req.Model, req.Models, req.ReasoningEffort, req.MaxContextTokens); err != nil {
 		a.fail(w, r, err)
 		return
 	}
@@ -299,10 +352,11 @@ func (a *api) updateAIProvider(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	if req.Name == nil && req.BaseURL == nil && req.Model == nil && req.IsDefault == nil {
+	if req.Name == nil && req.Kind == nil && req.BaseURL == nil && req.Model == nil &&
+		req.Models == nil && req.ReasoningEffort == nil && req.MaxContextTokens == nil && req.IsDefault == nil {
 		a.fail(w, r, problem.Validation(problem.Violation{
 			Pointer: "/", Code: "empty",
-			Message: "At least one of name, base_url, model or is_default is required.",
+			Message: "At least one editable field is required.",
 		}))
 		return
 	}
@@ -312,7 +366,9 @@ func (a *api) updateAIProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	args, err := json.Marshal(aiProviderUpdateArgs{
 		ProviderID: providerID, ExpectedRevision: req.ExpectedRevision,
-		Name: req.Name, BaseURL: req.BaseURL, Model: req.Model, IsDefault: req.IsDefault,
+		Name: req.Name, Kind: req.Kind, BaseURL: req.BaseURL, Model: req.Model,
+		Models: req.Models, ReasoningEffort: req.ReasoningEffort, MaxContextTokens: req.MaxContextTokens,
+		IsDefault: req.IsDefault,
 	})
 	if err != nil {
 		a.fail(w, r, problem.Wrap(err))
@@ -495,6 +551,61 @@ func (a *api) testAIProvider(w http.ResponseWriter, r *http.Request) {
 	a.writeResource(w, r, http.StatusOK, out, nil)
 }
 
+type aiProviderFetchModelsRequest struct {
+	ProviderID string `json:"provider_id,omitempty"`
+	Kind       string `json:"kind,omitempty"`
+	BaseURL    string `json:"base_url,omitempty"`
+	APIKey     string `json:"api_key,omitempty"`
+}
+
+type aiProviderFetchModelsResult struct {
+	OK        bool     `json:"ok"`
+	Models    []string `json:"models"`
+	LatencyMS *int64   `json:"latency_ms,omitempty"`
+	Category  string   `json:"category,omitempty"`
+}
+
+// fetchAIProviderModels implements POST /api/v1/ai/providers/fetch-models
+// (admin-only, catalog-exempt because it may carry an unsaved api_key for
+// model discovery before creating a provider).
+func (a *api) fetchAIProviderModels(w http.ResponseWriter, r *http.Request) {
+	act, err := a.caller(r)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	if err := a.authorize(r.Context(), act, "host.ai_providers:update", ""); err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	var req aiProviderFetchModelsRequest
+	if err := a.decodeJSON(r, &req); err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	res, err := a.d.AgentSessions.FetchProviderModels(r.Context(), agentsession.FetchModelsInput{
+		ProviderID: req.ProviderID,
+		Kind:       req.Kind,
+		BaseURL:    req.BaseURL,
+		APIKey:     req.APIKey,
+	})
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	models := res.Models
+	if models == nil {
+		models = []string{}
+	}
+	out := aiProviderFetchModelsResult{OK: res.OK, Models: models}
+	if res.OK {
+		out.LatencyMS = &res.LatencyMS
+	} else {
+		out.Category = res.Category
+	}
+	a.writeResource(w, r, http.StatusOK, out, nil)
+}
+
 // executeAIProviderCreate runs host.ai_providers.create inside the operation
 // transaction. The result is the full provider; operations of this action can
 // only originate from an administrator's session.
@@ -503,12 +614,14 @@ func (a *api) executeAIProviderCreate(ctx context.Context, tx *storage.Tx, req o
 	if err := decodeArgs(req.Args, &args); err != nil {
 		return nil, err
 	}
-	if err := a.checkProviderFields(args.Name, args.Kind, args.BaseURL, args.Model); err != nil {
+	if err := a.checkProviderFields(args.Name, args.Kind, args.BaseURL, args.Model, args.Models, args.ReasoningEffort, args.MaxContextTokens); err != nil {
 		return nil, err
 	}
 	p, err := a.d.AgentSessions.CreateProvider(ctx, tx, agentsession.CreateProviderInput{
 		Actor: req.Actor, Name: args.Name, Kind: args.Kind,
-		BaseURL: args.BaseURL, Model: args.Model, IsDefault: args.IsDefault,
+		BaseURL: args.BaseURL, Model: args.Model, Models: args.Models,
+		ReasoningEffort: args.ReasoningEffort, MaxContextTokens: args.MaxContextTokens,
+		IsDefault: args.IsDefault,
 	})
 	if err != nil {
 		return nil, err
@@ -529,7 +642,9 @@ func (a *api) executeAIProviderUpdate(ctx context.Context, tx *storage.Tx, req o
 	}
 	patch := aiProviderUpdateRequest{
 		ExpectedRevision: args.ExpectedRevision,
-		Name:             args.Name, BaseURL: args.BaseURL, Model: args.Model, IsDefault: args.IsDefault,
+		Name:             args.Name, Kind: args.Kind, BaseURL: args.BaseURL, Model: args.Model,
+		Models: args.Models, ReasoningEffort: args.ReasoningEffort, MaxContextTokens: args.MaxContextTokens,
+		IsDefault: args.IsDefault,
 	}
 	if err := a.checkProviderPatch(patch); err != nil {
 		return nil, err
@@ -540,7 +655,9 @@ func (a *api) executeAIProviderUpdate(ctx context.Context, tx *storage.Tx, req o
 	}
 	p, err := a.d.AgentSessions.UpdateProvider(ctx, tx, agentsession.UpdateProviderInput{
 		Actor: req.Actor, ProviderID: args.ProviderID, ExpectedRevision: revision,
-		Name: args.Name, BaseURL: args.BaseURL, Model: args.Model, IsDefault: args.IsDefault,
+		Name: args.Name, Kind: args.Kind, BaseURL: args.BaseURL, Model: args.Model,
+		Models: args.Models, ReasoningEffort: args.ReasoningEffort, MaxContextTokens: args.MaxContextTokens,
+		IsDefault: args.IsDefault,
 	})
 	if err != nil {
 		return nil, err
@@ -577,7 +694,7 @@ func (a *api) planAIProviderCreate(_ context.Context, _ *sql.Tx, req operations.
 	if err := decodeArgs(req.Args, &args); err != nil {
 		return operations.Preview{}, err
 	}
-	if err := a.checkProviderFields(args.Name, args.Kind, args.BaseURL, args.Model); err != nil {
+	if err := a.checkProviderFields(args.Name, args.Kind, args.BaseURL, args.Model, args.Models, args.ReasoningEffort, args.MaxContextTokens); err != nil {
 		return operations.Preview{}, err
 	}
 	after, err := json.Marshal(map[string]any{

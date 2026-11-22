@@ -49,12 +49,59 @@ export const coreLabel = (core: string): string =>
   (CORE_LABEL as Record<string, string>)[core] ?? EXTRA_CORE_LABELS[core] ?? core;
 
 export const SLASH_COMMANDS = [
-  { cmd: '/status', label: '会话状态', desc: '查看当前核心、授权级别与历史消息统计', instant: true },
+  { cmd: '/status', label: '会话状态', desc: '查看当前核心、模型、思考深度与历史消息统计', instant: true },
   { cmd: '/compact', label: '压缩上下文', desc: '将较早轮次总结压缩，保留审计记录', instant: true },
+  { cmd: '/plan', label: '计划模式', desc: '切换只读计划模式，先输出步骤清单再执行', instant: true },
+  { cmd: '/mode', label: '权限模式', desc: '切换 read_only / safe / full 授权级别', instant: false },
+  { cmd: '/model', label: '切换模型', desc: '如 /model gpt-5 high，即时切换模型与思考深度', instant: false },
+  { cmd: '/effort', label: '思考挡位', desc: '设置推理深度（none / low / medium / high / xhigh）', instant: false },
+  { cmd: '/context', label: '上下文大小', desc: '设置上下文窗口上限，如 /context 128k 或 200000', instant: false },
   { cmd: '/skills', label: '运维技能列表', desc: '列出当前内置 VPS 运维技能包', instant: true },
   { cmd: '/mcp', label: '宿主 MCP 工具', desc: '查看当前授权挂载的宿主与插件动作', instant: true },
   { cmd: '/help', label: '指令帮助', desc: '查看所有可用斜杠指令', instant: true },
 ] as const;
+
+export const EFFORT_OPTIONS = [
+  { value: '', label: '跟随模型默认' },
+  { value: 'none', label: '关闭思考 (none)' },
+  { value: 'low', label: '低 (low)' },
+  { value: 'medium', label: '中 (medium)' },
+  { value: 'high', label: '高 (high)' },
+  { value: 'xhigh', label: '极高 (xhigh)' },
+] as const;
+
+export const CONTEXT_OPTIONS = [
+  { value: '0', label: '自动默认 (128K)' },
+  { value: '32768', label: '32K (32,768)' },
+  { value: '65536', label: '64K (65,536)' },
+  { value: '128000', label: '128K (128,000)' },
+  { value: '200000', label: '200K (200,000)' },
+  { value: '512000', label: '512K (512,000)' },
+  { value: '1000000', label: '1M (1,000,000)' },
+] as const;
+
+export const effortLabel = (v?: string): string => {
+  switch (v) {
+    case 'none':
+      return '关闭';
+    case 'low':
+      return '低';
+    case 'medium':
+      return '中';
+    case 'high':
+      return '高';
+    case 'xhigh':
+      return '极高';
+    default:
+      return '默认';
+  }
+};
+
+export const formatContextSize = (n?: number): string => {
+  if (!n || n <= 0) return '默认';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+  return `${Math.round(n / 1000)}K`;
+};
 
 export const BUILTIN_SKILLS = [
   { id: 'ssh-hardening', label: 'SSH 安全体检', desc: '检查 sshd -T 生效项、cloud-init 覆盖与公钥状态', prompt: '请使用只读检查排查当前主机的 SSH 生效配置、是否存在 cloud-init 覆盖开启密码登录的风险，以及公钥配置情况。' },

@@ -61,14 +61,17 @@ func decodeEnhancedNativeConfig(raw json.RawMessage) (*enhancedNativeConfig, err
 		_ = json.Unmarshal(raw, cfg)
 		cfg.nativeConfig = *base
 	}
-	switch strings.ToLower(cfg.ReasoningEffort) {
-	case "", "low", "medium", "high":
-		cfg.ReasoningEffort = strings.ToLower(cfg.ReasoningEffort)
+	switch strings.ToLower(strings.TrimSpace(cfg.ReasoningEffort)) {
+	case "", "none", "low", "medium", "high", "xhigh":
+		cfg.ReasoningEffort = strings.ToLower(strings.TrimSpace(cfg.ReasoningEffort))
 	default:
 		return nil, problem.Validation(problem.Violation{
 			Pointer: "/config/reasoning_effort", Code: "INVALID",
-			Message: "reasoning_effort must be low, medium or high.",
+			Message: "reasoning_effort must be none, low, medium, high or xhigh.",
 		})
+	}
+	if _, err := ValidateMaxContextTokens(cfg.MaxContextTokens, "/config/max_context_tokens"); err != nil {
+		return nil, err
 	}
 	return cfg, nil
 }
@@ -82,8 +85,9 @@ func (c *enhancedNativeConfig) wantStream() bool {
 
 // EnhancedNativeCore wraps NativeCore while preserving every security boundary.
 type EnhancedNativeCore struct {
-	base   *NativeCore
-	skills *SkillRegistry
+	base      *NativeCore
+	skills    *SkillRegistry
+	workspace *WorkspaceManager
 }
 
 // NewEnhancedNativeCore constructs the upgraded native core.
@@ -95,6 +99,11 @@ func NewEnhancedNativeCore(opts NativeOptions, skills *SkillRegistry) *EnhancedN
 		base:   NewNativeCore(opts),
 		skills: skills,
 	}
+}
+
+// SetWorkspace attaches the separated workspace manager (SYSTEM.md + user skills).
+func (c *EnhancedNativeCore) SetWorkspace(ws *WorkspaceManager) {
+	c.workspace = ws
 }
 
 func (c *EnhancedNativeCore) Name() string { return string(CoreNative) }
@@ -138,13 +147,36 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 		return err
 	}
 	var apiKey []byte
+	providerKind := ProviderKindOpenAI
 	if cfg.BaseURL == "" {
-		providerKey, err := c.base.applyProvider(ctx, &cfg.nativeConfig)
-		if err != nil {
-			return err
+		if c.base.providers != nil {
+			ep, found, pErr := c.base.providers.ResolveProvider(ctx, cfg.ProviderID)
+			if pErr != nil {
+				return problem.From(pErr)
+			}
+			if !found {
+				if cfg.ProviderID != "" {
+					return problem.New(problem.Unavailable,
+						"The AI provider config.provider_id names no longer exists; pick another one or ask an administrator.")
+				}
+			} else {
+				defer clear(ep.Key)
+				apiKey = ep.Key
+				cfg.BaseURL = ep.BaseURL
+				if ep.Kind != "" {
+					providerKind = ep.Kind
+				}
+				if cfg.Model == "" {
+					cfg.Model = ep.Model
+				}
+				if cfg.ReasoningEffort == "" {
+					cfg.ReasoningEffort = ep.ReasoningEffort
+				}
+				if cfg.MaxContextTokens == 0 {
+					cfg.MaxContextTokens = ep.MaxContextTokens
+				}
+			}
 		}
-		defer clear(providerKey)
-		apiKey = providerKey
 	} else {
 		apiKey, err = c.base.apiKey(ctx, turn)
 		if err != nil {
@@ -195,6 +227,14 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 
 	names := newToolNames(toolsWithPlan)
 	sys := systemText(&cfg.nativeConfig)
+	if c.workspace != nil {
+		if customSys := c.workspace.ReadPromptForCore(CoreNative); customSys != "" {
+			sys += "\n\n## User Custom Instructions (SYSTEM.md)\n" + customSys
+		}
+		if customSkills := c.workspace.LoadCustomSkillsPrompt(); customSkills != "" {
+			sys += customSkills
+		}
+	}
 	if cfg.PlanMode {
 		sys += "\n\n## Plan Mode Active\nYou are in read-only Plan Mode. Inspect the host using read tools, call `" +
 			planToolFunctionName + "` to maintain a clear checklist, and present a concrete change plan for operator approval without mutating host state."
@@ -237,14 +277,15 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 	}
 
 	provider := &streamingOpenAIProvider{
-		core:      c.base,
-		cfg:       cfg,
-		apiKey:    apiKey,
-		emit:      emit,
-		telemetry: &telemetry,
-		sysText:   sys,
-		toolDefs:  toolDefs,
-		maxCtx:    compOpts.MaxContextTokens,
+		core:         c.base,
+		cfg:          cfg,
+		providerKind: providerKind,
+		apiKey:       apiKey,
+		emit:         emit,
+		telemetry:    &telemetry,
+		sysText:      sys,
+		toolDefs:     toolDefs,
+		maxCtx:       compOpts.MaxContextTokens,
 	}
 
 	maxSteps := cfg.steps(c.base.steps)
@@ -323,14 +364,15 @@ func (t *enhancedTools) Execute(ctx context.Context, call ModelToolCall) (ToolOu
 // streamingOpenAIProvider executes OpenAI-compatible SSE streaming requests,
 // capturing TTFT, TPS, cached tokens, reasoning_content, and tool_call deltas.
 type streamingOpenAIProvider struct {
-	core      *NativeCore
-	cfg       *enhancedNativeConfig
-	apiKey    []byte
-	emit      Emit
-	telemetry *TelemetrySnapshot
-	sysText   string
-	toolDefs  []ToolDef
-	maxCtx    int64
+	core         *NativeCore
+	cfg          *enhancedNativeConfig
+	providerKind string
+	apiKey       []byte
+	emit         Emit
+	telemetry    *TelemetrySnapshot
+	sysText      string
+	toolDefs     []ToolDef
+	maxCtx       int64
 }
 
 type streamChatRequest struct {
@@ -360,12 +402,20 @@ func (p *streamingOpenAIProvider) Complete(ctx context.Context, req ProviderRequ
 	p.telemetry.Steps++
 	stepStart := time.Now()
 
+	if p.providerKind == ProviderKindAnthropic {
+		return p.completeAnthropic(ctx, req, stepStart)
+	}
+
+	effort := p.cfg.ReasoningEffort
+	if effort == "none" {
+		effort = ""
+	}
 	body := streamChatRequest{
 		Model:           p.cfg.Model,
 		Messages:        toChatMessages(req.Messages),
 		Tools:           chatToolsFromDefs(req.Tools),
 		Temperature:     p.cfg.Temperature,
-		ReasoningEffort: p.cfg.ReasoningEffort,
+		ReasoningEffort: effort,
 		Stream:          p.cfg.wantStream(),
 	}
 	if len(body.Tools) > 0 {
@@ -587,4 +637,206 @@ func toProviderResponse(content string, calls []chatToolCall) ProviderResponse {
 		})
 	}
 	return out
+}
+
+func anthropicMessagesURL(baseURL string) string {
+	u := strings.TrimRight(baseURL, "/")
+	if strings.HasSuffix(u, "/v1") {
+		return u + "/messages"
+	}
+	return u + "/v1/messages"
+}
+
+func anthropicThinkingBudget(effort string) int {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "low":
+		return 4096
+	case "medium":
+		return 10240
+	case "high":
+		return 24576
+	case "xhigh":
+		return 49152
+	default:
+		return 0
+	}
+}
+
+// completeAnthropic executes one Messages API turn against an Anthropic-compatible
+// endpoint (official Anthropic API or third-party Claude relay) with full tool
+// calling, extended thinking effort mapping, and usage telemetry.
+func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req ProviderRequest, stepStart time.Time) (ProviderResponse, error) {
+	var sysParts []string
+	var msgs []map[string]any
+	for _, m := range req.Messages {
+		switch m.Role {
+		case LoopRoleSystem:
+			if strings.TrimSpace(m.Content) != "" {
+				sysParts = append(sysParts, m.Content)
+			}
+		case LoopRoleUser:
+			msgs = append(msgs, map[string]any{"role": "user", "content": m.Content})
+		case LoopRoleAssistant:
+			if len(m.ToolCalls) == 0 {
+				if m.Content != "" {
+					msgs = append(msgs, map[string]any{"role": "assistant", "content": m.Content})
+				}
+			} else {
+				var blocks []map[string]any
+				if m.Content != "" {
+					blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
+				}
+				for _, tc := range m.ToolCalls {
+					var inp any = map[string]any{}
+					if len(tc.Arguments) > 0 {
+						_ = json.Unmarshal(tc.Arguments, &inp)
+					}
+					blocks = append(blocks, map[string]any{
+						"type":  "tool_use",
+						"id":    tc.CallID,
+						"name":  tc.Name,
+						"input": inp,
+					})
+				}
+				msgs = append(msgs, map[string]any{"role": "assistant", "content": blocks})
+			}
+		case LoopRoleTool:
+			msgs = append(msgs, map[string]any{
+				"role": "user",
+				"content": []map[string]any{{
+					"type":        "tool_result",
+					"tool_use_id": m.ToolCallID,
+					"content":     m.Content,
+				}},
+			})
+		}
+	}
+
+	var tools []map[string]any
+	for _, td := range req.Tools {
+		var schema any = map[string]any{"type": "object", "properties": map[string]any{}}
+		if len(td.Parameters) > 0 {
+			_ = json.Unmarshal(td.Parameters, &schema)
+		}
+		tools = append(tools, map[string]any{
+			"name":         td.Name,
+			"description":  td.Description,
+			"input_schema": schema,
+		})
+	}
+
+	maxTokens := 8192
+	payload := map[string]any{
+		"model":      p.cfg.Model,
+		"max_tokens": maxTokens,
+		"messages":   msgs,
+	}
+	if len(sysParts) > 0 {
+		payload["system"] = strings.Join(sysParts, "\n\n")
+	}
+	if len(tools) > 0 {
+		payload["tools"] = tools
+	}
+	if budget := anthropicThinkingBudget(p.cfg.ReasoningEffort); budget > 0 {
+		if maxTokens <= budget {
+			payload["max_tokens"] = budget + 4096
+		}
+		payload["thinking"] = map[string]any{
+			"type":          "enabled",
+			"budget_tokens": budget,
+		}
+	} else if p.cfg.Temperature != nil {
+		payload["temperature"] = *p.cfg.Temperature
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return ProviderResponse{}, problem.Wrap(err)
+	}
+	timeout := p.cfg.timeout()
+	if p.core.timeout > 0 && p.core.timeout < timeout {
+		timeout = p.core.timeout
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, anthropicMessagesURL(p.cfg.BaseURL), bytes.NewReader(raw))
+	if err != nil {
+		return ProviderResponse{}, problem.New(problem.Unavailable, "The native core's base_url cannot be used.")
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	applyProviderAuthHeaders(httpReq, ProviderKindAnthropic, p.apiKey)
+
+	resp, err := p.core.client.Do(httpReq)
+	if err != nil {
+		if errors.Is(err, errEgressDenied) {
+			return ProviderResponse{}, problem.New(problem.PermissionDenied, "%s", egressDeniedDetail)
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
+			return ProviderResponse{}, problem.New(problem.Timeout, "The model did not answer before its deadline.")
+		}
+		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint could not be reached.")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ProviderResponse{}, modelStatusError(resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxModelResponse+1))
+	if err != nil {
+		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint did not answer.")
+	}
+	if len(data) > maxModelResponse {
+		return ProviderResponse{}, problem.New(problem.Unavailable, "The model answered more than 1 MiB.")
+	}
+
+	var out struct {
+		Content []struct {
+			Type     string          `json:"type"`
+			Text     string          `json:"text"`
+			Thinking string          `json:"thinking"`
+			ID       string          `json:"id"`
+			Name     string          `json:"name"`
+			Input    json.RawMessage `json:"input"`
+		} `json:"content"`
+		Usage *struct {
+			InputTokens              int64 `json:"input_tokens"`
+			OutputTokens             int64 `json:"output_tokens"`
+			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint returned an invalid response.")
+	}
+
+	var textBuf strings.Builder
+	var toolCalls []ModelToolCall
+	for _, blk := range out.Content {
+		switch blk.Type {
+		case "thinking":
+			if blk.Thinking != "" {
+				_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": blk.Thinking})
+			}
+		case "text":
+			if blk.Text != "" {
+				textBuf.WriteString(blk.Text)
+			}
+		case "tool_use":
+			toolCalls = append(toolCalls, ModelToolCall{
+				CallID: blk.ID, Name: blk.Name, Arguments: blk.Input,
+			})
+		}
+	}
+	var usage *openAIUsage
+	if out.Usage != nil {
+		usage = &openAIUsage{
+			PromptTokens:     out.Usage.InputTokens + out.Usage.CacheReadInputTokens + out.Usage.CacheCreationInputTokens,
+			CompletionTokens: out.Usage.OutputTokens,
+			TotalTokens:      out.Usage.InputTokens + out.Usage.CacheReadInputTokens + out.Usage.CacheCreationInputTokens + out.Usage.OutputTokens,
+		}
+		usage.PromptTokensDetails.CachedTokens = out.Usage.CacheReadInputTokens
+	}
+	p.recordUsage(stepStart, time.Since(stepStart), usage, textBuf.String(), req.Messages)
+	return ProviderResponse{Content: textBuf.String(), ToolCalls: toolCalls}, nil
 }

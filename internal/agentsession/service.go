@@ -121,20 +121,27 @@ type Options struct {
 	HTTPClient *http.Client
 	// Native tunes the built-in core.
 	Native NativeOptions
-	Config Config
+	// DataDir is the host's persistent data directory (e.g. /var/lib/qwq) where
+	// isolated per-core CLI official login credentials are stored under
+	// <DataDir>/agent-homes/<core>.
+	DataDir string
+	Config  Config
 }
 
 // Service is the agent session backend. It is safe for concurrent use.
 type Service struct {
-	db      *storage.DB
-	clock   clock.Clock
-	ids     *ids.Generator
-	log     *slog.Logger
-	cfg     Config
-	catalog ToolCatalog
-	runner  Runner
-	bridge  ApprovalBridge
-	secrets *secrets.Store
+	db        *storage.DB
+	clock     clock.Clock
+	ids       *ids.Generator
+	log       *slog.Logger
+	cfg       Config
+	catalog   ToolCatalog
+	runner    Runner
+	bridge    ApprovalBridge
+	secrets   *secrets.Store
+	cliAuth   *CLIAuthManager
+	workspace *WorkspaceManager
+	registry  *RegistryManager
 
 	cores map[string]Core
 
@@ -183,21 +190,27 @@ func New(opts Options) (*Service, error) {
 	}
 	cfg := opts.Config.withDefaults()
 	base, cancel := context.WithCancel(context.Background())
+	cliAuth := NewCLIAuthManager(opts.DataDir)
+	ws := NewWorkspaceManager(opts.DataDir, cliAuth)
+	reg := NewRegistryManager(ws, opts.HTTPClient)
 	s := &Service{
-		db:       opts.DB,
-		clock:    opts.Clock,
-		ids:      opts.IDs,
-		log:      opts.Logger,
-		cfg:      cfg,
-		catalog:  opts.Catalog,
-		runner:   opts.Runner,
-		bridge:   opts.Approvals,
-		secrets:  opts.Secrets,
-		cores:    map[string]Core{},
-		turnRate: authz.NewRateLimiter(0, opts.Clock.Now),
-		base:     base,
-		cancel:   cancel,
-		sessions: map[string]*sessionRuntime{},
+		db:        opts.DB,
+		clock:     opts.Clock,
+		ids:       opts.IDs,
+		log:       opts.Logger,
+		cfg:       cfg,
+		catalog:   opts.Catalog,
+		runner:    opts.Runner,
+		bridge:    opts.Approvals,
+		secrets:   opts.Secrets,
+		cliAuth:   cliAuth,
+		workspace: ws,
+		registry:  reg,
+		cores:     map[string]Core{},
+		turnRate:  authz.NewRateLimiter(0, opts.Clock.Now),
+		base:      base,
+		cancel:    cancel,
+		sessions:  map[string]*sessionRuntime{},
 	}
 	// The service itself resolves the global AI providers of the native and
 	// external adapter cores (GAP-2): it owns the rows and the secret store.
@@ -253,6 +266,15 @@ func (s *Service) sweepRuntimes(now time.Time) {
 // Heartbeat is the SSE heartbeat interval the API uses.
 func (s *Service) Heartbeat() time.Duration { return s.cfg.Heartbeat }
 
+// CLIAuth returns the persistent external CLI login manager.
+func (s *Service) CLIAuth() *CLIAuthManager { return s.cliAuth }
+
+// Workspace returns the separated MCP/Skills/Prompts workspace manager.
+func (s *Service) Workspace() *WorkspaceManager { return s.workspace }
+
+// Registry returns the official Skills & MCP registry manager.
+func (s *Service) Registry() *RegistryManager { return s.registry }
+
 // Close stops every running turn, waits until the turns wrote their final
 // status, and only then closes the SSE subscribers. A paused approval stays
 // waiting_approval in the database, for Recover to pick up. It is safe to call
@@ -260,6 +282,9 @@ func (s *Service) Heartbeat() time.Duration { return s.cfg.Heartbeat }
 func (s *Service) Close() {
 	if !s.closed.CompareAndSwap(false, true) {
 		return
+	}
+	if s.cliAuth != nil {
+		s.cliAuth.Close()
 	}
 	s.mu.Lock()
 	runtimes := make([]*sessionRuntime, 0, len(s.sessions))
@@ -581,9 +606,9 @@ func (s *Service) Update(ctx context.Context, owner actor.Actor, sessionID strin
 	if err != nil {
 		return nil, err
 	}
-	if req.Title == nil && req.PermissionMode == "" {
+	if req.Title == nil && req.PermissionMode == "" && len(req.Config) == 0 {
 		return nil, problem.Validation(problem.Violation{
-			Pointer: "/title", Code: "REQUIRED", Message: "Provide title and/or permission_mode.",
+			Pointer: "/title", Code: "REQUIRED", Message: "Provide title, permission_mode, and/or config.",
 		})
 	}
 	if req.ExpectedRevision != "" && req.ExpectedRevision != rec.Revision {
@@ -603,12 +628,23 @@ func (s *Service) Update(ctx context.Context, owner actor.Actor, sessionID strin
 			Message: "permission_mode must be read_only, safe, full or custom.",
 		})
 	}
+	var mergedCfg json.RawMessage
+	if len(req.Config) > 0 {
+		var err error
+		mergedCfg, err = mergeSessionConfig(rec.Core, rec.Config, req.Config)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var pointers []string
 	if title != nil {
 		pointers = append(pointers, "/title")
 	}
 	if req.PermissionMode != "" {
 		pointers = append(pointers, "/permission_mode")
+	}
+	if len(mergedCfg) > 0 {
+		pointers = append(pointers, "/config")
 	}
 	updated, err := s.updateSession(ctx, owner, sessionID, 0, pointers, func(cur *Session) error {
 		if req.ExpectedRevision != "" && req.ExpectedRevision != cur.Revision {
@@ -620,6 +656,13 @@ func (s *Service) Update(ctx context.Context, owner actor.Actor, sessionID strin
 		if req.PermissionMode != "" {
 			cur.PermissionMode = req.PermissionMode
 		}
+		if len(mergedCfg) > 0 {
+			m, err := mergeSessionConfig(cur.Core, cur.Config, req.Config)
+			if err != nil {
+				return err
+			}
+			cur.Config = m
+		}
 		return nil
 	})
 	if err != nil {
@@ -627,10 +670,59 @@ func (s *Service) Update(ctx context.Context, owner actor.Actor, sessionID strin
 	}
 	s.auditUpdate(ctx, owner, updated, pointers)
 	rt := s.runtimeFor(updated)
+	if len(mergedCfg) > 0 {
+		rt.mu.Lock()
+		rt.session.Config = updated.Config
+		rt.mu.Unlock()
+	}
 	if req.PermissionMode != "" {
 		s.applyMode(ctx, rt, req.PermissionMode)
 	}
 	return updated, nil
+}
+
+// mergeSessionConfig merges a partial JSON object patch onto an existing session
+// config, refusing plaintext secrets and validating the resulting config.
+func mergeSessionConfig(core CoreName, existing, patch json.RawMessage) (json.RawMessage, error) {
+	if err := refusePlaintextSecrets(patch); err != nil {
+		return nil, err
+	}
+	base := map[string]any{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &base)
+	}
+	var delta map[string]any
+	if err := json.Unmarshal(patch, &delta); err != nil || delta == nil {
+		return nil, problem.Validation(problem.Violation{
+			Pointer: "/config", Code: "INVALID", Message: "config must be a JSON object.",
+		})
+	}
+	for k, v := range delta {
+		if v == nil {
+			delete(base, k)
+		} else {
+			base[k] = v
+		}
+	}
+	raw, err := json.Marshal(base)
+	if err != nil {
+		return nil, problem.Wrap(err)
+	}
+	if len(raw) > maxConfigBytes {
+		return nil, problem.Validation(problem.Violation{
+			Pointer: "/config", Code: "too_large", Message: "config exceeds 32 KiB.",
+		})
+	}
+	normalized, err := normalizeConfig(core, raw)
+	if err != nil {
+		return nil, err
+	}
+	if core == CoreNative {
+		if _, err := decodeEnhancedNativeConfig(normalized); err != nil {
+			return nil, err
+		}
+	}
+	return normalized, nil
 }
 
 // auditUpdate records a metadata or permission-mode change. It runs in its own

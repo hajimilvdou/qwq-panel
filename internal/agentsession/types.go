@@ -446,6 +446,7 @@ type CreateRequest struct {
 type UpdateRequest struct {
 	Title            *string
 	PermissionMode   operations.PermissionMode
+	Config           json.RawMessage
 	ExpectedRevision string
 }
 

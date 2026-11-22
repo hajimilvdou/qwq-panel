@@ -15,12 +15,21 @@
   import NewSession from './NewSession.svelte';
   import SessionList from './SessionList.svelte';
 
+  type WorkspaceTab = 'prompts' | 'skills' | 'mcp' | 'registry';
+
   let { params }: { params: Record<string, string> } = $props();
 
   const list = useResource(sessionsResource);
   const id = $derived(params.sessionId);
   let drawer = $state(false);
   let narrow = $state(false);
+  let workspaceOpen = $state(false);
+  let workspaceTab = $state<WorkspaceTab>('prompts');
+
+  function openWorkspace(tab: WorkspaceTab = 'prompts') {
+    workspaceTab = tab;
+    workspaceOpen = true;
+  }
 
   $effect(() => {
     dock.chatSuppressed = true;
@@ -38,15 +47,22 @@
 
 <div class="agent">
   {#if !narrow}
-    <aside class="side"><SessionList {list} current={id} /></aside>
+    <aside class="side"><SessionList {list} current={id} onopenworkspace={openWorkspace} /></aside>
   {/if}
   <div class="main">
     {#key id}
       {#if id}
-        <Conversation {id} onmenu={narrow ? () => (drawer = true) : undefined} />
+        <Conversation
+          {id}
+          onmenu={narrow ? () => (drawer = true) : undefined}
+          onopenworkspace={openWorkspace}
+        />
       {:else}
         {#if narrow}
-          <button type="button" class="open-list" onclick={() => (drawer = true)}>历史对话</button>
+          <div class="mobile-bar">
+            <button type="button" class="open-list" onclick={() => (drawer = true)}>历史对话</button>
+            <button type="button" class="open-list" onclick={() => openWorkspace('prompts')}>MCP · 技能 · 提示词</button>
+          </div>
         {/if}
         <NewSession />
       {/if}
@@ -56,8 +72,19 @@
 
 {#if narrow}
   <Drawer bind:open={drawer} title="对话" side="left">
-    <SessionList {list} current={id} onpick={() => (drawer = false)} />
+    <SessionList
+      {list}
+      current={id}
+      onpick={() => (drawer = false)}
+      onopenworkspace={openWorkspace}
+    />
   </Drawer>
+{/if}
+
+{#if workspaceOpen}
+  {#await import('./AgentWorkspaceModal.svelte') then mod}
+    <mod.default bind:open={workspaceOpen} initialTab={workspaceTab} />
+  {/await}
 {/if}
 
 <style>
@@ -86,9 +113,14 @@
     min-height: 0;
     overflow-y: auto;
   }
+  .mobile-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    margin: var(--s-3) var(--s-3) 0;
+  }
   .open-list {
     align-self: flex-start;
-    margin: var(--s-3) var(--s-3) 0;
     min-height: 36px;
     padding: 0 var(--s-3);
     border: 1px solid var(--line);

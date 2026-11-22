@@ -28,10 +28,169 @@ export type TotpConfirmResult = S['TotpConfirmResult'];
 
 /* ------------------------------------------------------------------ 2 · AI 服务（缺口 2） */
 
-export type AiProvider = S['AiProvider'];
-export type AiProviderCreateRequest = S['AiProviderCreateRequest'];
-export type AiProviderUpdateRequest = S['AiProviderUpdateRequest'];
+export type AiProviderKind = 'openai_compatible' | 'anthropic_compatible';
+export type ReasoningEffort = '' | 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+
+export type AiProvider = Omit<S['AiProvider'], 'kind'> & {
+  kind?: AiProviderKind;
+  models?: string[];
+  reasoning_effort?: ReasoningEffort;
+  max_context_tokens?: number;
+};
+export type AiProviderCreateRequest = Omit<S['AiProviderCreateRequest'], 'kind'> & {
+  kind?: AiProviderKind;
+  models?: string[];
+  reasoning_effort?: ReasoningEffort;
+  max_context_tokens?: number;
+};
+export type AiProviderUpdateRequest = S['AiProviderUpdateRequest'] & {
+  kind?: AiProviderKind;
+  models?: string[];
+  reasoning_effort?: ReasoningEffort;
+  max_context_tokens?: number;
+};
 export type AiProviderTestResult = S['AiProviderTestResult'];
+
+export interface AiProviderFetchModelsRequest {
+  provider_id?: string;
+  kind?: AiProviderKind;
+  base_url?: string;
+  api_key?: string;
+}
+
+export interface AiProviderFetchModelsResult {
+  ok: boolean;
+  models: string[];
+  latency_ms?: number;
+  category?: NonNullable<AiProviderTestResult['category']>;
+}
+
+export type ExternalCliCore = 'codex' | 'claude-code' | 'opencode';
+
+export interface AgentCoreLoginState {
+  state: 'pending' | 'succeeded' | 'failed' | 'cancelled' | 'expired';
+  verification_url?: string;
+  user_code?: string;
+  message?: string;
+  output_tail?: string[];
+  started_at?: string;
+  updated_at?: string;
+}
+
+export interface AgentCoreAuthStatus {
+  core: ExternalCliCore;
+  display_name: string;
+  binary: string;
+  installed: boolean;
+  install_hint: string;
+  logged_in: boolean;
+  auth_method: 'oauth' | 'token' | 'none';
+  updated_at?: string;
+  active_login?: AgentCoreLoginState;
+}
+
+export interface AgentCoreLoginRequest {
+  mode: 'device' | 'token';
+  token?: string;
+}
+
+export type WorkspaceArea = 'mcp' | 'skills' | 'prompts';
+
+export interface AgentCorePromptTarget {
+  core: 'native' | 'claude-code' | 'codex' | 'opencode';
+  display_name: string;
+  rel_path: string;
+  file_name: string;
+  description: string;
+}
+
+export interface AgentWorkspaceFileEntry {
+  area: WorkspaceArea;
+  path: string;
+  name: string;
+  group?: string;
+  size: number;
+  is_text: boolean;
+  updated_at: string;
+}
+
+export interface AgentWorkspaceListResult {
+  area: WorkspaceArea;
+  directory_hint: string;
+  items: AgentWorkspaceFileEntry[];
+  prompt_targets?: AgentCorePromptTarget[];
+}
+
+export interface AgentWorkspaceFileContent {
+  area: WorkspaceArea;
+  path: string;
+  content: string;
+  size: number;
+  updated_at?: string;
+}
+
+export interface AgentWorkspaceWriteRequest {
+  area: WorkspaceArea;
+  path: string;
+  content?: string;
+  content_base64?: string;
+}
+
+export interface AgentMCPServerEntry {
+  id: string;
+  name: string;
+  description?: string;
+  transport: 'stdio' | 'http';
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  enabled: boolean;
+  source?: string;
+}
+
+export interface AgentRegistrySourceMeta {
+  id: string;
+  name: string;
+  kind: 'skill' | 'mcp';
+  repo: string;
+  url: string;
+  description: string;
+}
+
+export interface AgentRegistryItem {
+  id: string;
+  slug: string;
+  kind: 'skill' | 'mcp';
+  source: string;
+  source_name: string;
+  name: string;
+  description: string;
+  repo: string;
+  repo_path?: string;
+  repo_url: string;
+  raw_url?: string;
+  tags?: string[];
+  installed: boolean;
+  mcp_template?: AgentMCPServerEntry;
+}
+
+export interface AgentRegistrySearchResult {
+  sources: AgentRegistrySourceMeta[];
+  items: AgentRegistryItem[];
+  live_refreshed: boolean;
+  cached_at?: string;
+}
+
+export interface AgentRegistryInstallResult {
+  id: string;
+  kind: 'skill' | 'mcp';
+  installed: boolean;
+  target: string;
+  from_live: boolean;
+  message: string;
+}
+
 /** GET /api/v1/agent-cores 的条目：available/reason */
 export type AgentCoreInfo = S['AgentCoreInfo'];
 

@@ -6,9 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/qwq-panel/qwq/internal/actor"
+	"github.com/qwq-panel/qwq/internal/operations"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 	"github.com/qwq-panel/qwq/internal/storage"
 )
@@ -29,21 +31,28 @@ func (s *Service) registerDefaultAdapterCores(opts Options) {
 		EgressAllowPrefixes: opts.Native.EgressAllowPrefixes,
 		EgressAllowAddrs:    opts.Native.EgressAllowAddrs,
 	}
-	s.cores[string(CoreNative)] = NewEnhancedNativeCore(nativeOpts, skills)
+	nativeCore := NewEnhancedNativeCore(nativeOpts, skills)
+	nativeCore.SetWorkspace(s.workspace)
+	s.cores[string(CoreNative)] = nativeCore
 	s.cores[string(CoreClaudeCode)] = NewClaudeCodeCore(ClaudeCodeOptions{
 		Bridge:    opts.Approvals,
 		Providers: s,
 		Skills:    skills,
+		Auth:      s.cliAuth,
+		Workspace: s.workspace,
 	})
 	s.cores[string(CoreCodex)] = NewCodexCore(CodexOptions{
 		Bridge:    opts.Approvals,
 		Providers: s,
 		Skills:    skills,
+		Auth:      s.cliAuth,
+		Workspace: s.workspace,
 	})
 	s.cores[string(CoreOpencode)] = NewOpenCodeCore(OpenCodeOptions{
 		Bridge:    opts.Approvals,
 		Providers: s,
 		Skills:    skills,
+		Auth:      s.cliAuth,
 	})
 	s.cores[string(CoreDSH)] = NewDSHCore(DSHOptions{
 		Bridge:    opts.Approvals,
@@ -56,6 +65,7 @@ func (s *Service) registerDefaultAdapterCores(opts Options) {
 		Bridge:      opts.Approvals,
 		Providers:   s,
 		Skills:      skills,
+		Auth:        s.cliAuth,
 	})
 }
 
@@ -68,7 +78,7 @@ func isDirectSlashCommand(content string) bool {
 		return false
 	}
 	switch name {
-	case "status", "compact", "skills", "mcp", "help":
+	case "status", "compact", "plan", "mode", "model", "effort", "context", "skills", "mcp", "help":
 		return true
 	default:
 		return false
@@ -76,22 +86,44 @@ func isDirectSlashCommand(content string) bool {
 }
 
 // tryHandleSlashCommand intercepts panel-wide direct slash commands
-// (/status, /compact, /skills, /mcp, /help) at turn start so they run against
-// the host session runtime deterministically without calling an external LLM.
+// (/status, /compact, /plan, /mode, /model, /effort, /context, /skills, /mcp, /help)
+// at turn start so they run against the host session runtime deterministically
+// without calling an external LLM.
 func (s *Service) tryHandleSlashCommand(ctx context.Context, rt *sessionRuntime, sess Session, hist []Message, tools []ToolSpec) bool {
 	prompt := latestUserMessage(hist)
-	name, _, ok := ParseSlashCommand(prompt)
+	name, args, ok := ParseSlashCommand(prompt)
 	if !ok {
 		return false
 	}
 	emit := func(e Event) error { return s.emit(ctx, rt, e) }
+	owner := rt.owner()
 	switch name {
 	case "status":
+		var cfg struct {
+			Model            string `json:"model"`
+			ReasoningEffort  string `json:"reasoning_effort"`
+			MaxContextTokens int64  `json:"max_context_tokens"`
+			PlanMode         bool   `json:"plan_mode"`
+		}
+		_ = json.Unmarshal(sess.Config, &cfg)
+		extra := ""
+		if cfg.Model != "" {
+			extra += " · 模型 " + cfg.Model
+		}
+		if cfg.ReasoningEffort != "" {
+			extra += " · 思考 " + cfg.ReasoningEffort
+		}
+		if cfg.MaxContextTokens > 0 {
+			extra += fmt.Sprintf(" · 上下文 %dk", cfg.MaxContextTokens/1000)
+		}
+		if cfg.PlanMode {
+			extra += " · 计划模式开"
+		}
 		res := CommandResult{
 			Command: "/status",
 			OK:      true,
-			Summary: fmt.Sprintf("核心 %s · 权限模式 %s · 历史消息 %d 条 · 已挂载宿主工具 %d 项",
-				sess.Core, sess.PermissionMode, len(hist), len(tools)),
+			Summary: fmt.Sprintf("核心 %s · 权限模式 %s%s · 历史消息 %d 条 · 已挂载宿主工具 %d 项",
+				sess.Core, sess.PermissionMode, extra, len(hist), len(tools)),
 		}
 		_ = emitExtended(emit, EventCommandResult, res)
 		return true
@@ -113,6 +145,113 @@ func (s *Service) tryHandleSlashCommand(ctx context.Context, rt *sessionRuntime,
 			}
 		}
 		_ = emitExtended(emit, EventSessionCompacted, compRes)
+		return true
+
+	case "plan":
+		var cur struct {
+			PlanMode bool `json:"plan_mode"`
+		}
+		_ = json.Unmarshal(sess.Config, &cur)
+		next := !cur.PlanMode
+		if strings.EqualFold(args, "on") || strings.EqualFold(args, "true") {
+			next = true
+		} else if strings.EqualFold(args, "off") || strings.EqualFold(args, "false") {
+			next = false
+		}
+		patch, _ := json.Marshal(map[string]any{"plan_mode": next})
+		if _, err := s.Update(ctx, owner, sess.ID, UpdateRequest{Config: patch}); err != nil {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/plan", OK: false, Summary: "切换计划模式失败：" + err.Error()})
+			return true
+		}
+		msg := "已开启计划模式（锁定只读，优先输出执行清单与方案）"
+		if !next {
+			msg = "已关闭计划模式，恢复当前会话授权级别"
+		}
+		_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/plan", OK: true, Summary: msg})
+		return true
+
+	case "mode":
+		m := operations.PermissionMode(strings.TrimSpace(args))
+		if !m.Valid() || m == operations.PermissionCustom {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{
+				Command: "/mode", OK: false, Summary: "用法：/mode <read_only|safe|full>",
+			})
+			return true
+		}
+		if _, err := s.Update(ctx, owner, sess.ID, UpdateRequest{PermissionMode: m}); err != nil {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/mode", OK: false, Summary: "切换权限模式失败：" + err.Error()})
+			return true
+		}
+		_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/mode", OK: true, Summary: fmt.Sprintf("已切换权限模式为 %s", m)})
+		return true
+
+	case "model":
+		fields := strings.Fields(args)
+		if len(fields) == 0 {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/model", OK: false, Summary: "用法：/model <模型名> [none|low|medium|high|xhigh]"})
+			return true
+		}
+		delta := map[string]any{"model": fields[0]}
+		if len(fields) > 1 {
+			eff, err := ValidateReasoningEffort(fields[1], "/config/reasoning_effort")
+			if err != nil {
+				_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/model", OK: false, Summary: "思考深度应为 none / low / medium / high / xhigh"})
+				return true
+			}
+			delta["reasoning_effort"] = eff
+		}
+		patch, _ := json.Marshal(delta)
+		if _, err := s.Update(ctx, owner, sess.ID, UpdateRequest{Config: patch}); err != nil {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/model", OK: false, Summary: "切换模型失败：" + err.Error()})
+			return true
+		}
+		summary := fmt.Sprintf("已切换推理模型为 %s", fields[0])
+		if eff, ok := delta["reasoning_effort"].(string); ok && eff != "" {
+			summary += "（思考挡位：" + eff + "）"
+		}
+		_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/model", OK: true, Summary: summary})
+		return true
+
+	case "effort":
+		eff, err := ValidateReasoningEffort(args, "/config/reasoning_effort")
+		if err != nil || eff == "" {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/effort", OK: false, Summary: "用法：/effort <none|low|medium|high|xhigh>"})
+			return true
+		}
+		patch, _ := json.Marshal(map[string]any{"reasoning_effort": eff})
+		if _, err := s.Update(ctx, owner, sess.ID, UpdateRequest{Config: patch}); err != nil {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/effort", OK: false, Summary: "设置思考挡位失败：" + err.Error()})
+			return true
+		}
+		_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/effort", OK: true, Summary: fmt.Sprintf("已将思考挡位设为 %s", eff)})
+		return true
+
+	case "context":
+		raw := strings.ToLower(strings.TrimSpace(args))
+		mult := int64(1)
+		if strings.HasSuffix(raw, "k") {
+			mult = 1000
+			raw = strings.TrimSuffix(raw, "k")
+		} else if strings.HasSuffix(raw, "m") {
+			mult = 1_000_000
+			raw = strings.TrimSuffix(raw, "m")
+		}
+		n, perr := strconv.ParseInt(raw, 10, 64)
+		if perr != nil {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: false, Summary: "用法：/context <tokens>，例如 /context 128k 或 /context 200000"})
+			return true
+		}
+		val, verr := ValidateMaxContextTokens(n*mult, "/config/max_context_tokens")
+		if verr != nil {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: false, Summary: "上下文大小需为 0 或 1024 ~ 4000000 之间"})
+			return true
+		}
+		patch, _ := json.Marshal(map[string]any{"max_context_tokens": val})
+		if _, err := s.Update(ctx, owner, sess.ID, UpdateRequest{Config: patch}); err != nil {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: false, Summary: "设置上下文窗口失败：" + err.Error()})
+			return true
+		}
+		_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: true, Summary: fmt.Sprintf("已将上下文窗口大小设为 %d tokens", val)})
 		return true
 
 	case "skills":
@@ -150,7 +289,7 @@ func (s *Service) tryHandleSlashCommand(ctx context.Context, rt *sessionRuntime,
 		_ = emitExtended(emit, EventCommandResult, CommandResult{
 			Command: "/help",
 			OK:      true,
-			Summary: "可用快捷指令：/status（会话状态）、/compact（压缩上下文）、/skills（查看运维技能）、/mcp（查看宿主授权工具）、/help（帮助）",
+			Summary: "可用快捷指令：/status、/compact、/plan [on|off]、/mode <read_only|safe|full>、/model <名称> [挡位]、/effort <none|low|medium|high|xhigh>、/context <大小>、/skills、/mcp、/help",
 		})
 		return true
 

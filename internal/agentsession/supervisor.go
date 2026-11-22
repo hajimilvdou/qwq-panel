@@ -90,7 +90,20 @@ func SanitizedEnv(extra []string) ([]string, error) {
 		}
 		out = append(out, kv)
 	}
-	return out, nil
+	// Deduplicate keeping the last value per key so explicit per-core persistent
+	// auth overrides take precedence deterministically over default temp dirs.
+	idxByKey := make(map[string]int, len(out))
+	dedup := make([]string, 0, len(out))
+	for _, kv := range out {
+		k, _, _ := strings.Cut(kv, "=")
+		if pos, exists := idxByKey[k]; exists {
+			dedup[pos] = kv
+		} else {
+			idxByKey[k] = len(dedup)
+			dedup = append(dedup, kv)
+		}
+	}
+	return dedup, nil
 }
 
 // globalCLISem enforces the 1C1G concurrency ceiling (at most 1 active OS CLI
@@ -390,33 +403,55 @@ func (p *ChildProcess) Close(grace time.Duration) error {
 // The plaintext key never touches config_json, logs or errors, and cleanup
 // scrubs the temporary slice on return.
 func ResolveProviderEnv(ctx context.Context, providers ProviderResolver, providerID string, core CoreName) ([]string, func(), error) {
+	env, _, _, cleanup, err := ResolveProviderForCLI(ctx, providers, providerID, core)
+	return env, cleanup, err
+}
+
+// ResolveProviderForCLI resolves provider_id into child CLI environment
+// variables AND returns the resolved ProviderEndpoint metadata (model,
+// reasoning_effort, max_context_tokens, kind) so adapters inherit provider
+// defaults seamlessly.
+func ResolveProviderForCLI(ctx context.Context, providers ProviderResolver, providerID string, core CoreName) ([]string, ProviderEndpoint, bool, func(), error) {
 	noop := func() {}
 	if providers == nil || providerID == "" {
-		return nil, noop, nil
+		return nil, ProviderEndpoint{}, false, noop, nil
 	}
 	ep, found, err := providers.ResolveProvider(ctx, providerID)
 	if err != nil {
-		return nil, noop, problem.From(err)
+		return nil, ProviderEndpoint{}, false, noop, problem.From(err)
 	}
-	if !found || len(ep.Key) == 0 {
-		return nil, noop, nil
-	}
-	keyVar := "OPENAI_API_KEY"
-	baseVar := "OPENAI_BASE_URL"
-	switch core {
-	case CoreDSH:
-		keyVar = "DEEPSEEK_API_KEY"
-		baseVar = "DEEPSEEK_BASE_URL"
-	case CoreClaudeCode:
-		keyVar = "ANTHROPIC_API_KEY"
-		baseVar = "ANTHROPIC_BASE_URL"
-	}
-	env := []string{keyVar + "=" + string(ep.Key)}
-	if ep.BaseURL != "" {
-		env = append(env, baseVar+"="+ep.BaseURL)
+	if !found {
+		return nil, ProviderEndpoint{}, false, noop, nil
 	}
 	cleanup := func() { clear(ep.Key) }
-	return env, cleanup, nil
+	var env []string
+	switch {
+	case core == CoreDSH:
+		if len(ep.Key) > 0 {
+			env = append(env, "DEEPSEEK_API_KEY="+string(ep.Key))
+		}
+		if ep.BaseURL != "" {
+			env = append(env, "DEEPSEEK_BASE_URL="+ep.BaseURL)
+		}
+	case core == CoreClaudeCode || (core == CoreOpencode && ep.Kind == ProviderKindAnthropic):
+		if len(ep.Key) > 0 {
+			env = append(env, "ANTHROPIC_API_KEY="+string(ep.Key))
+			if core == CoreClaudeCode {
+				env = append(env, "ANTHROPIC_AUTH_TOKEN="+string(ep.Key))
+			}
+		}
+		if ep.BaseURL != "" {
+			env = append(env, "ANTHROPIC_BASE_URL="+ep.BaseURL)
+		}
+	default:
+		if len(ep.Key) > 0 {
+			env = append(env, "OPENAI_API_KEY="+string(ep.Key))
+		}
+		if ep.BaseURL != "" {
+			env = append(env, "OPENAI_BASE_URL="+ep.BaseURL)
+		}
+	}
+	return env, ep, true, cleanup, nil
 }
 
 // boundedBuffer retains at most limit bytes so verbose stderr never OOMs 1C1G.

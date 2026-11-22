@@ -15,10 +15,9 @@
 
   const info = useResource({ key: 'system.info', load: () => system.info() });
   const isAdmin = $derived(session.user?.role === 'admin');
-  const access = useResource<PanelAccessSettings>({
+  const access = useResource<PanelAccessSettings | null>({
     key: 'system.access',
-    load: () => system.access(),
-    enabled: () => isAdmin,
+    load: () => (isAdmin ? system.access() : Promise.resolve(null)),
   });
 
   const ROLE: Record<string, string> = { standalone: '单机', controller: '控制节点', agent: '被控节点' };
@@ -82,7 +81,7 @@
   function randomHighPort() {
     const buf = new Uint32Array(1);
     crypto.getRandomValues(buf);
-    portText = String(20000 + (buf[0] % 40000));
+    portText = String(20000 + ((buf[0] ?? 0) % 40000));
   }
 
   function randomEntryPath() {

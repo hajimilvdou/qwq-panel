@@ -11,7 +11,7 @@
 
 不同于在传统面板外面生硬套一层聊天框，**qwq 的每一项宿主能力与插件功能，底层都原生按 AI Agent 标准建模**：
 
-- **内置 7 个结构化 Agent 原生工具接口**（`/api/v1/agent/{find_actions,describe_action,read,plan,execute,wait,cancel}`）与 **103 条严格校验的 OpenAPI v1 契约**：AI 不需要靠猜命令或硬编码 SSH 脚本，直接发现可用能力、读取参数 Schema 并精准调用。
+- **内置 7 个结构化 Agent 原生工具接口**（`/api/v1/agent/{find_actions,describe_action,read,plan,execute,wait,cancel}`）与 **113 条严格校验的 OpenAPI v1 契约**：AI 不需要靠猜命令或硬编码 SSH 脚本，直接发现可用能力、读取参数 Schema 并精准调用。
 - **先出计划（Plan），再执行（Execute）**：对防火墙、反代、证书、SSH 等变更，AI 可先生成结构化变更预览与影响说明；高危动作自动进入**人工一键审批（Approvals）**，确认后才落地，不瞎改系统。
 - **全链路幂等、可审计、可回滚**：每次 AI 操作都有独立 `Idempotency-Key`、完整操作流水（Operations / Jobs）与不可篡改审计日志，配合细粒度作用域的 **Service Account / 授权委托**，随时可控、随时可撤权。
 - **既支持内置原生 Agent 会话，也支持外部 CLI Agent（Claude Code / Codex / 自定义 MCP 等）安全接入**：不想研究 Nginx 配置、ACME 证书、nftables 规则或 Docker Compose 参数的小白，直接把需求告诉 AI 即可搞定。
@@ -24,6 +24,18 @@
 - **10 款按需选装官方插件**：全部独立打包为 Ed25519 签名的 `.qwqpkg` 插件包，安装时可交互勾选，装完后也能在面板内随时一键加装或卸载；每个插件运行在独立的 `systemd DynamicUser + seccomp + cgroup v2` 沙箱中。
 - **与现有环境零冲突共存**：绝不改动宿主机已有的 Nginx / Caddy / UFW / firewalld / 宝塔；首次安装自动分配**随机高位端口（20000–59999）+ 随机安全密道（如 `/jsnsjx8k2m`）**，默认仅监听 `127.0.0.1:<随机端口>`。
 - **可复现构建 + Ed25519 全链路验签**：每次发版在 GitHub Actions 同一提交构建两遍逐字节比对 `SHA256SUMS`，并由离线发布密钥签名。
+
+---
+
+## 🧠 完整多核心 Agent 生态：官方登录 / 自定义 Key · 分目录资源管理 · 官方仓库一键安装
+
+除了内置原生 Agent，**qwq 全面打通 `Claude Code`、`Codex`、`OpenCode` 等主流外部 CLI Agent 的完整工作流**：
+
+- **面板内直接官方登录（OAuth / Device Code / Setup Token）**：在 **「设置 → AI 模型与 Agent」** 中为 `Codex`、`Claude Code`、`OpenCode` 发起官方登录或粘贴 Setup Token，凭据持久化保存在按核心隔离的 `<DataDir>/agent-homes/<core>`（`0700`）中，不污染宿主机 `/root`，跨轮次不会丢失登录态。
+- **自定义 URL + API Key 全参数控制**：支持 **OpenAI 兼容** 与 **Anthropic 兼容** 两种协议；输入 URL 和 Key 即可**一键拉取可用模型列表**、预设与实时调整**思考挡位（Effort：`none` / `low` / `medium` / `high` / `xhigh`）**、**上下文窗口大小（Max Context）**与 **Plan 模式**，并支持对话内 `/model`、`/effort`、`/context`、`/plan`、`/mode` 快捷指令即时生效。
+- **MCP / Skills / 各家自定义提示词分目录管理 + 拖拽上传**：在 Agent 页面一键打开资源管理器，三类文件严格分目录存放，**各家核心提示词互不串线**（`prompts/claude-code/CLAUDE.md`、`prompts/codex/AGENTS.md`、`prompts/opencode/AGENTS.md`、`prompts/native/SYSTEM.md`），支持在线编辑与**网页直接拖拽上传**，并自动同步镜像到对应 CLI 隔离目录。
+- **内置官方 Skills & MCP 仓库一键搜索安装**：内置 `anthropics/skills`、`openai/skills`、`modelcontextprotocol/servers`（及 Playwright、Context7 等高频官方 MCP）索引，支持 10 分钟 TTL 缓存与按需联网刷新，一键下载安装到 Agent 立即可用（前端弹窗按需懒加载，0 字节首屏负担）。
+- **查看会话圆点时间轴导航**：长对话侧边常驻高密度圆点进度轴，自动跟随当前阅读轮次，悬停弹出双行内容预览与时间（`X of N · HH:MM`），点击平滑跳转高亮，并支持可搜索会话目录。
 
 ---
 
@@ -45,7 +57,7 @@
 从 [GitHub Releases](https://github.com/hajimilvdou/qwq-panel/releases) 下载对应版本的 `install.sh`（内置 Ed25519 发布公钥验签）并运行：
 
 ```bash
-VERSION=v0.1.2
+VERSION=v0.1.3
 curl -fsSL "https://github.com/hajimilvdou/qwq-panel/releases/download/${VERSION}/install.sh" -o install.sh
 sudo bash install.sh --version "${VERSION}"
 ```

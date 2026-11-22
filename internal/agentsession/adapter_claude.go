@@ -30,14 +30,17 @@ import (
 //     optional `provider_id` key bridge (`ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`).
 
 type ClaudeCodeConfig struct {
-	Binary          string   `json:"binary,omitempty"`            // default "claude"
-	ProviderID      string   `json:"provider_id,omitempty"`       // optional global AIProvider key bridge
-	Model           string   `json:"model,omitempty"`             // optional --model override
-	ResumeSessionID string   `json:"resume_session_id,omitempty"` // optional --resume <id>
-	WorkDir         string   `json:"work_dir,omitempty"`
-	PlanMode        bool     `json:"plan_mode,omitempty"`
-	ActiveSkills    []string `json:"active_skills,omitempty"`
-	MaxTurns        int      `json:"max_turns,omitempty"`
+	Binary           string   `json:"binary,omitempty"`             // default "claude"
+	AuthMode         string   `json:"auth_mode,omitempty"`          // oauth | provider | "" (auto)
+	ProviderID       string   `json:"provider_id,omitempty"`        // optional global AIProvider key bridge
+	Model            string   `json:"model,omitempty"`              // optional --model override
+	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`   // none | low | medium | high | xhigh
+	MaxContextTokens int64    `json:"max_context_tokens,omitempty"` // optional context budget override
+	ResumeSessionID  string   `json:"resume_session_id,omitempty"`  // optional --resume <id>
+	WorkDir          string   `json:"work_dir,omitempty"`
+	PlanMode         bool     `json:"plan_mode,omitempty"`
+	ActiveSkills     []string `json:"active_skills,omitempty"`
+	MaxTurns         int      `json:"max_turns,omitempty"`
 }
 
 func decodeClaudeCodeConfig(raw json.RawMessage) (ClaudeCodeConfig, error) {
@@ -63,6 +66,8 @@ type ClaudeCodeOptions struct {
 	Bridge    ApprovalBridge
 	Providers ProviderResolver
 	Skills    *SkillRegistry
+	Auth      *CLIAuthManager
+	Workspace *WorkspaceManager
 }
 
 // ClaudeCodeCore implements Core, CapableCore, and PreflightableCore.
@@ -72,6 +77,8 @@ type ClaudeCodeCore struct {
 	bridge    ApprovalBridge
 	providers ProviderResolver
 	skills    *SkillRegistry
+	auth      *CLIAuthManager
+	workspace *WorkspaceManager
 }
 
 // NewClaudeCodeCore constructs a Claude Code CLI adapter.
@@ -94,6 +101,8 @@ func NewClaudeCodeCore(opts ClaudeCodeOptions) *ClaudeCodeCore {
 		bridge:    opts.Bridge,
 		providers: opts.Providers,
 		skills:    skills,
+		auth:      opts.Auth,
+		workspace: opts.Workspace,
 	}
 }
 
@@ -135,6 +144,7 @@ func (c *ClaudeCodeCore) Descriptor(context.Context) CoreDescriptor {
 			Skills:                true,
 			BidirectionalApproval: true,
 			MCPHostTools:          true,
+			ReasoningEffort:       true,
 		},
 	}
 }
@@ -164,6 +174,32 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 		return problem.New(problem.ValidationFailed, "No user prompt found in turn.")
 	}
 
+	var extraEnv []string
+	var cleanupEnv = func() {}
+	useProvider := cfg.AuthMode != "oauth" && cfg.ProviderID != ""
+	if useProvider {
+		pEnv, ep, found, cl, pErr := ResolveProviderForCLI(ctx, c.providers, cfg.ProviderID, CoreClaudeCode)
+		if pErr != nil {
+			return pErr
+		}
+		cleanupEnv = cl
+		extraEnv = append(extraEnv, pEnv...)
+		if found {
+			if cfg.Model == "" {
+				cfg.Model = ep.Model
+			}
+			if cfg.ReasoningEffort == "" {
+				cfg.ReasoningEffort = ep.ReasoningEffort
+			}
+			if cfg.MaxContextTokens == 0 {
+				cfg.MaxContextTokens = ep.MaxContextTokens
+			}
+		}
+	} else if c.auth != nil {
+		extraEnv = append(extraEnv, c.auth.PersistentEnvFor(CoreClaudeCode)...)
+	}
+	defer cleanupEnv()
+
 	effectiveMode := turn.PermissionMode
 	if cfg.PlanMode {
 		effectiveMode = operations.PermissionReadOnly
@@ -179,18 +215,35 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
+	if eff := strings.ToLower(strings.TrimSpace(cfg.ReasoningEffort)); eff != "" && eff != "none" {
+		if eff == "xhigh" {
+			eff = "high"
+		}
+		extraEnv = append(extraEnv, "CLAUDE_CODE_EFFORT_LEVEL="+eff)
+	}
 	if cfg.ResumeSessionID != "" {
 		args = append(args, "--resume", cfg.ResumeSessionID)
 	}
 	if cfg.MaxTurns > 0 {
 		args = append(args, "--max-turns", fmt.Sprintf("%d", cfg.MaxTurns))
 	}
-	if sysPrompt := c.skills.BuildSkillPrompt(cfg.ActiveSkills); sysPrompt != "" {
-		args = append(args, "--append-system-prompt", sysPrompt)
+	sysPrompt := c.skills.BuildSkillPrompt(cfg.ActiveSkills)
+	if c.workspace != nil {
+		if claudeMD := c.workspace.ReadPromptForCore(CoreClaudeCode); claudeMD != "" {
+			sysPrompt += "\n\n" + claudeMD
+		}
+		if customSkills := c.workspace.LoadCustomSkillsPrompt(); customSkills != "" {
+			sysPrompt += customSkills
+		}
+	}
+	if strings.TrimSpace(sysPrompt) != "" {
+		args = append(args, "--append-system-prompt", strings.TrimSpace(sysPrompt))
 	}
 
 	// Start an ephemeral authenticated loopback MCP bridge so Claude Code invokes
-	// qwq panel tools solely through Runner.RunTool -> operations.Run.
+	// qwq panel tools solely through Runner.RunTool -> operations.Run, plus any
+	// enabled user-installed MCP servers from agent-workspace/mcp/servers.json.
+	mcpServers := map[string]any{}
 	if turn.Runner != nil && len(turn.Tools) > 0 {
 		mcpTurn := turn
 		mcpTurn.PermissionMode = effectiveMode
@@ -199,7 +252,33 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 			return problem.New(problem.Internal, "Failed to start loopback MCP bridge: %v", err)
 		}
 		defer srv.Close()
-
+		mcpServers["qwq"] = map[string]any{
+			"type": "http",
+			"url":  srv.URL,
+			"headers": map[string]string{
+				"Authorization": "Bearer " + srv.Token,
+			},
+		}
+	}
+	if c.workspace != nil {
+		if userMCPs, merr := c.workspace.ListMCPServers(); merr == nil {
+			for _, u := range userMCPs {
+				if !u.Enabled || u.ID == "" || u.ID == "qwq" {
+					continue
+				}
+				if u.Transport == "http" && u.URL != "" {
+					mcpServers[u.ID] = map[string]any{"type": "http", "url": u.URL}
+				} else if u.Command != "" {
+					entry := map[string]any{"command": u.Command, "args": u.Args}
+					if len(u.Env) > 0 {
+						entry["env"] = u.Env
+					}
+					mcpServers[u.ID] = entry
+				}
+			}
+		}
+	}
+	if len(mcpServers) > 0 {
 		tmpDir, err := os.MkdirTemp("", "qwq-claude-mcp-*")
 		if err != nil {
 			return problem.New(problem.Internal, "Failed to create temporary MCP config dir.")
@@ -207,17 +286,7 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 		defer os.RemoveAll(tmpDir)
 
 		mcpCfgPath := filepath.Join(tmpDir, "mcp.json")
-		mcpPayload, err := json.Marshal(map[string]any{
-			"mcpServers": map[string]any{
-				"qwq": map[string]any{
-					"type": "http",
-					"url":  srv.URL,
-					"headers": map[string]string{
-						"Authorization": "Bearer " + srv.Token,
-					},
-				},
-			},
-		})
+		mcpPayload, err := json.Marshal(map[string]any{"mcpServers": mcpServers})
 		if err != nil {
 			return problem.Wrap(err)
 		}
@@ -226,12 +295,6 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 		}
 		args = append(args, "--mcp-config", mcpCfgPath, "--strict-mcp-config")
 	}
-
-	extraEnv, cleanupEnv, err := ResolveProviderEnv(ctx, c.providers, cfg.ProviderID, CoreClaudeCode)
-	if err != nil {
-		return err
-	}
-	defer cleanupEnv()
 
 	proc, err := c.launcher.Start(ctx, bin, args, extraEnv, cfg.WorkDir)
 	if err != nil {

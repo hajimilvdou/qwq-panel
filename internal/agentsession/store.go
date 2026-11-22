@@ -264,10 +264,14 @@ func (s *Service) updateSession(ctx context.Context, owner actor.Actor, id strin
 		if lastSeq > cur.LastSeq {
 			cur.LastSeq = lastSeq
 		}
+		cfgText := "{}"
+		if len(cur.Config) > 0 {
+			cfgText = string(cur.Config)
+		}
 		_, err = tx.ExecContext(ctx, `UPDATE agent_sessions SET
-			title = ?, permission_mode = ?, status = ?, last_seq = ?, updated_at = ?, revision = ?
+			title = ?, permission_mode = ?, status = ?, config_json = ?, last_seq = ?, updated_at = ?, revision = ?
 			WHERE session_id = ?`,
-			cur.Title, string(cur.PermissionMode), string(cur.Status), cur.LastSeq,
+			cur.Title, string(cur.PermissionMode), string(cur.Status), cfgText, cur.LastSeq,
 			storage.FormatTime(cur.UpdatedAt), rev, cur.ID)
 		if err != nil {
 			return fmt.Errorf("agentsession: update session: %w", err)

@@ -236,10 +236,32 @@ export const agentRoutes: RouteSpec[] = [
     },
   },
   {
+    method: 'GET',
+    pattern: '/api/v1/agent-cores/auth',
+    handler: () =>
+      ok({
+        items: [
+          { core: 'claude-code', installed: false, logged_in: false, auth_dir: '/var/lib/qwq/agent-homes/claude-code', hint: '支持官方 OAuth 登录或自定义 Anthropic Key' },
+          { core: 'codex', installed: false, logged_in: false, auth_dir: '/var/lib/qwq/agent-homes/codex', hint: '支持官方 Device Code 登录或自定义 OpenAI Key' },
+          { core: 'opencode', installed: false, logged_in: false, auth_dir: '/var/lib/qwq/agent-homes/opencode', hint: '支持官方登录或自定义 OpenAI/Anthropic Key' },
+        ],
+      }),
+  },
+  {
+    method: 'GET',
+    pattern: '/api/v1/agent-workspace/files',
+    handler: () => ok({ root: '/var/lib/qwq/agent-workspace', items: [] }),
+  },
+  {
+    method: 'GET',
+    pattern: '/api/v1/agent-registry',
+    handler: () => ok({ items: [], sources: [], live: false }),
+  },
+  {
     method: 'PATCH',
     pattern: '/api/v1/agent-sessions/:id',
     idempotency: 'none',
-    fields: ['title', 'permission_mode', 'expected_revision'],
+    fields: ['title', 'permission_mode', 'config', 'expected_revision'],
     handler: (ctx) => {
       const s = own(ctx);
       checkRevision(s.revision, ctx.body.expected_revision);
@@ -247,6 +269,9 @@ export const agentRoutes: RouteSpec[] = [
       if (ctx.body.permission_mode !== undefined) {
         if (!MODES.includes(ctx.body.permission_mode)) throw invalid('/permission_mode', '权限模式不对', 'ENUM');
         s.permission_mode = ctx.body.permission_mode;
+      }
+      if (ctx.body.config && typeof ctx.body.config === 'object') {
+        s.config = { ...(s.config ?? {}), ...ctx.body.config };
       }
       s.revision = rev(ctx.db);
       s.updated_at = nowIso();

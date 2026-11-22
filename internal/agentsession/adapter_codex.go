@@ -32,15 +32,17 @@ import (
 // Security: qwq's PermissionMode + PlanMode + ApprovalRouter remain authoritative.
 
 type CodexConfig struct {
-	Binary          string   `json:"binary,omitempty"`      // default "codex"
-	Transport       string   `json:"transport,omitempty"`   // app-server (default) | exec-json
-	ProviderID      string   `json:"provider_id,omitempty"` // optional global AIProvider key bridge
-	Model           string   `json:"model,omitempty"`
-	ReasoningEffort string   `json:"reasoning_effort,omitempty"` // low | medium | high
-	WorkDir         string   `json:"work_dir,omitempty"`
-	ThreadID        string   `json:"external_thread_id,omitempty"`
-	PlanMode        bool     `json:"plan_mode,omitempty"`
-	ActiveSkills    []string `json:"active_skills,omitempty"`
+	Binary           string   `json:"binary,omitempty"`      // default "codex"
+	Transport        string   `json:"transport,omitempty"`   // app-server (default) | exec-json
+	AuthMode         string   `json:"auth_mode,omitempty"`   // oauth | provider | "" (auto)
+	ProviderID       string   `json:"provider_id,omitempty"` // optional global AIProvider key bridge
+	Model            string   `json:"model,omitempty"`
+	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`   // none | low | medium | high | xhigh
+	MaxContextTokens int64    `json:"max_context_tokens,omitempty"` // optional context budget override
+	WorkDir          string   `json:"work_dir,omitempty"`
+	ThreadID         string   `json:"external_thread_id,omitempty"`
+	PlanMode         bool     `json:"plan_mode,omitempty"`
+	ActiveSkills     []string `json:"active_skills,omitempty"`
 }
 
 // CodexOptions configures CodexCore.
@@ -50,6 +52,8 @@ type CodexOptions struct {
 	Bridge    ApprovalBridge
 	Providers ProviderResolver
 	Skills    *SkillRegistry
+	Auth      *CLIAuthManager
+	Workspace *WorkspaceManager
 	Binary    string
 }
 
@@ -60,6 +64,8 @@ type CodexCore struct {
 	bridge    ApprovalBridge
 	providers ProviderResolver
 	skills    *SkillRegistry
+	auth      *CLIAuthManager
+	workspace *WorkspaceManager
 	bin       string
 }
 
@@ -79,7 +85,7 @@ func NewCodexCore(opts CodexOptions) *CodexCore {
 	}
 	return &CodexCore{
 		launcher: opts.Launcher, minter: opts.Minter, bridge: opts.Bridge,
-		providers: opts.Providers, skills: skills, bin: bin,
+		providers: opts.Providers, skills: skills, auth: opts.Auth, workspace: opts.Workspace, bin: bin,
 	}
 }
 
@@ -183,6 +189,31 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 
 	args := []string{"app-server"}
 	var extraEnv []string
+	var cleanupEnv = func() {}
+	useProvider := cfg.AuthMode != "oauth" && cfg.ProviderID != ""
+	if useProvider {
+		pEnv, ep, found, cl, pErr := ResolveProviderForCLI(ctx, c.providers, cfg.ProviderID, CoreCodex)
+		if pErr != nil {
+			return pErr
+		}
+		cleanupEnv = cl
+		extraEnv = append(extraEnv, pEnv...)
+		if found {
+			if cfg.Model == "" {
+				cfg.Model = ep.Model
+			}
+			if cfg.ReasoningEffort == "" {
+				cfg.ReasoningEffort = ep.ReasoningEffort
+			}
+			if cfg.MaxContextTokens == 0 {
+				cfg.MaxContextTokens = ep.MaxContextTokens
+			}
+		}
+	} else if c.auth != nil {
+		extraEnv = append(extraEnv, c.auth.PersistentEnvFor(CoreCodex)...)
+	}
+	defer cleanupEnv()
+
 	if len(turn.Tools) > 0 && turn.Runner != nil {
 		if mcpSrv, mErr := StartLoopbackMCPServerWithContext(ctx, mcpBridge); mErr == nil {
 			defer mcpSrv.Close()
@@ -193,10 +224,6 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 			extraEnv = append(extraEnv, "QWQ_MCP_TOKEN="+mcpSrv.Token)
 		}
 	}
-	if pEnv, cleanup, pErr := ResolveProviderEnv(ctx, c.providers, cfg.ProviderID, CoreCodex); pErr == nil {
-		defer cleanup()
-		extraEnv = append(extraEnv, pEnv...)
-	}
 
 	proc, err := c.effectiveLauncher().Start(ctx, cfg.Binary, args, extraEnv, cfg.WorkDir)
 	if err != nil {
@@ -204,13 +231,17 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 	}
 	defer proc.Close(defaultChildGracePeriod)
 
+	maxCtx := cfg.MaxContextTokens
+	if maxCtx <= 0 {
+		maxCtx = 200_000
+	}
 	var (
 		turnDone = make(chan error, 1)
 		textBuf  strings.Builder
 		msgID    = "codex_msg_" + turn.SessionID
 		startAt  = time.Now()
 		firstAt  time.Time
-		tele     = TelemetrySnapshot{Turns: 1, Steps: 1, Context: ContextBreakdown{MaxTokens: 200_000}}
+		tele     = TelemetrySnapshot{Turns: 1, Steps: 1, Context: ContextBreakdown{MaxTokens: maxCtx}}
 	)
 
 	onNotify := func(_ context.Context, method string, params json.RawMessage) error {
@@ -415,13 +446,22 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 			} `json:"thread"`
 			ThreadID string `json:"threadId"`
 		}
+		devPrompt := c.skills.BuildSkillPrompt(cfg.ActiveSkills)
+		if c.workspace != nil {
+			if agentsMD := c.workspace.ReadPromptForCore(CoreCodex); agentsMD != "" {
+				devPrompt += "\n\n" + agentsMD
+			}
+			if customSkills := c.workspace.LoadCustomSkillsPrompt(); customSkills != "" {
+				devPrompt += customSkills
+			}
+		}
 		if err := rpc.Call(ctx, "thread/start", map[string]any{
 			"model":           cfg.Model,
 			"reasoningEffort": cfg.ReasoningEffort,
 			"sandbox":         sandbox,
 			"approvalPolicy":  approvalPolicy,
 			"cwd":             cfg.WorkDir,
-			"developerPrompt": c.skills.BuildSkillPrompt(cfg.ActiveSkills),
+			"developerPrompt": strings.TrimSpace(devPrompt),
 		}, &tResp); err != nil {
 			return err
 		}
@@ -456,14 +496,40 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 
 // runExecJSONL implements the fallback `codex exec --json` NDJSON parser.
 func (c *CodexCore) runExecJSONL(ctx context.Context, cfg CodexConfig, turn Turn, emit Emit) error {
+	var extraEnv []string
+	var cleanupEnv = func() {}
+	useProvider := cfg.AuthMode != "oauth" && cfg.ProviderID != ""
+	if useProvider {
+		pEnv, ep, found, cl, pErr := ResolveProviderForCLI(ctx, c.providers, cfg.ProviderID, CoreCodex)
+		if pErr != nil {
+			return pErr
+		}
+		cleanupEnv = cl
+		extraEnv = append(extraEnv, pEnv...)
+		if found {
+			if cfg.Model == "" {
+				cfg.Model = ep.Model
+			}
+			if cfg.ReasoningEffort == "" {
+				cfg.ReasoningEffort = ep.ReasoningEffort
+			}
+		}
+	} else if c.auth != nil {
+		extraEnv = append(extraEnv, c.auth.PersistentEnvFor(CoreCodex)...)
+	}
+	defer cleanupEnv()
+
 	sandbox, _ := MapCodexSandboxAndApproval(turn.PermissionMode, cfg.PlanMode)
 	args := []string{"exec", "--json", "--sandbox", sandbox}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
+	if eff := strings.ToLower(strings.TrimSpace(cfg.ReasoningEffort)); eff != "" && eff != "none" {
+		args = append(args, "-c", "model_reasoning_effort="+eff)
+	}
 	args = append(args, latestUserMessage(turn.Messages))
 
-	proc, err := c.effectiveLauncher().Start(ctx, cfg.Binary, args, nil, cfg.WorkDir)
+	proc, err := c.effectiveLauncher().Start(ctx, cfg.Binary, args, extraEnv, cfg.WorkDir)
 	if err != nil {
 		return err
 	}

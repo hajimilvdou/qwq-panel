@@ -370,6 +370,7 @@ func (c *Controller) NewAgentSessions(ctx context.Context) (*agentsession.Servic
 		IDs:     c.ids,
 		Logger:  logger,
 		Secrets: c.sec,
+		DataDir: c.cfg.DataDir,
 		Catalog: AgentToolCatalog{Catalog: c.cat, HostAction: c.ops.HasHostAction},
 		Runner: &AgentRunner{
 			Ops: c.ops, Catalog: c.cat, NodeID: "local",

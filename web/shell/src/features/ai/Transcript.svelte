@@ -8,7 +8,7 @@
 -->
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Icon, Markdown, Orb } from '$ui';
+  import { CopyButton, Icon, Markdown, Orb } from '$ui';
   import ApprovalCard from '$lib/ai/ApprovalCard.svelte';
   import { approvals } from '$lib/ai/approvals.svelte';
   import type { SessionStream } from '$lib/ai/session-stream.svelte';
@@ -22,6 +22,14 @@
   let { stream, scroller = null, inlineApprovals = true }: Props = $props();
 
   const items = $derived(stream.transcript.items);
+  const turnIndexById = $derived.by(() => {
+    const map = new Map<string, number>();
+    let n = 0;
+    for (const m of items) {
+      if (m.kind === 'user') map.set(m.id, n++);
+    }
+    return map;
+  });
   const thinking = $derived(
     stream.transcript.status === 'running' && !items.some((x) => x.kind === 'assistant' && x.streaming),
   );
@@ -56,13 +64,16 @@
 
   {#each items as m (m.kind + m.id)}
     {#if m.kind === 'user'}
-      <li class="user">
+      <li class="user" data-turn-idx={turnIndexById.get(m.id)}>
         <div class="bubble" class:failed={m.state === 'failed'} class:sending={m.state === 'sending'}>{m.text}</div>
-        {#if m.state === 'failed'}
-          <button type="button" class="retry" onclick={() => stream.retry(m.id).catch(() => {})}>
-            <Icon name="alert" size={14} /> 没发出去 · 重试
-          </button>
-        {/if}
+        <div class="msg-tools">
+          <CopyButton text={m.text} label="复制提问" />
+          {#if m.state === 'failed'}
+            <button type="button" class="retry" onclick={() => stream.retry(m.id).catch(() => {})}>
+              <Icon name="alert" size={14} /> 没发出去 · 重试
+            </button>
+          {/if}
+        </div>
       </li>
     {:else if m.kind === 'reasoning'}
       <li class="reason">
@@ -82,7 +93,12 @@
     {:else if m.kind === 'assistant'}
       <li class="ai">
         <Orb size={22} state={m.streaming ? 'working' : 'still'} />
-        <div class="text"><Markdown source={m.text} /></div>
+        <div class="text">
+          <Markdown source={m.text} />
+          {#if !m.streaming && m.text}
+            <div class="msg-tools ai-tools"><CopyButton text={m.text} label="复制回复" /></div>
+          {/if}
+        </div>
       </li>
     {:else if m.kind === 'tool'}
       {@const pending = m.approvalId ? approvals.get(m.approvalId) : undefined}
@@ -126,6 +142,27 @@
     display: grid;
     justify-items: end;
     gap: 4px;
+    scroll-margin-top: 20px;
+  }
+  .user:global(.qwq-turn-flash) .bubble {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 26%, transparent);
+  }
+  .msg-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    opacity: 0;
+    transition: opacity var(--dur-1) var(--ease);
+  }
+  .user:hover .msg-tools,
+  .user:focus-within .msg-tools,
+  .ai:hover .ai-tools,
+  .ai:focus-within .ai-tools {
+    opacity: 1;
+  }
+  .ai-tools {
+    margin-top: 4px;
   }
   .bubble {
     max-width: min(76%, 640px);

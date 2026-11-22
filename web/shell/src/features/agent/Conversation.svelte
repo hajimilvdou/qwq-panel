@@ -7,23 +7,39 @@
 -->
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
-  import { Button, Chip, ConfirmDialog, EmptyState, ErrorState, IconButton, Menu, Skeleton, Icon } from '$ui';
+  import { Button, Checkbox, Chip, ConfirmDialog, Dialog, EmptyState, ErrorState, IconButton, Input, Menu, Select, Skeleton, Icon } from '$ui';
+  import type { Option } from '$ui';
+  import { ai } from '$api/endpoints';
   import type { PermissionMode } from '$api/types';
-  import { BUILTIN_SKILLS, coreLabel, MODE_META, MODES, SLASH_COMMANDS, statusMeta, lastSession } from '$lib/ai/agent-sessions.svelte';
+  import type { AiProvider, ReasoningEffort } from '$api/additions';
+  import {
+    BUILTIN_SKILLS,
+    CONTEXT_OPTIONS,
+    coreLabel,
+    EFFORT_OPTIONS,
+    MODE_META,
+    MODES,
+    SLASH_COMMANDS,
+    statusMeta,
+    lastSession,
+  } from '$lib/ai/agent-sessions.svelte';
   import { changeMode, pauseSession, takeOver } from '$lib/ai/controls';
   import { SessionStream } from '$lib/ai/session-stream.svelte';
   import { describeError, reportError } from '$lib/errors';
   import { page } from '$lib/page.svelte';
   import { navigate } from '$lib/router.svelte';
   import { resources } from '$lib/resource.svelte';
+  import { toasts } from '$lib/toast.svelte';
   import Composer from '../ai/Composer.svelte';
   import Transcript from '../ai/Transcript.svelte';
+  import TurnNavigator from '../ai/TurnNavigator.svelte';
 
   interface Props {
     id: string;
     onmenu?: () => void;
+    onopenworkspace?: (tab?: 'prompts' | 'skills' | 'mcp' | 'registry') => void;
   }
-  let { id, onmenu }: Props = $props();
+  let { id, onmenu, onopenworkspace }: Props = $props();
 
   /* 父组件以 {#key id} 重建本组件，id 在生命周期内不变 */
   const stream = new SessionStream(untrack(() => id));
@@ -42,6 +58,15 @@
   let cmdOpen = $state(false);
   let metricPop = $state<'speed' | 'cache' | 'ctx' | null>(null);
 
+  /* 会话实时运行参数弹窗（模型、思考挡位、上下文大小、Plan 模式） */
+  let cfgOpen = $state(false);
+  let cfgSaving = $state(false);
+  let cfgModel = $state('');
+  let cfgEffort = $state<ReasoningEffort>('');
+  let cfgMaxCtx = $state('0');
+  let cfgPlan = $state(false);
+  let cfgProviders = $state<AiProvider[]>([]);
+
   const s = $derived(stream.session);
   const st = $derived(statusMeta(stream.transcript.status));
   const running = $derived(stream.transcript.status === 'running');
@@ -50,6 +75,64 @@
   const planTotal = $derived(plan?.steps.length ?? 0);
   const planPct = $derived(planTotal > 0 ? Math.round((planDone / planTotal) * 100) : 0);
   const tel = $derived(stream.transcript.telemetry);
+
+  const sessionCfg = $derived((s?.config ?? {}) as Record<string, unknown>);
+  const activeModelName = $derived(typeof sessionCfg.model === 'string' ? sessionCfg.model : '');
+  const activeEffort = $derived(
+    typeof sessionCfg.reasoning_effort === 'string' ? (sessionCfg.reasoning_effort as ReasoningEffort) : '',
+  );
+  const activeMaxCtx = $derived(
+    typeof sessionCfg.max_context_tokens === 'number' ? sessionCfg.max_context_tokens : 0,
+  );
+  const activePlan = $derived(Boolean(sessionCfg.plan_mode));
+
+  const cfgModelOptions = $derived.by<Option[]>(() => {
+    const pid = typeof sessionCfg.provider_id === 'string' ? sessionCfg.provider_id : '';
+    const p = cfgProviders.find((x) => x.provider_id === pid) ?? cfgProviders.find((x) => x.is_default);
+    const set = new Set<string>();
+    if (p?.model) set.add(p.model);
+    for (const m of p?.models ?? []) set.add(m);
+    if (cfgModel.trim()) set.add(cfgModel.trim());
+    return [
+      { value: '', label: p ? `跟随服务默认 (${p.model})` : '跟随默认模型' },
+      ...Array.from(set).map((m) => ({ value: m, label: m })),
+    ];
+  });
+
+  async function openConfigDialog() {
+    cfgModel = activeModelName;
+    cfgEffort = activeEffort;
+    cfgMaxCtx = String(activeMaxCtx || 0);
+    cfgPlan = activePlan;
+    cfgOpen = true;
+    if (!cfgProviders.length) {
+      try {
+        const res = await ai.providers();
+        cfgProviders = res.items;
+      } catch {
+        /* 仅在有权限时加载提供方列表 */
+      }
+    }
+  }
+
+  async function saveConfigDialog() {
+    cfgSaving = true;
+    try {
+      const ctxNum = Number(cfgMaxCtx) || 0;
+      await stream.updateConfig({
+        model: cfgModel.trim(),
+        reasoning_effort: cfgEffort,
+        max_context_tokens: ctxNum,
+        plan_mode: cfgPlan,
+      });
+      toasts.success('已更新会话模型与运行参数');
+      cfgOpen = false;
+    } catch (err) {
+      reportError(err, '更新会话参数失败');
+    } finally {
+      cfgSaving = false;
+    }
+  }
 
   const slashQuery = $derived(text.startsWith('/') ? text.slice(1).trim().toLowerCase() : '');
   const showSlash = $derived(cmdOpen || text.startsWith('/'));
@@ -180,6 +263,11 @@
 
       {#if s}
         <div class="acts">
+          {#if onopenworkspace}
+            <Button size="sm" variant="ghost" icon="apps" onclick={() => onopenworkspace('prompts')} title="管理 MCP、技能与提示词">
+              资源
+            </Button>
+          {/if}
           <Menu label="权限模式" items={modeItems}>
             {#snippet trigger(props)}
               <button type="button" class="mode" class:danger={s.permission_mode === 'full'} {...props}>
@@ -201,14 +289,19 @@
       <p class="link" role="status">对话连接中断，正在重连…</p>
     {/if}
 
-    <div class="scroll" bind:this={scroller}>
-      <div class="inner">
-        {#if stream.phase === 'loading'}
-          <Skeleton lines={4} height={48} />
-        {:else}
-          <Transcript {stream} {scroller} />
-        {/if}
+    <div class="scroll-host">
+      <div class="scroll" bind:this={scroller}>
+        <div class="inner">
+          {#if stream.phase === 'loading'}
+            <Skeleton lines={4} height={48} />
+          {:else}
+            <Transcript {stream} {scroller} />
+          {/if}
+        </div>
       </div>
+      {#if stream.phase !== 'loading'}
+        <TurnNavigator items={stream.transcript.items} {scroller} />
+      {/if}
     </div>
 
     <div class="foot">
@@ -289,6 +382,18 @@
             / 快捷指令
           </button>
           {#if s}
+            <button
+              type="button"
+              class="c-pill"
+              class:active={activePlan || Boolean(activeEffort)}
+              onclick={openConfigDialog}
+              title="调整当前会话的模型、思考挡位、上下文大小与计划模式"
+            >
+              <Icon name="settings" size={13} />
+              <span>
+                {activeModelName || '默认模型'}{activeEffort ? ` · ${activeEffort}` : ''}{activePlan ? ' · Plan' : ''}
+              </span>
+            </button>
             <Menu label="权限模式" items={modeItems} align="start">
               {#snippet trigger(props)}
                 <button type="button" class="c-pill" class:danger={s.permission_mode === 'full'} {...props}>
@@ -372,6 +477,32 @@
 >
   对话记录会一并删除；进行中的一轮会被取消。已经执行的操作不受影响，可在"动态"里查看。
 </ConfirmDialog>
+
+<Dialog bind:open={cfgOpen} title="会话模型与运行参数" size="sm">
+  <div class="cfg-form">
+    {#if cfgModelOptions.length > 1}
+      <Select label="快速选择模型" options={cfgModelOptions} bind:value={cfgModel} />
+    {/if}
+    <Input
+      label="模型名称（留空则跟随服务或核心默认）"
+      bind:value={cfgModel}
+      placeholder="如 claude-sonnet-4-6 / gpt-5 / deepseek-reasoner"
+    />
+    <div class="cfg-row">
+      <Select label="思考挡位（Effort）" options={EFFORT_OPTIONS} bind:value={cfgEffort} />
+      <Select label="上下文窗口大小" options={CONTEXT_OPTIONS} bind:value={cfgMaxCtx} />
+    </div>
+    <Checkbox
+      bind:checked={cfgPlan}
+      label="计划模式（Plan Mode）：先列步骤再执行，适合高风险变更"
+    />
+    <p class="cfg-tip">也可以直接在对话框输入 <code>/effort high</code>、<code>/model 名称</code>、<code>/context 128000</code> 或 <code>/plan on</code> 快速生效。</p>
+  </div>
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (cfgOpen = false)}>取消</Button>
+    <Button variant="primary" loading={cfgSaving} onclick={saveConfigDialog}>保存并生效</Button>
+  {/snippet}
+</Dialog>
 
 <style>
   .conv {
@@ -482,6 +613,13 @@
     background: var(--warn-soft);
     color: var(--warn-text);
   }
+  .scroll-host {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
   .scroll {
     flex: 1;
     min-height: 0;
@@ -491,7 +629,22 @@
   .inner {
     width: min(1080px, 100%);
     margin: 0 auto;
-    padding: var(--s-5) var(--s-6);
+    padding: var(--s-5) 48px var(--s-5) var(--s-6);
+  }
+  .cfg-form {
+    display: grid;
+    gap: var(--s-3);
+  }
+  .cfg-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--s-3);
+  }
+  .cfg-tip {
+    margin: 0;
+    font-size: var(--fs-xs);
+    color: var(--text-3);
+    line-height: 1.5;
   }
   .foot {
     position: relative;

@@ -3151,6 +3151,305 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-cores/auth:
+    get:
+      operationId: listAgentCoreAuth
+      tags: [agent-sessions]
+      summary: List installation and official login status for external CLI agent cores
+      description: Returns installation detection, persistent official OAuth/token login state, and (for administrators) active device-code authorization progress for Codex, Claude Code, and OpenCode.
+      security:
+        - sessionCookie: []
+        - serviceAccountToken: []
+      parameters:
+        - $ref: '#/components/parameters/Fields'
+      responses:
+        '200':
+          description: External CLI core authentication statuses.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentCoreAuthList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-cores/{core}/login:
+    parameters:
+      - name: core
+        in: path
+        required: true
+        description: External CLI core identifier (codex, claude-code or opencode).
+        schema:
+          type: string
+          enum: [codex, claude-code, opencode]
+    post:
+      operationId: startAgentCoreLogin
+      tags: [agent-sessions]
+      summary: Start official device-code login or import a setup token for an external CLI agent core
+      description: Starts an isolated official OAuth/device-code login process or stores an imported OAuth setup token / auth JSON under the core's isolated persistent credential directory. Administrators only.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Interactive OAuth login initiation or secret token import must not store plaintext tokens in operation records.
+      x-qwq-action-exempt: Interactive CLI credential management; carries write-only OAuth tokens and live device-code subprocess state.
+      requestBody:
+        description: Login mode (device or token) and optional write-only token payload.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentCoreLoginRequest' }
+      responses:
+        '200':
+          description: Updated core authentication and login progress state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentCoreAuthStatus' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: logoutAgentCore
+      tags: [agent-sessions]
+      summary: Cancel active login or clear persisted official login credentials for an external CLI core
+      description: Cancels any in-flight login process and removes persisted official OAuth/token credentials for the specified external CLI core. Administrators only.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Idempotent DELETE clearing local CLI login state.
+      x-qwq-action-exempt: Interactive CLI credential logout and subprocess teardown.
+      responses:
+        '200':
+          description: Updated core authentication state after logout.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentCoreAuthStatus' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-workspace/files:
+    get:
+      operationId: listAgentWorkspaceFiles
+      tags: [agent-sessions]
+      summary: List files in the separated MCP, Skills, or per-core Prompts directory
+      description: Lists user-managed files inside the strictly separated agent workspace area (mcp, skills, or prompts). Administrators only.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: area
+          in: query
+          required: true
+          description: Separated workspace area (mcp, skills, or prompts).
+          schema: { type: string, enum: [mcp, skills, prompts] }
+        - $ref: '#/components/parameters/Fields'
+      responses:
+        '200':
+          description: Listed workspace files and canonical per-core prompt targets.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkspaceListResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-workspace/file:
+    get:
+      operationId: getAgentWorkspaceFile
+      tags: [agent-sessions]
+      summary: Read one file from the separated MCP, Skills, or Prompts directory
+      description: Returns the text content of a workspace file (such as CLAUDE.md, AGENTS.md, SYSTEM.md, SKILL.md, or servers.json). Administrators only.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: area
+          in: query
+          required: true
+          description: Separated workspace area (mcp, skills, or prompts).
+          schema: { type: string, enum: [mcp, skills, prompts] }
+        - name: path
+          in: query
+          required: true
+          description: Relative file path within the workspace area.
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - $ref: '#/components/parameters/Fields'
+      responses:
+        '200':
+          description: File content and metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkspaceFileContent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: putAgentWorkspaceFile
+      tags: [agent-sessions]
+      summary: Create, update, or upload a file into MCP, Skills, or Prompts
+      description: Saves edited text or a drag-and-drop uploaded file into the isolated agent workspace directory and mirrors per-core prompt files to their CLI home. Administrators only.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Idempotent PUT file write inside the agent workspace; carries up to 2 MiB file uploads.
+      x-qwq-action-exempt: Direct workspace file editor and drag-and-drop uploader for MCP, Skills, and per-core Prompts.
+      requestBody:
+        description: Target area, relative path, and UTF-8 or base64 content.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkspaceWriteRequest' }
+      responses:
+        '200':
+          description: Saved workspace file metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkspaceFileEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteAgentWorkspaceFile
+      tags: [agent-sessions]
+      summary: Delete a file or skill directory from MCP, Skills, or Prompts
+      description: Removes a file or a skill folder inside the isolated agent workspace area. Administrators only.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Idempotent DELETE removing a workspace file or skill directory.
+      x-qwq-action-exempt: Direct workspace file cleanup for MCP, Skills, and per-core Prompts.
+      parameters:
+        - name: area
+          in: query
+          required: true
+          description: Separated workspace area (mcp, skills, or prompts).
+          schema: { type: string, enum: [mcp, skills, prompts] }
+        - name: path
+          in: query
+          required: true
+          description: Relative file path (or skill slug directory) within the area.
+          schema: { type: string, minLength: 1, maxLength: 240 }
+      responses:
+        '204':
+          description: Deleted successfully.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-registry:
+    get:
+      operationId: searchAgentRegistry
+      tags: [agent-sessions]
+      summary: Search built-in official Skills and MCP repositories
+      description: Searches the curated and live-cached official repositories (anthropics/skills, openai/skills, modelcontextprotocol/servers) with installation status.
+      security:
+        - sessionCookie: []
+        - serviceAccountToken: []
+      parameters:
+        - name: kind
+          in: query
+          description: Filter by item type (all, skill, or mcp).
+          schema: { type: string, enum: [all, skill, mcp] }
+        - name: source
+          in: query
+          description: Filter by official repository source identifier.
+          schema: { type: string, maxLength: 64 }
+        - name: q
+          in: query
+          description: Case-insensitive search query.
+          schema: { type: string, maxLength: 128 }
+        - name: refresh
+          in: query
+          description: Set to 1 to refresh live GitHub repository indexes (cached 10 minutes).
+          schema: { type: string, enum: ['0', '1', 'false', 'true'] }
+        - $ref: '#/components/parameters/Fields'
+      responses:
+        '200':
+          description: Official repository metadata and matching installable items.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRegistrySearchResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-registry/install:
+    post:
+      operationId: installAgentRegistryItem
+      tags: [agent-sessions]
+      summary: Download and install an official Skill or MCP server into the agent workspace
+      description: Downloads an official Skill SKILL.md from the whitelisted upstream repository or adds an official MCP server entry into mcp/servers.json. Administrators only.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Idempotent installation overwriting the same skill slug or MCP server id.
+      x-qwq-action-exempt: Direct installation from whitelisted official Agent Skills and MCP repositories.
+      requestBody:
+        description: Official registry item identifier to install.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentRegistryInstallRequest' }
+      responses:
+        '200':
+          description: Installation result and target workspace path.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRegistryInstallResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/ai/providers/fetch-models:
+    post:
+      operationId: fetchAIProviderModels
+      tags: [ai]
+      summary: Fetch available model identifiers from an OpenAI or Anthropic compatible endpoint
+      description: Queries the endpoint's /models list through the host's outbound egress policy, using either an existing provider_id or unsaved base_url + api_key values. Administrators only.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Read-only model discovery probe that may carry an unsaved write-only API key.
+      x-qwq-action-exempt: Read-only connectivity and model discovery probe; does not mutate host state.
+      requestBody:
+        description: Existing provider_id or unsaved base_url/kind/api_key parameters.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiProviderFetchModelsRequest' }
+      responses:
+        '200':
+          description: Discovered model list or sanitized failure category.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiProviderFetchModelsResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/ai/providers:
     get:
       operationId: listAIProviders
@@ -4820,12 +5119,13 @@ components:
       type: object
       additionalProperties: false
       description: |
-        Members to change; at least one of `title` and `permission_mode` must be present.
+        Members to change; at least one of `title`, `permission_mode`, and `config` must be present.
         `expected_revision` is the revision the client last saw.
       required: [expected_revision]
       properties:
         title: { type: string, maxLength: 120, description: New display title. }
         permission_mode: { $ref: '#/components/schemas/PermissionMode' }
+        config: { type: object, description: 'Partial core configuration patch (provider_id, auth_mode, model, reasoning_effort, max_context_tokens, plan_mode); plaintext secrets are rejected.' }
         expected_revision: { $ref: '#/components/schemas/Revision' }
     AgentSendMessageRequest:
       type: object
@@ -4914,16 +5214,23 @@ components:
       type: object
       description: |
         A global AI provider (ADR-0017). An administrator sees every member; other principals get
-        the reduced projection without `base_url`, `kind`, the timestamps and `revision` (GAPS
+        the reduced projection without `base_url`, the timestamps and `revision` (GAPS
         缺口 2). The API key is never part of the resource: only `has_api_key` is exposed.
       additionalProperties: false
       required: [provider_id, name, model, has_api_key, is_default]
       properties:
         provider_id: { $ref: '#/components/schemas/ResourceId' }
         name: { type: string, minLength: 1, maxLength: 64, description: Display name; unique among providers. }
-        kind: { type: string, enum: [openai_compatible], description: 'The endpoint protocol; only `openai_compatible` exists.' }
+        kind: { type: string, enum: [openai_compatible, anthropic_compatible], description: 'Endpoint wire protocol (`openai_compatible` or `anthropic_compatible`).' }
         base_url: { type: string, minLength: 1, maxLength: 2048, description: Endpoint base URL; administrator projection only. }
-        model: { type: string, minLength: 1, maxLength: 128, description: Model a session uses unless its config overrides it. }
+        model: { type: string, minLength: 1, maxLength: 128, description: Default model a session uses unless its config overrides it. }
+        models:
+          type: array
+          maxItems: 500
+          description: Cached list of available model identifiers discovered from or configured for this provider.
+          items: { type: string, maxLength: 128 }
+        reasoning_effort: { type: string, enum: ['', none, low, medium, high, xhigh], description: Default reasoning/thinking effort level. }
+        max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 4000000, description: Default context window size in tokens (0 uses core default). }
         has_api_key: { type: boolean, description: Whether an API key is stored. The key is write-only and never returned. }
         is_default: { type: boolean, description: 'Whether sessions without their own endpoint use this provider; at most one provider is the default.' }
         created_at: { $ref: '#/components/schemas/Timestamp' }
@@ -4943,23 +5250,265 @@ components:
       required: [name, base_url, model]
       properties:
         name: { type: string, minLength: 1, maxLength: 64, description: Display name; unique among providers. }
-        kind: { type: string, enum: [openai_compatible], description: 'Endpoint protocol; the default and only value is `openai_compatible`.' }
+        kind: { type: string, enum: [openai_compatible, anthropic_compatible], description: 'Endpoint wire protocol; defaults to `openai_compatible`.' }
         base_url: { type: string, minLength: 1, maxLength: 2048, description: 'Absolute http or https URL without credentials, query or fragment.' }
-        model: { type: string, minLength: 1, maxLength: 128, description: Model a session uses unless its config overrides it. }
+        model: { type: string, minLength: 1, maxLength: 128, description: Default model a session uses unless its config overrides it. }
+        models:
+          type: array
+          maxItems: 500
+          description: Optional cached model list available on this provider.
+          items: { type: string, maxLength: 128 }
+        reasoning_effort: { type: string, enum: ['', none, low, medium, high, xhigh], description: Default reasoning/thinking effort level. }
+        max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 4000000, description: Default context window size in tokens (0 uses core default). }
         is_default: { type: boolean, description: Make this the provider sessions without their own endpoint use; clears the previous default. }
     AiProviderUpdateRequest:
       type: object
       additionalProperties: false
       description: |
-        Members to change; at least one of `name`, `base_url`, `model` and `is_default` must be
-        present. Changing `base_url` removes the stored API key.
+        Members to change; at least one editable field must be present. Changing `base_url` removes the stored API key.
       required: [expected_revision]
       properties:
         expected_revision: { $ref: '#/components/schemas/Revision' }
         name: { type: string, minLength: 1, maxLength: 64, description: New display name. }
+        kind: { type: string, enum: [openai_compatible, anthropic_compatible], description: New endpoint wire protocol. }
         base_url: { type: string, minLength: 1, maxLength: 2048, description: 'New endpoint base URL; removes the stored API key.' }
         model: { type: string, minLength: 1, maxLength: 128, description: New default model. }
+        models:
+          type: array
+          maxItems: 500
+          description: Updated cached model list available on this provider.
+          items: { type: string, maxLength: 128 }
+        reasoning_effort: { type: string, enum: ['', none, low, medium, high, xhigh], description: New default reasoning/thinking effort level. }
+        max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 4000000, description: New default context window size in tokens. }
         is_default: { type: boolean, description: 'Whether this provider is the default; setting it clears the previous default.' }
+    AiProviderFetchModelsRequest:
+      type: object
+      additionalProperties: false
+      description: Parameters for discovering available models from a saved provider or an unsaved endpoint.
+      properties:
+        provider_id: { $ref: '#/components/schemas/ResourceId' }
+        kind: { type: string, enum: [openai_compatible, anthropic_compatible], description: Endpoint wire protocol. }
+        base_url: { type: string, maxLength: 2048, description: Endpoint base URL (required when provider_id is omitted). }
+        api_key: { type: string, maxLength: 4096, writeOnly: true, description: Optional write-only API key for unsaved endpoints. }
+    AiProviderFetchModelsResult:
+      type: object
+      additionalProperties: false
+      description: Result of model discovery; never returns raw upstream error bodies.
+      required: [ok, models]
+      properties:
+        ok: { type: boolean, description: Whether model discovery succeeded. }
+        models:
+          type: array
+          maxItems: 500
+          description: Sorted deduplicated model identifiers returned by the endpoint.
+          items: { type: string, maxLength: 128 }
+        latency_ms: { type: integer, format: int64, minimum: 0, maximum: 600000, description: Round-trip time in milliseconds. }
+        category: { type: string, enum: [auth, network, denied, 4xx, 5xx], description: Sanitized failure category when ok is false. }
+    AgentCoreLoginState:
+      type: object
+      additionalProperties: false
+      description: In-flight or recently completed official CLI login process state.
+      required: [state]
+      properties:
+        state: { type: string, enum: [pending, succeeded, failed, cancelled, expired], description: Login lifecycle state. }
+        verification_url: { type: string, maxLength: 2048, description: Official OAuth/device verification URL to open in a browser. }
+        user_code: { type: string, maxLength: 64, description: One-time device authorization code. }
+        message: { type: string, maxLength: 500, description: Human-readable status guidance. }
+        output_tail:
+          type: array
+          maxItems: 32
+          description: Recent sanitized CLI login log lines (tokens redacted).
+          items: { type: string, maxLength: 300 }
+        started_at: { $ref: '#/components/schemas/Timestamp' }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+    AgentCoreAuthStatus:
+      type: object
+      additionalProperties: false
+      description: Installation and official login state of one external CLI agent core.
+      required: [core, display_name, binary, installed, install_hint, logged_in, auth_method]
+      properties:
+        core: { type: string, enum: [codex, claude-code, opencode], description: External CLI core identifier. }
+        display_name: { type: string, maxLength: 64, description: Human-readable core name. }
+        binary: { type: string, maxLength: 64, description: CLI executable name. }
+        installed: { type: boolean, description: Whether the CLI binary is present in PATH. }
+        install_hint: { type: string, maxLength: 200, description: Recommended official installation command. }
+        logged_in: { type: boolean, description: Whether persistent official login credentials are present in the isolated agent home. }
+        auth_method: { type: string, enum: [oauth, token, none], description: Active persistent login credential type. }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+        active_login: { $ref: '#/components/schemas/AgentCoreLoginState' }
+    AgentCoreAuthList:
+      type: object
+      additionalProperties: false
+      description: Official login status for every supported external CLI agent core.
+      required: [items]
+      properties:
+        items: { type: array, maxItems: 8, items: { $ref: '#/components/schemas/AgentCoreAuthStatus' }, description: External CLI core auth entries. }
+    AgentCoreLoginRequest:
+      type: object
+      additionalProperties: false
+      description: Request to start official CLI login or import an OAuth setup token.
+      properties:
+        mode: { type: string, enum: [device, token], description: Login flow mode (device launches official CLI login; token imports pasted setup token or auth JSON). }
+        token: { type: string, maxLength: 65536, writeOnly: true, description: Write-only setup token or credentials JSON when mode is token. }
+    AgentCorePromptTarget:
+      type: object
+      additionalProperties: false
+      description: Canonical custom prompt file for one agent core family.
+      required: [core, display_name, rel_path, file_name, description]
+      properties:
+        core: { $ref: '#/components/schemas/AgentCore' }
+        display_name: { type: string, maxLength: 64, description: Core display name. }
+        rel_path: { type: string, maxLength: 128, description: Relative path inside prompts/. }
+        file_name: { type: string, maxLength: 64, description: Canonical prompt filename (CLAUDE.md, AGENTS.md, SYSTEM.md). }
+        description: { type: string, maxLength: 240, description: Explanation of how this prompt file is loaded. }
+    AgentWorkspaceFileEntry:
+      type: object
+      additionalProperties: false
+      description: Metadata of one file inside the agent workspace.
+      required: [area, path, name, size, is_text, updated_at]
+      properties:
+        area: { type: string, enum: [mcp, skills, prompts], description: Separated workspace area. }
+        path: { type: string, maxLength: 240, description: Relative path within the area. }
+        name: { type: string, maxLength: 128, description: Basename of the file. }
+        group: { type: string, maxLength: 128, description: Skill slug or agent core family folder. }
+        size: { type: integer, format: int64, minimum: 0, maximum: 10485760, description: File size in bytes. }
+        is_text: { type: boolean, description: Whether the file can be edited inline as UTF-8 text. }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+    AgentWorkspaceListResult:
+      type: object
+      additionalProperties: false
+      description: Listed files for one separated agent workspace directory.
+      required: [area, directory_hint, items]
+      properties:
+        area: { type: string, enum: [mcp, skills, prompts], description: Separated workspace area. }
+        directory_hint: { type: string, maxLength: 512, description: Isolated host directory path of this area. }
+        items:
+          type: array
+          maxItems: 500
+          description: Files currently stored in this area.
+          items: { $ref: '#/components/schemas/AgentWorkspaceFileEntry' }
+        prompt_targets:
+          type: array
+          maxItems: 8
+          description: Canonical per-core prompt targets when area is prompts.
+          items: { $ref: '#/components/schemas/AgentCorePromptTarget' }
+    AgentWorkspaceFileContent:
+      type: object
+      additionalProperties: false
+      description: Inline text content of one workspace file.
+      required: [area, path, content, size]
+      properties:
+        area: { type: string, enum: [mcp, skills, prompts], description: Separated workspace area. }
+        path: { type: string, maxLength: 240, description: Relative path within the area. }
+        content: { type: string, maxLength: 524288, description: UTF-8 file text content. }
+        size: { type: integer, format: int64, minimum: 0, maximum: 524288, description: File size in bytes. }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+    AgentWorkspaceWriteRequest:
+      type: object
+      additionalProperties: false
+      description: Request to write text or upload a file into a workspace area.
+      required: [area, path]
+      properties:
+        area: { type: string, enum: [mcp, skills, prompts], description: Target workspace area. }
+        path: { type: string, minLength: 1, maxLength: 240, description: Relative file path within the area. }
+        content: { type: string, maxLength: 2097152, description: UTF-8 text content. }
+        content_base64: { type: string, maxLength: 3145728, description: Optional base64-encoded file bytes for drag-and-drop uploads. }
+    AgentMCPServerEntry:
+      type: object
+      additionalProperties: false
+      description: Standard MCP server configuration entry stored in mcp/servers.json.
+      required: [id, name, transport, enabled]
+      properties:
+        id: { type: string, maxLength: 64, description: Unique MCP server slug. }
+        name: { type: string, maxLength: 128, description: Display name. }
+        description: { type: string, maxLength: 500, description: Server summary. }
+        transport: { type: string, enum: [stdio, http], description: Transport protocol. }
+        command: { type: string, maxLength: 256, description: Executable for stdio transport. }
+        args:
+          type: array
+          maxItems: 32
+          description: Command arguments for stdio transport.
+          items: { type: string, maxLength: 256 }
+        url: { type: string, maxLength: 2048, description: Endpoint URL for HTTP transport. }
+        env:
+          type: object
+          description: Environment variables passed to the MCP server.
+          additionalProperties: { type: string, maxLength: 1024 }
+        enabled: { type: boolean, description: Whether this MCP server is enabled for agent turns. }
+        source: { type: string, maxLength: 128, description: Official repository source if installed from the registry. }
+    AgentRegistrySourceMeta:
+      type: object
+      additionalProperties: false
+      description: Metadata of one built-in official Skills or MCP repository.
+      required: [id, name, kind, repo, url, description]
+      properties:
+        id: { type: string, maxLength: 64, description: Source identifier. }
+        name: { type: string, maxLength: 128, description: Official repository display name. }
+        kind: { type: string, enum: [skill, mcp], description: Resource category provided by this repository. }
+        repo: { type: string, maxLength: 128, description: GitHub owner/repo slug. }
+        url: { type: string, maxLength: 512, description: Official repository homepage URL. }
+        description: { type: string, maxLength: 300, description: Short description. }
+    AgentRegistryItem:
+      type: object
+      additionalProperties: false
+      description: One searchable official Skill or MCP server entry.
+      required: [id, slug, kind, source, source_name, name, description, repo, repo_url, installed]
+      properties:
+        id: { type: string, maxLength: 128, description: Stable registry item identifier. }
+        slug: { type: string, maxLength: 64, description: Local folder or MCP id slug. }
+        kind: { type: string, enum: [skill, mcp], description: Item type. }
+        source: { type: string, maxLength: 64, description: Official source identifier. }
+        source_name: { type: string, maxLength: 128, description: Official source display name. }
+        name: { type: string, maxLength: 128, description: Display title. }
+        description: { type: string, maxLength: 500, description: Summary of capabilities. }
+        repo: { type: string, maxLength: 128, description: Upstream GitHub owner/repo. }
+        repo_path: { type: string, maxLength: 256, description: Relative path inside upstream repository. }
+        repo_url: { type: string, maxLength: 512, description: Upstream repository URL. }
+        raw_url: { type: string, maxLength: 512, description: Whitelisted raw SKILL.md URL. }
+        tags:
+          type: array
+          maxItems: 16
+          description: Searchable tags.
+          items: { type: string, maxLength: 64 }
+        installed: { type: boolean, description: Whether already installed in the local agent workspace. }
+        mcp_template: { $ref: '#/components/schemas/AgentMCPServerEntry' }
+    AgentRegistrySearchResult:
+      type: object
+      additionalProperties: false
+      description: Result of searching built-in official Skills and MCP repositories.
+      required: [sources, items, live_refreshed]
+      properties:
+        sources:
+          type: array
+          maxItems: 16
+          description: Built-in official repository definitions.
+          items: { $ref: '#/components/schemas/AgentRegistrySourceMeta' }
+        items:
+          type: array
+          maxItems: 300
+          description: Matching official Skills and MCP servers.
+          items: { $ref: '#/components/schemas/AgentRegistryItem' }
+        live_refreshed: { type: boolean, description: True when live GitHub indexes were refreshed in this call. }
+        cached_at: { $ref: '#/components/schemas/Timestamp' }
+    AgentRegistryInstallRequest:
+      type: object
+      additionalProperties: false
+      description: Request to download and install one official Skill or MCP server.
+      required: [id]
+      properties:
+        id: { type: string, minLength: 1, maxLength: 128, description: Official registry item identifier. }
+    AgentRegistryInstallResult:
+      type: object
+      additionalProperties: false
+      description: Result of installing an official Skill or MCP server.
+      required: [id, kind, installed, target, from_live, message]
+      properties:
+        id: { type: string, maxLength: 128, description: Installed registry item identifier. }
+        kind: { type: string, enum: [skill, mcp], description: Installed item type. }
+        installed: { type: boolean, description: Always true on success. }
+        target: { type: string, maxLength: 256, description: Written relative path inside the agent workspace. }
+        from_live: { type: boolean, description: True when downloaded directly from upstream GitHub raw content. }
+        message: { type: string, maxLength: 500, description: Human-readable confirmation message. }
     AiProviderKeyRequest:
       type: object
       additionalProperties: false

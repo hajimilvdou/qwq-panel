@@ -1,18 +1,22 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!--
-  NewSession · 新建会话面板（SPEC §3.3）
-  ───────────────────────────────────────────────────────────────
-  核心（segmented，不可用的写明原因）→ AI 服务（只读列表，管理在设置）→ 权限模式四选一
-  → 第一句话。发送即创建会话、发出消息、进入会话页。
+  NewSession · 新建会话面板（SPEC §3.3 / ADR-0028）
+  ───────────────────────────────────────────────────────────────────────────────
+  支持：
+  - 核心选择（内置原生 / Claude Code / Codex / OpenCode）
+  - 外部 CLI 明确区分「官方登录态」与「自定义 API 服务（URL/Key）」，互不串线
+  - 选择具体模型（自动带出该服务已拉取的模型列表，也支持手填）、思考挡位（Effort）、
+    上下文窗口大小（Max Context）与计划模式（Plan Mode）
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { Segmented, Select, Skeleton, Icon } from '$ui';
+  import { Checkbox, Chip, Icon, Input, Segmented, Select, Skeleton } from '$ui';
   import type { Option } from '$ui';
   import { agent, ai } from '$api/endpoints';
   import { newIdempotencyKey } from '$api/client';
   import type { AgentCore, PermissionMode } from '$api/types';
-  import { coreLabel, MODE_META, MODES } from '$lib/ai/agent-sessions.svelte';
+  import type { ReasoningEffort } from '$api/additions';
+  import { CONTEXT_OPTIONS, coreLabel, EFFORT_OPTIONS, MODE_META, MODES } from '$lib/ai/agent-sessions.svelte';
   import { useResource } from '$lib/resource.svelte';
   import { reportError } from '$lib/errors';
   import { navigate } from '$lib/router.svelte';
@@ -23,12 +27,22 @@
   let { prompt = '' }: { prompt?: string } = $props();
 
   const cores = useResource({ key: 'agent-cores', load: () => agent.cores().then((r) => r.items) });
+  const coreAuth = useResource({ key: 'agent.core-auth', load: () => agent.coreAuth().then((r) => r.items) });
   const providers = useResource({ key: 'ai-providers', load: () => ai.providers().then((r) => r.items), subjects: ['ai_providers/'] });
 
   let core = $state<AgentCore>('native');
+  let authMode = $state<'oauth' | 'provider'>('oauth');
   let mode = $state<PermissionMode>('safe');
   let providerId = $state('');
+  let modelOverride = $state('');
+  let effort = $state<ReasoningEffort>('');
+  let maxContext = $state('0');
+  let planMode = $state(false);
   let text = $state(untrack(() => prompt));
+
+  const isExternalCli = $derived(core !== 'native');
+  const activeCoreAuth = $derived(coreAuth.data?.find((c) => c.core === core) ?? null);
+  const activeProvider = $derived(providers.data?.find((p) => p.provider_id === providerId) ?? null);
 
   const coreOptions = $derived<Option<AgentCore>[]>(
     (cores.data ?? [{ core: 'native' as const, available: true }]).map((c) => ({
@@ -44,8 +58,15 @@
       label: `${p.name} · ${p.model}${p.is_default ? '（默认）' : ''}${p.has_api_key ? '' : '（未设置 Key）'}`,
     })),
   );
+  const modelOptions = $derived.by<Option[]>(() => {
+    const list = new Set<string>();
+    if (activeProvider?.model) list.add(activeProvider.model);
+    for (const m of activeProvider?.models ?? []) list.add(m);
+    return [{ value: '', label: activeProvider ? `跟随服务默认 (${activeProvider.model})` : '跟随核心默认' }, ...Array.from(list).map((m) => ({ value: m, label: m }))];
+  });
   const noProvider = $derived(providers.status === 'ready' && !providers.data?.length);
   const unavailableReason = $derived(cores.data?.find((c) => c.core === core && !c.available)?.reason);
+  const needsProvider = $derived(core === 'native' || authMode === 'provider');
 
   /* 默认选中默认提供方 */
   $effect(() => {
@@ -53,13 +74,32 @@
       providerId = (providers.data.find((p) => p.is_default) ?? providers.data[0]!).provider_id;
   });
 
+  /* 切换外部 CLI 核心时：若已登录官方账号默认选官方登录，否则若配了自定义服务则默认自定义 Key */
+  $effect(() => {
+    if (!isExternalCli) return;
+    if (activeCoreAuth?.logged_in) authMode = 'oauth';
+    else if (providers.data?.length) authMode = 'provider';
+  });
+
   async function start(first: string) {
     try {
-      const cfg: Record<string, unknown> = providerId ? { provider_id: providerId } : {};
+      const cfg: Record<string, unknown> = {};
       if (core === 'native') {
+        if (providerId) cfg.provider_id = providerId;
         cfg.stream = true;
         cfg.enable_plan_tool = true;
+      } else {
+        cfg.auth_mode = authMode;
+        if (authMode === 'provider' && providerId) {
+          cfg.provider_id = providerId;
+        }
       }
+      if (modelOverride.trim()) cfg.model = modelOverride.trim();
+      if (effort) cfg.reasoning_effort = effort;
+      const ctxNum = Number.parseInt(maxContext, 10) || 0;
+      if (ctxNum > 0) cfg.max_context_tokens = ctxNum;
+      if (planMode) cfg.plan_mode = true;
+
       const s = await agent.create({
         title: first.replace(/\s+/g, ' ').slice(0, 40),
         core,
@@ -94,40 +134,87 @@
     </div>
     {#if unavailableReason}<p class="hint">{unavailableReason}</p>{/if}
 
-    <div class="row">
-      <span class="lbl">AI 服务</span>
-      {#if noProvider}
-        <p class="hint">
-          还没有可用的 AI 服务。{#if session.can('host.ai_providers:create')}<a href="/settings/ai">去添加</a>{:else}请联系管理员添加。{/if}
-        </p>
-      {:else}
-        <div class="sel">
-          <Select label="AI 服务" hideLabel options={providerOptions} bind:value={providerId} />
+    {#if isExternalCli}
+      <div class="row">
+        <span class="lbl">认证</span>
+        <div class="auth-switch">
+          <button type="button" class="pill" class:on={authMode === 'oauth'} onclick={() => (authMode = 'oauth')}>
+            官方登录态
+            {#if activeCoreAuth}
+              <Chip size="sm" tone={activeCoreAuth.logged_in ? 'ok' : 'warn'}>
+                {activeCoreAuth.logged_in ? '已登录' : '未登录'}
+              </Chip>
+            {/if}
+          </button>
+          <button type="button" class="pill" class:on={authMode === 'provider'} onclick={() => (authMode = 'provider')}>
+            自定义 API 服务（自备 URL / Key）
+          </button>
+          {#if authMode === 'oauth' && activeCoreAuth && !activeCoreAuth.logged_in && session.can('host.ai_providers:create')}
+            <a class="go-link" href="/settings/ai">去面板登录官方账号 →</a>
+          {/if}
         </div>
-      {/if}
+      </div>
+    {/if}
+
+    {#if needsProvider}
+      <div class="row">
+        <span class="lbl">AI 服务</span>
+        {#if noProvider}
+          <p class="hint">
+            还没有可用的 AI 服务。{#if session.can('host.ai_providers:create')}<a href="/settings/ai">去添加</a>{:else}请联系管理员添加。{/if}
+          </p>
+        {:else}
+          <div class="sel">
+            <Select label="AI 服务" hideLabel options={providerOptions} bind:value={providerId} />
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    <div class="row top">
+      <span class="lbl">参数</span>
+      <div class="params-grid">
+        {#if needsProvider && (activeProvider?.models?.length ?? 0) > 0}
+          <Select label="模型" options={modelOptions} bind:value={modelOverride} />
+        {:else}
+          <Input label="模型覆盖（可选）" placeholder={activeProvider ? `默认 ${activeProvider.model}` : '留空使用核心默认模型'} mono bind:value={modelOverride} />
+        {/if}
+        <Select label="思考挡位（Effort）" options={[...EFFORT_OPTIONS]} bind:value={effort} />
+        <Select label="上下文窗口大小" options={[...CONTEXT_OPTIONS]} bind:value={maxContext} />
+      </div>
+    </div>
+
+    <div class="row">
+      <span class="lbl">计划</span>
+      <Checkbox label="开启计划模式（先输出只读排查与步骤清单，确认后再动手）" bind:checked={planMode} />
     </div>
 
     <div class="row top">
       <span class="lbl" id="new-mode-l">权限</span>
       <div class="modes" role="radiogroup" aria-labelledby="new-mode-l">
-      {#each MODES as m (m)}
-        {@const meta = MODE_META[m]}
-        <label class="mode" class:on={mode === m} class:off={m === 'custom'}>
-          <input type="radio" name="mode" value={m} bind:group={mode} disabled={m === 'custom'} />
-          <span class="mt">
-            {meta.label}
-            {#if m === 'safe'}<span class="rec">推荐</span>{/if}
-          </span>
-          {#if meta.note}<span class="mn" class:danger={meta.danger}>{meta.note}</span>{/if}
-          {#if mode === m}<span class="tick"><Icon name="check" size={16} /></span>{/if}
-        </label>
-      {/each}
+        {#each MODES as m (m)}
+          {@const meta = MODE_META[m]}
+          <label class="mode" class:on={mode === m} class:off={m === 'custom'}>
+            <input type="radio" name="mode" value={m} bind:group={mode} disabled={m === 'custom'} />
+            <span class="mt">
+              {meta.label}
+              {#if m === 'safe'}<span class="rec">推荐</span>{/if}
+            </span>
+            {#if meta.note}<span class="mn" class:danger={meta.danger}>{meta.note}</span>{/if}
+            {#if mode === m}<span class="tick"><Icon name="check" size={16} /></span>{/if}
+          </label>
+        {/each}
       </div>
     </div>
   </section>
 
   <div class="compose">
-    <Composer bind:value={text} onsend={start} disabled={(core === 'native' && noProvider) || !!unavailableReason} disabledReason="先选一个可用的核心或 AI 服务" />
+    <Composer
+      bind:value={text}
+      onsend={start}
+      disabled={(needsProvider && noProvider) || !!unavailableReason}
+      disabledReason="先选一个可用的核心或 AI 服务"
+    />
   </div>
 </div>
 
@@ -135,10 +222,10 @@
   .new {
     display: flex;
     flex-direction: column;
-    gap: var(--s-6);
-    width: min(860px, 100%);
+    gap: var(--s-5);
+    width: min(880px, 100%);
     margin: 0 auto;
-    padding: var(--s-7) var(--s-5) var(--s-5);
+    padding: var(--s-6) var(--s-5) var(--s-5);
   }
   .hero {
     display: grid;
@@ -147,9 +234,9 @@
     text-align: center;
   }
   .orb-big {
-    width: 60px;
-    height: 60px;
-    margin-bottom: var(--s-2);
+    width: 56px;
+    height: 56px;
+    margin-bottom: var(--s-1);
     border-radius: 50%;
     background:
       radial-gradient(circle at 32% 28%, rgb(255 255 255 / 0.55), transparent 44%),
@@ -177,7 +264,7 @@
     flex-wrap: wrap;
   }
   .lbl {
-    width: 64px;
+    width: 58px;
     flex: none;
     padding: 0;
     font-size: var(--fs-sm);
@@ -186,6 +273,43 @@
   .sel {
     flex: 1;
     min-width: 220px;
+  }
+  .auth-switch {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: var(--r-pill);
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--text-2);
+    font: inherit;
+    font-size: var(--fs-xs);
+    cursor: pointer;
+  }
+  .pill.on {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    font-weight: var(--fw-medium);
+  }
+  .go-link {
+    font-size: var(--fs-xs);
+    color: var(--accent-text);
+    text-decoration: none;
+  }
+  .params-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s-3);
   }
   .hint {
     margin: 0;
@@ -199,7 +323,7 @@
     align-items: start;
   }
   .row.top .lbl {
-    padding-top: var(--s-3);
+    padding-top: var(--s-2);
   }
   .modes {
     flex: 1;
@@ -266,7 +390,8 @@
     margin-top: auto;
   }
   @media (max-width: 860px) {
-    .modes {
+    .modes,
+    .params-grid {
       grid-template-columns: 1fr;
     }
   }

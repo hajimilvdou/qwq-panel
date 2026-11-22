@@ -44,6 +44,7 @@ type GenericACPOptions struct {
 	Bridge      ApprovalBridge
 	Providers   ProviderResolver
 	Skills      *SkillRegistry
+	Auth        *CLIAuthManager
 }
 
 // GenericACPCore implements Core, CapableCore, and PreflightableCore for any ACP agent.
@@ -57,6 +58,7 @@ type GenericACPCore struct {
 	bridge      ApprovalBridge
 	providers   ProviderResolver
 	skills      *SkillRegistry
+	auth        *CLIAuthManager
 }
 
 // NewGenericACPCore constructs a reusable ACP adapter.
@@ -87,6 +89,7 @@ func NewGenericACPCore(opts GenericACPOptions) *GenericACPCore {
 		bridge:      opts.Bridge,
 		providers:   opts.Providers,
 		skills:      skills,
+		auth:        opts.Auth,
 	}
 }
 
@@ -183,9 +186,13 @@ func (c *GenericACPCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 	}
 
 	var extraEnv []string
-	if pEnv, cleanup, pErr := ResolveProviderEnv(ctx, c.providers, cfg.ProviderID, c.name); pErr == nil {
-		defer cleanup()
-		extraEnv = append(extraEnv, pEnv...)
+	if cfg.ProviderID != "" {
+		if pEnv, cleanup, pErr := ResolveProviderEnv(ctx, c.providers, cfg.ProviderID, c.name); pErr == nil {
+			defer cleanup()
+			extraEnv = append(extraEnv, pEnv...)
+		}
+	} else if c.auth != nil {
+		extraEnv = append(extraEnv, c.auth.PersistentEnvFor(c.name)...)
 	}
 
 	proc, err := c.launcher.Start(ctx, cfg.Binary, cfg.Args, extraEnv, cfg.WorkDir)

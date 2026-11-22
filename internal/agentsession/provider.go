@@ -30,6 +30,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -46,18 +47,23 @@ import (
 // resources; this package owns its own).
 const providerPrefix = "aip"
 
-// providerKind is the only kind of the first release: an OpenAI-compatible
-// chat-completions endpoint.
-const providerKind = "openai_compatible"
+// Supported AI provider wire protocols.
+const (
+	ProviderKindOpenAI    = "openai_compatible"
+	ProviderKindAnthropic = "anthropic_compatible"
+)
 
 // providerKeyPurpose is the secret purpose of a provider's API key.
 const providerKeyPurpose = "agent.native.api_key"
 
 // Bounds of the AiProvider schemas.
 const (
-	maxProviderName  = 64
-	maxProviderModel = 128
-	maxProviderURL   = 2048
+	maxProviderName          = 64
+	maxProviderModel         = 128
+	maxProviderURL           = 2048
+	maxProviderModels        = 500
+	maxProviderContextTokens = 4_000_000
+	minProviderContextTokens = 1024
 )
 
 // providerProbeTimeout bounds one connectivity probe of POST .../test.
@@ -74,16 +80,19 @@ const (
 
 // AIProvider is one global AI provider (OpenAPI AiProvider).
 type AIProvider struct {
-	ID        string
-	Name      string
-	Kind      string
-	BaseURL   string
-	Model     string
-	APIKeyRef secrets.Ref
-	IsDefault bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Revision  string
+	ID               string
+	Name             string
+	Kind             string
+	BaseURL          string
+	Model            string
+	Models           []string
+	ReasoningEffort  string
+	MaxContextTokens int64
+	APIKeyRef        secrets.Ref
+	IsDefault        bool
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	Revision         string
 }
 
 // HasAPIKey reports whether the provider has a stored API key
@@ -173,24 +182,118 @@ func ValidateModelBaseURL(raw, pointer string) (string, error) {
 	return strings.TrimRight(raw, "/"), nil
 }
 
+// ValidateProviderKind validates the wire protocol kind.
+func ValidateProviderKind(raw string) (string, error) {
+	k := strings.TrimSpace(raw)
+	if k == "" {
+		return ProviderKindOpenAI, nil
+	}
+	switch k {
+	case ProviderKindOpenAI, ProviderKindAnthropic:
+		return k, nil
+	default:
+		return "", problem.Validation(problem.Violation{
+			Pointer: "/kind", Code: "INVALID",
+			Message: "kind must be openai_compatible or anthropic_compatible.",
+		})
+	}
+}
+
+// ValidateReasoningEffort validates a reasoning/thinking effort level.
+func ValidateReasoningEffort(raw, pointer string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	switch v {
+	case "", "none", "low", "medium", "high", "xhigh":
+		return v, nil
+	default:
+		return "", problem.Validation(problem.Violation{
+			Pointer: pointer, Code: "INVALID",
+			Message: "reasoning_effort must be none, low, medium, high or xhigh.",
+		})
+	}
+}
+
+// ValidateMaxContextTokens validates an optional context window token limit (0 = default).
+func ValidateMaxContextTokens(v int64, pointer string) (int64, error) {
+	if v == 0 {
+		return 0, nil
+	}
+	if v < minProviderContextTokens || v > maxProviderContextTokens {
+		return 0, problem.Validation(problem.Violation{
+			Pointer: pointer, Code: "OUT_OF_RANGE",
+			Message: fmt.Sprintf("max_context_tokens must be 0 or between %d and %d.", minProviderContextTokens, maxProviderContextTokens),
+		})
+	}
+	return v, nil
+}
+
+// ValidateProviderModels normalizes and bounds a provider's cached model list.
+func ValidateProviderModels(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return []string{}, nil
+	}
+	if len(raw) > maxProviderModels {
+		return nil, problem.Validation(problem.Violation{
+			Pointer: "/models", Code: "too_many",
+			Message: fmt.Sprintf("At most %d models may be saved per provider.", maxProviderModels),
+		})
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		m := strings.TrimSpace(item)
+		if m == "" {
+			continue
+		}
+		if utf8.RuneCountInString(m) > maxProviderModel {
+			return nil, problem.Validation(problem.Violation{
+				Pointer: "/models", Code: "too_long",
+				Message: "Each model name is at most 128 characters.",
+			})
+		}
+		for _, r := range m {
+			if unicode.IsControl(r) {
+				return nil, problem.Validation(problem.Violation{
+					Pointer: "/models", Code: "INVALID",
+					Message: "Model names must not contain control characters.",
+				})
+			}
+		}
+		if _, dup := seen[m]; dup {
+			continue
+		}
+		seen[m] = struct{}{}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
 // --- store -------------------------------------------------------------------
 
 // providerColumns is the SELECT list of the provider lookups.
-const providerColumns = `provider_id, name, kind, base_url, model, api_key_ref, is_default,
+const providerColumns = `provider_id, name, kind, base_url, model, models_json, reasoning_effort, max_context_tokens, api_key_ref, is_default,
 	created_at, updated_at, revision`
 
 // scanProvider reads one ai_providers row.
 func scanProvider(row interface{ Scan(...any) error }) (*AIProvider, error) {
 	var (
 		p                AIProvider
+		modelsJSON       string
 		ref              string
 		def              int
 		createdAt, updAt string
 		revision         int64
 	)
-	if err := row.Scan(&p.ID, &p.Name, &p.Kind, &p.BaseURL, &p.Model, &ref, &def,
+	if err := row.Scan(&p.ID, &p.Name, &p.Kind, &p.BaseURL, &p.Model, &modelsJSON, &p.ReasoningEffort, &p.MaxContextTokens, &ref, &def,
 		&createdAt, &updAt, &revision); err != nil {
 		return nil, err
+	}
+	p.Models = []string{}
+	if strings.TrimSpace(modelsJSON) != "" {
+		_ = json.Unmarshal([]byte(modelsJSON), &p.Models)
+		if p.Models == nil {
+			p.Models = []string{}
+		}
 	}
 	p.APIKeyRef = secrets.Ref(ref)
 	p.IsDefault = def != 0
@@ -329,12 +432,15 @@ func flipProviderDefault(ctx context.Context, tx *storage.Tx, exceptID string) e
 
 // CreateProviderInput carries one host.ai_providers.create.
 type CreateProviderInput struct {
-	Actor     actor.Actor
-	Name      string
-	Kind      string
-	BaseURL   string
-	Model     string
-	IsDefault bool
+	Actor            actor.Actor
+	Name             string
+	Kind             string
+	BaseURL          string
+	Model            string
+	Models           []string
+	ReasoningEffort  string
+	MaxContextTokens int64
+	IsDefault        bool
 }
 
 // CreateProvider inserts a provider in the caller's transaction. Making it the
@@ -344,14 +450,9 @@ func (s *Service) CreateProvider(ctx context.Context, tx *storage.Tx, in CreateP
 	if err != nil {
 		return nil, err
 	}
-	kind := in.Kind
-	if kind == "" {
-		kind = providerKind
-	}
-	if kind != providerKind {
-		return nil, problem.Validation(problem.Violation{
-			Pointer: "/kind", Code: "INVALID", Message: fmt.Sprintf("kind must be %s.", providerKind),
-		})
+	kind, err := ValidateProviderKind(in.Kind)
+	if err != nil {
+		return nil, err
 	}
 	baseURL, err := ValidateModelBaseURL(in.BaseURL, "/base_url")
 	if err != nil {
@@ -360,6 +461,22 @@ func (s *Service) CreateProvider(ctx context.Context, tx *storage.Tx, in CreateP
 	model, err := ValidateProviderModel(in.Model)
 	if err != nil {
 		return nil, err
+	}
+	models, err := ValidateProviderModels(in.Models)
+	if err != nil {
+		return nil, err
+	}
+	effort, err := ValidateReasoningEffort(in.ReasoningEffort, "/reasoning_effort")
+	if err != nil {
+		return nil, err
+	}
+	maxCtx, err := ValidateMaxContextTokens(in.MaxContextTokens, "/max_context_tokens")
+	if err != nil {
+		return nil, err
+	}
+	modelsJSON, err := json.Marshal(models)
+	if err != nil {
+		return nil, problem.Wrap(err)
 	}
 	var exists int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM ai_providers WHERE name = ?`, name).Scan(&exists); err != nil {
@@ -382,9 +499,9 @@ func (s *Service) CreateProvider(ctx context.Context, tx *storage.Tx, in CreateP
 		def = 1
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO ai_providers
-		(provider_id, name, kind, base_url, model, api_key_ref, is_default, created_at, updated_at, revision)
-		VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, 0)`,
-		id, name, kind, baseURL, model, def, storage.FormatTime(now), storage.FormatTime(now)); err != nil {
+		(provider_id, name, kind, base_url, model, models_json, reasoning_effort, max_context_tokens, api_key_ref, is_default, created_at, updated_at, revision)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, 0)`,
+		id, name, kind, baseURL, model, string(modelsJSON), effort, maxCtx, def, storage.FormatTime(now), storage.FormatTime(now)); err != nil {
 		return nil, fmt.Errorf("agentsession: insert provider: %w", err)
 	}
 	rev, err := tx.Changed(ctx, storage.Change{Subject: providerSubject(id), Kind: storage.Created})
@@ -412,8 +529,12 @@ type UpdateProviderInput struct {
 	ProviderID       string
 	ExpectedRevision int64
 	Name             *string
+	Kind             *string
 	BaseURL          *string
 	Model            *string
+	Models           *[]string
+	ReasoningEffort  *string
+	MaxContextTokens *int64
 	IsDefault        *bool
 }
 
@@ -421,10 +542,11 @@ type UpdateProviderInput struct {
 // clears the stored API key: the key is bound to the address it was entered
 // for, so a changed address must not silently receive it.
 func (s *Service) UpdateProvider(ctx context.Context, tx *storage.Tx, in UpdateProviderInput) (*AIProvider, error) {
-	if in.Name == nil && in.BaseURL == nil && in.Model == nil && in.IsDefault == nil {
+	if in.Name == nil && in.Kind == nil && in.BaseURL == nil && in.Model == nil &&
+		in.Models == nil && in.ReasoningEffort == nil && in.MaxContextTokens == nil && in.IsDefault == nil {
 		return nil, problem.Validation(problem.Violation{
 			Pointer: "/", Code: "empty",
-			Message: "At least one of name, base_url, model or is_default is required.",
+			Message: "At least one editable field is required.",
 		})
 	}
 	cur, err := loadProviderTx(ctx, tx, in.ProviderID)
@@ -434,7 +556,8 @@ func (s *Service) UpdateProvider(ctx context.Context, tx *storage.Tx, in UpdateP
 	if err := checkProviderRevision(in.ExpectedRevision, cur.Revision); err != nil {
 		return nil, err
 	}
-	name, baseURL, model, isDefault := cur.Name, cur.BaseURL, cur.Model, cur.IsDefault
+	name, kind, baseURL, model, isDefault := cur.Name, cur.Kind, cur.BaseURL, cur.Model, cur.IsDefault
+	models, effort, maxCtx := cur.Models, cur.ReasoningEffort, cur.MaxContextTokens
 	var pointers []string
 	if in.Name != nil {
 		v, err := ValidateProviderName(*in.Name)
@@ -443,6 +566,15 @@ func (s *Service) UpdateProvider(ctx context.Context, tx *storage.Tx, in UpdateP
 		}
 		if v != name {
 			name, pointers = v, append(pointers, "/name")
+		}
+	}
+	if in.Kind != nil {
+		v, err := ValidateProviderKind(*in.Kind)
+		if err != nil {
+			return nil, err
+		}
+		if v != kind {
+			kind, pointers = v, append(pointers, "/kind")
 		}
 	}
 	if in.BaseURL != nil {
@@ -461,6 +593,31 @@ func (s *Service) UpdateProvider(ctx context.Context, tx *storage.Tx, in UpdateP
 		}
 		if v != model {
 			model, pointers = v, append(pointers, "/model")
+		}
+	}
+	if in.Models != nil {
+		v, err := ValidateProviderModels(*in.Models)
+		if err != nil {
+			return nil, err
+		}
+		models, pointers = v, append(pointers, "/models")
+	}
+	if in.ReasoningEffort != nil {
+		v, err := ValidateReasoningEffort(*in.ReasoningEffort, "/reasoning_effort")
+		if err != nil {
+			return nil, err
+		}
+		if v != effort {
+			effort, pointers = v, append(pointers, "/reasoning_effort")
+		}
+	}
+	if in.MaxContextTokens != nil {
+		v, err := ValidateMaxContextTokens(*in.MaxContextTokens, "/max_context_tokens")
+		if err != nil {
+			return nil, err
+		}
+		if v != maxCtx {
+			maxCtx, pointers = v, append(pointers, "/max_context_tokens")
 		}
 	}
 	if in.IsDefault != nil && *in.IsDefault != isDefault {
@@ -502,10 +659,17 @@ func (s *Service) UpdateProvider(ctx context.Context, tx *storage.Tx, in UpdateP
 	if clearKey {
 		ref = ""
 	}
+	if models == nil {
+		models = []string{}
+	}
+	modelsJSON, err := json.Marshal(models)
+	if err != nil {
+		return nil, problem.Wrap(err)
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE ai_providers SET
-		name = ?, base_url = ?, model = ?, api_key_ref = ?, is_default = ?, updated_at = ?
+		name = ?, kind = ?, base_url = ?, model = ?, models_json = ?, reasoning_effort = ?, max_context_tokens = ?, api_key_ref = ?, is_default = ?, updated_at = ?
 		WHERE provider_id = ?`,
-		name, baseURL, model, ref, providerBoolInt(isDefault), storage.FormatTime(now), cur.ID); err != nil {
+		name, kind, baseURL, model, string(modelsJSON), effort, maxCtx, ref, providerBoolInt(isDefault), storage.FormatTime(now), cur.ID); err != nil {
 		return nil, fmt.Errorf("agentsession: update provider: %w", err)
 	}
 	rev, err := tx.Changed(ctx, storage.Change{
@@ -682,9 +846,13 @@ func providerBoolInt(b bool) int {
 
 // ProviderEndpoint is the resolved model endpoint of a provider.
 type ProviderEndpoint struct {
-	ID      string
-	BaseURL string
-	Model   string
+	ID               string
+	Kind             string
+	BaseURL          string
+	Model            string
+	Models           []string
+	ReasoningEffort  string
+	MaxContextTokens int64
 	// Key is the revealed API key, empty when the provider has none. The
 	// caller must clear it after use.
 	Key []byte
@@ -706,7 +874,15 @@ func (s *Service) ResolveProvider(ctx context.Context, id string) (ProviderEndpo
 	if err != nil || !found {
 		return ProviderEndpoint{}, false, err
 	}
-	ep := ProviderEndpoint{ID: p.ID, BaseURL: p.BaseURL, Model: p.Model}
+	ep := ProviderEndpoint{
+		ID:               p.ID,
+		Kind:             p.Kind,
+		BaseURL:          p.BaseURL,
+		Model:            p.Model,
+		Models:           append([]string(nil), p.Models...),
+		ReasoningEffort:  p.ReasoningEffort,
+		MaxContextTokens: p.MaxContextTokens,
+	}
 	if p.APIKeyRef == "" {
 		return ep, true, nil
 	}
@@ -724,7 +900,7 @@ func (s *Service) ResolveProvider(ctx context.Context, id string) (ProviderEndpo
 	return ep, true, nil
 }
 
-// --- connectivity probe ------------------------------------------------------
+// --- connectivity probe & model discovery ------------------------------------
 
 // ProviderProbe is the outcome of TestProvider (OpenAPI AiProviderTestResult).
 type ProviderProbe struct {
@@ -733,6 +909,34 @@ type ProviderProbe struct {
 	// Category classifies a failure: auth, network, denied, 4xx or 5xx. It
 	// never carries the address, the exact status or the response body.
 	Category string
+}
+
+// FetchModelsInput specifies either an existing provider_id or ad-hoc URL+Key
+// credentials (for fetching models before saving a new provider).
+type FetchModelsInput struct {
+	ProviderID string
+	Kind       string
+	BaseURL    string
+	APIKey     string
+}
+
+// FetchModelsResult is the sanitized model discovery response (AGT-03).
+type FetchModelsResult struct {
+	OK        bool
+	Models    []string
+	LatencyMS int64
+	Category  string
+}
+
+func (s *Service) nativeCoreForHTTP() (*NativeCore, error) {
+	switch core := s.cores[string(CoreNative)].(type) {
+	case *NativeCore:
+		return core, nil
+	case *EnhancedNativeCore:
+		return core.base, nil
+	default:
+		return nil, problem.New(problem.Unavailable, "The native core is not available on this host.")
+	}
 }
 
 // TestProvider probes one provider: a GET of {base_url}/models through the
@@ -756,30 +960,96 @@ func (s *Service) TestProvider(ctx context.Context, id string) (ProviderProbe, e
 		key = ep.Key
 		defer clear(key)
 	}
-	switch core := s.cores[string(CoreNative)].(type) {
-	case *NativeCore:
-		return core.probeProvider(ctx, p.BaseURL, key), nil
-	case *EnhancedNativeCore:
-		return core.base.probeProvider(ctx, p.BaseURL, key), nil
-	default:
-		return ProviderProbe{}, problem.New(problem.Unavailable, "The native core is not available on this host.")
+	core, err := s.nativeCoreForHTTP()
+	if err != nil {
+		return ProviderProbe{}, err
 	}
+	return core.probeProviderKind(ctx, p.Kind, p.BaseURL, key), nil
 }
 
-// probeProvider performs one minimal request against an OpenAI-compatible
-// endpoint and classifies the outcome. It shares the client (and therefore the
-// egress policy) of the model turns.
-func (c *NativeCore) probeProvider(ctx context.Context, baseURL string, apiKey []byte) ProviderProbe {
-	ctx, cancel := context.WithTimeout(ctx, providerProbeTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)
-	if err != nil {
-		return ProviderProbe{Category: "network"}
+// FetchProviderModels queries {base_url}/models (or Anthropic /v1/models) using
+// the egress-controlled HTTP client and returns the sorted unique model IDs.
+func (s *Service) FetchProviderModels(ctx context.Context, in FetchModelsInput) (FetchModelsResult, error) {
+	kind := in.Kind
+	baseURL := strings.TrimSpace(in.BaseURL)
+	var key []byte
+	defer clear(key)
+
+	if in.ProviderID != "" {
+		ep, found, err := s.ResolveProvider(ctx, in.ProviderID)
+		if err != nil {
+			return FetchModelsResult{}, err
+		}
+		if !found {
+			return FetchModelsResult{}, providerNotFound()
+		}
+		if kind == "" {
+			kind = ep.Kind
+		}
+		if baseURL == "" {
+			baseURL = ep.BaseURL
+		}
+		if in.APIKey != "" {
+			key = []byte(strings.TrimSpace(in.APIKey))
+		} else {
+			key = ep.Key
+		}
+	} else {
+		if in.APIKey != "" {
+			key = []byte(strings.TrimSpace(in.APIKey))
+		}
 	}
+	validKind, err := ValidateProviderKind(kind)
+	if err != nil {
+		return FetchModelsResult{}, err
+	}
+	validURL, err := ValidateModelBaseURL(baseURL, "/base_url")
+	if err != nil {
+		return FetchModelsResult{}, err
+	}
+	core, err := s.nativeCoreForHTTP()
+	if err != nil {
+		return FetchModelsResult{}, err
+	}
+	return core.fetchModels(ctx, validKind, validURL, key), nil
+}
+
+func modelsEndpointURL(kind, baseURL string) string {
+	u := strings.TrimRight(baseURL, "/")
+	if kind == ProviderKindAnthropic {
+		if strings.HasSuffix(u, "/v1") {
+			return u + "/models"
+		}
+		return u + "/v1/models"
+	}
+	return u + "/models"
+}
+
+func applyProviderAuthHeaders(req *http.Request, kind string, apiKey []byte) {
 	req.Header.Set("Accept", "application/json")
+	if kind == ProviderKindAnthropic {
+		req.Header.Set("anthropic-version", "2023-06-01")
+		if len(apiKey) > 0 {
+			req.Header.Set("x-api-key", string(apiKey))
+		}
+		return
+	}
 	if len(apiKey) > 0 {
 		req.Header.Set("Authorization", "Bearer "+string(apiKey))
 	}
+}
+
+// probeProviderKind performs one minimal request against an OpenAI-compatible
+// or Anthropic-compatible endpoint and classifies the outcome. It shares the
+// client (and therefore the egress policy) of the model turns.
+func (c *NativeCore) probeProviderKind(ctx context.Context, kind, baseURL string, apiKey []byte) ProviderProbe {
+	ctx, cancel := context.WithTimeout(ctx, providerProbeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsEndpointURL(kind, baseURL), nil)
+	if err != nil {
+		return ProviderProbe{Category: "network"}
+	}
+	applyProviderAuthHeaders(req, kind, apiKey)
 	start := time.Now()
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -805,6 +1075,112 @@ func (c *NativeCore) probeProvider(ctx context.Context, baseURL string, apiKey [
 	default:
 		return ProviderProbe{Category: "network"}
 	}
+}
+
+func (c *NativeCore) fetchModels(ctx context.Context, kind, baseURL string, apiKey []byte) FetchModelsResult {
+	ctx, cancel := context.WithTimeout(ctx, providerProbeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsEndpointURL(kind, baseURL), nil)
+	if err != nil {
+		return FetchModelsResult{Category: "network"}
+	}
+	applyProviderAuthHeaders(req, kind, apiKey)
+	start := time.Now()
+	resp, err := c.client.Do(req)
+	if err != nil {
+		if errors.Is(err, errEgressDenied) {
+			return FetchModelsResult{Category: "denied"}
+		}
+		return FetchModelsResult{Category: "network"}
+	}
+	defer resp.Body.Close()
+	latency := time.Since(start).Milliseconds()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+			return FetchModelsResult{Category: "auth", LatencyMS: latency}
+		case resp.StatusCode >= 500:
+			return FetchModelsResult{Category: "5xx", LatencyMS: latency}
+		case resp.StatusCode >= 400:
+			return FetchModelsResult{Category: "4xx", LatencyMS: latency}
+		default:
+			return FetchModelsResult{Category: "network", LatencyMS: latency}
+		}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return FetchModelsResult{Category: "network", LatencyMS: latency}
+	}
+	models := parseModelsListPayload(body)
+	return FetchModelsResult{OK: true, Models: models, LatencyMS: latency}
+}
+
+// parseModelsListPayload parses OpenAI / Anthropic / Ollama compatible model
+// list payloads (`{"data":[{"id":"..."}]}`, `{"models":[{"name":"..."}]}`, or
+// a bare string array) and returns sorted deduplicated valid model IDs.
+func parseModelsListPayload(body []byte) []string {
+	var raw []string
+	var obj struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+		Models []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(body, &obj) == nil {
+		for _, item := range obj.Data {
+			if item.ID != "" {
+				raw = append(raw, item.ID)
+			} else if item.Name != "" {
+				raw = append(raw, item.Name)
+			}
+		}
+		for _, item := range obj.Models {
+			if item.ID != "" {
+				raw = append(raw, item.ID)
+			} else if item.Name != "" {
+				raw = append(raw, item.Name)
+			}
+		}
+	}
+	if len(raw) == 0 {
+		var arr []string
+		if json.Unmarshal(body, &arr) == nil {
+			raw = arr
+		}
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, s := range raw {
+		m := strings.TrimSpace(s)
+		if m == "" || utf8.RuneCountInString(m) > maxProviderModel {
+			continue
+		}
+		valid := true
+		for _, r := range m {
+			if unicode.IsControl(r) {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		if _, dup := seen[m]; dup {
+			continue
+		}
+		seen[m] = struct{}{}
+		out = append(out, m)
+		if len(out) >= maxProviderModels {
+			break
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // --- agent cores -------------------------------------------------------------

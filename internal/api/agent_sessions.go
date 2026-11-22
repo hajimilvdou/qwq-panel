@@ -157,9 +157,10 @@ type agentSessionCreateRequest struct {
 
 // agentSessionUpdateRequest is AgentSessionUpdateRequest.
 type agentSessionUpdateRequest struct {
-	Title            *string `json:"title"`
-	PermissionMode   string  `json:"permission_mode"`
-	ExpectedRevision string  `json:"expected_revision"`
+	Title            *string         `json:"title"`
+	PermissionMode   string          `json:"permission_mode"`
+	Config           json.RawMessage `json:"config,omitempty"`
+	ExpectedRevision string          `json:"expected_revision"`
 }
 
 // agentSessionAPIKeyRequest is AgentSessionAPIKeyRequest.
@@ -427,6 +428,7 @@ func (a *api) updateAgentSession(w http.ResponseWriter, r *http.Request) {
 	rec, err := svc.Update(r.Context(), act, id, agentsession.UpdateRequest{
 		Title:            req.Title,
 		PermissionMode:   mode,
+		Config:           req.Config,
 		ExpectedRevision: req.ExpectedRevision,
 	})
 	if err != nil {

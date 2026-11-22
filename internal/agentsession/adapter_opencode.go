@@ -25,16 +25,19 @@ import (
 //  3. Fallback: `opencode run --format json` (NDJSON event stream)
 
 type OpenCodeConfig struct {
-	ServerURL    string   `json:"server_url,omitempty"`  // e.g. http://127.0.0.1:4096
-	Binary       string   `json:"binary,omitempty"`      // default "opencode"
-	Transport    string   `json:"transport,omitempty"`   // auto (default: serve if up else acp) | serve-http | acp | run-json
-	ProviderID   string   `json:"provider_id,omitempty"` // optional global AIProvider key bridge
-	Model        string   `json:"model,omitempty"`       // providerID/modelID
-	Agent        string   `json:"agent,omitempty"`       // build | plan | general
-	SessionID    string   `json:"external_thread_id,omitempty"`
-	PlanMode     bool     `json:"plan_mode,omitempty"`
-	ActiveSkills []string `json:"active_skills,omitempty"`
-	WorkDir      string   `json:"work_dir,omitempty"`
+	ServerURL        string   `json:"server_url,omitempty"`         // e.g. http://127.0.0.1:4096
+	Binary           string   `json:"binary,omitempty"`             // default "opencode"
+	Transport        string   `json:"transport,omitempty"`          // auto (default: serve if up else acp) | serve-http | acp | run-json
+	AuthMode         string   `json:"auth_mode,omitempty"`          // oauth | provider | "" (auto)
+	ProviderID       string   `json:"provider_id,omitempty"`        // optional global AIProvider key bridge
+	Model            string   `json:"model,omitempty"`              // providerID/modelID
+	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`   // none | low | medium | high | xhigh
+	MaxContextTokens int64    `json:"max_context_tokens,omitempty"` // optional context budget override
+	Agent            string   `json:"agent,omitempty"`              // build | plan | general
+	SessionID        string   `json:"external_thread_id,omitempty"`
+	PlanMode         bool     `json:"plan_mode,omitempty"`
+	ActiveSkills     []string `json:"active_skills,omitempty"`
+	WorkDir          string   `json:"work_dir,omitempty"`
 }
 
 // OpenCodeOptions configures OpenCodeCore.
@@ -45,6 +48,7 @@ type OpenCodeOptions struct {
 	Bridge    ApprovalBridge
 	Providers ProviderResolver
 	Skills    *SkillRegistry
+	Auth      *CLIAuthManager
 	Binary    string
 }
 
@@ -56,6 +60,7 @@ type OpenCodeCore struct {
 	bridge    ApprovalBridge
 	providers ProviderResolver
 	skills    *SkillRegistry
+	auth      *CLIAuthManager
 	bin       string
 }
 
@@ -79,7 +84,7 @@ func NewOpenCodeCore(opts OpenCodeOptions) *OpenCodeCore {
 	}
 	return &OpenCodeCore{
 		client: cl, launcher: launcher, minter: opts.Minter, bridge: opts.Bridge,
-		providers: opts.Providers, skills: skills, bin: bin,
+		providers: opts.Providers, skills: skills, auth: opts.Auth, bin: bin,
 	}
 }
 
@@ -205,6 +210,7 @@ func (c *OpenCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 			Bridge:      c.bridge,
 			Providers:   c.providers,
 			Skills:      c.skills,
+			Auth:        c.auth,
 		})
 		return acp.Run(ctx, turn, emit)
 	case "run-json":
@@ -455,12 +461,35 @@ func (c *OpenCodeCore) Compact(ctx context.Context, req CompactRequest) (Compact
 
 // runCLIJSON runs `opencode run --format json` as a zero-daemon fallback.
 func (c *OpenCodeCore) runCLIJSON(ctx context.Context, cfg OpenCodeConfig, turn Turn, emit Emit) error {
+	var extraEnv []string
+	var cleanupEnv = func() {}
+	useProvider := cfg.AuthMode != "oauth" && cfg.ProviderID != ""
+	if useProvider {
+		pEnv, ep, found, cl, pErr := ResolveProviderForCLI(ctx, c.providers, cfg.ProviderID, CoreOpencode)
+		if pErr != nil {
+			return pErr
+		}
+		cleanupEnv = cl
+		extraEnv = append(extraEnv, pEnv...)
+		if found {
+			if cfg.Model == "" {
+				cfg.Model = ep.Model
+			}
+			if cfg.ReasoningEffort == "" {
+				cfg.ReasoningEffort = ep.ReasoningEffort
+			}
+		}
+	} else if c.auth != nil {
+		extraEnv = append(extraEnv, c.auth.PersistentEnvFor(CoreOpencode)...)
+	}
+	defer cleanupEnv()
+
 	args := []string{"run", "--format", "json", "--agent", MapOpenCodeAgent(turn.PermissionMode, cfg.PlanMode)}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
 	args = append(args, latestUserMessage(turn.Messages))
-	proc, err := c.launcher.Start(ctx, cfg.Binary, args, nil, cfg.WorkDir)
+	proc, err := c.launcher.Start(ctx, cfg.Binary, args, extraEnv, cfg.WorkDir)
 	if err != nil {
 		return err
 	}
