@@ -29,7 +29,7 @@ export type TotpConfirmResult = S['TotpConfirmResult'];
 /* ------------------------------------------------------------------ 2 · AI 服务（缺口 2） */
 
 export type AiProviderKind = 'openai_compatible' | 'anthropic_compatible';
-export type ReasoningEffort = '' | 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ReasoningEffort = string;
 
 export type AiProvider = Omit<S['AiProvider'], 'kind'> & {
   kind?: AiProviderKind;

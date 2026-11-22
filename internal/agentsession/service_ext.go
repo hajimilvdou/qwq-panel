@@ -188,17 +188,22 @@ func (s *Service) tryHandleSlashCommand(ctx context.Context, rt *sessionRuntime,
 	case "model":
 		fields := strings.Fields(args)
 		if len(fields) == 0 {
-			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/model", OK: false, Summary: "用法：/model <模型名> [none|low|medium|high|xhigh]"})
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/model", OK: false, Summary: "用法：/model <模型名> [思考挡位，可填任意自定义代号或 auto]"})
 			return true
 		}
 		delta := map[string]any{"model": fields[0]}
 		if len(fields) > 1 {
-			eff, err := ValidateReasoningEffort(fields[1], "/config/reasoning_effort")
-			if err != nil {
-				_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/model", OK: false, Summary: "思考深度应为 none / low / medium / high / xhigh"})
-				return true
+			rawEff := strings.TrimSpace(fields[1])
+			if strings.EqualFold(rawEff, "auto") || strings.EqualFold(rawEff, "reset") {
+				delta["reasoning_effort"] = ""
+			} else {
+				eff, err := ValidateReasoningEffort(rawEff, "/config/reasoning_effort")
+				if err != nil {
+					_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/model", OK: false, Summary: "思考挡位仅支持字母、数字及 . _ - : /（最长 48 字符）"})
+					return true
+				}
+				delta["reasoning_effort"] = eff
 			}
-			delta["reasoning_effort"] = eff
 		}
 		patch, _ := json.Marshal(delta)
 		if _, err := s.Update(ctx, owner, sess.ID, UpdateRequest{Config: patch}); err != nil {
@@ -207,23 +212,43 @@ func (s *Service) tryHandleSlashCommand(ctx context.Context, rt *sessionRuntime,
 		}
 		summary := fmt.Sprintf("已切换推理模型为 %s", fields[0])
 		if eff, ok := delta["reasoning_effort"].(string); ok && eff != "" {
-			summary += "（思考挡位：" + eff + "）"
+			summary += "（自定义思考挡位：" + eff + "）"
+		} else {
+			resolved, matched, prof := ResolveReasoningEffort(fields[0], "")
+			if matched {
+				summary += fmt.Sprintf("（已自动匹配 %s → %s）", prof.Family, resolved)
+			} else {
+				summary += fmt.Sprintf("（未命中清单，默认思考挡位：%s）", resolved)
+			}
 		}
 		_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/model", OK: true, Summary: summary})
 		return true
 
 	case "effort":
-		eff, err := ValidateReasoningEffort(args, "/config/reasoning_effort")
-		if err != nil || eff == "" {
-			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/effort", OK: false, Summary: "用法：/effort <none|low|medium|high|xhigh>"})
+		rawEff := strings.TrimSpace(args)
+		if rawEff == "" {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/effort", OK: false, Summary: "用法：/effort <自定义挡位代号，如 minimal/low/medium/high/xhigh/max/16384 或 auto>"})
 			return true
+		}
+		eff := ""
+		if !strings.EqualFold(rawEff, "auto") && !strings.EqualFold(rawEff, "reset") {
+			var err error
+			eff, err = ValidateReasoningEffort(rawEff, "/config/reasoning_effort")
+			if err != nil {
+				_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/effort", OK: false, Summary: "思考挡位仅支持字母、数字及 . _ - : /（最长 48 字符）"})
+				return true
+			}
 		}
 		patch, _ := json.Marshal(map[string]any{"reasoning_effort": eff})
 		if _, err := s.Update(ctx, owner, sess.ID, UpdateRequest{Config: patch}); err != nil {
 			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/effort", OK: false, Summary: "设置思考挡位失败：" + err.Error()})
 			return true
 		}
-		_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/effort", OK: true, Summary: fmt.Sprintf("已将思考挡位设为 %s", eff)})
+		msg := fmt.Sprintf("已将思考挡位设为自定义：%s", eff)
+		if eff == "" {
+			msg = "已恢复自动匹配思考挡位（命中内置模型清单时自动套用，未命中默认 high）"
+		}
+		_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/effort", OK: true, Summary: msg})
 		return true
 
 	case "context":

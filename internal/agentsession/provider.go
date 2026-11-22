@@ -200,17 +200,35 @@ func ValidateProviderKind(raw string) (string, error) {
 }
 
 // ValidateReasoningEffort validates a reasoning/thinking effort level.
+// Empty string means "auto-match built-in model catalog, fallback to high".
+// Any custom provider/model effort code (e.g. minimal, low, medium, high,
+// xhigh, max, none, off, or a numeric token budget like 16384) is allowed as
+// long as it uses safe identifier characters (1..48 chars).
 func ValidateReasoningEffort(raw, pointer string) (string, error) {
-	v := strings.ToLower(strings.TrimSpace(raw))
-	switch v {
-	case "", "none", "low", "medium", "high", "xhigh":
-		return v, nil
-	default:
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return "", nil
+	}
+	if len(v) > 48 {
 		return "", problem.Validation(problem.Violation{
-			Pointer: pointer, Code: "INVALID",
-			Message: "reasoning_effort must be none, low, medium, high or xhigh.",
+			Pointer: pointer, Code: "too_long",
+			Message: "reasoning_effort is at most 48 characters.",
 		})
 	}
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		ok := (c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') ||
+			c == '_' || c == '-' || c == '.' || c == ':' || c == '/'
+		if !ok {
+			return "", problem.Validation(problem.Violation{
+				Pointer: pointer, Code: "INVALID",
+				Message: "reasoning_effort may only contain letters, digits, and . _ - : /.",
+			})
+		}
+	}
+	return v, nil
 }
 
 // ValidateMaxContextTokens validates an optional context window token limit (0 = default).

@@ -23,7 +23,8 @@
     ExternalCliCore,
     ReasoningEffort,
   } from '$api/additions';
-  import { CONTEXT_OPTIONS, EFFORT_OPTIONS, effortLabel, formatContextSize } from '$lib/ai/agent-sessions.svelte';
+  import { CONTEXT_OPTIONS, effortLabel, formatContextSize } from '$lib/ai/agent-sessions.svelte';
+  import EffortField from '../ai/EffortField.svelte';
   import { describeError, reportError, type ErrorView } from '$lib/errors';
   import { createIntent, runIntent, type Intent } from '$lib/ops';
   import { useResource } from '$lib/resource.svelte';
@@ -513,10 +514,14 @@
       </div>
     {/if}
 
-    <div class="grid-2">
-      <Select label="默认思考挡位（Effort）" options={[...EFFORT_OPTIONS]} bind:value={form.reasoning_effort} />
-      <Select label="默认上下文窗口大小" options={[...CONTEXT_OPTIONS]} bind:value={form.max_context_tokens} />
-    </div>
+    <EffortField
+      label="默认思考挡位（Effort，可自由填写或点选）"
+      model={form.model}
+      error={editErr?.fields['/reasoning_effort']}
+      bind:value={form.reasoning_effort}
+    />
+
+    <Select label="默认上下文窗口大小" options={[...CONTEXT_OPTIONS]} bind:value={form.max_context_tokens} />
 
     <Checkbox label="设为默认服务" bind:checked={form.is_default} disabled={editing?.is_default} />
     {#if editErr && !Object.keys(editErr.fields).length}<Alert>{editErr.message}</Alert>{/if}

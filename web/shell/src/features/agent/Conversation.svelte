@@ -16,13 +16,13 @@
     BUILTIN_SKILLS,
     CONTEXT_OPTIONS,
     coreLabel,
-    EFFORT_OPTIONS,
     MODE_META,
     MODES,
     SLASH_COMMANDS,
     statusMeta,
     lastSession,
   } from '$lib/ai/agent-sessions.svelte';
+  import EffortField from '../ai/EffortField.svelte';
   import { changeMode, pauseSession, takeOver } from '$lib/ai/controls';
   import { SessionStream } from '$lib/ai/session-stream.svelte';
   import { describeError, reportError } from '$lib/errors';
@@ -488,15 +488,17 @@
       bind:value={cfgModel}
       placeholder="如 claude-sonnet-4-6 / gpt-5 / deepseek-reasoner"
     />
-    <div class="cfg-row">
-      <Select label="思考挡位（Effort）" options={EFFORT_OPTIONS} bind:value={cfgEffort} />
-      <Select label="上下文窗口大小" options={CONTEXT_OPTIONS} bind:value={cfgMaxCtx} />
-    </div>
+    <EffortField
+      label="思考挡位（Effort，可自由填写）"
+      model={cfgModel.trim() || activeModelName}
+      bind:value={cfgEffort}
+    />
+    <Select label="上下文窗口大小" options={CONTEXT_OPTIONS} bind:value={cfgMaxCtx} />
     <Checkbox
       bind:checked={cfgPlan}
       label="计划模式（Plan Mode）：先列步骤再执行，适合高风险变更"
     />
-    <p class="cfg-tip">也可以直接在对话框输入 <code>/effort high</code>、<code>/model 名称</code>、<code>/context 128000</code> 或 <code>/plan on</code> 快速生效。</p>
+    <p class="cfg-tip">也可以直接在对话框输入 <code>/effort max</code>、<code>/effort 16384</code>、<code>/effort auto</code>、<code>/model 名称</code> 或 <code>/plan on</code> 快速生效。</p>
   </div>
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (cfgOpen = false)}>取消</Button>
@@ -633,11 +635,6 @@
   }
   .cfg-form {
     display: grid;
-    gap: var(--s-3);
-  }
-  .cfg-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
     gap: var(--s-3);
   }
   .cfg-tip {

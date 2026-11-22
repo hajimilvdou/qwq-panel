@@ -16,7 +16,8 @@
   import { newIdempotencyKey } from '$api/client';
   import type { AgentCore, PermissionMode } from '$api/types';
   import type { ReasoningEffort } from '$api/additions';
-  import { CONTEXT_OPTIONS, coreLabel, EFFORT_OPTIONS, MODE_META, MODES } from '$lib/ai/agent-sessions.svelte';
+  import { CONTEXT_OPTIONS, coreLabel, MODE_META, MODES } from '$lib/ai/agent-sessions.svelte';
+  import EffortField from '../ai/EffortField.svelte';
   import { useResource } from '$lib/resource.svelte';
   import { reportError } from '$lib/errors';
   import { navigate } from '$lib/router.svelte';
@@ -173,14 +174,20 @@
 
     <div class="row top">
       <span class="lbl">参数</span>
-      <div class="params-grid">
-        {#if needsProvider && (activeProvider?.models?.length ?? 0) > 0}
-          <Select label="模型" options={modelOptions} bind:value={modelOverride} />
-        {:else}
-          <Input label="模型覆盖（可选）" placeholder={activeProvider ? `默认 ${activeProvider.model}` : '留空使用核心默认模型'} mono bind:value={modelOverride} />
-        {/if}
-        <Select label="思考挡位（Effort）" options={[...EFFORT_OPTIONS]} bind:value={effort} />
-        <Select label="上下文窗口大小" options={[...CONTEXT_OPTIONS]} bind:value={maxContext} />
+      <div class="params-stack">
+        <div class="params-grid">
+          {#if needsProvider && (activeProvider?.models?.length ?? 0) > 0}
+            <Select label="模型" options={modelOptions} bind:value={modelOverride} />
+          {:else}
+            <Input label="模型覆盖（可选）" placeholder={activeProvider ? `默认 ${activeProvider.model}` : '留空使用核心默认模型'} mono bind:value={modelOverride} />
+          {/if}
+          <Select label="上下文窗口大小" options={[...CONTEXT_OPTIONS]} bind:value={maxContext} />
+        </div>
+        <EffortField
+          label="思考挡位（Effort，可自定义或自动匹配清单）"
+          model={modelOverride.trim() || activeProvider?.model || ''}
+          bind:value={effort}
+        />
       </div>
     </div>
 
@@ -305,10 +312,15 @@
     color: var(--accent-text);
     text-decoration: none;
   }
-  .params-grid {
+  .params-stack {
     flex: 1;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s-3);
+    min-width: 0;
+  }
+  .params-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--s-3);
   }
   .hint {

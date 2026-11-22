@@ -282,3 +282,68 @@ func TestWorkspaceSeparationAndOfficialRegistry(t *testing.T) {
 		t.Fatalf("LoadCustomSkillsPrompt missing uploaded skill: %q", ws.LoadCustomSkillsPrompt())
 	}
 }
+
+func TestModelEffortCatalogAndCustomEffort(t *testing.T) {
+	// 1. Catalog matches major families even with vendor prefixes.
+	cases := []struct {
+		model       string
+		wantMatched bool
+		wantDefault string
+	}{
+		{"openai/gpt-5.4-codex", true, "high"},
+		{"gpt-5-mini", true, "medium"},
+		{"o3-mini", true, "high"},
+		{"anthropic/claude-opus-4-6-20260205", true, "high"},
+		{"claude-haiku-4-5", true, "medium"},
+		{"google/gemini-3-pro-preview", true, "high"},
+		{"gemini-2.5-flash", true, "medium"},
+		{"deepseek/deepseek-reasoner", true, "high"},
+		{"x-ai/grok-4", true, "high"},
+		{"qwen3-max", true, "high"},
+		{"glm-5", true, "high"},
+		{"kimi-k2.5", true, "high"},
+		{"minimax-m2", true, "high"},
+		{"doubao-seed-1.6", true, "high"},
+		// Unmatched custom model falls back to "high" when user leaves effort empty.
+		{"my-private-finetuned-llm-v9", false, "high"},
+	}
+	for _, tc := range cases {
+		eff, matched, _ := ResolveReasoningEffort(tc.model, "")
+		if matched != tc.wantMatched || eff != tc.wantDefault {
+			t.Fatalf("ResolveReasoningEffort(%q, \"\") = (%q, %v), want (%q, %v)",
+				tc.model, eff, matched, tc.wantDefault, tc.wantMatched)
+		}
+	}
+
+	// 2. Explicit custom user effort overrides both catalog and fallback verbatim.
+	for _, custom := range []string{"minimal", "max", "xhigh", "16384", "thinking:deep", "off"} {
+		eff, _, _ := ResolveReasoningEffort("my-private-llm", custom)
+		if eff != custom {
+			t.Fatalf("custom effort = %q, want %q", eff, custom)
+		}
+		if _, err := ValidateReasoningEffort(custom, "/reasoning_effort"); err != nil {
+			t.Fatalf("ValidateReasoningEffort(%q) failed: %v", custom, err)
+		}
+	}
+
+	// 3. Reject unsafe characters / spaces / overly long effort strings.
+	for _, bad := range []string{"high; rm -rf /", "has space", strings.Repeat("a", 49)} {
+		if _, err := ValidateReasoningEffort(bad, "/reasoning_effort"); err == nil {
+			t.Fatalf("ValidateReasoningEffort(%q) unexpectedly succeeded", bad)
+		}
+	}
+
+	// 4. Anthropic budget handles named levels, numeric budgets, and disabled states.
+	if b := anthropicThinkingBudget("claude-opus-4-6", "12000"); b != 12000 {
+		t.Fatalf("numeric budget = %d, want 12000", b)
+	}
+	if b := anthropicThinkingBudget("claude-opus-4-6", "max"); b != 49152 {
+		t.Fatalf("max budget = %d, want 49152", b)
+	}
+	if b := anthropicThinkingBudget("claude-opus-4-6", "off"); b != 0 {
+		t.Fatalf("off budget = %d, want 0", b)
+	}
+	if b := anthropicThinkingBudget("unknown-claude-relay", ""); b != 24576 {
+		t.Fatalf("fallback high budget = %d, want 24576", b)
+	}
+}

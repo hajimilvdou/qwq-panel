@@ -215,10 +215,7 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
-	if eff := strings.ToLower(strings.TrimSpace(cfg.ReasoningEffort)); eff != "" && eff != "none" {
-		if eff == "xhigh" {
-			eff = "high"
-		}
+	if eff, _, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort); !IsReasoningEffortDisabled(eff) && !strings.EqualFold(eff, "none") {
 		extraEnv = append(extraEnv, "CLAUDE_CODE_EFFORT_LEVEL="+eff)
 	}
 	if cfg.ResumeSessionID != "" {

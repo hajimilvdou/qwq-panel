@@ -54,7 +54,7 @@ export const SLASH_COMMANDS = [
   { cmd: '/plan', label: '计划模式', desc: '切换只读计划模式，先输出步骤清单再执行', instant: true },
   { cmd: '/mode', label: '权限模式', desc: '切换 read_only / safe / full 授权级别', instant: false },
   { cmd: '/model', label: '切换模型', desc: '如 /model gpt-5 high，即时切换模型与思考深度', instant: false },
-  { cmd: '/effort', label: '思考挡位', desc: '设置推理深度（none / low / medium / high / xhigh）', instant: false },
+  { cmd: '/effort', label: '思考挡位', desc: '设置自定义思考挡位（如 minimal / high / xhigh / max / 16384 或 auto）', instant: false },
   { cmd: '/context', label: '上下文大小', desc: '设置上下文窗口上限，如 /context 128k 或 200000', instant: false },
   { cmd: '/skills', label: '运维技能列表', desc: '列出当前内置 VPS 运维技能包', instant: true },
   { cmd: '/mcp', label: '宿主 MCP 工具', desc: '查看当前授权挂载的宿主与插件动作', instant: true },
@@ -81,9 +81,15 @@ export const CONTEXT_OPTIONS = [
 ] as const;
 
 export const effortLabel = (v?: string): string => {
-  switch (v) {
+  const s = (v ?? '').trim();
+  if (!s) return '自动';
+  switch (s.toLowerCase()) {
     case 'none':
+    case 'off':
+    case 'disabled':
       return '关闭';
+    case 'minimal':
+      return '极简';
     case 'low':
       return '低';
     case 'medium':
@@ -92,8 +98,10 @@ export const effortLabel = (v?: string): string => {
       return '高';
     case 'xhigh':
       return '极高';
+    case 'max':
+      return '最大';
     default:
-      return '默认';
+      return s;
   }
 };
 

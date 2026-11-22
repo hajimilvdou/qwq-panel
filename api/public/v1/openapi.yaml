@@ -5229,7 +5229,7 @@ components:
           maxItems: 500
           description: Cached list of available model identifiers discovered from or configured for this provider.
           items: { type: string, maxLength: 128 }
-        reasoning_effort: { type: string, enum: ['', none, low, medium, high, xhigh], description: Default reasoning/thinking effort level. }
+        reasoning_effort: { type: string, maxLength: 48, pattern: '^[a-zA-Z0-9._:/-]{0,48}$', description: Custom reasoning/thinking effort code (e.g. minimal, low, medium, high, xhigh, max, none, or numeric budget); empty auto-matches the built-in model catalog and falls back to high. }
         max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 4000000, description: Default context window size in tokens (0 uses core default). }
         has_api_key: { type: boolean, description: Whether an API key is stored. The key is write-only and never returned. }
         is_default: { type: boolean, description: 'Whether sessions without their own endpoint use this provider; at most one provider is the default.' }
@@ -5258,7 +5258,7 @@ components:
           maxItems: 500
           description: Optional cached model list available on this provider.
           items: { type: string, maxLength: 128 }
-        reasoning_effort: { type: string, enum: ['', none, low, medium, high, xhigh], description: Default reasoning/thinking effort level. }
+        reasoning_effort: { type: string, maxLength: 48, pattern: '^[a-zA-Z0-9._:/-]{0,48}$', description: Custom reasoning/thinking effort code (e.g. minimal, low, medium, high, xhigh, max, none, or numeric budget); empty auto-matches the built-in model catalog and falls back to high. }
         max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 4000000, description: Default context window size in tokens (0 uses core default). }
         is_default: { type: boolean, description: Make this the provider sessions without their own endpoint use; clears the previous default. }
     AiProviderUpdateRequest:
@@ -5278,7 +5278,7 @@ components:
           maxItems: 500
           description: Updated cached model list available on this provider.
           items: { type: string, maxLength: 128 }
-        reasoning_effort: { type: string, enum: ['', none, low, medium, high, xhigh], description: New default reasoning/thinking effort level. }
+        reasoning_effort: { type: string, maxLength: 48, pattern: '^[a-zA-Z0-9._:/-]{0,48}$', description: New custom reasoning/thinking effort code; empty restores auto-matching against the built-in model catalog with fallback to high. }
         max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 4000000, description: New default context window size in tokens. }
         is_default: { type: boolean, description: 'Whether this provider is the default; setting it clears the previous default.' }
     AiProviderFetchModelsRequest:

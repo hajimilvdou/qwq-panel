@@ -61,15 +61,11 @@ func decodeEnhancedNativeConfig(raw json.RawMessage) (*enhancedNativeConfig, err
 		_ = json.Unmarshal(raw, cfg)
 		cfg.nativeConfig = *base
 	}
-	switch strings.ToLower(strings.TrimSpace(cfg.ReasoningEffort)) {
-	case "", "none", "low", "medium", "high", "xhigh":
-		cfg.ReasoningEffort = strings.ToLower(strings.TrimSpace(cfg.ReasoningEffort))
-	default:
-		return nil, problem.Validation(problem.Violation{
-			Pointer: "/config/reasoning_effort", Code: "INVALID",
-			Message: "reasoning_effort must be none, low, medium, high or xhigh.",
-		})
+	eff, err := ValidateReasoningEffort(cfg.ReasoningEffort, "/config/reasoning_effort")
+	if err != nil {
+		return nil, err
 	}
+	cfg.ReasoningEffort = eff
 	if _, err := ValidateMaxContextTokens(cfg.MaxContextTokens, "/config/max_context_tokens"); err != nil {
 		return nil, err
 	}
@@ -406,8 +402,8 @@ func (p *streamingOpenAIProvider) Complete(ctx context.Context, req ProviderRequ
 		return p.completeAnthropic(ctx, req, stepStart)
 	}
 
-	effort := p.cfg.ReasoningEffort
-	if effort == "none" {
+	effort, _, _ := ResolveReasoningEffort(p.cfg.Model, p.cfg.ReasoningEffort)
+	if IsReasoningEffortDisabled(effort) {
 		effort = ""
 	}
 	body := streamChatRequest{
@@ -647,8 +643,18 @@ func anthropicMessagesURL(baseURL string) string {
 	return u + "/v1/messages"
 }
 
-func anthropicThinkingBudget(effort string) int {
-	switch strings.ToLower(strings.TrimSpace(effort)) {
+func anthropicThinkingBudget(model, configured string) int {
+	effort, _, _ := ResolveReasoningEffort(model, configured)
+	lower := strings.ToLower(strings.TrimSpace(effort))
+	if IsReasoningEffortDisabled(lower) || lower == "none" {
+		return 0
+	}
+	if n, ok := ParseNumericThinkingBudget(lower); ok {
+		return n
+	}
+	switch lower {
+	case "minimal":
+		return 1024
 	case "low":
 		return 4096
 	case "medium":
@@ -656,9 +662,12 @@ func anthropicThinkingBudget(effort string) int {
 	case "high":
 		return 24576
 	case "xhigh":
+		return 36864
+	case "max":
 		return 49152
 	default:
-		return 0
+		// Any custom non-disabled effort code enables deep thinking with a safe default budget.
+		return 16384
 	}
 }
 
@@ -737,7 +746,7 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 	if len(tools) > 0 {
 		payload["tools"] = tools
 	}
-	if budget := anthropicThinkingBudget(p.cfg.ReasoningEffort); budget > 0 {
+	if budget := anthropicThinkingBudget(p.cfg.Model, p.cfg.ReasoningEffort); budget > 0 {
 		if maxTokens <= budget {
 			payload["max_tokens"] = budget + 4096
 		}

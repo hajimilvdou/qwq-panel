@@ -32,7 +32,7 @@
 除了内置原生 Agent，**qwq 全面打通 `Claude Code`、`Codex`、`OpenCode` 等主流外部 CLI Agent 的完整工作流**：
 
 - **面板内直接官方登录（OAuth / Device Code / Setup Token）**：在 **「设置 → AI 模型与 Agent」** 中为 `Codex`、`Claude Code`、`OpenCode` 发起官方登录或粘贴 Setup Token，凭据持久化保存在按核心隔离的 `<DataDir>/agent-homes/<core>`（`0700`）中，不污染宿主机 `/root`，跨轮次不会丢失登录态。
-- **自定义 URL + API Key 全参数控制**：支持 **OpenAI 兼容** 与 **Anthropic 兼容** 两种协议；输入 URL 和 Key 即可**一键拉取可用模型列表**、预设与实时调整**思考挡位（Effort：`none` / `low` / `medium` / `high` / `xhigh`）**、**上下文窗口大小（Max Context）**与 **Plan 模式**，并支持对话内 `/model`、`/effort`、`/context`、`/plan`、`/mode` 快捷指令即时生效。
+- **自定义 URL + API Key 全参数控制**：支持 **OpenAI 兼容** 与 **Anthropic 兼容** 两种协议；输入 URL 和 Key 即可**一键拉取可用模型列表**、预设与实时调整**思考挡位（支持自由填写任意自定义代号/数字预算，内置 OpenAI / Claude / Gemini / DeepSeek / Grok / Qwen / GLM / Kimi 等主流模型挡位清单自动匹配，未命中且未自定义自动默认 `high`）**、**上下文窗口大小（Max Context）**与 **Plan 模式**，并支持对话内 `/model`、`/effort`、`/context`、`/plan`、`/mode` 快捷指令即时生效。
 - **MCP / Skills / 各家自定义提示词分目录管理 + 拖拽上传**：在 Agent 页面一键打开资源管理器，三类文件严格分目录存放，**各家核心提示词互不串线**（`prompts/claude-code/CLAUDE.md`、`prompts/codex/AGENTS.md`、`prompts/opencode/AGENTS.md`、`prompts/native/SYSTEM.md`），支持在线编辑与**网页直接拖拽上传**，并自动同步镜像到对应 CLI 隔离目录。
 - **内置官方 Skills & MCP 仓库一键搜索安装**：内置 `anthropics/skills`、`openai/skills`、`modelcontextprotocol/servers`（及 Playwright、Context7 等高频官方 MCP）索引，支持 10 分钟 TTL 缓存与按需联网刷新，一键下载安装到 Agent 立即可用（前端弹窗按需懒加载，0 字节首屏负担）。
 - **查看会话圆点时间轴导航**：长对话侧边常驻高密度圆点进度轴，自动跟随当前阅读轮次，悬停弹出双行内容预览与时间（`X of N · HH:MM`），点击平滑跳转高亮，并支持可搜索会话目录。
