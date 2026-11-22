@@ -40,6 +40,7 @@ func TestRecoverRequiresFlags(t *testing.T) {
 
 func TestRecoverMissingConfig(t *testing.T) {
 	var out, errb bytes.Buffer
+	asLocalRoot(t)
 	code := runRecover([]string{
 		"--config", filepath.Join(t.TempDir(), "missing.json"),
 		"--username", "admin", "--password-stdin",
@@ -86,6 +87,7 @@ func TestRecoverResetsAdmin(t *testing.T) {
 	}
 
 	var out, errb bytes.Buffer
+	asLocalRoot(t)
 	code := runRecover([]string{
 		"--config", cfgPath,
 		"--username", "ADMIN",
@@ -131,6 +133,7 @@ func TestRecoverRefusesMissingDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
+	asLocalRoot(t)
 	code := runRecover([]string{"--config", cfgPath, "--username", "admin", "--password-stdin"},
 		strings.NewReader("NewPassword123!\n"), &out, &errb)
 	if code != 1 {

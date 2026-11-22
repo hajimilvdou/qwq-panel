@@ -19,6 +19,7 @@ import (
 // stubControllerActive 让恢复前的"controller 是否在运行"检查返回 active。
 func stubControllerActive(t *testing.T, active bool) {
 	t.Helper()
+	asLocalRoot(t)
 	old := controllerActive
 	controllerActive = func() bool { return active }
 	t.Cleanup(func() { controllerActive = old })

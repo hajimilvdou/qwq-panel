@@ -20,6 +20,7 @@ var setupLink = regexp.MustCompile(`https://127\.0\.0\.1:8443/setup#token=(\S+)`
 // initDataDir 启动一次 controller 建好数据目录，再写出 qwq.json。
 func initDataDir(t *testing.T) (string, config.Config) {
 	t.Helper()
+	asLocalRoot(t)
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DataDir = filepath.Join(dir, "data")

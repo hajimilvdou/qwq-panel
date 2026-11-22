@@ -17,9 +17,10 @@ import (
 const capabilityRequestTimeout = 30 * time.Second
 
 type capabilityServer struct {
-	runner  sandbox.CapabilityRunner
-	logger  *slog.Logger
-	version string
+	runner         sandbox.CapabilityRunner
+	logger         *slog.Logger
+	version        string
+	lookupAgentUID func(string) (int, error)
 }
 
 func newCapabilityServer(runner sandbox.CapabilityRunner, logger *slog.Logger, version string) *capabilityServer {
@@ -27,6 +28,17 @@ func newCapabilityServer(runner sandbox.CapabilityRunner, logger *slog.Logger, v
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &capabilityServer{runner: runner, logger: logger, version: version}
+}
+
+func (s *capabilityServer) agentUID() (int, error) {
+	if s.lookupAgentUID != nil {
+		return s.lookupAgentUID(sandbox.DefaultAgentUser)
+	}
+	account, err := user.Lookup(sandbox.DefaultAgentUser)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(account.Uid)
 }
 
 func (s *capabilityServer) serve(ctx context.Context, listener net.Listener, oneShot bool) error {
@@ -39,12 +51,8 @@ func (s *capabilityServer) serveConn(ctx context.Context, connection net.Conn) {
 		return
 	}
 	if uid != 0 {
-		account, lookupErr := user.Lookup(sandbox.DefaultAgentUser)
-		if lookupErr != nil {
-			return
-		}
-		agentUID, parseErr := strconv.Atoi(account.Uid)
-		if parseErr != nil || uid != agentUID {
+		agentUID, lookupErr := s.agentUID()
+		if lookupErr != nil || uid != agentUID {
 			return
 		}
 	}

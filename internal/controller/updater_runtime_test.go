@@ -548,6 +548,17 @@ type installerFixture struct {
 func newInstallerFixture(t *testing.T) *installerFixture {
 	t.Helper()
 	base := t.TempDir()
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(base, func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
+			if d.IsDir() {
+				_ = os.Chmod(p, 0o700)
+			}
+			return nil
+		})
+	})
 	pluginsRoot := filepath.Join(base, "plugins")
 	stagingRoot := filepath.Join(base, "staging")
 	unitDir := filepath.Join(base, "units")

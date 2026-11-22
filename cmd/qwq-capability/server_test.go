@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,7 @@ func TestCapabilityDisconnectCancelsRunner(t *testing.T) {
 	defer listener.Close()
 	runner := &cancelCapabilityRunner{started: make(chan struct{}), canceled: make(chan struct{})}
 	server := newCapabilityServer(runner, nil, "test")
+	server.lookupAgentUID = func(string) (int, error) { return os.Getuid(), nil }
 	done := make(chan error, 1)
 	go func() { done <- server.serve(t.Context(), listener, true) }()
 	connection, err := net.Dial("unix", listener.Addr().String())
@@ -106,6 +108,7 @@ func TestCapabilitySingleRequestActivation(t *testing.T) {
 	t.Cleanup(func() { listener.Close() })
 	runner := &fixtureCapabilityRunner{}
 	server := newCapabilityServer(runner, slog.New(slog.DiscardHandler), "test")
+	server.lookupAgentUID = func(string) (int, error) { return os.Getuid(), nil }
 	done := make(chan error, 1)
 	go func() { done <- server.serve(t.Context(), listener, true) }()
 	client := sandbox.NewCapabilityClient(listener.Addr().String())

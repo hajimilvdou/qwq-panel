@@ -23,6 +23,14 @@ func asRoot(t *testing.T) {
 	t.Cleanup(func() { privilegedEUID = old })
 }
 
+// asLocalRoot makes localdb/backup/recover/setup-token geteuid report 0 during non-root tests.
+func asLocalRoot(t *testing.T) {
+	t.Helper()
+	old := geteuid
+	geteuid = func() int { return 0 }
+	t.Cleanup(func() { geteuid = old })
+}
+
 // asUnprivileged makes privilegedEUID report a normal user.
 func asUnprivileged(t *testing.T) {
 	t.Helper()
@@ -55,6 +63,7 @@ func requireLinux(t *testing.T) {
 }
 
 func TestRunPrivilegedUsage(t *testing.T) {
+	asRoot(t)
 	if out, code, stderr := runPrivilegedForTest(t, nil, ""); code != 2 || !strings.Contains(stderr, "usage: qwq privileged") {
 		t.Errorf("no args: code %d, stderr %q, out %+v", code, stderr, out)
 	}
