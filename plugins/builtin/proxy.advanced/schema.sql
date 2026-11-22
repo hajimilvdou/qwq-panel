@@ -127,3 +127,28 @@ CREATE TABLE IF NOT EXISTS tuning_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_tuning_snapshots_rev
     ON tuning_snapshots(revision DESC);
+
+CREATE TABLE IF NOT EXISTS warp_config (
+    id TEXT PRIMARY KEY CHECK (id = 'default'),
+    account_id TEXT NOT NULL DEFAULT '',
+    account_type TEXT NOT NULL DEFAULT 'free' CHECK (account_type IN ('free', 'plus', 'manual')),
+    private_key_enc BLOB NOT NULL,
+    access_token_enc BLOB NOT NULL,
+    public_key TEXT NOT NULL DEFAULT '',
+    peer_public_key TEXT NOT NULL DEFAULT '',
+    endpoint TEXT NOT NULL DEFAULT 'engage.cloudflareclient.com:2408',
+    address_v4 TEXT NOT NULL DEFAULT '172.16.0.2/32',
+    address_v6 TEXT NOT NULL DEFAULT '',
+    client_id TEXT NOT NULL DEFAULT '',
+    reserved_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(reserved_json)),
+    mtu INTEGER NOT NULL DEFAULT 1280 CHECK (mtu >= 1200 AND mtu <= 1500),
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+    routing_mode TEXT NOT NULL DEFAULT 'bound_ports' CHECK (routing_mode IN ('bound_ports', 'domains', 'all')),
+    bound_ports_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(bound_ports_json)),
+    domains_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(domains_json)),
+    license_key_masked TEXT NOT NULL DEFAULT '',
+    last_synced_rev TEXT NOT NULL DEFAULT '',
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+) STRICT;

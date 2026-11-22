@@ -31,6 +31,8 @@
   let cachedUsers = [];
   let cachedChains = [];
   let cachedInbounds = [];
+  let cachedWARP = null;
+  let cachedWARPPresets = {};
 
   const send = (msg) => { if (port) port.postMessage(msg); };
   const setStatus = (text) => { $('status').textContent = text; };
@@ -639,9 +641,100 @@
     renderBrutalStatus(brutalResp);
   }
 
+  // ==================== Cloudflare WARP 渲染与绑定 ====================
+
+  const WARP_MODE_LABELS = {
+    bound_ports: '指定端口全流量走 WARP',
+    domains: '仅解锁域名走 WARP（其余直连）',
+    all: '全部代理端口全局走 WARP',
+  };
+
+  function renderWARPStatus(data) {
+    const w = data?.warp || {};
+    cachedWARP = data;
+    cachedWARPPresets = data?.unlock_presets || {};
+
+    $('w-state').textContent = w.registered
+      ? (w.enabled ? `已启用 (${(w.account_type || 'free').toUpperCase()})` : `已注册 · 未启用`)
+      : '未注册';
+    $('w-account').textContent = w.registered
+      ? `账号 ${w.account_id || '—'}${w.license_key_masked ? ` · License ${w.license_key_masked}` : ''}`
+      : '点击下方「一键注册 Cloudflare WARP」自动申请 WireGuard 凭据';
+    $('w-addrs').textContent = w.registered
+      ? [w.address_v4, w.address_v6].filter(Boolean).join(' / ') || '—'
+      : '—';
+    $('w-reserved').textContent = w.registered && Array.isArray(w.reserved) && w.reserved.length
+      ? `reserved: [${w.reserved.join(', ')}]${w.client_id ? ` (${w.client_id})` : ''}`
+      : 'reserved: —';
+    $('w-ep-summary').textContent = w.endpoint || 'engage.cloudflareclient.com:2408';
+    $('w-mode-summary').textContent = WARP_MODE_LABELS[w.routing_mode] || w.routing_mode || '—';
+    $('w-sync-state').textContent = w.registered ? (w.last_synced_rev ? '已同步至 core.xray' : '待同步生效') : '未配置';
+    $('w-sync-rev').textContent = w.last_synced_rev ? `core.xray rev: ${w.last_synced_rev}` : '保存绑定后自动热重载 Xray';
+
+    $('w-endpoint').value = w.endpoint || 'engage.cloudflareclient.com:2408';
+    $('w-mode').value = w.routing_mode || 'bound_ports';
+    $('w-mtu').value = String(w.mtu || 1280);
+    $('w-enabled').checked = w.registered ? Boolean(w.enabled) : true;
+    $('w-domains').value = Array.isArray(w.domains) ? w.domains.join('\n') : '';
+
+    const box = $('w-ports-box');
+    clearNode(box);
+    const inbounds = data?.inbounds || [];
+    if (!inbounds.length) {
+      const sp = document.createElement('span');
+      sp.className = 'muted';
+      sp.textContent = '尚未检测到 core.xray 代理入站端口，请先初始化代理核心或直接选择“全局/域名模式”。';
+      box.appendChild(sp);
+    } else {
+      for (const ib of inbounds) {
+        const lbl = document.createElement('label');
+        lbl.className = 'check';
+        lbl.style.padding = '6px 10px';
+        lbl.style.border = '1px solid var(--line)';
+        lbl.style.borderRadius = '8px';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.dataset.warpPort = ib.profile_id;
+        cb.checked = Boolean(ib.bound);
+        lbl.appendChild(cb);
+        const txt = document.createElement('span');
+        txt.textContent = ` ${ib.label}${ib.enabled ? '' : '（已停用）'}`;
+        lbl.appendChild(txt);
+        box.appendChild(lbl);
+      }
+    }
+  }
+
+  function readSelectedWARPPorts() {
+    const out = [];
+    for (const cb of document.querySelectorAll('input[data-warp-port]')) {
+      if (cb.checked) out.push(cb.dataset.warpPort);
+    }
+    return out;
+  }
+
+  function readWARPDomainsInput() {
+    return $('w-domains').value
+      .split(/[\s,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  function appendWARPPreset(key) {
+    const preset = cachedWARPPresets[key] || [];
+    const cur = new Set(readWARPDomainsInput());
+    for (const d of preset) cur.add(d);
+    $('w-domains').value = Array.from(cur).join('\n');
+    $('w-mode').value = 'domains';
+  }
+
   async function refreshChains() {
-    const res = await invoke('chains.list', {});
-    renderChains(res.chains || []);
+    const [chainsRes, warpRes] = await Promise.all([
+      invoke('chains.list', {}),
+      invoke('warp.status', {}),
+    ]);
+    renderChains(chainsRes.chains || []);
+    renderWARPStatus(warpRes);
   }
 
   async function refreshTuningAndBrutal() {
@@ -720,6 +813,100 @@
       const pre = $('nft-preview');
       pre.textContent = r.nftables_rules || '# 当前没有需要下发的 nftables 连接限制规则';
       pre.classList.remove('hidden');
+    }
+  });
+
+  $('btn-w-preset-ai').addEventListener('click', () => appendWARPPreset('ai'));
+  $('btn-w-preset-stream').addEventListener('click', () => appendWARPPreset('streaming'));
+  $('btn-w-preset-google').addEventListener('click', () => appendWARPPreset('google'));
+
+  $('btn-warp-register').addEventListener('click', async () => {
+    const payload = {
+      license_key: $('w-license').value.trim(),
+      endpoint: $('w-endpoint').value.trim(),
+      mtu: Number($('w-mtu').value) || 1280,
+      enabled: $('w-enabled').checked,
+      routing_mode: $('w-mode').value,
+      bound_profile_ids: readSelectedWARPPorts(),
+      domains: readWARPDomainsInput(),
+      sync_core: true,
+    };
+    const r = await runAction('一键注册 Cloudflare WARP', () => invoke('warp.register', payload));
+    if (r) {
+      $('w-license').value = '';
+      const msg = r.sync_warning
+        ? `Cloudflare WARP 注册成功（${r.warp?.address_v4 || ''}），提示：${r.sync_warning}`
+        : `Cloudflare WARP 注册成功并已同步至 core.xray（IPv4: ${r.warp?.address_v4 || ''}）`;
+      showBanner(msg, r.sync_warning ? 'warn' : 'ok');
+      void refreshChains();
+    }
+  });
+
+  $('btn-warp-save').addEventListener('click', async () => {
+    const payload = {
+      enabled: $('w-enabled').checked,
+      routing_mode: $('w-mode').value,
+      bound_profile_ids: readSelectedWARPPorts(),
+      domains: readWARPDomainsInput(),
+      endpoint: $('w-endpoint').value.trim(),
+      mtu: Number($('w-mtu').value) || 1280,
+      sync_core: true,
+    };
+    const manualPriv = $('w-manual-priv').value.trim();
+    if (manualPriv) {
+      payload.private_key = manualPriv;
+      payload.peer_public_key = $('w-manual-pub').value.trim();
+      payload.address_v4 = $('w-manual-v4').value.trim();
+      payload.address_v6 = $('w-manual-v6').value.trim();
+      const cid = $('w-manual-cid').value.trim();
+      if (cid) {
+        if (/^\d+(,\s*\d+){2,3}$/.test(cid)) {
+          payload.reserved = cid.split(',').map((n) => Number(n.trim()));
+        } else {
+          payload.client_id = cid;
+        }
+      }
+    }
+    const r = await runAction('保存 WARP 绑定并同步 Xray', () => invoke('warp.configure', payload));
+    if (r) {
+      $('w-manual-priv').value = '';
+      const msg = r.sync_warning
+        ? `WARP 配置已保存，提示：${r.sync_warning}`
+        : `WARP 端口绑定与分流规则已同步生效（core.xray rev: ${r.core_revision || '最新'}）`;
+      showBanner(msg, r.sync_warning ? 'warn' : 'ok');
+      void refreshChains();
+    }
+  });
+
+  $('btn-warp-probe').addEventListener('click', async () => {
+    const r = await runAction('探测 WARP 端点与本机 IP', () => invoke('warp.probe', {}));
+    if (r) {
+      if (r.best_endpoint) {
+        $('w-endpoint').value = r.best_endpoint;
+      }
+      const pre = $('warp-output');
+      pre.textContent = JSON.stringify(r, null, 2);
+      pre.classList.remove('hidden');
+      const tr = r.host_trace || {};
+      showBanner(
+        `探测完成：推荐端点 ${r.best_endpoint || '无'} · 本机出口 ${tr.ip || '未知'} (${tr.loc || '-'} / colo=${tr.colo || '-'} / warp=${tr.warp || 'off'})`,
+        r.best_endpoint ? 'ok' : 'warn',
+      );
+    }
+  });
+
+  $('btn-warp-preview').addEventListener('click', () => {
+    const pre = $('warp-output');
+    pre.textContent = cachedWARP?.xray_preview_json || '{}';
+    pre.classList.remove('hidden');
+  });
+
+  $('btn-warp-delete').addEventListener('click', async () => {
+    if (!window.confirm('确认注销并清除本地 Cloudflare WARP 凭据？绑定的代理端口将恢复直连。')) return;
+    const r = await runAction('清除 Cloudflare WARP', () => invoke('warp.delete', {}));
+    if (r) {
+      showBanner(r.sync_warning ? `已清除 WARP，提示：${r.sync_warning}` : '已清除 WARP 并恢复直连', r.sync_warning ? 'warn' : 'ok');
+      void refreshChains();
     }
   });
 

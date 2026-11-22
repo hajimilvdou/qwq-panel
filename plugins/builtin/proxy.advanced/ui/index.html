@@ -201,8 +201,92 @@
       </section>
     </section>
 
-    <!-- ==================== 视图 2: /proxy/chains 链式代理独立页 ==================== -->
+    <!-- ==================== 视图 2: /proxy/chains 链式代理与 Cloudflare WARP 解锁页 ==================== -->
     <section data-view="/proxy/chains" class="hidden">
+      <!-- Cloudflare WARP 服务端 WireGuard 链式出口解锁 -->
+      <section class="card">
+        <h3>Cloudflare WARP 出口解锁（服务端 WireGuard 链式代理）</h3>
+        <p class="card-desc">当 VPS 原生 IP 较脏（触发 Cloudflare 人机验证、ChatGPT/Claude 拒访或流媒体受限）时，通过 <strong>Xray 内置用户态 WireGuard</strong> 将选定入站端口或解锁域名走 WARP 出口转发：不改宿主机路由表、不影响 SSH/面板、零额外常驻进程，1C1G/LXC 容器原生可用。</p>
+
+        <section class="stats" style="margin-bottom:14px">
+          <div class="stat">
+            <div class="k">WARP 账号状态</div>
+            <div class="v" id="w-state">未注册</div>
+            <div class="d" id="w-account">点击下方「一键注册」自动申请</div>
+          </div>
+          <div class="stat">
+            <div class="k">分配内网地址</div>
+            <div class="v mono" id="w-addrs" style="font-size:14px">—</div>
+            <div class="d mono" id="w-reserved">reserved: —</div>
+          </div>
+          <div class="stat">
+            <div class="k">当前端点 / 分流模式</div>
+            <div class="v mono" id="w-ep-summary" style="font-size:14px">—</div>
+            <div class="d" id="w-mode-summary">—</div>
+          </div>
+          <div class="stat">
+            <div class="k">Xray 同步状态</div>
+            <div class="v" id="w-sync-state">—</div>
+            <div class="d" id="w-sync-rev">—</div>
+          </div>
+        </section>
+
+        <div class="form-grid">
+          <label>可选 WARP+ License Key（留空注册免费版）
+            <input id="w-license" type="password" placeholder="留空直接免费注册，或填 26 位 WARP+ 密钥" />
+          </label>
+          <label>WARP 端点（Endpoint）
+            <input id="w-endpoint" class="mono" value="engage.cloudflareclient.com:2408" placeholder="engage.cloudflareclient.com:2408" />
+          </label>
+          <label>分流模式
+            <select id="w-mode">
+              <option value="bound_ports">指定代理端口全流量走 WARP（推荐：按端口隔离）</option>
+              <option value="domains">仅解锁域名走 WARP，其余直连（AI / 流媒体分流）</option>
+              <option value="all">全部代理端口全局走 WARP</option>
+            </select>
+          </label>
+          <label>MTU（1200–1500）
+            <input id="w-mtu" type="number" min="1200" max="1500" value="1280" />
+          </label>
+          <label class="check"><input id="w-enabled" type="checkbox" checked /> 启用 WARP 出口并立即同步到 Xray</label>
+        </div>
+
+        <div style="margin-top:14px">
+          <div class="muted" style="font-size:12px;margin-bottom:6px">绑定代理入站端口（勾选需要套 WARP 的端口；“仅解锁域名”模式下留空=全部端口生效）：</div>
+          <div id="w-ports-box" class="actions" style="margin-top:0;gap:10px"></div>
+        </div>
+
+        <div id="w-domains-wrap" style="margin-top:14px">
+          <div class="actions" style="margin-top:0;margin-bottom:6px">
+            <span class="muted" style="font-size:12px">解锁域名列表（每行或逗号分隔，支持 <code>openai.com</code> / <code>geosite:netflix</code>）：</span>
+            <button id="btn-w-preset-ai" class="btn sm ghost" type="button">+ AI 全家桶</button>
+            <button id="btn-w-preset-stream" class="btn sm ghost" type="button">+ 流媒体解锁</button>
+            <button id="btn-w-preset-google" class="btn sm ghost" type="button">+ Google 防验证</button>
+          </div>
+          <textarea id="w-domains" rows="3" style="width:100%;font-family:monospace;font-size:12px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)" placeholder="openai.com, chatgpt.com, claude.ai, netflix.com"></textarea>
+        </div>
+
+        <details style="margin-top:12px">
+          <summary class="muted" style="cursor:pointer;font-size:12px">手动导入已有 WireGuard / WARP+ / Zero Trust 密钥（若 VPS 无法访问注册接口时使用）</summary>
+          <div class="form-grid" style="margin-top:10px">
+            <label>WireGuard PrivateKey <input id="w-manual-priv" type="password" class="mono" placeholder="44 位 Base64 私钥" /></label>
+            <label>Peer PublicKey <input id="w-manual-pub" class="mono" value="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=" /></label>
+            <label>WARP IPv4 地址 <input id="w-manual-v4" class="mono" value="172.16.0.2/32" /></label>
+            <label>WARP IPv6 地址（可选） <input id="w-manual-v6" class="mono" placeholder="2606:4700:110:...::2/128" /></label>
+            <label>Client ID / Reserved（可选，如 VYX7 或 12,34,56） <input id="w-manual-cid" class="mono" placeholder="可选" /></label>
+          </div>
+        </details>
+
+        <div class="actions">
+          <button id="btn-warp-register" class="btn" type="button">一键注册 Cloudflare WARP</button>
+          <button id="btn-warp-save" class="btn" type="button">保存端口绑定并同步生效</button>
+          <button id="btn-warp-probe" class="btn ghost" type="button">探测优选端点与本机 IP</button>
+          <button id="btn-warp-preview" class="btn ghost" type="button">预览 Xray WireGuard 配置</button>
+          <button id="btn-warp-delete" class="btn danger" type="button">注销清除 WARP</button>
+        </div>
+        <pre id="warp-output" class="hidden"></pre>
+      </section>
+
       <section class="card">
         <h3>新增 / 更新链式代理落地节点</h3>
         <p class="card-desc">同时支持服务端出口链式转发（Xray <code>proxySettings.tag</code>）与客户端订阅链式导出（Clash <code>dialer-proxy</code> / sing-box <code>detour</code>）。密码与 UUID 采用本地 AES-256-GCM 加密存储，列表与预览永不明文回显。</p>

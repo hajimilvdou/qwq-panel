@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -606,5 +608,153 @@ func TestTcpfitDynamicPlanOOMCapApplyRollbackAndIperf3Honesty(t *testing.T) {
 	okSweep := invokeProxy(t, h.srv, "tuning.sweep", map[string]any{"peer_host": "127.0.0.1", "peer_port": 1, "duration_sec": 1})
 	if okSweep.GetError() != nil {
 		t.Fatalf("tuning.sweep 合法主机不应报系统异常: %+v", okSweep.GetError())
+	}
+}
+
+func TestWARPRegisterConfigureAndCoreSync(t *testing.T) {
+	// 1. 启动本地模拟 Cloudflare WARP 注册与 Trace 服务。
+	var gotLicense string
+	mockCF := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/reg":
+			var req struct {
+				Key string `json:"key"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if len(req.Key) != 44 {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"id": "warp-acct-001",
+				"token": "tok-secret-12345",
+				"config": {
+					"client_id": "DAoV",
+					"interface": {"addresses": {"v4": "172.16.0.2", "v6": "2606:4700:110:8a00::2"}},
+					"peers": [{"public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=", "endpoint": {"host": "engage.cloudflareclient.com:2408"}}]
+				}
+			}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/reg/warp-acct-001/account":
+			var req struct {
+				License string `json:"license"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			gotLicense = req.License
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"account_type":"plus"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/cdn-cgi/trace":
+			_, _ = w.Write([]byte("ip=203.0.113.10\nloc=US\ncolo=SJC\nwarp=off\n"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer mockCF.Close()
+
+	prevAPI, prevTrace := warpAPIBaseOverride, warpTraceURLOverride
+	warpAPIBaseOverride = mockCF.URL
+	warpTraceURLOverride = mockCF.URL + "/cdn-cgi/trace"
+	defer func() {
+		warpAPIBaseOverride = prevAPI
+		warpTraceURLOverride = prevTrace
+	}()
+
+	h, _ := newExtProxyHarness(t, `{"vless_port":443,"hy2_port":8443,"ss_port":9443}`)
+
+	// 2. 一键注册 Cloudflare WARP（带 WARP+ License 并绑定入站端口）。
+	regResp := invokeProxy(t, h.srv, "warp.register", map[string]any{
+		"license_key":       "ABCD-1234-EFGH-5678-IJKL",
+		"routing_mode":      "bound_ports",
+		"bound_profile_ids": []string{"vless-main", "hy2-main"},
+		"sync_core":         false,
+	})
+	if regResp.GetError() != nil {
+		t.Fatalf("warp.register failed: %+v", regResp.GetError())
+	}
+	if gotLicense != "ABCD-1234-EFGH-5678-IJKL" {
+		t.Fatalf("license not sent to Cloudflare mock: %q", gotLicense)
+	}
+	regPayload := string(regResp.GetPayloadJson())
+	if strings.Contains(regPayload, "tok-secret-12345") || strings.Contains(regPayload, "ABCD-1234-EFGH-5678-IJKL") {
+		t.Fatalf("warp.register response leaked secret token or license key!")
+	}
+
+	// 3. 查询 warp.status：验证 client_id -> reserved 解码正确，且私钥永不明文返回。
+	stResp := invokeProxy(t, h.srv, "warp.status", map[string]any{})
+	if stResp.GetError() != nil {
+		t.Fatalf("warp.status failed: %+v", stResp.GetError())
+	}
+	var stOut struct {
+		WARP     warpRecord            `json:"warp"`
+		Inbounds []xrayInboundPortInfo `json:"inbounds"`
+	}
+	if err := json.Unmarshal(stResp.GetPayloadJson(), &stOut); err != nil {
+		t.Fatal(err)
+	}
+	if !stOut.WARP.Registered || !stOut.WARP.Enabled || stOut.WARP.AccountType != "plus" || !stOut.WARP.HasPrivateKey {
+		t.Fatalf("unexpected warp status: %+v", stOut.WARP)
+	}
+	// base64("DAoV") = [12, 10, 21]
+	if len(stOut.WARP.Reserved) != 3 || stOut.WARP.Reserved[0] != 12 || stOut.WARP.Reserved[1] != 10 || stOut.WARP.Reserved[2] != 21 {
+		t.Fatalf("reserved decode mismatch: %v", stOut.WARP.Reserved)
+	}
+	if len(stOut.Inbounds) < 2 {
+		t.Fatalf("expected discovered inbound ports, got %+v", stOut.Inbounds)
+	}
+
+	// 4. 修改绑定为解锁域名模式，并验证合并 core.xray 配置生成完整 warp 段。
+	cfgResp := invokeProxy(t, h.srv, "warp.configure", map[string]any{
+		"routing_mode":      "domains",
+		"bound_profile_ids": []string{"vless-main"},
+		"domains":           []string{"openai.com", "netflix.com"},
+		"sync_core":         false,
+	})
+	if cfgResp.GetError() != nil {
+		t.Fatalf("warp.configure failed: %+v", cfgResp.GetError())
+	}
+	stInspect, err := openStore(h.dataDir, nil)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer stInspect.Close()
+
+	savedWARP, err := stInspect.GetWARP(t.Context())
+	if err != nil || savedWARP == nil || savedWARP.PrivateKey == "" {
+		t.Fatalf("GetWARP decrypted private key missing: %v", err)
+	}
+	// 确保 warp.status 从未泄漏私钥明文
+	if strings.Contains(string(stResp.GetPayloadJson()), savedWARP.PrivateKey) {
+		t.Fatalf("warp.status leaked plaintext WireGuard private key!")
+	}
+
+	redactedXray := []byte(`{
+		"schema_version":"2",
+		"enabled":true,
+		"outbound":{"type":"direct"},
+		"profiles":[
+			{"id":"vless-main","enabled":true,"listen":"0.0.0.0","port":443,"protocol":"vless","users":[{"id":"u1","uuid":{"$secret_present":true}}],"vless":{"transport":"raw","flow":"xtls-rprx-vision","security":{"mode":"reality","target":"example.com:443","server_names":["example.com"],"private_key":{"$secret_present":true},"short_ids":["1234"]}}}
+		]
+	}`)
+	merged, err := mergeCoreXrayConfigWithWARP(redactedXray, []userRecord{{ID: "u1", VLESSUUID: "11111111-1111-1111-1111-111111111111", Status: "active"}}, savedWARP, true)
+	if err != nil {
+		t.Fatalf("mergeCoreXrayConfigWithWARP failed: %v", err)
+	}
+	var mergedDoc map[string]any
+	if err := json.Unmarshal(merged, &mergedDoc); err != nil {
+		t.Fatal(err)
+	}
+	warpSec, ok := mergedDoc["warp"].(map[string]any)
+	if !ok || warpSec["enabled"] != true || warpSec["routing_mode"] != "domains" || warpSec["private_key"] != savedWARP.PrivateKey {
+		t.Fatalf("merged core.xray warp section mismatch: %+v", warpSec)
+	}
+
+	// 5. 注销清除 WARP。
+	delResp := invokeProxy(t, h.srv, "warp.delete", map[string]any{})
+	if delResp.GetError() != nil {
+		t.Fatalf("warp.delete failed: %+v", delResp.GetError())
+	}
+	afterDel, err := stInspect.GetWARP(t.Context())
+	if err != nil || afterDel != nil {
+		t.Fatalf("WARP record should be deleted: %+v, err=%v", afterDel, err)
 	}
 }

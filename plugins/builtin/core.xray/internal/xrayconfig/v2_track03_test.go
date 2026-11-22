@@ -118,3 +118,82 @@ func TestRenderV2TrafficMarkAndOutboundPolicy(t *testing.T) {
 			foundMarkOutbound, foundDirectV4, foundMarkRule, foundDomainRule)
 	}
 }
+
+func TestRenderV2WARPOutboundAndPortBinding(t *testing.T) {
+	intent, materials, options := v2Fixture(t)
+	defer materials.Clear()
+
+	// Valid 32-byte base64 WireGuard private & peer public keys.
+	privKey := []byte("gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFA=")
+	peerPub := "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+	targetProfileID := intent.Profiles[0].ID
+
+	intent.WARP = &corev2.WARPOutbound{
+		Enabled:         true,
+		PrivateKey:      corev2.SecretRef{ID: "sec_0123456789abcdefghjkmnpqrs"},
+		PeerPublicKey:   peerPub,
+		Endpoint:        "engage.cloudflareclient.com:2408",
+		AddressV4:       "172.16.0.2/32",
+		AddressV6:       "2606:4700:110:8a00::2/128",
+		Reserved:        []int{12, 34, 56},
+		MTU:             1280,
+		RoutingMode:     corev2.WARPRoutingDomains,
+		BoundProfileIDs: []string{targetProfileID},
+		Domains:         []string{"openai.com", "netflix.com"},
+	}
+	materials.WARP = &WARPMaterials{PrivateKey: append([]byte(nil), privKey...)}
+
+	raw, err := RenderV2(intent, materials, options)
+	if err != nil {
+		t.Fatalf("RenderV2 with WARP: %v", err)
+	}
+	var doc struct {
+		Inbounds []struct {
+			Tag      string          `json:"tag"`
+			Sniffing *nativeSniffing `json:"sniffing"`
+		} `json:"inbounds"`
+		Outbounds []struct {
+			Tag      string         `json:"tag"`
+			Protocol string         `json:"protocol"`
+			Settings map[string]any `json:"settings"`
+		} `json:"outbounds"`
+		Routing struct {
+			Rules []struct {
+				InboundTag  []string `json:"inboundTag"`
+				Domain      []string `json:"domain"`
+				IP          []string `json:"ip"`
+				OutboundTag string   `json:"outboundTag"`
+			} `json:"rules"`
+		} `json:"routing"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	var foundWARP, foundPrivateDirect, foundDomainRule, foundSniff bool
+	for _, in := range doc.Inbounds {
+		if in.Sniffing != nil && in.Sniffing.Enabled {
+			foundSniff = true
+		}
+	}
+	for _, ob := range doc.Outbounds {
+		if ob.Tag == "qwq-warp" && ob.Protocol == "wireguard" {
+			if ob.Settings["secretKey"] == string(privKey) && ob.Settings["kernelMode"] == false {
+				foundWARP = true
+			}
+		}
+	}
+	wantTag, _ := corev1.InboundTag(targetProfileID)
+	for _, r := range doc.Routing.Rules {
+		if r.OutboundTag == "qwq-direct" && len(r.IP) >= 4 {
+			foundPrivateDirect = true
+		}
+		if r.OutboundTag == "qwq-warp" && len(r.Domain) == 2 && len(r.InboundTag) == 1 && r.InboundTag[0] == wantTag {
+			foundDomainRule = true
+		}
+	}
+	if !foundWARP || !foundPrivateDirect || !foundDomainRule || !foundSniff {
+		t.Fatalf("missing WARP artifacts: warp=%v privDirect=%v domainRule=%v sniff=%v",
+			foundWARP, foundPrivateDirect, foundDomainRule, foundSniff)
+	}
+}

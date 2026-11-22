@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "配置 Cloudflare WARP 绑定与参数请求",
+  "description": "启用/停用 WARP、调整分流模式、绑定代理入站端口、设置解锁域名、优选端点或手动导入 WireGuard 密钥，并同步至 core.xray 生效。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "routing_mode": {
+      "type": "string",
+      "enum": [
+        "bound_ports",
+        "domains",
+        "all"
+      ]
+    },
+    "bound_profile_ids": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32
+      }
+    },
+    "domains": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 253
+      }
+    },
+    "endpoint": {
+      "type": "string",
+      "maxLength": 259
+    },
+    "mtu": {
+      "type": "integer",
+      "minimum": 1200,
+      "maximum": 1500
+    },
+    "private_key": {
+      "type": "string",
+      "maxLength": 64,
+      "writeOnly": true
+    },
+    "peer_public_key": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "address_v4": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "address_v6": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "client_id": {
+      "type": "string",
+      "maxLength": 16
+    },
+    "reserved": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255
+      }
+    },
+    "sync_core": {
+      "type": "boolean",
+      "default": true
+    }
+  }
+}

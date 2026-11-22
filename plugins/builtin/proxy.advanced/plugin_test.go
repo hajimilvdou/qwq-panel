@@ -435,8 +435,8 @@ func TestProxyAdvancedManifestAndPackageDigests(t *testing.T) {
 		parsed.Resources.DiskMaxMB != 32 || parsed.Resources.KVMaxKB != 128 {
 		t.Fatalf("资源预算不符: %+v", parsed.Resources)
 	}
-	if len(parsed.Operations) != 25 {
-		t.Fatalf("操作数量=%d，期望=25", len(parsed.Operations))
+	if len(parsed.Operations) != 30 {
+		t.Fatalf("操作数量=%d，期望=30", len(parsed.Operations))
 	}
 	if parsed.UI == nil || len(parsed.UI.Routes) != 3 {
 		t.Fatalf("UI 路由数量应为 3（/proxy, /proxy/chains, /proxy/tuning），实际: %+v", parsed.UI)

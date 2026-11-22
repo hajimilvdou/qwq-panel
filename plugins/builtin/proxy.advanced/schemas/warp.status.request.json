@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询 Cloudflare WARP 状态请求",
+  "description": "获取当前 Cloudflare WARP 账号脱敏状态、可绑定的 Xray 入站端口列表与解锁预设。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

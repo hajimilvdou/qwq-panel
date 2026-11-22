@@ -79,6 +79,20 @@ func AllocateObfsTargets(intent *corev2.Intent) map[string]ObfsTarget {
 	return targets
 }
 
+// ValidWireGuardKey 校验 32 字节标准/无填充 Base64 WireGuard 私钥或公钥。
+func ValidWireGuardKey(value []byte) bool {
+	trimmed := strings.TrimSpace(string(value))
+	if len(trimmed) != 44 && len(trimmed) != 43 {
+		return false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(trimmed)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(trimmed)
+	}
+	defer clear(decoded)
+	return err == nil && len(decoded) == 32
+}
+
 // RenderV2 是完整候选的纯渲染；未启用profile仍校验形状/材料，但不创建监听。
 // 顶层enabled=false保留其enabled profiles的预检候选，实际启动由Apply决定。
 func RenderV2(intent *corev2.Intent, materials V2Materials, options V2Options) ([]byte, error) {
@@ -94,9 +108,17 @@ func RenderV2(intent *corev2.Intent, materials V2Materials, options V2Options) (
 	if len(materials.Profiles) != len(intent.Profiles) {
 		return nil, ErrV2Materials
 	}
+	if intent.WARP != nil {
+		if materials.WARP == nil || !ValidWireGuardKey(materials.WARP.PrivateKey) {
+			return nil, ErrV2Materials
+		}
+	}
 	profiles := slices.Clone(intent.Profiles)
 	slices.SortFunc(profiles, func(left, right corev2.Profile) int { return strings.Compare(left.ID, right.ID) })
 	inbounds := make([]nativeInbound, 0, len(profiles))
+	enabledTagsByProfile := make(map[string]string, len(profiles))
+	allEnabledTags := make([]string, 0, len(profiles))
+	needSniff := intent.WARP != nil && intent.WARP.Enabled && intent.WARP.RoutingMode == corev2.WARPRoutingDomains
 	type markedUser struct {
 		mark  uint32
 		email string
@@ -130,7 +152,16 @@ func RenderV2(intent *corev2.Intent, materials V2Materials, options V2Options) (
 			return nil, err
 		}
 		if *profile.Enabled {
+			if needSniff {
+				inbound.Sniffing = &nativeSniffing{
+					Enabled:      true,
+					DestOverride: []string{"http", "tls", "quic"},
+					RouteOnly:    true,
+				}
+			}
 			inbounds = append(inbounds, inbound)
+			enabledTagsByProfile[profile.ID] = inbound.Tag
+			allEnabledTags = append(allEnabledTags, inbound.Tag)
 			for _, u := range profile.Users {
 				if u.TrafficMark != 0 {
 					email, eerr := corev1.UserEmail(u.ID)
@@ -177,6 +208,9 @@ func RenderV2(intent *corev2.Intent, materials V2Materials, options V2Options) (
 				OutboundTag: targetTag,
 			})
 		}
+	}
+	if intent.WARP != nil && intent.WARP.Enabled && materials.WARP != nil {
+		appendWARPOutboundAndRules(&cfg, intent.WARP, materials.WARP.PrivateKey, enabledTagsByProfile, allEnabledTags)
 	}
 	if len(markedUsers) > 0 {
 		slices.SortFunc(markedUsers, func(a, b markedUser) int {
@@ -231,6 +265,107 @@ func makeFreedomOutbound(tag, strategy, sendThrough string, mark uint32) nativeO
 		}
 	}
 	return ob
+}
+
+func appendWARPOutboundAndRules(
+	cfg *nativeConfig,
+	warp *corev2.WARPOutbound,
+	privateKey []byte,
+	enabledTagsByProfile map[string]string,
+	allEnabledTags []string,
+) {
+	addrs := []string{ensureCIDR(warp.AddressV4, "/32")}
+	if strings.TrimSpace(warp.AddressV6) != "" {
+		addrs = append(addrs, ensureCIDR(warp.AddressV6, "/128"))
+	}
+	mtu := warp.MTU
+	if mtu <= 0 {
+		mtu = corev2.DefaultWARPMTU
+	}
+	cfg.Outbounds = append(cfg.Outbounds, nativeOutbound{
+		Tag:      "qwq-warp",
+		Protocol: "wireguard",
+		Settings: nativeWireGuardSettings{
+			SecretKey: strings.TrimSpace(string(privateKey)),
+			Address:   addrs,
+			Peers: []nativeWireGuardPeer{{
+				PublicKey: strings.TrimSpace(warp.PeerPublicKey),
+				Endpoint:  strings.TrimSpace(warp.Endpoint),
+			}},
+			Reserved:   slices.Clone(warp.Reserved),
+			MTU:        mtu,
+			KernelMode: false,
+		},
+	})
+	if cfg.Routing.DomainStrategy == "" {
+		cfg.Routing.DomainStrategy = "AsIs"
+	}
+	// 内网与回环地址始终直连，防止管理访问或本机回环流量误入 WARP。
+	cfg.Routing.Rules = append(cfg.Routing.Rules, nativeRule{
+		Type:        "field",
+		IP:          []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7"},
+		OutboundTag: "qwq-direct",
+	})
+
+	boundTags := make([]string, 0, len(warp.BoundProfileIDs))
+	for _, pid := range warp.BoundProfileIDs {
+		if tag, ok := enabledTagsByProfile[pid]; ok {
+			boundTags = append(boundTags, tag)
+		}
+	}
+	slices.Sort(boundTags)
+
+	switch warp.RoutingMode {
+	case corev2.WARPRoutingBoundPorts:
+		if len(boundTags) > 0 {
+			cfg.Routing.Rules = append(cfg.Routing.Rules, nativeRule{
+				Type:        "field",
+				InboundTags: boundTags,
+				OutboundTag: "qwq-warp",
+			})
+		}
+	case corev2.WARPRoutingDomains:
+		doms := make([]string, 0, len(warp.Domains))
+		for _, d := range warp.Domains {
+			d = strings.TrimSpace(d)
+			if d == "" {
+				continue
+			}
+			if !strings.Contains(d, ":") {
+				d = "domain:" + strings.TrimPrefix(d, ".")
+			}
+			doms = append(doms, d)
+		}
+		if len(doms) > 0 {
+			rule := nativeRule{
+				Type:        "field",
+				Domain:      doms,
+				OutboundTag: "qwq-warp",
+			}
+			if len(boundTags) > 0 {
+				rule.InboundTags = boundTags
+			} else if len(allEnabledTags) > 0 {
+				rule.InboundTags = slices.Clone(allEnabledTags)
+			}
+			cfg.Routing.Rules = append(cfg.Routing.Rules, rule)
+		}
+	case corev2.WARPRoutingAll:
+		if len(allEnabledTags) > 0 {
+			cfg.Routing.Rules = append(cfg.Routing.Rules, nativeRule{
+				Type:        "field",
+				InboundTags: slices.Clone(allEnabledTags),
+				OutboundTag: "qwq-warp",
+			})
+		}
+	}
+}
+
+func ensureCIDR(addr, suffix string) string {
+	addr = strings.TrimSpace(addr)
+	if strings.Contains(addr, "/") {
+		return addr
+	}
+	return addr + suffix
 }
 
 func projectVLESS(profile corev2.Profile, outbound *corev2.Outbound) *corev1.Intent {

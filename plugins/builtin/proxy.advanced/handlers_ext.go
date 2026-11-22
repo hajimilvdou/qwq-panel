@@ -24,6 +24,13 @@ func (i *instance) registerExtendedOperations() {
 	i.HandleInvoke("chains.probe", i.handleChainsProbe)
 	i.HandleInvoke("chains.preview", i.handleChainsPreview)
 
+	// Cloudflare WARP 一键注册、端点优选与入站端口/解锁域名绑定
+	i.HandleInvoke("warp.status", i.handleWARPStatus)
+	i.HandleInvoke("warp.register", i.handleWARPRegister)
+	i.HandleInvoke("warp.configure", i.handleWARPConfigure)
+	i.HandleInvoke("warp.probe", i.handleWARPProbe)
+	i.HandleInvoke("warp.delete", i.handleWARPDelete)
+
 	// TCP Brutal + Brutal Custom 端口透明接管与超发倍率手调
 	i.HandleInvoke("brutal.status", i.handleBrutalStatus)
 	i.HandleInvoke("brutal.binding.upsert", i.handleBrutalBindingUpsert)

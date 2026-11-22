@@ -42,12 +42,19 @@ type systemPolicy struct {
 }
 
 type nativeInbound struct {
-	Tag      string        `json:"tag"`
-	Listen   string        `json:"listen"`
-	Port     *int          `json:"port,omitempty"`
-	Protocol string        `json:"protocol"`
-	Settings any           `json:"settings"`
-	Stream   *nativeStream `json:"streamSettings,omitempty"`
+	Tag      string          `json:"tag"`
+	Listen   string          `json:"listen"`
+	Port     *int            `json:"port,omitempty"`
+	Protocol string          `json:"protocol"`
+	Settings any             `json:"settings"`
+	Stream   *nativeStream   `json:"streamSettings,omitempty"`
+	Sniffing *nativeSniffing `json:"sniffing,omitempty"`
+}
+
+type nativeSniffing struct {
+	Enabled      bool     `json:"enabled"`
+	DestOverride []string `json:"destOverride"`
+	RouteOnly    bool     `json:"routeOnly,omitempty"`
 }
 
 type vlessSettings struct {
@@ -143,6 +150,20 @@ type nativeSockopt struct {
 
 type nativeFreedomSettings struct {
 	DomainStrategy string `json:"domainStrategy,omitempty"`
+}
+
+type nativeWireGuardSettings struct {
+	SecretKey  string                `json:"secretKey"`
+	Address    []string              `json:"address"`
+	Peers      []nativeWireGuardPeer `json:"peers"`
+	Reserved   []int                 `json:"reserved,omitempty"`
+	MTU        int                   `json:"mtu,omitempty"`
+	KernelMode bool                  `json:"kernelMode"`
+}
+
+type nativeWireGuardPeer struct {
+	PublicKey string `json:"publicKey"`
+	Endpoint  string `json:"endpoint"`
 }
 
 type nativeRouting struct {

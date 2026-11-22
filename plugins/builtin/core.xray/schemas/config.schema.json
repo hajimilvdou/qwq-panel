@@ -397,6 +397,9 @@
         },
         "outbound": {
           "$ref": "#/$defs/outboundDirect"
+        },
+        "warp": {
+          "$ref": "#/$defs/warpOutbound"
         }
       },
       "required": [
@@ -404,6 +407,86 @@
         "enabled",
         "profiles",
         "outbound"
+      ]
+    },
+    "warpOutbound": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "可选 Cloudflare WARP 用户态 WireGuard 出口，支持按绑定端口、解锁域名或全局分流。",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "private_key": {
+          "$ref": "#/$defs/secretValue128"
+        },
+        "peer_public_key": {
+          "type": "string",
+          "minLength": 43,
+          "maxLength": 44
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 259
+        },
+        "address_v4": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 32
+        },
+        "address_v6": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "reserved": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 4,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "mtu": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1500
+        },
+        "routing_mode": {
+          "enum": [
+            "bound_ports",
+            "domains",
+            "all"
+          ]
+        },
+        "bound_profile_ids": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          }
+        },
+        "domains": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253
+          }
+        }
+      },
+      "required": [
+        "enabled",
+        "private_key",
+        "peer_public_key",
+        "endpoint",
+        "address_v4",
+        "routing_mode"
       ]
     }
   }

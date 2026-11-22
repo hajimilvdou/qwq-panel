@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cloudflare WARP 状态响应",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "warp",
+    "inbounds"
+  ],
+  "properties": {
+    "warp": {
+      "type": "object"
+    },
+    "inbounds": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "unlock_presets": {
+      "type": "object"
+    },
+    "candidate_endpoints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "xray_preview": {
+      "type": "object"
+    },
+    "xray_preview_json": {
+      "type": "string"
+    }
+  }
+}

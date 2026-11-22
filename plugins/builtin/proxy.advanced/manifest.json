@@ -71,8 +71,18 @@
     "schemas/users.set_status.response.json": "sha256:f5a2e51c6ad4c2cb37fae618a44d68a918169ea648e5c21b61bee75add3bac53",
     "schemas/users.usage_history.request.json": "sha256:8a0cbc374b51078f467077118950a16d5c288737eb26bd2326bb35563c6748a2",
     "schemas/users.usage_history.response.json": "sha256:3961e5626b1934737ba9488427c7c03e633703b8bc07580d57c98cf68ae9c7be",
-    "ui/index.html": "sha256:d6f372f52c45d09d2d697baabf87055b27125c8c4a1e74ddad6512591064e397",
-    "ui/proxy.js": "sha256:cb05a737664638c1cd38aa3e0c92ea6f080d25d15e262967896b59db3555c2dd"
+    "schemas/warp.configure.request.json": "sha256:3549e12ff2315492b8ed097f7861cb5839983032d740bcd1a26cc4ba09e6e232",
+    "schemas/warp.configure.response.json": "sha256:355cec5678f4e035132459cdb9e1ca8bb8ee4a434d7aa044b76d14fd262926bd",
+    "schemas/warp.delete.request.json": "sha256:ff9ddcd21ecd261e070e8b372ef17282356f8ae0d980dd006bc21d97dc8ae676",
+    "schemas/warp.delete.response.json": "sha256:dbe06708a803e22abd2d3acb57086b096ed914a79c9eb3f28e3db7e73bd95f90",
+    "schemas/warp.probe.request.json": "sha256:2e3c9a6a144c0b362c66beadc92b19ec377f225d54463fd265735a1b3c4a9716",
+    "schemas/warp.probe.response.json": "sha256:b59c1e10d4e38a2bf8235150aa3f7a3142e7efa8de2b483c3e2710f30354c596",
+    "schemas/warp.register.request.json": "sha256:22174ef470efff5481aba6eb9344d4956a8b9c45c9fc8c25fd1e9d64a7d5053a",
+    "schemas/warp.register.response.json": "sha256:ec31d645d6e618aaf280202fcef84c2807a6eb089a0cf01f2fd4ad4f990281fe",
+    "schemas/warp.status.request.json": "sha256:9fecaf0be57870533738379f6bd1dab1d8303d91d77ad4e88731cdc2cb7e7665",
+    "schemas/warp.status.response.json": "sha256:ca1da9258a97ab1f47ea5f48657025b16fc3582cf49699b713b36115aa78857b",
+    "ui/index.html": "sha256:994e77bff378996e372f06eb5a0e4e2b55fbc150bb8d07d7fecdb3a8ef20b8cf",
+    "ui/proxy.js": "sha256:89426b1732fb96702c6e148d61cdb6643f7964e5b516199c6c3eb4e72a72b8fc"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -745,6 +755,160 @@
       "request_schema": "schemas/tuning.sweep.request.json",
       "response_schema": "schemas/tuning.sweep.response.json",
       "ui_route": "/proxy/tuning"
+    },
+    {
+      "name": "warp.status",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "查看 Cloudflare WARP 状态、可绑定的 Xray 入站端口列表与解锁预设",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "plugin.config.read",
+          "scope": "core.xray"
+        }
+      ],
+      "request_schema": "schemas/warp.status.request.json",
+      "response_schema": "schemas/warp.status.response.json",
+      "ui_route": "/proxy/chains"
+    },
+    {
+      "name": "warp.register",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": false,
+      "timeout_ms": 25000,
+      "summary": "一键向 Cloudflare 注册 WARP 账号（免费或 WARP+）并可同时绑定代理端口",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.egress",
+          "scope": "chain"
+        },
+        {
+          "name": "plugin.config.read",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.config.write",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "core.xray/core.apply"
+        }
+      ],
+      "request_schema": "schemas/warp.register.request.json",
+      "response_schema": "schemas/warp.register.response.json",
+      "approval": "confirm",
+      "approval_summary": "将向 Cloudflare 注册新的 WARP 账号并加密保存 WireGuard 私钥，同时按选定端口同步到 core.xray",
+      "ui_route": "/proxy/chains"
+    },
+    {
+      "name": "warp.configure",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 20000,
+      "summary": "调整 Cloudflare WARP 端口绑定、解锁域名、端点或手动导入密钥并同步至 core.xray 生效",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "plugin.config.read",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.config.write",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "core.xray/core.apply"
+        }
+      ],
+      "request_schema": "schemas/warp.configure.request.json",
+      "response_schema": "schemas/warp.configure.response.json",
+      "approval": "confirm",
+      "approval_summary": "将更新 Cloudflare WARP 代理端口绑定与分流规则，并热重载 core.xray",
+      "ui_route": "/proxy/chains"
+    },
+    {
+      "name": "warp.probe",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "summary": "探测 Cloudflare WARP 候选端点延迟与当前宿主机 Cloudflare Trace 出口信息",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "network.egress",
+          "scope": "chain"
+        }
+      ],
+      "request_schema": "schemas/warp.probe.request.json",
+      "response_schema": "schemas/warp.probe.response.json",
+      "ui_route": "/proxy/chains"
+    },
+    {
+      "name": "warp.delete",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "summary": "注销并清除 Cloudflare WARP 凭据，恢复绑定的代理端口为直连出口",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "plugin.config.read",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.config.write",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "core.xray/core.apply"
+        }
+      ],
+      "request_schema": "schemas/warp.delete.request.json",
+      "response_schema": "schemas/warp.delete.response.json",
+      "approval": "confirm",
+      "approval_summary": "将删除本地保存的 Cloudflare WARP 凭据并从 core.xray 移除 WARP 出口路由",
+      "ui_route": "/proxy/chains"
     }
   ],
   "ui": {

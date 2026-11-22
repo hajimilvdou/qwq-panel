@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "探测 Cloudflare WARP 响应",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "endpoints"
+  ],
+  "properties": {
+    "endpoints": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "best_endpoint": {
+      "type": "string"
+    },
+    "host_trace": {
+      "type": "object"
+    }
+  }
+}

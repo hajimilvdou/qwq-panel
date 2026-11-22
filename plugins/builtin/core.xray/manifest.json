@@ -24,7 +24,7 @@
     "attestations/xray-source.json": "sha256:fe644bb13cb4f62a8230908d26452a119d1aff7e5aef650cb819365100ee5bdf",
     "LICENSES/AGPL-3.0-only.txt": "sha256:0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
     "LICENSES/MPL-2.0.txt": "sha256:1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
-    "schemas/config.schema.json": "sha256:e5a5e0106ff72f8aebec601da562ebfb0c33ae0cdda296d626a25d7ae3cae432",
+    "schemas/config.schema.json": "sha256:8653e01dbac36e7ab403b7e4660210bc2c78d4916bc1191b365c323d8257d00a",
     "schemas/core.apply.request.json": "sha256:45c58b4e56fd27cbf8e45cf5c3852c3b6b7dbd2168d61bde3366bef96605bb37",
     "schemas/core.apply.response.json": "sha256:7b7dfce9be9e27d1f5a4b8233e2700958985031e87c827d47dc2998470766105",
     "schemas/core.capabilities.request.json": "sha256:0e0674274d30094e0feb651a101f2c77467674907c5786969bdf67eeaced7481",

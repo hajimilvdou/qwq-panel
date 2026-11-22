@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "配置 Cloudflare WARP 响应",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "warp"
+  ],
+  "properties": {
+    "warp": {
+      "type": "object"
+    },
+    "core_revision": {
+      "type": "string"
+    },
+    "sync_warning": {
+      "type": "string"
+    }
+  }
+}

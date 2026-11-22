@@ -3,8 +3,11 @@
 package coreapi
 
 import (
+	"encoding/base64"
+	"net"
 	"net/netip"
 	"strconv"
+	"strings"
 
 	v1 "github.com/qwq-panel/qwq/sdk/coreapi"
 	"github.com/qwq-panel/qwq/sdk/internal/strictjson"
@@ -61,10 +64,116 @@ func Validate(intent *Intent) error {
 		v.claim(profile, path)
 	}
 	v.require(totalUsers <= MaxUsers, "/profiles", "SIZE", "节点总用户数不得超过 256")
+	if intent.WARP != nil {
+		v.warp(intent.WARP, seenProfiles)
+	}
 	if len(v.violations) != 0 {
 		return &Error{Code: "INVALID_INTENT", Violations: v.violations}
 	}
 	return nil
+}
+
+func (v *validator) warp(w *WARPOutbound, seenProfiles map[string]bool) {
+	v.secret(&w.PrivateKey, "/warp/private_key")
+	v.require(validWGPublicKey(w.PeerPublicKey), "/warp/peer_public_key", "FORMAT", "WARP 对端公钥必须是 32 字节 Base64 WireGuard 公钥")
+	v.require(validWARPEndpoint(w.Endpoint), "/warp/endpoint", "ENDPOINT", "WARP 端点必须是合法的 host:port")
+	v.require(validWARPAddrV4(w.AddressV4), "/warp/address_v4", "IP", "WARP IPv4 内网地址格式无效")
+	if w.AddressV6 != "" {
+		v.require(validWARPAddrV6(w.AddressV6), "/warp/address_v6", "IP", "WARP IPv6 内网地址格式无效")
+	}
+	if len(w.Reserved) > 0 {
+		v.require(len(w.Reserved) == 3 || len(w.Reserved) == 4, "/warp/reserved", "SIZE", "WARP reserved 必须为 3 或 4 个字节整数")
+		for idx, b := range w.Reserved {
+			v.require(b >= 0 && b <= 255, strictjson.Pointer("/warp/reserved", strconv.Itoa(idx)), "RANGE", "reserved 字节值必须在 0..255 之间")
+		}
+	}
+	if w.MTU != 0 {
+		v.require(w.MTU >= 1200 && w.MTU <= 1500, "/warp/mtu", "RANGE", "WARP MTU 必须在 1200..1500 之间")
+	}
+	v.require(w.RoutingMode == WARPRoutingBoundPorts || w.RoutingMode == WARPRoutingDomains || w.RoutingMode == WARPRoutingAll,
+		"/warp/routing_mode", "ENUM", "WARP 分流模式必须为 bound_ports、domains 或 all")
+	seenBound := make(map[string]bool, len(w.BoundProfileIDs))
+	for idx, pid := range w.BoundProfileIDs {
+		p := strictjson.Pointer("/warp/bound_profile_ids", strconv.Itoa(idx))
+		v.require(seenProfiles[pid], p, "UNKNOWN_PROFILE", "绑定的代理端口 profile 不存在")
+		v.require(!seenBound[pid], p, "DUPLICATE", "绑定的代理端口 profile 不能重复")
+		seenBound[pid] = true
+	}
+	v.require(len(w.Domains) <= MaxWARPDomains, "/warp/domains", "SIZE", "WARP 解锁域名数量不得超过 128")
+	for idx, d := range w.Domains {
+		p := strictjson.Pointer("/warp/domains", strconv.Itoa(idx))
+		v.require(validWARPDomainRule(d), p, "DOMAIN", "WARP 解锁域名格式无效")
+	}
+}
+
+func validWGPublicKey(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) != 44 && len(s) != 43 {
+		return false
+	}
+	raw, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		raw, err = base64.RawStdEncoding.DecodeString(s)
+	}
+	return err == nil && len(raw) == 32
+}
+
+func validWARPEndpoint(ep string) bool {
+	ep = strings.TrimSpace(ep)
+	if ep == "" || len(ep) > 259 || strings.ContainsAny(ep, " \t\r\n\x00/\\;{}\"'`") {
+		return false
+	}
+	host, portStr, err := net.SplitHostPort(ep)
+	if err != nil || host == "" {
+		return false
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return false
+	}
+	if ip, perr := netip.ParseAddr(host); perr == nil {
+		ip = ip.Unmap()
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			return false
+		}
+		return true
+	}
+	return !strings.EqualFold(host, "localhost") && !strings.EqualFold(host, "metadata.google.internal")
+}
+
+func validWARPAddrV4(s string) bool {
+	s = strings.TrimSpace(s)
+	if pfx, err := netip.ParsePrefix(s); err == nil {
+		return pfx.Addr().Is4() && pfx.Bits() >= 1 && pfx.Bits() <= 32
+	}
+	if addr, err := netip.ParseAddr(s); err == nil {
+		return addr.Is4()
+	}
+	return false
+}
+
+func validWARPAddrV6(s string) bool {
+	s = strings.TrimSpace(s)
+	if pfx, err := netip.ParsePrefix(s); err == nil {
+		return pfx.Addr().Is6() && !pfx.Addr().Is4In6() && pfx.Bits() >= 1 && pfx.Bits() <= 128
+	}
+	if addr, err := netip.ParseAddr(s); err == nil {
+		return addr.Is6() && !addr.Is4In6()
+	}
+	return false
+}
+
+func validWARPDomainRule(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || len(s) > 253 || strings.ContainsAny(s, " \t\r\n\x00/\\;{}\"'`") {
+		return false
+	}
+	for _, prefix := range []string{"domain:", "full:", "keyword:", "geosite:"} {
+		if strings.HasPrefix(s, prefix) {
+			return len(s) > len(prefix)
+		}
+	}
+	return strings.Contains(s, ".")
 }
 
 type validator struct {

@@ -24,6 +24,13 @@ const (
 	// MinTrafficMark 与 MaxTrafficMark 限定按用户内核流量整形标记的保留段。
 	MinTrafficMark uint32 = 0x5100
 	MaxTrafficMark uint32 = 0x51FF
+
+	// WARP 出口分流模式：指定端口全流量 / 仅解锁域名（可选限定端口）/ 全部代理端口。
+	WARPRoutingBoundPorts = "bound_ports"
+	WARPRoutingDomains    = "domains"
+	WARPRoutingAll        = "all"
+	MaxWARPDomains        = 128
+	DefaultWARPMTU        = 1280
 )
 
 // SecretRef、Violation、Error 与 v1 共用身份格式、脱敏和领域错误。
@@ -35,10 +42,27 @@ type Reality = v1.Reality
 
 // Intent 是完整期望快照；Enabled 指针区分缺失字段与显式停用。
 type Intent struct {
-	SchemaVersion string    `json:"schema_version"`
-	Enabled       *bool     `json:"enabled"`
-	Profiles      []Profile `json:"profiles"`
-	Outbound      *Outbound `json:"outbound"`
+	SchemaVersion string        `json:"schema_version"`
+	Enabled       *bool         `json:"enabled"`
+	Profiles      []Profile     `json:"profiles"`
+	Outbound      *Outbound     `json:"outbound"`
+	WARP          *WARPOutbound `json:"warp,omitempty"`
+}
+
+// WARPOutbound 描述可选的 Cloudflare WARP 用户态 WireGuard 服务端链式出口。
+// PrivateKey 仅持宿主签发的 secret 引用，不接受明文。
+type WARPOutbound struct {
+	Enabled         bool      `json:"enabled"`
+	PrivateKey      SecretRef `json:"private_key"`
+	PeerPublicKey   string    `json:"peer_public_key"`
+	Endpoint        string    `json:"endpoint"`
+	AddressV4       string    `json:"address_v4"`
+	AddressV6       string    `json:"address_v6,omitempty"`
+	Reserved        []int     `json:"reserved,omitempty"`
+	MTU             int       `json:"mtu,omitempty"`
+	RoutingMode     string    `json:"routing_mode"`
+	BoundProfileIDs []string  `json:"bound_profile_ids,omitempty"`
+	Domains         []string  `json:"domains,omitempty"`
 }
 
 // Profile 通过 Protocol 选择唯一成员；其他协议成员必须完全缺失。
@@ -99,7 +123,8 @@ type Obfs struct {
 }
 
 // String 与 GoString 防止普通调试格式意外展开完整期望配置。
-func (Intent) String() string    { return "CoreIntent(v2)" }
-func (Intent) GoString() string  { return "coreapi.Intent{[REDACTED]}" }
-func (Profile) String() string   { return "CoreProfile{[REDACTED]}" }
-func (Profile) GoString() string { return "coreapi.Profile{[REDACTED]}" }
+func (Intent) String() string       { return "CoreIntent(v2)" }
+func (Intent) GoString() string     { return "coreapi.Intent{[REDACTED]}" }
+func (Profile) String() string      { return "CoreProfile{[REDACTED]}" }
+func (Profile) GoString() string    { return "coreapi.Profile{[REDACTED]}" }
+func (WARPOutbound) String() string { return "WARPOutbound{[REDACTED]}" }

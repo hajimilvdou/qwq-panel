@@ -133,6 +133,20 @@ func LoadV2(ctx context.Context, intent *corev2.Intent, revealer Revealer, tlsLo
 			return materials, ErrUnavailable
 		}
 	}
+	if intent.WARP != nil {
+		if err := ctx.Err(); err != nil {
+			return materials, err
+		}
+		val, rerr := revealBounded(ctx, revealer, intent.WARP.PrivateKey.ID, maxV2EncodedMaterial)
+		if rerr != nil {
+			return materials, rerr
+		}
+		if !xrayconfig.ValidWireGuardKey(val) {
+			clear(val)
+			return materials, ErrUnavailable
+		}
+		materials.WARP = &xrayconfig.WARPMaterials{PrivateKey: val}
+	}
 	return materials, nil
 }
 

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "删除 Cloudflare WARP 配置请求",
+  "description": "移除已保存的 Cloudflare WARP 账号与密钥，并从 core.xray 中取消 WARP 出口路由。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

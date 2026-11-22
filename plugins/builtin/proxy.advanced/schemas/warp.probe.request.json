@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "探测 Cloudflare WARP 端点与本机出口状态请求",
+  "description": "测试多个 Cloudflare WARP 优选端点延迟并检测当前宿主机 Cloudflare Trace 信息。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

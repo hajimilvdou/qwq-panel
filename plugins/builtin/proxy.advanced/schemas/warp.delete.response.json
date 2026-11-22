@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "删除 Cloudflare WARP 配置响应",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "deleted"
+  ],
+  "properties": {
+    "deleted": {
+      "type": "boolean"
+    },
+    "core_revision": {
+      "type": "string"
+    },
+    "sync_warning": {
+      "type": "string"
+    }
+  }
+}

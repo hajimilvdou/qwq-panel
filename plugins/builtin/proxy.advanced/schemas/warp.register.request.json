@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "一键注册 Cloudflare WARP 请求",
+  "description": "自动生成 WireGuard X25519 密钥对并向 Cloudflare 注册免费或 WARP+ 账号，支持同时绑定代理端口与分流模式。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "license_key": {
+      "type": "string",
+      "maxLength": 64,
+      "writeOnly": true,
+      "description": "可选 WARP+ 许可证密钥，留空注册免费版"
+    },
+    "endpoint": {
+      "type": "string",
+      "maxLength": 259,
+      "description": "可选自定义 WARP Endpoint（默认 engage.cloudflareclient.com:2408）"
+    },
+    "mtu": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1500
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "routing_mode": {
+      "type": "string",
+      "enum": [
+        "bound_ports",
+        "domains",
+        "all"
+      ],
+      "default": "bound_ports"
+    },
+    "bound_profile_ids": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32
+      }
+    },
+    "domains": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 253
+      }
+    },
+    "sync_core": {
+      "type": "boolean",
+      "default": true
+    }
+  }
+}

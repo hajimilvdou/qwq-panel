@@ -161,6 +161,10 @@ func (i *instance) syncCoreAndTraffic(ctx context.Context, host *pluginsdk.Host)
 }
 
 func (i *instance) syncCoreXrayLocked(ctx context.Context, host *pluginsdk.Host) (string, error) {
+	return i.syncCoreXrayLockedWithWARP(ctx, host, false)
+}
+
+func (i *instance) syncCoreXrayLockedWithWARP(ctx context.Context, host *pluginsdk.Host, writeNewWARPSecret bool) (string, error) {
 	if host == nil || host.Conn() == nil {
 		return "", pluginsdk.ErrNoHost
 	}
@@ -184,7 +188,11 @@ func (i *instance) syncCoreXrayLocked(ctx context.Context, host *pluginsdk.Host)
 	if err != nil {
 		return "", err
 	}
-	mergedJSON, err := mergeCoreXrayConfig(getResp.GetRedactedConfigJson(), activeUsers)
+	warpCfg, err := i.store.GetWARP(ctx)
+	if err != nil {
+		return "", err
+	}
+	mergedJSON, err := mergeCoreXrayConfigWithWARP(getResp.GetRedactedConfigJson(), activeUsers, warpCfg, writeNewWARPSecret)
 	if err != nil {
 		return "", err
 	}
@@ -297,7 +305,7 @@ func (i *instance) syncTrafficShapingLocked(ctx context.Context, host *pluginsdk
 
 // ======================== core.xray 脱敏配置合并（$secret_present -> $keep_secret） ========================
 
-func mergeCoreXrayConfig(redactedRaw []byte, activeUsers []userRecord) ([]byte, error) {
+func mergeCoreXrayConfigWithWARP(redactedRaw []byte, activeUsers []userRecord, warpCfg *warpWithSecrets, writeNewWARPSecret bool) ([]byte, error) {
 	trimmed := bytes.TrimSpace(redactedRaw)
 	if len(trimmed) == 0 {
 		return nil, pluginsdk.Errorf("PRECONDITION_FAILED", "目标插件 core.xray 尚未初始化配置")
@@ -311,6 +319,14 @@ func mergeCoreXrayConfig(redactedRaw []byte, activeUsers []userRecord) ([]byte, 
 
 	// 支持 Core Intent v2（profiles 数组）与 v1（单 inbound.users）两种形态。
 	if profiles, ok := doc["profiles"].([]any); ok {
+		existingProfileIDs := make(map[string]bool, len(profiles))
+		for _, item := range profiles {
+			if prof, ok := item.(map[string]any); ok {
+				if id, _ := prof["id"].(string); id != "" {
+					existingProfileIDs[id] = true
+				}
+			}
+		}
 		if len(activeUsers) == 0 {
 			doc["enabled"] = false
 		} else {
@@ -324,6 +340,20 @@ func mergeCoreXrayConfig(redactedRaw []byte, activeUsers []userRecord) ([]byte, 
 				existingUsers := indexExistingSecretSlots(prof["users"])
 				prof["users"] = buildProfileUsers(protocol, activeUsers, existingUsers)
 			}
+		}
+		// 同步可选 Cloudflare WARP 服务端 WireGuard 出口与端口绑定。
+		if warpCfg != nil && warpCfg.Registered {
+			existingWARPHasSecret := false
+			if prevW, ok := doc["warp"].(map[string]any); ok {
+				if slot, ok := prevW["private_key"].(map[string]any); ok {
+					if keep, ok := slot["$keep_secret"].(bool); ok && keep {
+						existingWARPHasSecret = true
+					}
+				}
+			}
+			doc["warp"] = buildCoreXrayWARPSection(warpCfg, existingProfileIDs, existingWARPHasSecret, writeNewWARPSecret)
+		} else if warpCfg == nil && !writeNewWARPSecret {
+			delete(doc, "warp")
 		}
 	} else if inbound, ok := doc["inbound"].(map[string]any); ok {
 		if len(activeUsers) == 0 {

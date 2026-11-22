@@ -17,7 +17,15 @@ var ErrV2Materials = errors.New("xrayconfig: invalid v2 material")
 var ErrObfsTarget = errors.New("xrayconfig: private obfs target required")
 var errMaterialSerialization = errors.New("xrayconfig: refusing to serialize private material")
 
-type V2Materials struct{ Profiles map[string]ProfileMaterials }
+type V2Materials struct {
+	Profiles map[string]ProfileMaterials
+	WARP     *WARPMaterials
+}
+
+// WARPMaterials 仅在单次 Apply 中短时持有 Cloudflare WARP WireGuard 私钥。
+type WARPMaterials struct {
+	PrivateKey []byte
+}
 
 // ProfileMaterials 与期望协议一一对应；其他成员必须完全缺失。
 type ProfileMaterials struct {
@@ -93,6 +101,8 @@ func (HysteriaMaterials) String() string   { return "HysteriaMaterials{[REDACTED
 func (HysteriaMaterials) GoString() string { return "xrayconfig.HysteriaMaterials{[REDACTED]}" }
 func (SS2022Materials) String() string     { return "SS2022Materials{[REDACTED]}" }
 func (SS2022Materials) GoString() string   { return "xrayconfig.SS2022Materials{[REDACTED]}" }
+func (WARPMaterials) String() string       { return "WARPMaterials{[REDACTED]}" }
+func (WARPMaterials) GoString() string     { return "xrayconfig.WARPMaterials{[REDACTED]}" }
 
 // 日志走同一脱敏值；JSON 序列化直接拒绝，不让 byte slice 自动编码成秘密字符串。
 func redactedMaterialLog() slog.Value                  { return slog.StringValue("[REDACTED]") }
@@ -101,11 +111,13 @@ func (ProfileMaterials) LogValue() slog.Value          { return redactedMaterial
 func (TLSMaterials) LogValue() slog.Value              { return redactedMaterialLog() }
 func (HysteriaMaterials) LogValue() slog.Value         { return redactedMaterialLog() }
 func (SS2022Materials) LogValue() slog.Value           { return redactedMaterialLog() }
+func (WARPMaterials) LogValue() slog.Value             { return redactedMaterialLog() }
 func (V2Materials) MarshalJSON() ([]byte, error)       { return nil, errMaterialSerialization }
 func (ProfileMaterials) MarshalJSON() ([]byte, error)  { return nil, errMaterialSerialization }
 func (TLSMaterials) MarshalJSON() ([]byte, error)      { return nil, errMaterialSerialization }
 func (HysteriaMaterials) MarshalJSON() ([]byte, error) { return nil, errMaterialSerialization }
 func (SS2022Materials) MarshalJSON() ([]byte, error)   { return nil, errMaterialSerialization }
+func (WARPMaterials) MarshalJSON() ([]byte, error)     { return nil, errMaterialSerialization }
 
 func clearMaterialMap(values map[string][]byte) {
 	for id, value := range values {
@@ -133,5 +145,10 @@ func (materials *V2Materials) Clear() {
 			clearMaterialMap(profile.Shadowsocks2022.PSKs)
 		}
 		delete(materials.Profiles, id)
+	}
+	if materials.WARP != nil {
+		clear(materials.WARP.PrivateKey)
+		materials.WARP.PrivateKey = nil
+		materials.WARP = nil
 	}
 }
