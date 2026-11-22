@@ -264,9 +264,10 @@ func (s *Service) runWrite(ctx context.Context, w *writeRequest) (*Response, err
 	if err := s.executeCreated(ctx, op); err != nil {
 		return nil, withOperationID(err, op.ID)
 	}
-	if op.Mode == ModeJob && op.Meta.Source == PluginSource {
-		// A queued job answers with the record it was accepted as: a worker
-		// may already have moved it on, and the client follows it by ID.
+	if op.Mode == ModeJob {
+		// A queued job (plugin or host) answers with the record it was
+		// accepted as: a worker may already have moved it on, and the client
+		// follows it by ID.
 		return newResponse(op), nil
 	}
 	current, err := loadOperation(ctx, s.db.Reader(), op.ID)
