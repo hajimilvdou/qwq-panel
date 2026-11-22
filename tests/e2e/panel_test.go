@@ -659,6 +659,8 @@ func (p *panel) verifyAccessStealthAndRebind(t *testing.T) {
 	if cur.EntryGateActive || cur.BypassReason != "panel_domain" || cur.EffectiveEntryPath != "" {
 		t.Fatalf("panel_domain did not auto-disable entry gate: %+v", cur)
 	}
+	// Secret entry path is now auto-disabled; direct API calls use root path.
+	p.entryPath = ""
 	resp, err = probeClient.Get(p.origin + "/readyz")
 	if err != nil {
 		t.Fatalf("readyz after domain auto-disable failed: %v", err)
