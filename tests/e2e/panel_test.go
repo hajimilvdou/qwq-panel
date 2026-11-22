@@ -290,6 +290,7 @@ func (p *panel) invoke(op string, payload any) map[string]any {
 		want = http.StatusOK // decode reports the unexpected status
 	}
 	p.decode(resp, want, &opv)
+	p.approveFixtureJob(&opv)
 	return p.waitOperation(&opv)
 }
 

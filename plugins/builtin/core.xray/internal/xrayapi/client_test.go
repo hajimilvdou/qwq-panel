@@ -48,7 +48,12 @@ func (f *fakeStats) QueryStats(ctx context.Context, request *wire.QueryStatsRequ
 
 func fakeEndpoint(t *testing.T, service *fakeStats) string {
 	t.Helper()
-	dir := t.TempDir()
+	// 使用短 /tmp 路径，避免 CI 工作区较深时触及 ValidSocket 的 103 字节 UDS 路径上限。
+	dir, err := os.MkdirTemp("/tmp", "qwq-xapi-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}

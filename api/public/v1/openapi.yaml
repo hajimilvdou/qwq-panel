@@ -881,6 +881,7 @@ paths:
       operationId: listServiceAccounts
       tags: [service-accounts]
       summary: List automation service accounts (without bearer tokens)
+      description: Returns metadata for automation service accounts; plaintext bearer tokens are never returned.
       security:
         - sessionCookie: []
       responses:
@@ -890,25 +891,34 @@ paths:
             application/json:
               schema:
                 type: object
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
     post:
       operationId: createServiceAccount
       tags: [service-accounts]
       summary: Create an automation service account (returns bearer token once)
+      description: Creates a scoped automation service account and returns its one-time bearer token in the creation response.
       security:
         - sessionCookie: []
           csrfToken: []
       x-qwq-idempotency: required
       x-qwq-action-exempt: credential-mint
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
+        description: Service account creation payload.
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [name, role]
               properties:
-                name: { type: string }
+                name: { type: string, minLength: 1, maxLength: 64 }
                 role: { type: string, enum: [admin, operator, viewer] }
                 scope: { type: object }
       responses:
@@ -918,12 +928,18 @@ paths:
             application/json:
               schema:
                 type: object
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/service-accounts/{service_id}:
     delete:
       operationId: deleteServiceAccount
       tags: [service-accounts]
       summary: Revoke a service account immediately
+      description: Revokes the specified service account immediately with optimistic revision concurrency.
       security:
         - sessionCookie: []
           csrfToken: []
@@ -932,15 +948,20 @@ paths:
       parameters:
         - name: service_id
           in: path
+          description: Identifier of the service account to revoke.
           required: true
-          schema: { type: string }
-        - name: expected_revision
-          in: query
-          required: false
-          schema: { type: string }
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/ExpectedRevisionQuery'
       responses:
         '204':
           description: Service account revoked
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/service-accounts/renewal-bootstrap:
     post:
@@ -1166,28 +1187,38 @@ paths:
       operationId: createNodeEnrollmentToken
       tags: [nodes]
       summary: Issue a one-time short-lived enrollment token for a remote node agent
+      description: Issues a one-time short-lived enrollment token for pairing a remote node agent via mTLS.
       security:
         - sessionCookie: []
           csrfToken: []
       x-qwq-idempotency: required
       x-qwq-action-exempt: credential-mint
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
+        description: Node enrollment token parameters.
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [preset_name]
               properties:
-                preset_name: { type: string }
+                preset_name: { type: string, minLength: 1, maxLength: 64 }
                 mode: { type: string, enum: [full, probe_512m] }
-                ttl_seconds: { type: integer }
+                ttl_seconds: { type: integer, format: int32, minimum: 60, maximum: 86400 }
       responses:
         '201':
           description: One-time enrollment token
           content:
             application/json:
               schema: { type: object }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/nodes/{node_id}:
     parameters:
@@ -1219,18 +1250,27 @@ paths:
       operationId: revokeNode
       tags: [nodes]
       summary: Revoke a remote node's mTLS certificate and disconnect its live session
+      description: Revokes a remote node's mTLS client certificate and disconnects any active agent session immediately.
       security:
         - sessionCookie: []
           csrfToken: []
       x-qwq-idempotency: required
+      x-qwq-action-exempt: credential-revocation
       parameters:
         - $ref: '#/components/parameters/NodeIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '200':
           description: Node revoked
           content:
             application/json:
               schema: { type: object }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
   # ---------------------------------------------------------------- plugins
   /api/v1/plugins:
@@ -2380,6 +2420,7 @@ paths:
       operationId: getNetworkFacts
       tags: [system]
       summary: Read live host IPv4/IPv6 addresses and default route facts
+      description: Inspects live host IPv4 and IPv6 addresses together with default route facts.
       security:
         - sessionCookie: []
         - serviceAccountToken: []
@@ -2389,14 +2430,17 @@ paths:
           content:
             application/json:
               schema: { type: object }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/network/policy:
     get:
       operationId: getNetworkPolicy
       tags: [system]
       summary: Read node dual-stack inbound/outbound network policy
+      description: Returns the current dual-stack inbound and outbound network policy for the node.
       security:
         - sessionCookie: []
         - serviceAccountToken: []
@@ -2406,37 +2450,59 @@ paths:
           content:
             application/json:
               schema: { type: object }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
     put:
       operationId: putNetworkPolicy
       tags: [system]
       summary: Update node dual-stack inbound/outbound network policy
+      description: Updates the node dual-stack inbound and outbound network policy with optimistic revision concurrency.
       security:
         - sessionCookie: []
+          csrfToken: []
         - serviceAccountToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Idempotent PUT protected by optimistic expected_revision check.
+      x-qwq-action-exempt: Direct host network policy configuration; audited directly by the host API.
       requestBody:
+        description: Desired dual-stack network policy configuration.
         required: true
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                inbound_family_mode: { type: string, minLength: 1, maxLength: 32 }
+                inbound_candidates: { type: array, maxItems: 64, items: { type: object } }
+                outbound_family_mode: { type: string, minLength: 1, maxLength: 32 }
+                outbound_bind_ipv4: { type: string, maxLength: 64 }
+                outbound_bind_ipv6: { type: string, maxLength: 64 }
+                outbound_overrides: { type: array, maxItems: 512, items: { type: object } }
+                expected_revision: { $ref: '#/components/schemas/Revision' }
+                skip_facts_guard: { type: boolean }
       responses:
         '200':
           description: Updated node network policy.
           content:
             application/json:
               schema: { type: object }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/routing/profile:
     get:
       operationId: getRoutingProfile
       tags: [system]
       summary: Read China split routing profile and active rule bundle digest
+      description: Returns the current China split routing profile and active rule bundle metadata.
       security:
         - sessionCookie: []
         - serviceAccountToken: []
@@ -2446,77 +2512,124 @@ paths:
           content:
             application/json:
               schema: { type: object }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
     put:
       operationId: putRoutingProfile
       tags: [system]
       summary: Update China split routing profile and custom rules
+      description: Updates the China split routing profile and custom rules with optimistic revision concurrency.
       security:
         - sessionCookie: []
+          csrfToken: []
         - serviceAccountToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Idempotent PUT protected by optimistic expected_revision check.
+      x-qwq-action-exempt: Direct host routing profile configuration; audited directly by the host API.
       requestBody:
+        description: Desired China split routing profile and custom rules.
         required: true
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, maxLength: 64 }
+                mode: { type: string, minLength: 1, maxLength: 32 }
+                block_ads: { type: boolean }
+                dns_anti_poison: { type: boolean }
+                custom_rules: { type: array, maxItems: 2048, items: { type: object } }
+                expected_revision: { $ref: '#/components/schemas/Revision' }
       responses:
         '200':
           description: Updated routing profile.
           content:
             application/json:
               schema: { type: object }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/routing/update-bundle:
     post:
       operationId: updateRoutingBundle
       tags: [system]
       summary: Verify SHA-256 and atomically swap the MIT routing rule bundle
+      description: Verifies the SHA-256 digest and atomically activates a new MIT routing rule bundle.
       security:
         - sessionCookie: []
+          csrfToken: []
         - serviceAccountToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Content-addressed SHA-256 bundle swap is naturally idempotent.
+      x-qwq-action-exempt: Direct host routing bundle update; audited directly by the host API.
       requestBody:
+        description: Routing rule bundle payload and optional expected SHA-256 digest.
         required: true
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              additionalProperties: false
+              required: [version, bundle_text]
+              properties:
+                version: { type: string, minLength: 1, maxLength: 64 }
+                bundle_text: { type: string, minLength: 1, maxLength: 4194304 }
+                expected_sha256: { type: string, maxLength: 128 }
       responses:
         '200':
           description: Activated bundle digest and rule count.
           content:
             application/json:
               schema: { type: object }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/routing/preview:
     post:
       operationId: previewRoutingTwoHop
       tags: [system]
       summary: Preview client split decision, first-hop endpoints and second-hop outbound policy
+      description: Evaluates a target hostname or URL against the active routing profile and returns a read-only preview.
       security:
         - sessionCookie: []
+          csrfToken: []
         - serviceAccountToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Read-only routing decision preview with no state mutation.
+      x-qwq-action-exempt: Read-only preview query; does not mutate host state.
       requestBody:
+        description: Target hostname or URL to evaluate.
         required: true
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              additionalProperties: false
+              required: [target]
+              properties:
+                target: { type: string, minLength: 1, maxLength: 512 }
       responses:
         '200':
           description: Two-hop routing preview.
           content:
             application/json:
               schema: { type: object }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
   # ---------------------------------------------------------------- agent sessions (ADR-0010 §5)
   /api/v1/agent-sessions:
