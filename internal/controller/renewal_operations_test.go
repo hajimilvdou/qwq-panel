@@ -703,12 +703,21 @@ func TestRenewalOperationsEndToEndAndCancellation(t *testing.T) {
 		t.Fatalf("ops.Cancel 失败：%v", err)
 	}
 	// 推进假时钟越过 JobCancelGrace，触发真实 executor context 取消并传播到 RenewalContexts。
-	env.clock.Advance(env.host.Operations.Config().JobCancelGrace)
-
-	select {
-	case <-cancelExecCtx.Done():
-	case <-time.After(3 * time.Second):
-		t.Fatal("ops.Cancel 后 RenewalContexts 派生上下文未及时取消")
+	// Cancel 内部的宽限计时器在后台 goroutine 注册，周期推进假时钟避免抢先 Advance 导致假时钟漏触发。
+	cancelDeadline := time.NewTimer(3 * time.Second)
+	defer cancelDeadline.Stop()
+	cancelTick := time.NewTicker(10 * time.Millisecond)
+	defer cancelTick.Stop()
+waitCancel:
+	for {
+		env.clock.Advance(env.host.Operations.Config().JobCancelGrace)
+		select {
+		case <-cancelExecCtx.Done():
+			break waitCancel
+		case <-cancelTick.C:
+		case <-cancelDeadline.C:
+			t.Fatal("ops.Cancel 后 RenewalContexts 派生上下文未及时取消")
+		}
 	}
 	env.waitOpStatus(t, caller2.OperationID, operations.Canceled)
 	// 取消退出后再调用 Finish 应幂等成功。
