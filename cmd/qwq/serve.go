@@ -393,9 +393,13 @@ func newPluginRuntime(cfg config.Config, pluginsDir string, logger *slog.Logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build management port guards: %w", err)
 	}
+	systemd := sandbox.NewSystemctl(sandbox.ExecRunner{})
+	if _, compat := systemd.(*sandbox.CompatUnitctlClient); compat {
+		logger.Info("plugin unit control uses legacy-polkit compat patch", "socket", sandbox.DefaultCompatUnitctlSocket)
+	}
 	rt, err := controller.NewPluginRuntime(controller.PluginRuntimeOptions{
 		Units: controller.UnitManagerAdapter{
-			Systemctl: sandbox.NewExecSystemctl(sandbox.ExecRunner{}),
+			Systemctl: systemd,
 			NodeID:    "local",
 		},
 		PluginDir:       dirs.Resolve,
@@ -440,7 +444,7 @@ func newUpdater(c *controller.Controller, pluginsDir, trustDir, stagingDir strin
 			"trust_dir", trust, "error", err)
 		return nil, nil
 	}
-	systemd := sandbox.NewExecSystemctl(sandbox.ExecRunner{})
+	systemd := sandbox.NewSystemctl(sandbox.ExecRunner{})
 	installer := &controller.PluginInstaller{
 		PluginsRoot: plugins,
 		DataRoot:    sandbox.DefaultPluginDataRoot,

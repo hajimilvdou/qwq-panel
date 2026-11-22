@@ -112,25 +112,34 @@ func TestContainerAndSmallMemory(t *testing.T) {
 	}
 }
 
-// Only Ubuntu 24.04 has been exercised end to end; the other supported
-// platforms are accepted but carry a "not verified" note that points at the
-// README support table (PRIV-06).
+// Verified native platforms (Debian 12/13, Ubuntu 24.04/26.04) report clean OK;
+// legacy-polkit platforms (Ubuntu 22.04, Debian 11) report compat-patch status.
 func TestOSVerificationStatus(t *testing.T) {
 	for _, c := range []struct {
 		release string
+		compat  bool
 		status  Status
 		detail  string
 	}{
-		{"ID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\n", OK, "Ubuntu 24.04.3 LTS"},
-		{"ID=ubuntu\nVERSION_ID=\"24.10\"\nPRETTY_NAME=\"Ubuntu 24.10\"\n", OK, "not verified"},
-		{"ID=ubuntu\nVERSION_ID=\"22.04\"\nPRETTY_NAME=\"Ubuntu 22.04.5 LTS\"\n", OK, "not verified"},
-		{"ID=debian\nVERSION_ID=\"12\"\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n", OK, "not verified"},
-		{"ID=rocky\nVERSION_ID=\"9.4\"\nPRETTY_NAME=\"Rocky Linux 9.4 (Blue Onyx)\"\n", OK, "not verified"},
-		{"ID=ubuntu\nVERSION_ID=\"20.04\"\nPRETTY_NAME=\"Ubuntu 20.04 LTS\"\n", Warn, "not a supported distribution"},
+		{"ID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\n", false, OK, "Ubuntu 24.04.3 LTS"},
+		{"ID=ubuntu\nVERSION_ID=\"26.04\"\nPRETTY_NAME=\"Ubuntu 26.04.1 LTS\"\n", false, OK, "Ubuntu 26.04.1 LTS"},
+		{"ID=debian\nVERSION_ID=\"12\"\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n", false, OK, "Debian GNU/Linux 12"},
+		{"ID=debian\nVERSION_ID=\"13\"\nPRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\n", false, OK, "Debian GNU/Linux 13"},
+		{"ID=ubuntu\nVERSION_ID=\"24.10\"\nPRETTY_NAME=\"Ubuntu 24.10\"\n", false, OK, "not verified"},
+		{"ID=ubuntu\nVERSION_ID=\"22.04\"\nPRETTY_NAME=\"Ubuntu 22.04.5 LTS\"\n", false, OK, "qwq-compat-polkit"},
+		{"ID=ubuntu\nVERSION_ID=\"22.04\"\nPRETTY_NAME=\"Ubuntu 22.04.5 LTS\"\n", true, OK, "compat patch active"},
+		{"ID=debian\nVERSION_ID=\"11\"\nPRETTY_NAME=\"Debian GNU/Linux 11 (bullseye)\"\n", false, Warn, "qwq-compat-polkit"},
+		{"ID=debian\nVERSION_ID=\"11\"\nPRETTY_NAME=\"Debian GNU/Linux 11 (bullseye)\"\n", true, OK, "compat patch active"},
+		{"ID=rocky\nVERSION_ID=\"9.4\"\nPRETTY_NAME=\"Rocky Linux 9.4 (Blue Onyx)\"\n", false, OK, "not verified"},
+		{"ID=ubuntu\nVERSION_ID=\"20.04\"\nPRETTY_NAME=\"Ubuntu 20.04 LTS\"\n", false, Warn, "not a supported distribution"},
 	} {
-		r := checkOS(fake(fakeFS{"/etc/os-release": c.release}, nil))
+		files := fakeFS{"/etc/os-release": c.release}
+		if c.compat {
+			files[CompatPolkitMarkerPath] = `{"patch":"qwq-compat-polkit"}`
+		}
+		r := checkOS(fake(files, nil))
 		if r.Status != c.status || !strings.Contains(r.Detail, c.detail) {
-			t.Errorf("%q = %+v, want %s containing %q", c.release, r, c.status, c.detail)
+			t.Errorf("%q (compat=%v) = %+v, want %s containing %q", c.release, c.compat, r, c.status, c.detail)
 		}
 	}
 }

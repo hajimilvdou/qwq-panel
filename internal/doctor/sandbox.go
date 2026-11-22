@@ -242,20 +242,56 @@ const SandboxPolkitID = "sandbox-polkit"
 // PluginPolkitRulePath 是发布包必须安装的最小插件单元授权规则。
 const PluginPolkitRulePath = "/etc/polkit-1/rules.d/60-qwq-plugin.rules"
 
+// CompatPolkitMarkerPath 与 CompatUnitctlSocketUnit 标识旧版 polkit 兼容补丁
+// （qwq-compat-polkit，面向 Ubuntu 22.04 / Debian 11 等缺少 polkit >= 0.106 的系统）。
+// 原生支持 polkit JS 规则的系统（Debian 12+ / Ubuntu 24.04+）绝不安装此补丁。
+const (
+	CompatPolkitMarkerPath  = "/etc/qwq/compat/polkit-compat.json"
+	CompatUnitctlSocketUnit = "qwq-compat-unitctl.socket"
+)
+
 // polkitMissingFix is shared by both shapes of a host without polkit: the unit
 // query failing outright and LoadState=not-found.
-const polkitMissingFix = "install polkit (a Debian 12 minimal install usually lacks it: `apt install polkitd`); " +
+const polkitMissingFix = "install polkit (`apt install polkitd`) or let `install.sh` apply the qwq-compat-polkit compatibility patch; " +
 	"without it the unprivileged agent cannot start, stop or kill plugin units (ADR-0003 decision 1)"
 
+// compatPolkitActive reports whether the optional qwq-compat-polkit patch is
+// installed safely and its socket unit is active.
+func compatPolkitActive(ctx context.Context, env Env) bool {
+	info, err := env.Stat(CompatPolkitMarkerPath)
+	if err != nil {
+		return false
+	}
+	if info != nil && (!info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0) {
+		return false
+	}
+	out, err := env.Run(ctx, "systemctl", "show", "-p", "ActiveState", "-p", "LoadState", CompatUnitctlSocketUnit)
+	if err != nil {
+		return false
+	}
+	kv := parseShow(out)
+	return kv["LoadState"] == "loaded" && kv["ActiveState"] == "active"
+}
+
 // sandboxPolkit reports whether the unprivileged controller can manage plugin
-// units through polkit. Ubuntu 22.04's polkit 0.105 reads only .pkla files, so
-// the JavaScript rule the deployment installs is ignored and every plugin
-// start, stop or kill is denied; refusing the host here is clearer than a
-// plugin that can never run (PRIV-06).
+// units through native polkit (>= 0.106) or, on legacy-polkit hosts, through
+// the optional qwq-compat-polkit patch. Ubuntu 22.04 and Debian 11 ship
+// polkit 0.105 (or no polkitd), which ignores JavaScript rules; without the
+// compat patch every plugin start, stop or kill is denied (PRIV-06).
 func sandboxPolkit(ctx context.Context, env Env) Result {
+	compatOK := func() Result {
+		return Result{
+			ID:     SandboxPolkitID,
+			Status: OK,
+			Detail: "polkit compat patch active (qwq-compat-unitctl.socket; scoped to qwq-plugin@*)",
+		}
+	}
 	out, err := env.Run(ctx, "systemctl", "show", "-p", "ActiveState", "-p", "LoadState", "-p", "UnitFileState", "polkit.service")
 	kv := parseShow(out)
 	if err != nil || kv["LoadState"] == "" {
+		if compatPolkitActive(ctx, env) {
+			return compatOK()
+		}
 		if _, serr := env.Stat("/usr/lib/polkit-1/polkitd"); serr == nil {
 			return Result{ID: SandboxPolkitID, Status: Fail, Detail: "polkit is installed but systemctl could not query it",
 				Fix: "check `systemctl status polkit.service`; the agent cannot start or stop plugin units without it"}
@@ -263,6 +299,9 @@ func sandboxPolkit(ctx context.Context, env Env) Result {
 		return Result{ID: SandboxPolkitID, Status: Fail, Detail: "polkit not found", Fix: polkitMissingFix}
 	}
 	if r, ok := polkitVersionCheck(ctx, env); ok {
+		if compatPolkitActive(ctx, env) {
+			return compatOK()
+		}
 		return r
 	}
 	// ========================================================================
@@ -271,6 +310,9 @@ func sandboxPolkit(ctx context.Context, env Env) Result {
 	if kv["LoadState"] == "loaded" {
 		info, err := env.Stat(PluginPolkitRulePath)
 		if err != nil || (info != nil && (!info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0)) {
+			if compatPolkitActive(ctx, env) {
+				return compatOK()
+			}
 			return Result{ID: SandboxPolkitID, Status: Fail, Detail: "the plugin unit authorization rule is missing or unsafe",
 				Fix: "reinstall " + PluginPolkitRulePath + " from deployments/polkit/qwq-plugin.rules as root:root 0644"}
 		}
@@ -283,6 +325,9 @@ func sandboxPolkit(ctx context.Context, env Env) Result {
 		return Result{ID: SandboxPolkitID, Status: Info,
 			Detail: "polkit is " + kv["ActiveState"] + "; it is D-Bus activated on first use",
 			Fix:    "nothing to do unless the agent's systemctl calls fail; then start polkit.service"}
+	}
+	if compatPolkitActive(ctx, env) {
+		return compatOK()
 	}
 	return Result{ID: SandboxPolkitID, Status: Fail,
 		Detail: "polkit.service is not loaded (" + kv["LoadState"] + ")", Fix: polkitMissingFix}
@@ -315,9 +360,8 @@ func polkitVersionCheck(ctx context.Context, env Env) (Result, bool) {
 		return Result{}, false
 	}
 	return Result{ID: SandboxPolkitID, Status: Fail,
-		Detail: fmt.Sprintf("polkit %d.%d reads no JavaScript rules (Ubuntu 22.04): /etc/polkit-1/rules.d/60-qwq-plugin.rules is ignored and plugin units cannot be started, stopped or killed", major, minor),
-		Fix: "use a platform whose polkit reads JavaScript rules (>= 0.106, such as Ubuntu 24.04); a legacy .pkla rule cannot be limited to qwq-plugin@* units " +
-			"and would grant control of every unit. This platform is not verified yet (see the support table in README)"}, true
+		Detail: fmt.Sprintf("polkit %d.%d reads no JavaScript rules (Ubuntu 22.04 / Debian 11): /etc/polkit-1/rules.d/60-qwq-plugin.rules is ignored and plugin units cannot be started, stopped or killed", major, minor),
+		Fix:    "let `install.sh` automatically install the qwq-compat-polkit compatibility patch, or use a platform with polkit >= 0.106 (Debian 12+, Ubuntu 24.04+)"}, true
 }
 
 func sandboxRuntimeDir(env Env, o SandboxOptions) Result {

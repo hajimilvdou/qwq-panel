@@ -150,3 +150,41 @@ func TestPrivilegedDeploymentBoundaries(t *testing.T) {
 		seenCaps[capName] = true
 	}
 }
+
+func TestCompatUnitctlDeploymentBoundaries(t *testing.T) {
+	service := readDeployment(t, "compat", "polkit", "qwq-compat-unitctl.service")
+	for key, want := range map[string]string{
+		"Restart":               "no",
+		"RuntimeMaxSec":         "60",
+		"MemoryMax":             "32M",
+		"TasksMax":              "16",
+		"ProtectSystem":         "strict",
+		"PrivateNetwork":        "yes",
+		"NoNewPrivileges":       "yes",
+		"ProtectHome":           "yes",
+		"CapabilityBoundingSet": "",
+	} {
+		values := unitDirectives(service, key)
+		if len(values) != 1 || values[0] != want {
+			t.Errorf("compat unitctl %s=%v，期望 %q", key, values, want)
+		}
+	}
+	if len(unitDirectives(service, "ReadWritePaths")) != 0 {
+		t.Fatal("compat unitctl 不应声明任何 ReadWritePaths")
+	}
+	if bp := unitDirectives(service, "BindPaths"); len(bp) != 1 || bp[0] != "-/run/credentials:/run/qwq/compat-creds" {
+		t.Fatalf("compat unitctl BindPaths=%v，期望仅限 -/run/credentials:/run/qwq/compat-creds", bp)
+	}
+	socket := readDeployment(t, "compat", "polkit", "qwq-compat-unitctl.socket")
+	for key, want := range map[string]string{
+		"ListenStream": DefaultCompatUnitctlSocket,
+		"SocketMode":   "0660",
+		"SocketGroup":  "qwq",
+		"RemoveOnStop": "yes",
+	} {
+		values := unitDirectives(socket, key)
+		if len(values) != 1 || values[0] != want {
+			t.Errorf("compat unitctl socket %s=%v，期望 %q", key, values, want)
+		}
+	}
+}

@@ -54,22 +54,29 @@ systemctl disable --now qwq-privileged.socket 2>/dev/null || true
 systemctl stop qwq-privileged.service 2>/dev/null || true
 systemctl disable --now qwq-capability.socket 2>/dev/null || true
 systemctl stop qwq-capability.service 2>/dev/null || true
+systemctl disable --now qwq-compat-unitctl.socket 2>/dev/null || true
+systemctl stop qwq-compat-unitctl.service 2>/dev/null || true
 systemctl stop qwq-firewall-restore.service 2>/dev/null || true
 
 # ── unit、tmpfiles、polkit、程序 ─────────────────────────────────────────────
 log "删除 unit 与程序"
 shopt -s nullglob
 rm -rf -- \
-  "$UNIT_DIR"/qwq-controller.service "$UNIT_DIR"/qwq-backup.service "$UNIT_DIR"/qwq-backup.timer \
-  "$UNIT_DIR"/qwq-privileged.service "$UNIT_DIR"/qwq-privileged.socket \
-  "$UNIT_DIR"/qwq-capability.service "$UNIT_DIR"/qwq-capability.socket \
+  "$UNIT_DIR"/qwq-controller.service "$UNIT_DIR"/qwq-controller.service.d/10-compat-seccomp.conf \
+  "$UNIT_DIR"/qwq-backup.service "$UNIT_DIR"/qwq-backup.timer \
+  "$UNIT_DIR"/qwq-privileged.service "$UNIT_DIR"/qwq-privileged.service.d/10-compat-seccomp.conf "$UNIT_DIR"/qwq-privileged.socket \
+  "$UNIT_DIR"/qwq-capability.service "$UNIT_DIR"/qwq-capability.service.d/10-compat-seccomp.conf "$UNIT_DIR"/qwq-capability.socket \
+  "$UNIT_DIR"/qwq-compat-unitctl.service "$UNIT_DIR"/qwq-compat-unitctl.socket \
   "$UNIT_DIR"/qwq-firewall-restore.service \
   "$UNIT_DIR"/qwq-plugin@* "$UNIT_DIR"/*.wants/qwq-* \
   /etc/tmpfiles.d/qwq-plugin-*.conf \
+  /etc/tmpfiles.d/qwq-compat-polkit.conf \
   /etc/polkit-1/rules.d/60-qwq-plugin.rules \
+  /etc/qwq/compat \
   /usr/lib/tmpfiles.d/qwq.conf /usr/lib/sysusers.d/qwq.conf \
   /usr/local/bin/qwq /opt/qwq \
   /var/lib/qwq-plugins /var/lib/qwq-privileged /run/qwq
+rmdir "$UNIT_DIR"/qwq-controller.service.d "$UNIT_DIR"/qwq-privileged.service.d "$UNIT_DIR"/qwq-capability.service.d 2>/dev/null || true
 shopt -u nullglob
 systemctl daemon-reload
 systemctl reset-failed 'qwq*' 2>/dev/null || true

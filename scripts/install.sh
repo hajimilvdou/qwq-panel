@@ -61,15 +61,18 @@ usage() { sed -n '5,8p' "$0" | sed 's/^#  //' >&2; exit 2; }
 # ── 参数 ─────────────────────────────────────────────────────────────────────
 offline='' version='' mirror=$DEFAULT_MIRROR
 mode_minimal=0 csv_plugins='' offline_plugin_dir=''
+compat_patch_file='' no_compat_patch=0
 while (($#)); do
   case $1 in
-    --offline)    offline=${2:?}; shift 2 ;;
-    --version)    version=${2:?}; shift 2 ;;
-    --mirror)     mirror=${2:?}; shift 2 ;;
-    --minimal)    mode_minimal=1; shift ;;
-    --plugins)    csv_plugins=${2:?}; shift 2 ;;
-    --plugin-dir) offline_plugin_dir=${2:?}; shift 2 ;;
-    -h|--help)    usage ;;
+    --offline)         offline=${2:?}; shift 2 ;;
+    --version)         version=${2:?}; shift 2 ;;
+    --mirror)          mirror=${2:?}; shift 2 ;;
+    --minimal)         mode_minimal=1; shift ;;
+    --plugins)         csv_plugins=${2:?}; shift 2 ;;
+    --plugin-dir)      offline_plugin_dir=${2:?}; shift 2 ;;
+    --compat-patch)    compat_patch_file=${2:?}; shift 2 ;;
+    --no-compat-patch) no_compat_patch=1; shift ;;
+    -h|--help)         usage ;;
     *) echo "未知参数：$1" >&2; usage ;;
   esac
 done
@@ -306,10 +309,80 @@ if [[ $(readlink /usr/local/bin/qwq 2>/dev/null) != "$PREFIX/current/bin/qwq" ]]
   ln -sfn "$PREFIX/current/bin/qwq" /usr/local/bin/qwq
 fi
 
+# ── 旧版 polkit 自动兼容补丁检测（仅缺 polkit >= 0.106 的系统启用）──────────
+needs_polkit_compat() {
+  local load_state
+  load_state=$(systemctl show -p LoadState --value polkit.service 2>/dev/null || true)
+  if [[ $load_state != loaded ]]; then
+    return 0
+  fi
+  if command -v pkaction >/dev/null 2>&1; then
+    local ver major minor
+    ver=$(pkaction --version 2>/dev/null | sed -nE 's/.*version[[:space:]]+([0-9]+)(\.([0-9]+))?.*/\1 \3/p' | head -n 1)
+    if [[ -n $ver ]]; then
+      read -r major minor <<<"$ver"
+      minor=${minor:-0}
+      if (( major == 0 && minor < 106 )); then
+        return 0
+      fi
+    fi
+  fi
+  return 1
+}
+
+apply_polkit_compat_if_needed() {
+  ((no_compat_patch)) && return 0
+  if ! needs_polkit_compat; then
+    return 0
+  fi
+  local rel_tag=$V
+  [[ $rel_tag == v* ]] || rel_tag="v$rel_tag"
+  local cfname="qwq-compat-polkit-${rel_tag}-linux-${ARCH}.tar.gz"
+  local alt_cfname="qwq-compat-polkit-${V}-linux-${ARCH}.tar.gz"
+  local ctar=""
+
+  if [[ -n $compat_patch_file ]]; then
+    [[ -f $compat_patch_file ]] || die "找不到指定的兼容补丁包 $compat_patch_file"
+    ctar=$compat_patch_file
+  elif [[ -n $version ]]; then
+    log "检测到当前系统缺少 polkit >= 0.106（不支持原生 JS 规则），自动下载兼容补丁 $cfname …"
+    ctar="$T/$cfname"
+    curl -fsSL --proto '=https' --retry 3 -o "$ctar" "$mirror/$rel_tag/$cfname" ||
+      die "下载兼容补丁 $cfname 失败"
+    if ! (cd "$T" && awk -v f="$cfname" '$2 == f { found = 1; print } END { exit !found }' SHA256SUMS | sha256sum --strict -c - >/dev/null); then
+      die "兼容补丁 $cfname SHA-256 校验失败"
+    fi
+  else
+    local off_dir
+    off_dir=$(dirname "$offline")
+    if [[ -f "$off_dir/$cfname" ]]; then
+      ctar="$off_dir/$cfname"
+    elif [[ -f "$off_dir/$alt_cfname" ]]; then
+      ctar="$off_dir/$alt_cfname"
+    else
+      echo "提示：当前系统缺少 polkit >= 0.106，但离线目录未找到 $cfname；插件沙箱需安装该兼容补丁或升级至 Debian 12+ / Ubuntu 24.04+" >&2
+      return 0
+    fi
+    log "检测到当前系统缺少 polkit >= 0.106，自动应用离线兼容补丁 $(basename "$ctar") …"
+  fi
+
+  local cdir="$T/compat-polkit"
+  mkdir -p "$cdir"
+  tar -C "$cdir" --no-same-owner -xzf "$ctar" || die "解压兼容补丁失败"
+  [[ -x "$cdir/install-compat.sh" ]] || die "兼容补丁缺少 install-compat.sh"
+  local out
+  out=$(bash "$cdir/install-compat.sh")
+  printf '%s\n' "$out"
+  if [[ $out != *"已是最新"* ]]; then
+    changed=1
+  fi
+}
+
 # ── 启动 ─────────────────────────────────────────────────────────────────────
 systemctl daemon-reload
 systemctl enable --now qwq-privileged.socket            # 先 socket，controller 依赖它
 systemctl enable --now qwq-capability.socket            # 空闲没有 root 能力进程
+apply_polkit_compat_if_needed
 systemctl enable qwq-controller.service
 systemctl enable --now qwq-backup.timer                 # 每日备份到 /var/lib/qwq/backups（DEP-04）
 if ((changed)); then

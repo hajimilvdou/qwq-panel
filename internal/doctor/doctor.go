@@ -141,10 +141,9 @@ func Worst(rs []Result) Status {
 	return w
 }
 
-// checkOS reports the distribution and whether it has been verified. Only
-// Ubuntu 24.04 (the test host) has been exercised end to end; the other
-// supported platforms are accepted by policy (ADR-0005 Q4) but carry a "not
-// verified" note here and in the README support table (PRIV-06).
+// checkOS reports the distribution and its verification / compatibility status.
+// Native verified: Debian 12/13, Ubuntu 24.04/26.04.
+// Verified with qwq-compat-polkit patch: Ubuntu 22.04, Debian 11.
 func checkOS(env Env) Result {
 	b, err := env.ReadFile("/etc/os-release")
 	if err != nil {
@@ -154,17 +153,37 @@ func checkOS(env Env) Result {
 	id, ver := kv["ID"], kv["VERSION_ID"]
 	name := kv["PRETTY_NAME"]
 	major, _ := strconv.Atoi(strings.SplitN(ver, ".", 2)[0])
+
+	_, compatErr := env.Stat(CompatPolkitMarkerPath)
+	hasCompat := compatErr == nil
+
+	// Native verified platforms.
+	if (id == "ubuntu" && (ver == "24.04" || ver == "26.04")) ||
+		(id == "debian" && (major == 12 || major == 13)) {
+		return Result{ID: "os", Status: OK, Detail: name}
+	}
+	// Legacy-polkit platforms supported through the optional qwq-compat-polkit patch.
+	if id == "ubuntu" && ver == "22.04" {
+		if hasCompat {
+			return Result{ID: "os", Status: OK, Detail: name + " (compat patch active)"}
+		}
+		return Result{ID: "os", Status: OK, Detail: name + " (requires qwq-compat-polkit patch; install.sh applies it automatically)"}
+	}
+	if id == "debian" && major == 11 {
+		if hasCompat {
+			return Result{ID: "os", Status: OK, Detail: name + " (compat patch active)"}
+		}
+		return Result{ID: "os", Status: Warn, Detail: name + " is supported via qwq-compat-polkit patch",
+			Fix: "install.sh automatically applies qwq-compat-polkit on Debian 11; native support starts at Debian 12+ / Ubuntu 24.04+"}
+	}
 	supported := (id == "debian" && major >= 12) || (id == "ubuntu" && major >= 22) ||
 		((id == "rocky" || id == "almalinux") && major >= 9)
 	if !supported {
 		return Result{ID: "os", Status: Warn, Detail: name + " is not a supported distribution",
-			Fix: "supported: Debian 12+, Ubuntu 22.04+, Rocky/Alma 9+ (ADR-0005 Q4)"}
+			Fix: "native: Debian 12+, Ubuntu 24.04+, Rocky/Alma 9+; compat patch: Ubuntu 22.04, Debian 11"}
 	}
-	if !(id == "ubuntu" && ver == "24.04") {
-		return Result{ID: "os", Status: OK,
-			Detail: name + " (not verified yet; see the support table in README)"}
-	}
-	return Result{ID: "os", Status: OK, Detail: name}
+	return Result{ID: "os", Status: OK,
+		Detail: name + " (not verified yet; see the support table in README)"}
 }
 
 func checkKernel(env Env) Result {

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# qwq legacy-polkit compatibility socket (qwq-compat-polkit).
+# ONLY installed on distributions that lack polkit >= 0.106 JavaScript rules
+# (e.g. Ubuntu 22.04 with polkit 0.105, Debian 11). Native platforms
+# (Debian 12+, Ubuntu 24.04+, Rocky/Alma 9+) never install this unit.
+
+[Unit]
+Description=qwq legacy-polkit compat unitctl socket
+Documentation=https://github.com/hajimilvdou/qwq-panel
+
+[Socket]
+ListenStream=/run/qwq/compat-unitctl.sock
+SocketMode=0660
+SocketGroup=qwq
+Service=qwq-compat-unitctl.service
+RemoveOnStop=yes
+TriggerLimitIntervalSec=2s
+TriggerLimitBurst=40
+
+[Install]
+WantedBy=sockets.target

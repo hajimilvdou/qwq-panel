@@ -35,10 +35,13 @@ export GOOS=linux GOARCH=${GOARCH:-$(go env GOARCH)} CGO_ENABLED=0
 go build -trimpath -buildvcs=false -ldflags="$HOST_LDFLAGS" -o "$OUT/bin/qwq" ./cmd/qwq
 go build -trimpath -buildvcs=false -ldflags="$HOST_LDFLAGS" -o "$OUT/bin/qwq-privileged" ./cmd/qwq-privileged
 go build -trimpath -buildvcs=false -ldflags="$HOST_LDFLAGS" -o "$OUT/bin/qwq-capability" ./cmd/qwq-capability
+go build -trimpath -buildvcs=false -ldflags="$HOST_LDFLAGS" -o "$OUT/bin/qwq-compat-unitctl" ./cmd/qwq-compat-unitctl
 go test -c -tags e2e -ldflags="$LDFLAGS" -o "$OUT/e2e.test" ./tests/e2e
 
 RELEASE_TAR=release/qwq-e2e-linux-$GOARCH.tar.gz
+COMPAT_TAR=release/qwq-compat-polkit-e2e-linux-$GOARCH.tar.gz
 bash scripts/package.sh "$OUT/bin" e2e "$OUT/$RELEASE_TAR"
+bash scripts/package-compat.sh "$OUT/bin/qwq-compat-unitctl" e2e "$OUT/$COMPAT_TAR"
 
 "$OUT/tools/qwqctl" keygen -out "$OUT/key" >"$OUT/keygen.txt"
 KEY_ID=$(sed -n 's/^key_id: *//p' "$OUT/keygen.txt")

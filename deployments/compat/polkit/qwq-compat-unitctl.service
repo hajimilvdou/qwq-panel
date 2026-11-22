@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# qwq legacy-polkit compatibility helper (qwq-compat-polkit).
+# Socket-activated: handles one allowlisted qwq-plugin@* start/stop/kill
+# request from the unprivileged qwq user and exits immediately (zero idle RAM).
+# ONLY installed on legacy-polkit hosts (Ubuntu 22.04, Debian 11).
+
+[Unit]
+Description=qwq legacy-polkit compat unitctl (socket activated)
+Documentation=https://github.com/hajimilvdou/qwq-panel
+Requires=qwq-compat-unitctl.socket
+After=qwq-compat-unitctl.socket
+StartLimitIntervalSec=60
+StartLimitBurst=120
+
+[Service]
+Type=exec
+ExecStart=/opt/qwq/compat/polkit/bin/qwq-compat-unitctl --socket /run/qwq/compat-unitctl.sock --credentials-dir /run/qwq/compat-creds
+UMask=0022
+Restart=no
+TimeoutStartSec=10s
+TimeoutStopSec=10s
+RuntimeMaxSec=60
+MemoryMax=32M
+TasksMax=16
+Environment=GOMAXPROCS=2
+
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+ProtectSystem=strict
+BindPaths=-/run/credentials:/run/qwq/compat-creds
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=ENOSYS
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+KeyringMode=private

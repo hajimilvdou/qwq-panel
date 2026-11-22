@@ -208,8 +208,42 @@ func TestSandboxChecksPolkitVersion(t *testing.T) {
 	if r.Status != Fail || !strings.Contains(r.Detail, "0.105") || !strings.Contains(r.Detail, "JavaScript") {
 		t.Errorf("polkit 0.105 = %+v", r)
 	}
-	if !strings.Contains(r.Fix, "0.106") || !strings.Contains(r.Fix, "not verified") {
+	if !strings.Contains(r.Fix, "0.106") || !strings.Contains(r.Fix, "qwq-compat-polkit") {
 		t.Errorf("polkit 0.105 fix = %q", r.Fix)
+	}
+
+	// Installing and activating qwq-compat-polkit resolves polkit 0.105 and
+	// missing-polkit hosts cleanly without weakening native hosts.
+	f = targetHost()
+	f.cmds["pkaction --version"] = cmdResult{out: "pkaction version 0.105"}
+	f.exists[CompatPolkitMarkerPath] = true
+	f.cmds["systemctl show -p ActiveState -p LoadState "+CompatUnitctlSocketUnit] = cmdResult{
+		out: "ActiveState=active\nLoadState=loaded\n",
+	}
+	if r := byID(SandboxChecks(f.env(), SandboxOptions{}))["sandbox-polkit"]; r.Status != OK || !strings.Contains(r.Detail, "compat patch active") {
+		t.Errorf("polkit 0.105 with compat patch = %+v", r)
+	}
+
+	// Missing polkit (e.g. Debian 11) with active compat patch also passes.
+	f = targetHost()
+	delete(f.cmds, "pkaction --version")
+	f.cmds["systemctl show -p ActiveState -p LoadState -p UnitFileState polkit.service"] = cmdResult{
+		out: "ActiveState=inactive\nLoadState=not-found\nUnitFileState=\n",
+	}
+	f.exists[CompatPolkitMarkerPath] = true
+	f.cmds["systemctl show -p ActiveState -p LoadState "+CompatUnitctlSocketUnit] = cmdResult{
+		out: "ActiveState=active\nLoadState=loaded\n",
+	}
+	if r := byID(SandboxChecks(f.env(), SandboxOptions{}))["sandbox-polkit"]; r.Status != OK || !strings.Contains(r.Detail, "compat patch active") {
+		t.Errorf("missing polkit with compat patch = %+v", r)
+	}
+
+	// Marker present without active socket must still fail.
+	f.cmds["systemctl show -p ActiveState -p LoadState "+CompatUnitctlSocketUnit] = cmdResult{
+		out: "ActiveState=inactive\nLoadState=loaded\n",
+	}
+	if r := byID(SandboxChecks(f.env(), SandboxOptions{}))["sandbox-polkit"]; r.Status != Fail {
+		t.Errorf("inactive compat socket = %+v, want Fail", r)
 	}
 
 	// 0.106 introduced JavaScript rules; the meson era (121+) keeps them.

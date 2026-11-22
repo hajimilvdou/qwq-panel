@@ -6,12 +6,13 @@
 #  用法：source scripts/dev-env.sh && bash scripts/release.sh vX.Y.Z <out-dir>
 #
 #  产出（<out-dir> 须不存在或为空，全部扁平输出以直接兼容 GitHub Releases）：
-#    qwq-vX.Y.Z-linux-{amd64,arm64}.tar.gz        极简必装主包（原面板底座 + 必装 security.basic.qwqpkg）
-#    install.sh                                   内嵌发布公钥与镜像地址的在线安装脚本
-#    <id>-vX.Y.Z-linux-{amd64,arm64}.qwqpkg       10 款独立可选官方插件包（按需下载安装）
-#    plugins-index.json                           官方可选插件元数据与依赖索引
-#    sbom.cdx.json                                CycloneDX SBOM（cmd/qwq，linux/amd64）
-#    SHA256SUMS                                   覆盖主包 + install.sh + *.qwqpkg + plugins-index.json + sbom
+#    qwq-vX.Y.Z-linux-{amd64,arm64}.tar.gz               极简必装主包（原面板底座 + 必装 security.basic.qwqpkg）
+#    qwq-compat-polkit-vX.Y.Z-linux-{amd64,arm64}.tar.gz 旧版 polkit 兼容补丁（仅 Ubuntu 22.04 / Debian 11 自动下载）
+#    install.sh                                          内嵌发布公钥与镜像地址的在线安装脚本
+#    <id>-vX.Y.Z-linux-{amd64,arm64}.qwqpkg              10 款独立可选官方插件包（按需下载安装）
+#    plugins-index.json                                  官方可选插件元数据与依赖索引
+#    sbom.cdx.json                                       CycloneDX SBOM（cmd/qwq，linux/amd64）
+#    SHA256SUMS                                          覆盖主包 + 兼容补丁 + install.sh + *.qwqpkg + plugins-index.json + sbom
 # =============================================================================
 set -euo pipefail
 
@@ -83,7 +84,7 @@ fi
 export QWQ_TRUST_PUBKEYS="$PLUGIN_PUB"
 
 # ── 第三方许可证 ─────────────────────────────────────────────────────────────
-GOARCH=amd64 go-licenses save ./cmd/qwq ./cmd/qwq-privileged ./cmd/qwq-capability ./cmd/qwqctl \
+GOARCH=amd64 go-licenses save ./cmd/qwq ./cmd/qwq-privileged ./cmd/qwq-capability ./cmd/qwq-compat-unitctl ./cmd/qwqctl \
   --ignore github.com/qwq-panel/qwq --save_path "$W/THIRD_PARTY_LICENSES"
 export QWQ_THIRD_PARTY_DIR=$W/THIRD_PARTY_LICENSES
 
@@ -131,7 +132,7 @@ OPTIONAL_SPECS=(
 for arch in amd64 arm64; do
   bin=$W/$arch
   mkdir -p "$bin"
-  for c in qwq qwqctl qwq-privileged qwq-capability; do
+  for c in qwq qwqctl qwq-privileged qwq-capability qwq-compat-unitctl; do
     GOARCH=$arch go build -trimpath -ldflags "$LDF" -o "$bin/$c" "./cmd/$c"
   done
 
@@ -139,6 +140,9 @@ for arch in amd64 arm64; do
   sec_pkg="$W/security.basic-$V-linux-$arch.qwqpkg"
   pack_official_plugin "plugins/builtin/security.basic" "$arch" "$sec_pkg"
   QWQ_BOOTSTRAP_PLUGIN="$sec_pkg" bash scripts/package.sh "$bin" "$V" "$OUT/qwq-$V-linux-$arch.tar.gz" >/dev/null
+
+  # 1b. 构建独立的旧版 polkit 兼容补丁包（仅 Ubuntu 22.04 / Debian 11 按需自动下载，原生系统不装）
+  bash scripts/package-compat.sh "$bin/qwq-compat-unitctl" "$V" "$OUT/qwq-compat-polkit-$V-linux-$arch.tar.gz" >/dev/null
 
   # 2. 构建其余 10 款可选插件为包外独立 .qwqpkg 产物（扁平输出，直接作为 GitHub Release 附件）
   for spec in "${OPTIONAL_SPECS[@]}"; do
@@ -211,7 +215,7 @@ GOARCH=amd64 cyclonedx-gomod app -json -noserial -notimestamp -std -licenses -ma
 (
   cd "$OUT"
   LC_ALL=C
-  files=(qwq-"$V"-linux-*.tar.gz install.sh sbom.cdx.json plugins-index.json)
+  files=(qwq-"$V"-linux-*.tar.gz qwq-compat-polkit-"$V"-linux-*.tar.gz install.sh sbom.cdx.json plugins-index.json)
   shopt -s nullglob
   for p in *.qwqpkg; do files+=("$p"); done
   sha256sum -- "${files[@]}" >SHA256SUMS

@@ -9,7 +9,8 @@
 | 文件 | 内容 |
 |---|---|
 | `qwq-vX.Y.Z-linux-{amd64,arm64}.tar.gz` | 极简必装主包（宿主二进制、内嵌 Web Shell、必装 `security.basic.qwqpkg`、`share/`、`install.sh`、`uninstall.sh`、许可证） |
-| `install.sh` | 独立在线安装脚本（已内嵌 `deployments/release.pub` 公钥与仓库 Release 下载地址，支持交互或 `--plugins` 自选官方插件） |
+| `qwq-compat-polkit-vX.Y.Z-linux-{amd64,arm64}.tar.gz` | 旧版 polkit 兼容补丁（仅 Ubuntu 22.04 / Debian 11 等缺少 `polkit >= 0.106` 的系统由 `install.sh` 按需自动下载验签安装；原生支持系统不会下载或安装） |
+| `install.sh` | 独立在线安装脚本（已内嵌 `deployments/release.pub` 公钥与仓库 Release 下载地址，支持交互或 `--plugins` 自选官方插件，旧版系统自动匹配兼容补丁） |
 | `<plugin_id>-vX.Y.Z-linux-{amd64,arm64}.qwqpkg` | 10 款独立可选官方插件包（按需下载安装） |
 | `plugins-index.json` | 官方可选插件元数据、依赖与校验和索引 |
 | `sbom.cdx.json` | CycloneDX SBOM（`cmd/qwq`，linux/amd64） |
