@@ -1,0 +1,6 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "TLS 证书控制器插件配置（证书材料与私钥完全由宿主加密托管，配置不含敏感字段）",
+  "properties": {}
+}

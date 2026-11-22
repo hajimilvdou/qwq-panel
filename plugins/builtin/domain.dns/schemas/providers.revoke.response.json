@@ -1,0 +1,53 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "撤销 DNS 提供商授权后的公开视图响应",
+  "required": [
+    "provider"
+  ],
+  "properties": {
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "revision",
+        "enabled",
+        "zone_count"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "提供商资源 ID"
+        },
+        "kind": {
+          "type": "string",
+          "description": "提供商类型"
+        },
+        "name": {
+          "type": "string",
+          "description": "提供商显示名称"
+        },
+        "revision": {
+          "type": "string",
+          "description": "撤销后的资源版本"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "提供商是否仍处于启用状态"
+        },
+        "zone_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "已发现托管域数量"
+        },
+        "last_error": {
+          "type": "string",
+          "description": "最近错误码"
+        }
+      }
+    }
+  }
+}

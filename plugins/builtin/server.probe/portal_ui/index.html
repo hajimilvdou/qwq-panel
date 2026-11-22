@@ -1,0 +1,81 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>qwq Probe · 服务器实时探针</title>
+  <link rel="stylesheet" href="portal.css">
+  <script src="portal.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="topbar">
+    <div>
+      <strong id="site-title">qwq Probe · 全球服务器实时探针</strong>
+      <span id="site-sub" style="font-size:12px;color:var(--text-2);margin-left:8px">单向零入站安全遥测</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button type="button" class="pill active" data-view="orb-cards">卡片视图</button>
+      <button type="button" class="pill" data-view="compact-list">极简列表</button>
+      <button type="button" class="pill" data-view="tty-terminal">极客 TTY</button>
+      <button type="button" class="pill" id="theme-toggle">深浅色</button>
+      <button type="button" class="pill berry" id="admin-switch-btn">切换后台管理</button>
+    </div>
+  </header>
+
+  <div class="banner">
+    <span id="banner-text">所有监控节点与拨测链路运行正常</span>
+    <span id="fleet-summary" style="font-size:12.5px;color:var(--text-2)">实时刷新中</span>
+  </div>
+
+  <!-- 对外公开展示前端 -->
+  <section id="public-showcase">
+    <div id="nodes-container" class="cards"></div>
+    <div id="tty-container" class="tty" hidden>
+      <pre id="tty-output" style="margin:0 0 10px;white-space:pre-wrap"></pre>
+      <div><span>visitor@qwq-probe:~$ </span><input id="tty-input" type="text" placeholder="输入 help / ls / top / ping / login"></div>
+    </div>
+  </section>
+
+  <!-- 独立探针页原地管理后台（仅输入独立管理口令解锁后可见，无需装其他插件也能管理节点与绑定域名！） -->
+  <section id="standalone-admin" hidden>
+    <div class="card" style="margin-bottom:14px">
+      <h3 style="margin:0 0 8px">独立探针后台 · 域名与 HTTPS 绑定（无域名插件亦可独立生效）</h3>
+      <p id="standalone-dnc-msg" style="font-size:12.5px;color:var(--text-2);margin:0 0 10px"></p>
+      <input id="adm-domain" type="text" placeholder="输入要绑定的探针域名，如 status.example.com">
+      <select id="adm-track">
+        <option value="auto">自动探测（有面板证书套件则借用，否则走内置闭环）</option>
+        <option value="builtin_acme">探针内置 Let's Encrypt 自动签发与续期</option>
+        <option value="builtin_pem">直接粘贴 PEM / Cloudflare 15 年源站证书</option>
+        <option value="reverse_proxy">反向代理 / 宝塔共存 / Cloudflare Tunnel 免端口绑定</option>
+      </select>
+      <input id="adm-email" type="email" placeholder="ACME 通知邮箱（选用内置自动签发时填写）">
+      <button type="button" class="pill berry" id="adm-save-domain">立即绑定域名</button>
+      <pre id="adm-snippet" style="font-size:12px;overflow-x:auto;margin-top:10px" hidden></pre>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px">新增监控服务器 & 生成单向 Agent 一键安装命令</h3>
+      <input id="adm-node-name" type="text" placeholder="服务器名称，如 法兰克福 9929 · 01">
+      <input id="adm-node-region" type="text" placeholder="地区代码，如 DE / HK / JP / US" value="DE">
+      <button type="button" class="pill active" id="adm-add-node">生成单向安全探针命令</button>
+      <pre id="adm-install-cmd" style="font-size:12px;overflow-x:auto;margin-top:10px" hidden></pre>
+    </div>
+  </section>
+</div>
+
+<!-- 独立探针管理员口令弹窗（Alt+M 或点击右上角切换后台） -->
+<div class="modal-mask" id="login-modal" hidden>
+  <form class="modal" id="login-form">
+    <h3 style="margin:0 0 6px">解锁独立探针管理后台</h3>
+    <p style="margin:0 0 12px;font-size:12.5px;color:var(--text-2)">使用探针专属管理口令原地切换后台（与 qwq 宿主根会话物理隔离）。</p>
+    <input id="login-password" type="password" placeholder="输入探针管理口令" autocomplete="current-password" required>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+      <button type="button" class="pill" id="login-cancel">取消</button>
+      <button type="submit" class="pill berry">解锁并进入后台</button>
+    </div>
+  </form>
+</div>
+</body>
+</html>

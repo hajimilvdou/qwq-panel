@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# qwq plugin socket template (P2-T5). The host package installs this file as
+# /etc/systemd/system/qwq-plugin@.socket; `qwq privileged install` renders the
+# concrete qwq-plugin@<id>.socket for each plugin.
+#
+# Scheme A (P2-T1): systemd owns the listening socket, sets its owner and mode,
+# and passes the file descriptor to the plugin process. The plugin therefore
+# needs no access to its own socket path, and no other plugin can connect: the
+# socket is 0600 and owned by the agent user.
+#
+# /run is a tmpfs. The per-plugin directories below /run/qwq are created by
+# systemd-tmpfiles from /etc/tmpfiles.d/qwq-plugin-<id>.conf, which the helper
+# writes at install time. RuntimeDirectory= is deliberately not used: it would
+# apply its mode and ownership to the shared /run/qwq as well.
+
+[Unit]
+Description=qwq plugin socket alpha
+
+[Socket]
+ListenStream=/run/qwq/plugin/alpha/plugin.sock
+SocketUser=qwq
+SocketMode=0600
+Service=qwq-plugin@alpha.service
+# The socket file is a runtime object; do not leave it behind after stop.
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

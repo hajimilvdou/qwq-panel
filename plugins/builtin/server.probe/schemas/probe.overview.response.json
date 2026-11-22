@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "public_nodes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "settings": {
+      "type": "object"
+    },
+    "dnc_capabilities": {
+      "type": "object"
+    },
+    "proxy_snippets": {
+      "type": "object"
+    }
+  }
+}

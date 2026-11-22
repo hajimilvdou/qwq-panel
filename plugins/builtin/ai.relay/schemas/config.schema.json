@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI 中转分发插件配置",
+  "description": "控制上游 SSRF 策略、默认预冻结额度、微批写库日志保留天数与周期回血检查间隔。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "public_origin": {
+      "type": "string",
+      "maxLength": 253,
+      "description": "可选公开访问基地址（用于拼装 LinuxDo OAuth2 回调 URI）。"
+    },
+    "allow_private_upstream": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否允许连接 loopback 或 RFC1918 内网上游地址（默认 false 防 SSRF）。"
+    },
+    "default_reserve_micros": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 10000000,
+      "default": 50000,
+      "description": "单次流式请求在内存账本中的默认预冻结微点额度（默认 50,000 micros = $0.05）。"
+    },
+    "log_retention_days": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 365,
+      "default": 30,
+      "description": "调用消费明细在 SQLite 中的保留天数。"
+    },
+    "refill_check_interval_seconds": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 86400,
+      "default": 300,
+      "description": "后台周期定额回血与 OAuth 令牌刷新检查间隔秒数。"
+    },
+    "upstream_timeout_seconds": {
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 600,
+      "default": 120,
+      "description": "上游模型服务商 HTTP 响应头超时秒数。"
+    }
+  }
+}

@@ -1,0 +1,250 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="zh-CN" data-theme="light" data-accent="sky" data-mood="warn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>qwq · 视觉预览「晴朗」</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="shell.css">
+<link rel="stylesheet" href="widgets.css">
+<script src="preview.js" defer></script>
+</head>
+<body>
+<div class="ambient" aria-hidden="true"></div>
+<div class="app">
+  <!-- ============================================================ 侧栏 -->
+  <aside class="side" aria-label="主导航">
+    <div class="brand">
+      <span class="mood brand-mood" aria-hidden="true"><svg viewBox="0 0 40 40"><use data-face href="#face-happy"/></svg></span>
+      <span class="brand-text"><b>qwq</b><small>服务器管家</small></span>
+    </div>
+    <nav class="nav">
+      <a class="nav-item is-active" href="#"><span class="tile t-blue"><svg class="i"><use href="#i-home"/></svg></span>主页</a>
+      <a class="nav-item" href="#"><span class="tile t-orange"><svg class="i"><use href="#i-inbox"/></svg></span>待办<span class="count" data-attn-count>2</span></a>
+      <a class="nav-item" href="#"><span class="tile t-teal"><svg class="i"><use href="#i-clock"/></svg></span>动态</a>
+      <a class="nav-item" href="#"><span class="tile t-ai"><svg class="i"><use href="#i-ai"/></svg></span>AI 助手</a>
+      <span class="nav-label">应用</span>
+      <a class="nav-item" href="#"><span class="tile t-green"><svg class="i"><use href="#i-pulse"/></svg></span>系统监控</a>
+      <a class="nav-item" href="#"><span class="tile t-pink"><svg class="i"><use href="#i-shield"/></svg></span>安全防护</a>
+      <a class="nav-item" href="#"><span class="tile t-violet"><svg class="i"><use href="#i-apps"/></svg></span>应用中心</a>
+      <span class="nav-label">系统</span>
+      <a class="nav-item" href="#"><span class="tile t-slate"><svg class="i"><use href="#i-sliders"/></svg></span>设置</a>
+    </nav>
+    <div class="side-foot">
+      <div class="server-card">
+        <span class="mood sm" aria-hidden="true"><svg viewBox="0 0 40 40"><use data-face href="#face-happy"/></svg></span>
+        <div><b>tokyo-1</b><small>Ubuntu 24.04 · 2 核 · 4 GB</small></div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="stage">
+    <!-- ============================================================ 顶栏 -->
+    <header class="top">
+      <h1>主页</h1>
+      <button class="search" type="button"><svg class="i sm"><use href="#i-search"/></svg><span>搜索，或直接说你想做什么…</span><kbd>Ctrl K</kbd></button>
+      <div class="top-actions">
+        <button class="icon-btn" type="button" id="theme-btn" aria-label="切换主题"><svg class="i theme-light-icon"><use href="#i-moon"/></svg><svg class="i theme-dark-icon"><use href="#i-sun"/></svg></button>
+        <button class="icon-btn hide-m" type="button" aria-label="通知"><svg class="i"><use href="#i-bell"/></svg><span class="badge" data-attn-count>2</span></button>
+        <button class="avatar" type="button" aria-label="账户 Alice">A</button>
+      </div>
+    </header>
+
+    <main class="main">
+      <!-- ============================================================ AI 横幅 -->
+      <section class="ai-banner" aria-label="AI 正在工作">
+        <span class="orb sm" aria-hidden="true"><svg viewBox="0 0 40 40"><use href="#face-happy"/></svg></span>
+        <p><b>AI 助手正在帮你创建用户 bob</b><span>第 2/5 步 · 等你批准后继续</span></p>
+        <div class="ai-banner-actions">
+          <button class="btn sm plain" type="button"><svg class="i sm"><use href="#i-eye"/></svg>跟随</button>
+          <button class="btn sm plain" type="button"><svg class="i sm"><use href="#i-pause"/></svg>暂停</button>
+          <button class="btn sm soft" type="button">查看对话</button>
+        </div>
+      </section>
+
+      <!-- ============================================================ 问候 -->
+      <section class="hero">
+        <div class="hero-main">
+          <span class="mood" aria-hidden="true"><svg viewBox="0 0 40 40"><use data-face href="#face-meh"/></svg></span>
+          <div>
+            <p class="hello">下午好，Alice</p>
+            <h2 class="hero-title" id="hero-title">有 2 件事等你确认</h2>
+            <p class="hero-sub"><span class="chip ok">tokyo-1 在线</span><span id="hero-sub">已稳定运行 23 天 · 刚刚检查过</span></p>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <button class="btn ghost" type="button"><svg class="i sm"><use href="#i-plus"/></svg>安装应用</button>
+          <button class="btn ai" type="button"><svg class="i sm"><use href="#i-ai"/></svg>问问 AI</button>
+        </div>
+      </section>
+
+      <!-- ============================================================ 指标 -->
+      <section class="grid" aria-label="关键指标">
+        <article class="card span-3 stat">
+          <div class="stat-top"><span class="tile t-blue"><svg class="i"><use href="#i-cpu"/></svg></span>CPU</div>
+          <div class="stat-body">
+            <div><p class="stat-value num"><span data-cpu>23</span><small>%</small></p><p class="stat-sub">2 核 · 负载 0.42</p></div>
+            <svg class="ring" viewBox="0 0 64 64" data-ring="cpu" data-tone="--c-blue"><circle class="track" cx="32" cy="32" r="26"/><circle class="value" cx="32" cy="32" r="26"/></svg>
+          </div>
+        </article>
+        <article class="card span-3 stat">
+          <div class="stat-top"><span class="tile t-violet"><svg class="i"><use href="#i-memory"/></svg></span>内存</div>
+          <div class="stat-body">
+            <div><p class="stat-value num">41<small>%</small></p><p class="stat-sub">1.6 / 4 GB</p></div>
+            <svg class="ring" viewBox="0 0 64 64" data-ring="41" data-tone="--c-violet"><circle class="track" cx="32" cy="32" r="26"/><circle class="value" cx="32" cy="32" r="26"/></svg>
+          </div>
+        </article>
+        <article class="card span-3 stat">
+          <div class="stat-top"><span class="tile t-teal"><svg class="i"><use href="#i-disk"/></svg></span>磁盘</div>
+          <div class="stat-body">
+            <div><p class="stat-value num"><span data-disk>62</span><small>%</small></p><p class="stat-sub" data-disk-sub>38 / 61 GB</p></div>
+            <svg class="ring" viewBox="0 0 64 64" data-ring="disk" data-tone="--c-teal"><circle class="track" cx="32" cy="32" r="26"/><circle class="value" cx="32" cy="32" r="26"/></svg>
+          </div>
+        </article>
+        <article class="card span-3 stat">
+          <div class="stat-top"><span class="tile t-orange"><svg class="i"><use href="#i-net"/></svg></span>网络</div>
+          <div class="stat-body">
+            <div><p class="stat-value num">1.2<small>MB/s</small></p><p class="stat-sub">↓ 1.2 MB/s · ↑ 236 KB/s</p></div>
+            <svg class="spark" viewBox="0 0 112 44" data-tone="--c-orange"><path data-spark/></svg>
+          </div>
+        </article>
+      </section>
+
+      <!-- ============================================================ 需要你处理 -->
+      <div class="section-head"><h2>需要你处理</h2><span class="count" data-attn-count>2</span><a href="#">全部待办</a></div>
+      <section class="grid attn-list">
+        <article class="card span-6 attn is-ai">
+          <div class="attn-head">
+            <span class="tile t-ai"><svg class="i"><use href="#i-user-plus"/></svg></span>
+            <div><h3>AI 助手想创建一个新用户 <span class="mono">bob</span></h3><p>代表你发起 · 角色：运维 · 2 分钟前</p></div>
+          </div>
+          <div class="attn-chips"><span class="chip bad">高风险</span><span class="chip ok">可以撤销</span><span class="chip plain">13 分钟后过期</span></div>
+          <div class="attn-actions"><button class="btn plain" type="button">拒绝</button><button class="btn ghost" type="button">看看细节</button><button class="btn primary" type="button">批准</button></div>
+        </article>
+        <article class="card span-6 attn">
+          <div class="attn-head">
+            <span class="countdown"><svg viewBox="0 0 52 52"><circle class="track" cx="26" cy="26" r="23"/><circle class="value" cx="26" cy="26" r="23"/></svg><b class="num" data-cd>1:52</b></span>
+            <div><h3>SSH 端口已改为 <span class="mono">2222</span>，请确认能登录</h3><p>先用新端口连一次试试。倒计时结束会自动改回 22，防止你被锁在外面。</p></div>
+          </div>
+          <div class="attn-chips"><span class="chip warn">等待确认</span><span class="chip plain">由你在 5 分钟前修改</span></div>
+          <div class="attn-actions"><button class="btn plain" type="button">现在改回</button><button class="btn ok" type="button">能登录，保留</button></div>
+        </article>
+      </section>
+      <section class="card calm">
+        <span class="mood" aria-hidden="true"><svg viewBox="0 0 40 40"><use href="#face-happy"/></svg></span>
+        <div><h3>暂时没有需要你处理的事</h3><p class="stat-sub">有新的审批或提醒时，这里和右下角都会告诉你。</p></div>
+      </section>
+
+      <!-- ============================================================ 趋势与安全 -->
+      <section class="grid">
+        <article class="card span-8">
+          <header class="card-head">
+            <span class="tile t-blue"><svg class="i"><use href="#i-pulse"/></svg></span>
+            <div><h3>性能趋势</h3><p>实时 · 每 2 秒更新</p></div>
+            <div class="seg" role="group" aria-label="时间范围"><button type="button" aria-pressed="true">1 小时</button><button type="button">24 小时</button><button type="button">7 天</button></div>
+          </header>
+          <div class="legend"><span><i data-tone="--c-blue"></i>CPU <b class="num"><span data-cpu>23</span>%</b></span><span><i data-tone="--c-violet"></i>内存 <b class="num">41%</b></span></div>
+          <svg class="chart" viewBox="0 0 600 190" preserveAspectRatio="none" aria-label="CPU 与内存最近一小时的曲线">
+            <path class="grid-line" d="M0 47.5H600M0 95H600M0 142.5H600"/>
+            <path class="area" data-area="mem" data-tone="--c-violet"/><path class="line" data-line="mem" data-tone="--c-violet"/>
+            <path class="area" data-area="cpu" data-tone="--c-blue"/><path class="line" data-line="cpu" data-tone="--c-blue"/>
+          </svg>
+          <div class="axis"><span>60 分钟前</span><span>45</span><span>30</span><span>15</span><span>现在</span></div>
+        </article>
+        <article class="card span-4">
+          <header class="card-head"><span class="tile t-pink"><svg class="i"><use href="#i-shield"/></svg></span><div><h3>安全防护</h3><p>今天</p></div><a class="more btn sm plain" href="#">详情</a></header>
+          <p class="big-line"><b class="num">128</b><span class="stat-sub">次可疑登录已被拦截</span></p>
+          <div class="bars" data-bars aria-hidden="true"></div>
+          <ol class="checks">
+            <li><svg class="i sm"><use href="#i-check"/></svg>防火墙<b>已开启</b></li>
+            <li><svg class="i sm"><use href="#i-check"/></svg>SSH 登录方式<b>仅密钥</b></li>
+            <li><svg class="i sm"><use href="#i-check"/></svg>两步验证<b>已开启</b></li>
+          </ol>
+        </article>
+      </section>
+
+      <!-- ============================================================ 动态与应用 -->
+      <section class="grid">
+        <article class="card span-7">
+          <header class="card-head"><span class="tile t-teal"><svg class="i"><use href="#i-clock"/></svg></span><div><h3>最近动态</h3><p>你、同事和 AI 做的每一次改动</p></div><a class="more btn sm plain" href="#">全部</a></header>
+          <ol class="feed">
+            <li><span class="orb mini" aria-hidden="true"><svg viewBox="0 0 40 40"><use href="#face-happy"/></svg></span><div><span class="who">AI 助手</span> <span class="what">请求创建用户 bob</span><div class="row-actions"><span class="chip ai">等你批准</span></div></div><time>2 分钟前</time></li>
+            <li><span class="avatar sm">A</span><div><span class="who">你</span> <span class="what">把 SSH 端口改为 2222</span><div class="row-actions"><span class="chip warn">等待确认</span></div></div><time>5 分钟前</time></li>
+            <li><span class="tile t-slate"><svg class="i"><use href="#i-shield"/></svg></span><div><span class="who">系统</span> <span class="what">自动封禁了 3 个反复尝试登录的 IP</span></div><time>18 分钟前</time></li>
+            <li><span class="avatar sm b">李</span><div><span class="who">李雷</span> <span class="what">把「安全防护」更新到 1.3.0</span><div class="row-actions"><button class="btn sm plain" type="button"><svg class="i sm"><use href="#i-undo"/></svg>回滚到 1.2.4</button></div></div><time>1 小时前</time></li>
+          </ol>
+        </article>
+        <article class="card span-5">
+          <header class="card-head"><span class="tile t-violet"><svg class="i"><use href="#i-apps"/></svg></span><div><h3>我的应用</h3><p>3 个应用正在运行</p></div><a class="more btn sm plain" href="#">应用中心</a></header>
+          <div class="apps">
+            <a class="app-item" href="#"><span class="tile t-green"><svg class="i"><use href="#i-pulse"/></svg></span><div><b>系统监控</b><small>运行中 · 1.2.0</small></div></a>
+            <a class="app-item" href="#"><span class="tile t-pink"><svg class="i"><use href="#i-shield"/></svg></span><div><b>安全防护</b><small>运行中 · 1.3.0</small></div></a>
+            <a class="app-item" href="#"><span class="tile t-ai"><svg class="i"><use href="#i-ai"/></svg></span><div><b>AI 助手</b><small>工作中</small></div></a>
+            <a class="app-item add" href="#"><span class="tile"><svg class="i"><use href="#i-plus"/></svg></span><div><b>添加应用</b><small>从文件安装</small></div></a>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- ============================================================ AI 浮窗 -->
+<button class="dock" type="button" aria-label="打开 AI 助手">
+  <span class="orb" aria-hidden="true"><svg viewBox="0 0 40 40"><use href="#face-happy"/></svg></span>
+  <span><b>AI 助手正在工作</b><small>第 2/5 步 · 等你批准</small></span>
+</button>
+
+<!-- ============================================================ 手机底栏 -->
+<nav class="tabbar" aria-label="主导航">
+  <a class="is-active" href="#"><svg class="i"><use href="#i-home"/></svg>主页</a>
+  <a href="#"><svg class="i"><use href="#i-inbox"/></svg>待办</a>
+  <a href="#"><svg class="i"><use href="#i-clock"/></svg>动态</a>
+  <a href="#"><svg class="i"><use href="#i-ai"/></svg>AI</a>
+  <a href="#"><svg class="i"><use href="#i-apps"/></svg>更多</a>
+</nav>
+
+<!-- ============================================================ 预览控制（仅预览） -->
+<div class="pv" role="toolbar" aria-label="预览控制">
+  <div class="pv-group" data-pv="theme"><button type="button" data-v="light">浅色</button><button type="button" data-v="dark">深色</button></div>
+  <div class="pv-group" data-pv="accent">
+    <button class="sw" type="button" data-v="sky" data-sw="#3c6df0" aria-label="晴空蓝"></button>
+    <button class="sw" type="button" data-v="violet" data-sw="#7352f2" aria-label="星云紫"></button>
+    <button class="sw" type="button" data-v="teal" data-sw="#0b8580" aria-label="青瓷"></button>
+    <button class="sw" type="button" data-v="coral" data-sw="#d24f27" aria-label="柿子橙"></button>
+    <button class="sw" type="button" data-v="rose" data-sw="#cc3577" aria-label="樱粉"></button>
+    <button class="sw" type="button" data-v="green" data-sw="#17855a" aria-label="松绿"></button>
+  </div>
+  <div class="pv-group" data-pv="mood"><button type="button" data-v="ok">一切正常</button><button type="button" data-v="warn">有待办</button><button type="button" data-v="bad">出故障</button></div>
+</div>
+
+<!-- ============================================================ 图标与表情 -->
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="face-happy" viewBox="0 0 40 40"><path d="M10.6 18.6q3.1-4.4 6.2 0M23.2 18.6q3.1-4.4 6.2 0"/><path d="M14.6 25q2.7 3.6 5.4 0q2.7 3.6 5.4 0"/></symbol>
+  <symbol id="face-meh" viewBox="0 0 40 40"><circle cx="13.8" cy="17.6" r="2.4" fill="currentColor" stroke="none"/><circle cx="26.2" cy="17.6" r="2.4" fill="currentColor" stroke="none"/><path d="M15.5 25.5q2.25 3 4.5 0q2.25 3 4.5 0"/></symbol>
+  <symbol id="face-sad" viewBox="0 0 40 40"><circle cx="13.4" cy="16.8" r="3.6"/><circle cx="26.6" cy="16.8" r="3.6"/><path d="M15.4 19.6l2.6 3M28.6 19.6l2.6 3"/><path d="M16 27.4q2 2.6 4 0q2 2.6 4 0"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13.5 6.6 6h10.8l2.6 7.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M4 13.5h4.6l1.3 2.3h4.2l1.3-2.3H20"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-ai" viewBox="0 0 24 24"><path d="M6.5 5h11A2.5 2.5 0 0 1 20 7.5v7a2.5 2.5 0 0 1-2.5 2.5H12l-4.5 3.5V17h-1A2.5 2.5 0 0 1 4 14.5v-7A2.5 2.5 0 0 1 6.5 5z"/><path d="M9.5 10v1.5M14.5 10v1.5"/></symbol>
+  <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12 2.5-6H21"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5 19 6v5.2c0 4.3-2.9 7.6-7 9.3-4.1-1.7-7-5-7-9.3V6z"/><path d="m9 12 2.2 2.2L15.5 10"/></symbol>
+  <symbol id="i-apps" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="2"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="2"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="2"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="2"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16.5V11a6 6 0 1 1 12 0v5.5l1.5 1.5h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5"/><path d="M9.5 3.5v3M14.5 3.5v3M9.5 17.5v3M14.5 17.5v3M3.5 9.5h3M3.5 14.5h3M17.5 9.5h3M17.5 14.5h3"/></symbol>
+  <symbol id="i-memory" viewBox="0 0 24 24"><rect x="3.5" y="7" width="17" height="10" rx="2.5"/><path d="M7.5 11v2M11 11v2M14.5 11v2M7 17v2.5M17 17v2.5"/></symbol>
+  <symbol id="i-disk" viewBox="0 0 24 24"><ellipse cx="12" cy="6.5" rx="7" ry="2.8"/><path d="M5 6.5v11c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-11"/><path d="M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8"/></symbol>
+  <symbol id="i-net" viewBox="0 0 24 24"><path d="M8 4v15M4.5 15.5 8 19l3.5-3.5M16 20V5M12.5 8.5 16 5l3.5 3.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.3 2.4 2.4 4.6-4.9"/></symbol>
+  <symbol id="i-user-plus" viewBox="0 0 24 24"><circle cx="10" cy="8.5" r="3.5"/><path d="M3.5 19.5a6.5 6.5 0 0 1 13 0M18.5 8v6M15.5 11h6"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4.5 9.5 9 5"/><path d="M4.5 9.5H14a5.5 5.5 0 0 1 0 11h-3"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6.5v11M15 6.5v11"/></symbol>
+</svg>
+</body>
+</html>

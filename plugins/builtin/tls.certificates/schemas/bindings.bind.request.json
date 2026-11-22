@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "将已预留消费者绑定到指定证书代的请求（严格对齐 hostauth.BindCertificateArgs）",
+  "required": [
+    "certificate_id",
+    "binding_ref",
+    "attempt_id",
+    "generation"
+  ],
+  "properties": {
+    "certificate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "目标证书资源 ID"
+    },
+    "binding_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "宿主预留的稳定绑定引用 ID"
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "本次绑定幂等尝试 ID"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "目标证书代号"
+    }
+  }
+}

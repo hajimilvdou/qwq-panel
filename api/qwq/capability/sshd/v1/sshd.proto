@@ -1,0 +1,175 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.capability.sshd.v1;
+
+import "qwq/platform/v1/platform.proto";
+
+// Host Capability service: sshd (ADR-0019 decision 3.2).
+// Capability: system.sshd.configure; the scope is fixed to qwq's own objects (self).
+// The effective config is read with sshd -T (optionally sshd -T -C user=...,addr=...), each setting
+// is annotated with its source file and overrides are detected (ADR-0009 rule 1). Only
+// /etc/ssh/sshd_config.d/00-qwq.conf is written (qwq-owned, sorts first); the main config and other
+// drop-ins are never touched. Every write is validated with sshd -t before it is applied (rule 2).
+//
+// Errors follow the Platform ABI convention (ADR-0007): gRPC status codes report transport and
+// host-side failures; a call that reached its handler reports the business outcome in
+// ErrorDetail.code with gRPC OK. Codes: VALIDATION_FAILED (with FieldViolation), PRECONDITION_FAILED
+// (revision mismatch or anti-lockout precondition), PERMISSION_DENIED, CONFLICT, RESOURCE_EXHAUSTED,
+// UNAVAILABLE, PORT_VERIFY_FAILED (the new port did not verify), INTERNAL.
+//
+// Write RPCs need the operation_id currently dispatched to this instance; read RPCs only need the
+// capability. Versioned independently of the Platform ABI: append-only once frozen, not counted in
+// sdk/abi.Minor. go_package is supplied by Buf managed mode; do not hard-code it here.
+
+service SshdService {
+  // Reads the effective sshd config with per-setting source files. effect=read, risk=low.
+  rpc GetEffectiveConfig(GetEffectiveConfigRequest) returns (GetEffectiveConfigResponse);
+  // Reads the qwq drop-in 00-qwq.conf. effect=read, risk=low.
+  rpc GetDropIn(GetDropInRequest) returns (GetDropInResponse);
+  // 双端口事务的显式一步：ADD_NEW 保留旧端口，COMMIT_NEW 在宿主锁内重新验证后摘旧，
+  // ROLLBACK 恢复该事务原始快照。事务引用绑定当前派发的 operation 与实例。
+  // effect=write, risk=high, reachability.
+  rpc SetPort(SetPortRequest) returns (SetPortResponse);
+  // Host-side loopback verification: the helper connects to 127.0.0.1/::1 on the port in the host
+  // netns and reads the SSH banner (plugins have PrivateNetwork=yes and cannot TCP).
+  // effect=read, risk=low.
+  rpc VerifyPort(VerifyPortRequest) returns (VerifyPortResponse);
+  // Writes PasswordAuthentication/PermitRootLogin to 00-qwq.conf. Anti-lockout: disabling password
+  // auth or root login is refused with PRECONDITION_FAILED when the target user has no usable
+  // authorized key (key state is read via the account service). effect=write, risk=high,
+  // reachability.
+  rpc SetLoginPolicy(SetLoginPolicyRequest) returns (SetLoginPolicyResponse);
+  // Removes the qwq drop-in. effect=destructive, risk=high, reachability.
+  rpc RemoveDropIn(RemoveDropInRequest) returns (RemoveDropInResponse);
+  // 恢复中断事务的宿主原始快照。必须经新的已授权写 operation，只接受同一插件/
+  // 实例的不透明事务引用和当前 revision；不接受文件内容、路径或新的策略。
+  // effect=write, risk=high, reachability.
+  rpc RecoverDropIn(RecoverDropInRequest) returns (RecoverDropInResponse);
+}
+
+message GetEffectiveConfigRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  // Optional sshd -C match user; empty = no match criteria.
+  string match_user = 2;
+  // Optional sshd -C match address; empty = no match criteria.
+  string match_address = 3;
+}
+message GetEffectiveConfigResponse {
+  repeated Setting settings = 1;
+  string revision = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+// One effective sshd setting. sshd takes the first value of a key; when a key repeats across the
+// main config and earlier Included drop-ins, overridden_by names the file whose value is shadowed,
+// so the UI can hint "overridden by another file" (ADR-0009, the 50-cloud-init.conf case).
+message Setting {
+  string key = 1;
+  string value = 2;
+  string source_file = 3;
+  string overridden_by = 4;
+}
+
+message GetDropInRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+}
+message GetDropInResponse {
+  string content = 1;
+  string revision = 2;
+  bool exists = 3;
+  qwq.platform.v1.ErrorDetail error = 4;
+  bool transaction_pending = 5;
+  // 事务详情仅对原插件和实例返回；其他调用者只能看见 pending。
+  string transaction_ref = 6;
+  string transaction_stage = 7;
+  string transaction_operation_id = 8;
+  uint32 transaction_port = 9;
+  string transaction_kind = 10;
+}
+
+message SetPortRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  uint32 new_port = 2;
+  // Optimistic concurrency guard on sshd/dropin; mismatch -> PRECONDITION_FAILED.
+  string expected_revision = 3;
+  // 未指定阶段拒绝执行，不能通过重复调用隐式切换阶段。
+  PortChangeStage stage = 4;
+  // ADD_NEW 返回的不透明宿主事务引用；提交和回滚必须携带。
+  string transaction_ref = 5;
+}
+
+enum PortChangeStage {
+  PORT_CHANGE_STAGE_UNSPECIFIED = 0;
+  PORT_CHANGE_STAGE_ADD_NEW = 1;
+  PORT_CHANGE_STAGE_COMMIT_NEW = 2;
+  PORT_CHANGE_STAGE_ROLLBACK = 3;
+}
+
+message SetPortResponse {
+  string revision = 1;
+  repeated uint32 listening_ports = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+  string transaction_ref = 4;
+}
+
+message VerifyPortRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  // 1-65535, panel port conflicts excluded; the helper only connects to loopback.
+  uint32 port = 2;
+}
+message VerifyPortResponse {
+  bool reachable = 1;
+  // The SSH version banner (SSH-2.0-...) when reachable.
+  string banner = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+message SetLoginPolicyRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  // Unset fields are left unchanged.
+  optional bool password_auth = 2;
+  optional bool permit_root_login = 3;
+  string expected_revision = 4;
+  // 收紧策略时必须指定具有可用公钥登录路径的恢复用户。
+  string recovery_user = 5;
+  // 需要 prohibit-password 时使用此枚举；不能同时设置 permit_root_login。
+  RootLoginMode root_login_mode = 6;
+}
+
+enum RootLoginMode {
+  ROOT_LOGIN_MODE_UNSPECIFIED = 0;
+  ROOT_LOGIN_MODE_ALLOW = 1;
+  ROOT_LOGIN_MODE_DENY = 2;
+  ROOT_LOGIN_MODE_KEYS_ONLY = 3;
+}
+message SetLoginPolicyResponse {
+  string revision = 1;
+  // The effective sshd -T values after the change.
+  repeated Setting effective = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+message RemoveDropInRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string expected_revision = 2;
+  // 恢复原配置导致登录策略收紧时，必须证明该用户仍有公钥登录路径。
+  string recovery_user = 3;
+}
+message RemoveDropInResponse {
+  string revision = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+
+message RecoverDropInRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string expected_revision = 2;
+  string transaction_ref = 3;
+  string recovery_user = 4;
+}
+message RecoverDropInResponse {
+  string revision = 1;
+  repeated uint32 listening_ports = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}

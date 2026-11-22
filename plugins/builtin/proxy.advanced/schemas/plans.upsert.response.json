@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "创建或更新代理套餐响应",
+  "description": "返回保存后的套餐实体及是否同步刷新了内核限速规则。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan",
+    "created",
+    "shaping_degraded",
+    "shaping_degraded_reason"
+  ],
+  "properties": {
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "quota_bytes",
+        "down_limit_kbps",
+        "up_limit_kbps",
+        "billing_reset_day",
+        "validity_days",
+        "created_at",
+        "updated_at",
+        "revision"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "套餐唯一 ID。"
+        },
+        "name": {
+          "type": "string",
+          "description": "套餐显示名称。"
+        },
+        "quota_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "每周期总流量配额（字节，0 表示不限）。"
+        },
+        "down_limit_kbps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "下行带宽限速（kbps，0 表示不限）。"
+        },
+        "up_limit_kbps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "上行带宽限速（kbps，0 表示不限）。"
+        },
+        "max_connections": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "套餐默认最大并发 TCP 连接数（0 表示不限）。"
+        },
+        "max_ips": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024,
+          "description": "套餐默认最大同时在线 IP 数（0 表示不限）。"
+        },
+        "billing_reset_day": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 28,
+          "description": "每月计费重置日（1-28，0 表示不自动重置）。"
+        },
+        "validity_days": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "新建用户的默认有效天数（0 表示长期有效）。"
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "创建时间戳（Unix 毫秒）。"
+        },
+        "updated_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "更新时间戳（Unix 毫秒）。"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "套餐修订号。"
+        }
+      }
+    },
+    "created": {
+      "type": "boolean",
+      "description": "本次操作是否为新建套餐。"
+    },
+    "shaping_degraded": {
+      "type": "boolean",
+      "description": "若节点内核不支持限速则为 true。"
+    },
+    "shaping_degraded_reason": {
+      "type": "string",
+      "description": "内核限速降级说明（无降级时为空）。"
+    }
+  }
+}

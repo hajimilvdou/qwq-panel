@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "共存安全管理器探测响应",
+  "description": "探测节点上的 ufw、firewalld、fail2ban、bt、1panel 等外部管理器状态。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["managers", "has_active_firewall_conflict", "fail2ban_active"],
+  "properties": {
+    "managers": {
+      "type": "array",
+      "description": "已探测到的管理器列表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "active", "detail"],
+        "properties": {
+          "kind": { "type": "string", "description": "管理器类型（如 ufw、firewalld、fail2ban、bt、1panel）。" },
+          "active": { "type": "boolean", "description": "该管理器当前是否处于活跃状态。" },
+          "detail": { "type": "string", "description": "宿主返回的诊断说明。" }
+        }
+      }
+    },
+    "has_active_firewall_conflict": {
+      "type": "boolean",
+      "description": "是否存在活跃的外部防火墙管理器冲突。"
+    },
+    "fail2ban_active": {
+      "type": "boolean",
+      "description": "是否检测到 fail2ban 处于活跃状态（为 true 时本插件防爆破切入只读旁观模式）。"
+    }
+  }
+}

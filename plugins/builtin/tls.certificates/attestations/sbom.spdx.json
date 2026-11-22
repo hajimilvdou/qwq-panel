@@ -1,0 +1,14 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "tls.certificates",
+  "documentNamespace": "https://qwq-panel.invalid/spdx/tls.certificates/0.1.0",
+  "creationInfo": {
+    "creators": [
+      "Organization: qwq"
+    ],
+    "created": "2026-11-21T00:00:00Z"
+  },
+  "packages": []
+}

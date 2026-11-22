@@ -1,0 +1,702 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.platform.v1;
+
+// Platform ABI v1.
+// ABI status: frozen
+// After the P0-T7 review the line above reads "ABI status: frozen". From then on field numbers,
+// names, enum values and RPCs are append-only, and scripts/check.sh enforces buf breaking (FILE).
+// Minor versions (sdk/abi.Minor) only add fields, messages, enum values and RPCs.
+// go_package is supplied by Buf managed mode (buf.gen.yaml); do not hard-code it here.
+//
+// Identity (ADR-0003, review C2):
+// - Plugin identity and process generation come from the transport (per-plugin UDS + SO_PEERCRED),
+//   never from message fields.
+// - On plugin -> host calls the instance is identified by the opaque instance_handle issued in
+//   InitializeRequest. Handles are invalidated when the process generation ends.
+// - Actor, node and trace fields sent by a plugin are for log correlation only, never for
+//   authorization.
+//
+// Payloads are JSON bytes validated against schemas declared in manifest.json. Default limit
+// 4 MiB per message; large files use a dedicated chunked transfer capability.
+//
+// Errors (ADR-0007):
+// - gRPC status codes report transport and host-side failures: UNAVAILABLE, DEADLINE_EXCEEDED,
+//   PERMISSION_DENIED (missing capability), UNIMPLEMENTED (RPC unknown to the peer).
+// - The domain outcome of a call that reached its handler is an ErrorDetail with a stable code
+//   while the gRPC status is OK. ErrorDetail never carries secrets or stack traces.
+//
+// Subjects (ADR-0007): a plugin names its own resources with a relative subject
+// "<segment>(/<segment>)*", each segment matching [A-Za-z0-9._~-]{1,128}. The host prefixes it
+// with the instance namespace, e.g.
+// "nodes/local/plugins/security.scan/instances/default/resources/baseline", or
+// "plugins/<plugin_id>/resources/<subject>" for placement=controller, so a plugin cannot name the
+// host's or another plugin's resources. Preconditions, planned changes and resource changes sent by
+// plugins use relative subjects; events and the public API use full subjects.
+
+// ---------- Common ----------
+
+enum ActorKind {
+  ACTOR_KIND_UNSPECIFIED = 0;
+  ACTOR_KIND_HUMAN = 1;
+  ACTOR_KIND_AI_AGENT = 2;
+  ACTOR_KIND_SERVICE = 3;
+  ACTOR_KIND_SYSTEM = 4;
+}
+
+// Who caused this call (ADR-0004 D4). Set by the host.
+message Actor {
+  ActorKind kind = 1;
+  string id = 2;
+  // For AI_AGENT and SERVICE: the human user whose delegation is being used.
+  string on_behalf_of = 3;
+}
+
+// Host -> plugin call context. Set by the host; deadlines use the gRPC deadline.
+message RequestContext {
+  string request_id = 1;
+  string operation_id = 2;
+  string trace_id = 3;
+  Actor actor = 4;
+  string node_id = 5;
+  // Target instance for instance-level calls (ADR-0002). Empty for process-level calls.
+  string instance_id = 6;
+  // BCP 47 tag of the actor's UI language, e.g. "zh-CN". Use it for user-facing text
+  // (FieldViolation.message, ErrorDetail.message, PlannedChange.description, progress messages);
+  // codes stay language independent.
+  string locale = 7;
+}
+
+// Plugin -> host call context.
+message HostCallContext {
+  string instance_handle = 1;
+  // The operation this call acts for, when it was dispatched to this instance. The host then
+  // checks the call against that operation's declared capabilities. Required by RevealSecret.
+  string operation_id = 2;
+  string trace_id = 3;
+}
+
+message ErrorDetail {
+  string code = 1; // stable and machine readable, e.g. PRECONDITION_FAILED, VALIDATION_FAILED
+  string message = 2; // localized; untrusted text
+  bool retryable = 3;
+  bytes details_json = 4;
+  // Field-level causes, e.g. for VALIDATION_FAILED (review C8).
+  repeated FieldViolation violations = 5;
+}
+
+// Field-level validation result (review C8). Also used for warnings.
+message FieldViolation {
+  string pointer = 1; // RFC 6901 JSON Pointer, e.g. /inbounds/0/port
+  string code = 2; // machine readable, e.g. PORT_IN_USE
+  string message = 3; // localized; for users
+}
+
+// Optimistic concurrency guard on a resource (ADR-0004 D2, D7).
+message Precondition {
+  string subject = 1; // relative subject for plugin-owned resources
+  string revision = 2; // must equal the current revision at execution time; empty = must not exist
+}
+
+message Capability {
+  string name = 1;
+  string scope = 2;
+}
+
+enum OperationMode {
+  OPERATION_MODE_UNSPECIFIED = 0;
+  OPERATION_MODE_INVOKE = 1; // synchronous, Invoke
+  OPERATION_MODE_JOB = 2; // long running, RunJob; API returns 202 + operation_id
+}
+
+enum OperationEffect {
+  OPERATION_EFFECT_UNSPECIFIED = 0;
+  OPERATION_EFFECT_READ = 1;
+  OPERATION_EFFECT_WRITE = 2;
+  OPERATION_EFFECT_DESTRUCTIVE = 3;
+}
+
+enum RiskLevel {
+  RISK_LEVEL_UNSPECIFIED = 0;
+  RISK_LEVEL_LOW = 1;
+  RISK_LEVEL_MEDIUM = 2;
+  RISK_LEVEL_HIGH = 3;
+}
+
+// Operation lifecycle (ADR-0004 D7).
+enum OperationState {
+  OPERATION_STATE_UNSPECIFIED = 0;
+  OPERATION_STATE_PENDING = 1;
+  OPERATION_STATE_AWAITING_APPROVAL = 2;
+  OPERATION_STATE_APPROVED = 3;
+  OPERATION_STATE_REJECTED = 4;
+  OPERATION_STATE_EXPIRED = 5;
+  OPERATION_STATE_RUNNING = 6;
+  OPERATION_STATE_SUCCEEDED = 7;
+  OPERATION_STATE_FAILED = 8;
+  OPERATION_STATE_CANCELED = 9;
+}
+
+// Must match the manifest entry exactly; a mismatch blocks loading.
+// The host computes effective risk = max(risk, capability floor); plugins cannot lower it.
+message OperationDescriptor {
+  string name = 1;
+  string api_version = 2;
+  string permission = 3;
+  OperationMode mode = 4;
+  OperationEffect effect = 5;
+  RiskLevel risk = 6;
+  bool idempotent = 7;
+  bool plannable = 8;
+  int32 timeout_ms = 9;
+  string request_schema_ref = 10;
+  string response_schema_ref = 11;
+  string summary = 12; // untrusted text, <= 120 chars
+  string undo_operation = 13;
+  string ui_route = 14;
+  // Capabilities this operation may use, a subset of PluginDescriptor.capabilities. The capability
+  // floor of the risk is taken over them, and host calls carrying this operation_id are checked
+  // against them. Empty = every capability of the plugin (ADR-0007).
+  repeated Capability capabilities = 15;
+}
+
+enum Placement {
+  PLACEMENT_UNSPECIFIED = 0;
+  PLACEMENT_NODE = 1;
+  PLACEMENT_CONTROLLER = 2;
+}
+
+// Must match manifest.json; a mismatch blocks loading (ARCH §5.3).
+message PluginDescriptor {
+  string plugin_id = 1;
+  string plugin_version = 2;
+  uint32 abi_major = 3;
+  uint32 abi_minor = 4;
+  Placement placement = 5;
+  repeated Capability capabilities = 6;
+  repeated OperationDescriptor operations = 7;
+  string state_schema_version = 8;
+  string minimum_rollback_version = 9;
+  string config_schema_ref = 10;
+  bool config_hot_apply = 11;
+}
+
+// ---------- Process level ----------
+
+message GetDescriptorRequest {}
+message GetDescriptorResponse {
+  PluginDescriptor descriptor = 1;
+}
+
+// ---------- Instance lifecycle (ADR-0002, review C4) ----------
+//
+// New instance:   Initialize -> Start -> Activate
+// Blue/green:     candidate Initialize + Start -> readiness -> route switch
+//                 -> old Deactivate -> candidate Activate -> old Stop(drain) -> old ReleaseInstance
+// Start means "ready to serve requests". Timers, subscriptions and other background work begin
+// only after Activate, so two generations never run background work at the same time.
+
+enum LifecycleState {
+  LIFECYCLE_STATE_UNSPECIFIED = 0;
+  LIFECYCLE_STATE_INITIALIZED = 1;
+  LIFECYCLE_STATE_READY = 2; // started, serving requests, no background work
+  LIFECYCLE_STATE_ACTIVE = 3; // background work running
+  LIFECYCLE_STATE_DRAINING = 4;
+  LIFECYCLE_STATE_STOPPED = 5;
+  LIFECYCLE_STATE_FAILED = 6;
+}
+
+message InitializeRequest {
+  RequestContext context = 1;
+  string instance_handle = 2; // opaque; send it back in HostCallContext
+  string data_dir = 3;
+  bytes config_json = 4; // secret fields are references, never plaintext
+  string config_revision = 5;
+  string state_schema_version = 6; // persisted version; empty for a new instance
+  // ABI minor implemented by the host, at least the manifest's abi.minimum_minor. RPCs newer than
+  // this fail with UNIMPLEMENTED.
+  uint32 host_abi_minor = 7;
+}
+message InitializeResponse {
+  // State schema version after any expand-only migration done during Initialize.
+  string state_schema_version = 1;
+}
+
+message StartRequest {
+  RequestContext context = 1;
+}
+message StartResponse {}
+
+message ActivateRequest {
+  RequestContext context = 1;
+}
+message ActivateResponse {}
+
+// Stop background work; keep serving in-flight and new requests until Stop.
+message DeactivateRequest {
+  RequestContext context = 1;
+  int32 grace_period_ms = 2;
+}
+message DeactivateResponse {}
+
+message StopRequest {
+  RequestContext context = 1;
+  bool drain = 2;
+  int32 grace_period_ms = 3;
+}
+message StopResponse {
+  bool drained = 1;
+}
+
+// Free memory and goroutines of one instance; the process keeps serving other instances.
+// Host-side cleanup by owner (ARCH §5.7) does not depend on this call.
+message ReleaseInstanceRequest {
+  RequestContext context = 1;
+}
+message ReleaseInstanceResponse {}
+
+// Domain readiness of one instance. Process liveness uses grpc.health.v1 served by go-plugin.
+message CheckHealthRequest {
+  RequestContext context = 1;
+}
+message CheckHealthResponse {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_SERVING = 1;
+    STATUS_NOT_SERVING = 2;
+  }
+  Status status = 1;
+  LifecycleState lifecycle_state = 2;
+  string message = 3;
+  bytes details_json = 4;
+  string applied_config_revision = 5;
+}
+
+// ---------- Config (ARCH §6.5) ----------
+
+message ValidateConfigRequest {
+  RequestContext context = 1;
+  bytes config_json = 2;
+  string proposed_revision = 3;
+  string current_revision = 4;
+}
+message ValidateConfigResponse {
+  repeated FieldViolation violations = 1;
+  repeated FieldViolation warnings = 2;
+  ErrorDetail error = 3;
+}
+
+message ApplyConfigRequest {
+  RequestContext context = 1;
+  bytes config_json = 2;
+  string proposed_revision = 3;
+  string current_revision = 4;
+}
+message ApplyConfigResponse {
+  string applied_revision = 1;
+  ErrorDetail error = 2;
+}
+
+// ---------- Operations ----------
+
+message InvokeRequest {
+  reserved 5;
+  reserved "idempotency_key";
+  RequestContext context = 1;
+  string operation = 2;
+  string api_version = 3;
+  bytes payload_json = 4;
+  // Plugin-owned preconditions captured by PlanOperation (ADR-0004 D7). The plugin must check them
+  // atomically against its own state and fail with code PRECONDITION_FAILED on mismatch.
+  repeated Precondition preconditions = 6;
+  // Execution attempt of RequestContext.operation_id, starting at 1; (operation_id, attempt)
+  // identifies an execution. The host retries only idempotent operations (ARCH §7).
+  uint32 attempt = 7;
+}
+message InvokeResponse {
+  reserved 3;
+  reserved "violations";
+  bytes payload_json = 1;
+  // Set on failure; validation failures use code VALIDATION_FAILED with violations.
+  ErrorDetail error = 2;
+  // Plugin-owned resources changed by this call (ADR-0004 D3). The host emits resource.changed for
+  // each, together with the operation result.
+  repeated ResourceChange changes = 4;
+}
+
+// RunJob stream rules (ADR-0007):
+// - The plugin sends zero or more progress messages, then exactly one terminal message
+//   (completed = true, or error set), then closes the stream.
+// - Cancellation, timeout and a broken stream (e.g. Agent restart) all cancel the stream context.
+//   The plugin stops as soon as possible and leaves its state consistent. The host never resumes a
+//   broken stream: it marks the attempt failed and, only for idempotent operations, may start a
+//   new attempt with attempt + 1.
+message RunJobRequest {
+  RequestContext context = 1;
+  string operation = 2;
+  string api_version = 3;
+  bytes payload_json = 4;
+  uint32 attempt = 5; // starts at 1
+  repeated Precondition preconditions = 6;
+}
+message JobProgress {
+  uint32 percent = 1; // 0-100
+  string message = 2; // localized; untrusted text
+  string step = 3; // machine readable step id, used for follow mode
+  bytes result_json = 4; // terminal message only
+  bool completed = 5;
+  ErrorDetail error = 6;
+  uint32 step_index = 7; // 1-based position of step; 0 = unknown
+  uint32 step_count = 8; // total number of steps; 0 = unknown
+  // Plugin-owned resources changed since the previous message. The host emits resource.changed
+  // right away, so open UIs follow a long job step by step (ADR-0004 D9).
+  repeated ResourceChange changes = 9;
+}
+message RunJobResponse {
+  JobProgress progress = 1;
+}
+
+// Side-effect free preview (ADR-0004 D7). The host renders the confirmation card from structured
+// data; plugin text is shown as "from plugin" and never replaces host-known facts.
+message PlannedChange {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_CREATE = 1;
+    KIND_UPDATE = 2;
+    KIND_DELETE = 3;
+  }
+  Kind kind = 1;
+  string subject = 2; // relative subject
+  string pointer = 3; // JSON Pointer within the subject, optional
+  bytes before_json = 4;
+  bytes after_json = 5;
+  bool reversible = 6;
+  string description = 7; // one line for the confirmation card; localized, untrusted, <= 200 chars
+}
+message PlanOperationRequest {
+  RequestContext context = 1;
+  string operation = 2;
+  string api_version = 3;
+  bytes payload_json = 4;
+}
+message PlanOperationResponse {
+  repeated PlannedChange changes = 1;
+  repeated FieldViolation violations = 2;
+  repeated FieldViolation warnings = 3;
+  repeated Precondition preconditions = 4;
+  ErrorDetail error = 5;
+}
+
+// A change to a plugin-owned resource (ADR-0004 D3, ADR-0007). The host turns it into a
+// resource.changed event with the full subject, actor and operation_id; plugins cannot publish
+// resource.changed themselves.
+message ResourceChange {
+  string subject = 1; // relative subject
+  string revision = 2; // revision after the change; empty when deleted
+  repeated string changed_pointers = 3; // RFC 6901 pointers within the resource; empty = whole resource
+  bool deleted = 4;
+}
+
+// ---------- Public routes (ADR-0002) ----------
+// The host owns TLS, rate limits, body limits and the route table under /p/{plugin_id}/...; it
+// resolves the target instance and calls ServePublicRoute, which needs capability
+// public.route:<name>. The host strips Cookie, Authorization and Proxy-Authorization from requests,
+// strips Set-Cookie and hop-by-hop headers from responses, and adds its own security headers.
+// Bodies are limited to 4 MiB each way; ABI v1 has no streaming. Public requests are anonymous:
+// RequestContext.actor is unset.
+
+message HttpHeader {
+  string name = 1; // lower case
+  string value = 2;
+}
+message ServePublicRouteRequest {
+  RequestContext context = 1;
+  string route = 2; // route name from public.route:<name>
+  string method = 3;
+  string path = 4; // path after /p/{plugin_id}, starting with "/"
+  string raw_query = 5;
+  repeated HttpHeader headers = 6;
+  bytes body = 7;
+}
+message ServePublicRouteResponse {
+  uint32 status = 1;
+  repeated HttpHeader headers = 2;
+  bytes body = 3;
+}
+
+// ---------- Host: state ----------
+// Node-local, one store per plugin (review O3); keys are namespaced to the calling instance.
+// Keys are 1-256 bytes of [A-Za-z0-9._/-]. A value is a JSON document of at most 1 MiB; the total
+// per instance is limited by manifest resources.kv_max_kb. Revisions are opaque strings.
+// Reads need state.kv.read, writes need state.kv.write.
+
+message GetStateRequest {
+  HostCallContext context = 1;
+  string key = 2;
+}
+message GetStateResponse {
+  bytes value_json = 1;
+  bool found = 2;
+  string revision = 3;
+}
+
+message PutStateRequest {
+  HostCallContext context = 1;
+  string key = 2;
+  bytes value_json = 3;
+  oneof precondition { // unset = unconditional write
+    bool must_not_exist = 4;
+    string expected_revision = 5;
+  }
+}
+message PutStateResponse {
+  string revision = 1;
+}
+
+message DeleteStateRequest {
+  HostCallContext context = 1;
+  string key = 2;
+  string expected_revision = 3; // empty = unconditional delete
+}
+message DeleteStateResponse {}
+
+// Lists keys in byte order.
+message ListStateRequest {
+  HostCallContext context = 1;
+  string prefix = 2;
+  string page_token = 3; // from the previous response; empty = first page
+  uint32 page_size = 4; // 0 = 100; capped at 1000
+  bool include_values = 5;
+}
+message ListStateResponse {
+  // The host may return fewer than page_size entries (at least one) to keep the response under the message limit.
+  repeated StateEntry entries = 1;
+  string next_page_token = 2; // empty = no more entries
+}
+message StateEntry {
+  string key = 1;
+  string revision = 2;
+  bytes value_json = 3; // only when include_values
+}
+
+// ---------- Host: events (review C9) ----------
+// PublishEvent needs events.publish:<type>; SubscribeEvents needs events.subscribe:<topic>;
+// ReportChanges needs no capability because it only reaches the plugin's own subjects. Types
+// starting with "resource." or "operation." are reserved for the host.
+
+enum DeliveryClass {
+  DELIVERY_CLASS_UNSPECIFIED = 0;
+  DELIVERY_CLASS_LOSSY_REALTIME = 1;
+  DELIVERY_CLASS_RELIABLE = 2;
+}
+
+// Only plugin-controlled fields; event_id, sequence, time, actor and class are assigned by the host.
+message EventDraft {
+  string type = 1; // dotted, e.g. security.alert
+  string schema_version = 2;
+  string subject = 3; // relative subject
+  bytes payload_json = 4;
+}
+
+message Event {
+  string event_id = 1;
+  // Position in the journal the subscriber reads: node plugins read the node journal, controller
+  // plugins the controller journal.
+  uint64 sequence = 2;
+  string type = 3;
+  string schema_version = 4;
+  string subject = 5; // full subject
+  int64 occurred_at_unix_ms = 6;
+  Actor actor = 7;
+  string node_id = 8;
+  string trace_id = 9;
+  string operation_id = 10;
+  DeliveryClass delivery_class = 11; // from host topic policy
+  bytes payload_json = 12;
+}
+
+message PublishEventRequest {
+  HostCallContext context = 1;
+  EventDraft event = 2;
+}
+message PublishEventResponse {
+  string event_id = 1;
+  uint64 sequence = 2;
+}
+
+// Topics are event types or prefixes ending in ".*", e.g. "security.*". Reliable events are
+// at-least-once; deduplicate by event_id. Lossy realtime events are never replayed.
+message SubscribeEventsRequest {
+  HostCallContext context = 1;
+  repeated string topics = 2;
+  // 0 = resume from the cursor the host stored for this subscription.
+  uint64 last_acked_sequence = 3;
+  // Durable name, unique per instance, [a-z0-9_-]{1,64}. The host keeps one cursor per
+  // (instance, subscription), so restarts and parallel subscriptions resume independently.
+  string subscription = 4;
+}
+message SubscribeEventsResponse {
+  Event event = 1;
+}
+
+// Cumulative: acknowledges every reliable event of the subscription up to and including sequence.
+message AckEventsRequest {
+  HostCallContext context = 1;
+  uint64 sequence = 2;
+  string subscription = 3;
+}
+message AckEventsResponse {}
+
+// Changes made outside Invoke and RunJob, e.g. by a timer after Activate (ADR-0004 D3).
+message ReportChangesRequest {
+  HostCallContext context = 1;
+  repeated ResourceChange changes = 2;
+}
+message ReportChangesResponse {}
+
+// ---------- Host: config, secrets, audit ----------
+
+// Reads this instance's config snapshot. Empty revision = currently applied revision.
+message GetConfigRequest {
+  HostCallContext context = 1;
+  string revision = 2;
+}
+message GetConfigResponse {
+  bytes config_json = 1;
+  string revision = 2;
+}
+
+// Requires capability secret.reveal:<secret_ref> and an operation_id that is currently dispatched
+// to this instance. Every call is audited and rate limited. Prefer host-performed actions over
+// reveal.
+message RevealSecretRequest {
+  HostCallContext context = 1;
+  string secret_ref = 2;
+  string purpose = 3; // recorded in audit; not used for authorization
+}
+message RevealSecretResponse {
+  bytes value = 1;
+}
+
+enum AuditOutcome {
+  AUDIT_OUTCOME_UNSPECIFIED = 0;
+  AUDIT_OUTCOME_SUCCESS = 1;
+  AUDIT_OUTCOME_FAILURE = 2;
+  AUDIT_OUTCOME_DENIED = 3;
+}
+// The host fills actor, time and plugin identity and marks source=plugin; separate quota
+// (review S10).
+message AuditRecord {
+  string action = 1;
+  string subject = 2;
+  AuditOutcome outcome = 3;
+  bytes details_json = 4;
+}
+message WriteAuditRequest {
+  HostCallContext context = 1;
+  AuditRecord record = 2;
+}
+message WriteAuditResponse {}
+
+// ---------- Host: plugin-to-plugin invoke (review C3) ----------
+// Point to point and host mediated: capability plugin.invoke:<plugin_id>/<operation>, schema
+// validation, deadline propagation, audit, routing to the ACTIVE generation. Not a pipeline.
+// The call runs as a child operation of HostCallContext.operation_id with the same actor; if its
+// effective risk exceeds the parent's, it waits for its own approval (ADR-0007).
+message InvokePluginRequest {
+  HostCallContext context = 1;
+  string target_plugin_id = 2;
+  string target_instance_id = 3;
+  string operation = 4;
+  string api_version = 5;
+  bytes payload_json = 6;
+  string idempotency_key = 7; // deduplicates retries of this call; scoped to the calling instance
+  // Node of the target instance; empty = the caller's node. Only placement=controller plugins may
+  // target other nodes.
+  string target_node_id = 8;
+}
+message InvokePluginResponse {
+  bytes payload_json = 1;
+  ErrorDetail error = 2;
+  // Set when the call created an operation that has not finished (target mode=job, or approval
+  // required). Follow it with WaitOperation.
+  string operation_id = 3;
+  OperationState state = 4;
+}
+
+// Wait for an operation this instance created with InvokePlugin.
+message WaitOperationRequest {
+  HostCallContext context = 1;
+  string operation_id = 2;
+  // Returns at a terminal state, at AWAITING_APPROVAL, or after the timeout. 0 = return the
+  // current state now. The host caps the wait at 60 s and at the gRPC deadline.
+  uint32 timeout_ms = 3;
+}
+message WaitOperationResponse {
+  OperationState state = 1;
+  bytes result_json = 2; // when SUCCEEDED
+  ErrorDetail error = 3; // when FAILED, REJECTED, EXPIRED or CANCELED
+  JobProgress progress = 4; // latest progress while RUNNING
+}
+
+// Cancel an operation this instance created with InvokePlugin.
+message CancelOperationRequest {
+  HostCallContext context = 1;
+  string operation_id = 2;
+}
+message CancelOperationResponse {
+  OperationState state = 1;
+}
+
+// ---------- Services ----------
+
+// Implemented by every plugin, served over the plugin socket (ADR-0003). Plugins embed the
+// generated Unimplemented server, so RPCs added in later minors answer UNIMPLEMENTED.
+service PluginService {
+  rpc GetDescriptor(GetDescriptorRequest) returns (GetDescriptorResponse);
+  rpc Initialize(InitializeRequest) returns (InitializeResponse);
+  rpc Start(StartRequest) returns (StartResponse);
+  rpc Activate(ActivateRequest) returns (ActivateResponse);
+  rpc Deactivate(DeactivateRequest) returns (DeactivateResponse);
+  rpc Stop(StopRequest) returns (StopResponse);
+  rpc ReleaseInstance(ReleaseInstanceRequest) returns (ReleaseInstanceResponse);
+  rpc CheckHealth(CheckHealthRequest) returns (CheckHealthResponse);
+  rpc ValidateConfig(ValidateConfigRequest) returns (ValidateConfigResponse);
+  rpc ApplyConfig(ApplyConfigRequest) returns (ApplyConfigResponse);
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+  rpc RunJob(RunJobRequest) returns (stream RunJobResponse);
+  rpc PlanOperation(PlanOperationRequest) returns (PlanOperationResponse);
+  rpc ServePublicRoute(ServePublicRouteRequest) returns (ServePublicRouteResponse);
+}
+
+// Host services are served by the Agent on a per-plugin UDS (ADR-0003). A service whose RPCs all
+// need one capability is registered only when it is granted; every RPC also checks its own
+// capability and fails with PERMISSION_DENIED without it.
+service HostStateService {
+  rpc GetState(GetStateRequest) returns (GetStateResponse);
+  rpc PutState(PutStateRequest) returns (PutStateResponse);
+  rpc DeleteState(DeleteStateRequest) returns (DeleteStateResponse);
+  rpc ListState(ListStateRequest) returns (ListStateResponse);
+}
+service HostEventsService {
+  rpc PublishEvent(PublishEventRequest) returns (PublishEventResponse);
+  rpc SubscribeEvents(SubscribeEventsRequest) returns (stream SubscribeEventsResponse);
+  rpc AckEvents(AckEventsRequest) returns (AckEventsResponse);
+  rpc ReportChanges(ReportChangesRequest) returns (ReportChangesResponse);
+}
+service HostConfigService {
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+}
+service HostSecretsService {
+  rpc RevealSecret(RevealSecretRequest) returns (RevealSecretResponse);
+}
+service HostAuditService {
+  rpc WriteAudit(WriteAuditRequest) returns (WriteAuditResponse);
+}
+service HostInvokeService {
+  rpc InvokePlugin(InvokePluginRequest) returns (InvokePluginResponse);
+  rpc WaitOperation(WaitOperationRequest) returns (WaitOperationResponse);
+  rpc CancelOperation(CancelOperationRequest) returns (CancelOperationResponse);
+}

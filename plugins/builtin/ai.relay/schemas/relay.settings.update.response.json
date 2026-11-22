@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "更新门户策略响应",
+  "description": "保存门户全局策略后的时间戳与脱敏确认。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["updated_at", "linuxdo_client_secret_configured", "smtp_configured"],
+  "properties": {
+    "updated_at": { "type": "integer", "minimum": 0, "description": "保存时间戳（Unix 毫秒）。" },
+    "linuxdo_client_secret_configured": { "type": "boolean", "description": "LinuxDo 密钥是否已配置。" },
+    "smtp_configured": { "type": "boolean", "description": "SMTP 配置是否已保存。" }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "generated_at": {
+      "type": "integer"
+    },
+    "revision": {
+      "type": "string"
+    },
+    "total_nodes": {
+      "type": "integer"
+    },
+    "online_nodes": {
+      "type": "integer"
+    },
+    "offline_nodes": {
+      "type": "integer"
+    },
+    "degraded_nodes": {
+      "type": "integer"
+    },
+    "total_rx_mbps": {
+      "type": "number"
+    },
+    "total_tx_mbps": {
+      "type": "number"
+    },
+    "domain_summary": {
+      "type": "object"
+    },
+    "anomalies": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "suggested_actions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

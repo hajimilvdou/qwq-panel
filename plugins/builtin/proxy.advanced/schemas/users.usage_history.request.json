@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询用户小时级流量历史请求",
+  "description": "按用户 ID 与回溯小时数查询本地 SQLite 中的小时聚合流量曲线（最多保留 90 天）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user_id"],
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9._-]{0,31}$",
+      "description": "目标代理用户 ID。"
+    },
+    "hours": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2160,
+      "default": 24,
+      "description": "回溯小时数（1..2160，默认 24 小时）。"
+    }
+  }
+}

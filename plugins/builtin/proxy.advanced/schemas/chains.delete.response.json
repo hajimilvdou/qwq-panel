@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "删除链式代理节点响应",
+  "description": "返回删除结果。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "deleted",
+    "id"
+  ],
+  "properties": {
+    "deleted": {
+      "type": "boolean"
+    },
+    "id": {
+      "type": "string"
+    }
+  }
+}

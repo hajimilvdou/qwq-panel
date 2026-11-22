@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "按提供商 ID 选择目标提供商的请求",
+  "required": [
+    "provider_id"
+  ],
+  "properties": {
+    "provider_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "目标 DNS 提供商资源 ID"
+    }
+  }
+}

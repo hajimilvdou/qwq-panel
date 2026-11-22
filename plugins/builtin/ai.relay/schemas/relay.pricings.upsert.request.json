@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "保存模型统计倍率请求",
+  "description": "配置模型的输入/输出微点倍率、Prompt Cache 读写折扣倍率或按次计费标准（纯虚拟统计配额）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["model_name"],
+  "properties": {
+    "model_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "模型标识（如 claude-sonnet-4-5、gpt-4o、gemini-2.5-pro）。"
+    },
+    "billing_mode": {
+      "type": "string",
+      "enum": ["token", "per_call"],
+      "default": "token",
+      "description": "计费统计模式：token 按令牌数或 per_call 按次。"
+    },
+    "input_micros_per_1k": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 2000,
+      "description": "每 1K 输入 Token 对应的微点（micros）。"
+    },
+    "output_micros_per_1k": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 8000,
+      "description": "每 1K 输出 Token 对应的微点（micros）。"
+    },
+    "cache_read_ratio": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 2,
+      "default": 0.1,
+      "description": "Prompt Cache 命中读取的输入倍率折扣（默认 0.1 即 1 折）。"
+    },
+    "cache_write_ratio": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 5,
+      "default": 1.25,
+      "description": "Prompt Cache 首次写入的输入倍率（默认 1.25 倍）。"
+    },
+    "per_call_micros": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "per_call 模式下单次调用扣除的微点。"
+    }
+  }
+}

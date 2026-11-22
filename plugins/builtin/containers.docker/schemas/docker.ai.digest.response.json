@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "daemon_available",
+    "containers_running",
+    "containers_total",
+    "images_count",
+    "stacks_count",
+    "anomalies"
+  ],
+  "properties": {
+    "daemon_available": {
+      "type": "boolean"
+    },
+    "daemon_reason": {
+      "type": "string"
+    },
+    "containers_running": {
+      "type": "integer"
+    },
+    "containers_total": {
+      "type": "integer"
+    },
+    "images_count": {
+      "type": "integer"
+    },
+    "stacks_count": {
+      "type": "integer"
+    },
+    "anomalies": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

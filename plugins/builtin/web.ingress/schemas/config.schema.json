@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "web.ingress plugin configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "preferred_engine": {
+      "type": "string",
+      "enum": [
+        "builtin-go",
+        "caddy",
+        "nginx"
+      ],
+      "default": "builtin-go"
+    },
+    "listen_addr": {
+      "type": "string",
+      "maxLength": 64,
+      "default": ""
+    },
+    "export_config_path": {
+      "type": "string",
+      "maxLength": 255,
+      "default": ""
+    }
+  }
+}

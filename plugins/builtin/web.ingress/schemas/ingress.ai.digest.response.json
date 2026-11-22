@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "engine",
+    "sites_total",
+    "sites_enabled",
+    "active_routes",
+    "snapshots_count"
+  ],
+  "properties": {
+    "engine": {
+      "type": "string"
+    },
+    "sites_total": {
+      "type": "integer"
+    },
+    "sites_enabled": {
+      "type": "integer"
+    },
+    "active_routes": {
+      "type": "integer"
+    },
+    "snapshots_count": {
+      "type": "integer"
+    },
+    "plain_http_list": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

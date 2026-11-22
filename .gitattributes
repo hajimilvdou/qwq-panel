@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
+*.wasm binary
+
+# ------------------------- 许可证原文字节 -------------------------
+# 内容地址按上游原文校验；按字节保留，不转换换行或合并原文。
+plugins/builtin/core.xray/LICENSES/dependencies/** binary
+
+# 生成代码：diff 折叠，GitHub 语言统计不计入
+sdk/gen/** linguist-generated=true

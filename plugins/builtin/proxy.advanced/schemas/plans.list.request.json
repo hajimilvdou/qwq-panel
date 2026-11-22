@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "列举代理套餐请求",
+  "description": "按分页上限列举本地 SQLite 中的全部代理套餐。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256,
+      "default": 100,
+      "description": "最多返回的套餐数量。"
+    }
+  }
+}

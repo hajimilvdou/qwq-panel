@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "修改代理用户状态请求",
+  "description": "启用、停用或恢复代理用户状态，并同步推送至 core.xray 与内核 HTB 限速。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user_id", "status"],
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9._-]{0,31}$",
+      "description": "目标代理用户 ID。"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "suspended_quota", "expired", "disabled"],
+      "description": "目标状态（active 启用、disabled 手动停用、suspended_quota 超配额暂停、expired 到期）。"
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "可选乐观并发修订号。"
+    }
+  }
+}

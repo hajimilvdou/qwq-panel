@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Daily consistent backup of the qwq data directory (DEP-04). Installed as
+# /etc/systemd/system/qwq-backup.service and started by qwq-backup.timer.
+# Writes /var/lib/qwq/backups/qwq-<time>.tar.gz (0600) and keeps the newest 7;
+# see docs/operations/backup-restore.md. The archive contains the master key:
+# copy it off the machine, encrypted.
+#
+# VACUUM INTO reads one snapshot of the live database, so the controller keeps
+# running. The sandbox matches qwq-controller.service; the backup needs no
+# network and no capabilities.
+
+[Unit]
+Description=qwq backup
+Documentation=https://github.com/qwq-panel/qwq
+ConditionPathExists=/etc/qwq/qwq.json
+ConditionPathExists=/var/lib/qwq/qwq.db
+
+[Service]
+Type=oneshot
+User=qwq
+Group=qwq
+ExecStart=/opt/qwq/current/bin/qwq backup --config /etc/qwq/qwq.json --out /var/lib/qwq/backups --keep 7
+ReadWritePaths=/var/lib/qwq
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=

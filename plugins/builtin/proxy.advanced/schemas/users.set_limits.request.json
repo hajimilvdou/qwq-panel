@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "更新用户连接数与链式代理覆盖请求",
+  "description": "更新单个代理用户的最大并发连接数覆盖、最大同时在线 IP 数覆盖或绑定链式落地节点。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "user_id"
+  ],
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "目标代理用户 ID。"
+    },
+    "max_connections_override": {
+      "type": "integer",
+      "minimum": -1,
+      "maximum": 65535,
+      "description": "-1 继承套餐，0 不限，>0 显式连接上限。"
+    },
+    "max_ips_override": {
+      "type": "integer",
+      "minimum": -1,
+      "maximum": 1024,
+      "description": "-1 继承套餐，0 不限，>0 显式在线 IP 上限。"
+    },
+    "chain_id": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "绑定链式代理落地节点 ID（空串表示清除绑定）。"
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "可选乐观锁修订号。"
+    }
+  }
+}

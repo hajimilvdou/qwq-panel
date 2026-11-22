@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询用户实时连接与 nftables 规则请求",
+  "description": "查询多用户实时活跃连接数/IP 数，并可选渲染按 traffic_mark 限流的 nftables ct count 规则。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "include_nftables": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否同时渲染 nftables ct count 规则文本。"
+    }
+  }
+}

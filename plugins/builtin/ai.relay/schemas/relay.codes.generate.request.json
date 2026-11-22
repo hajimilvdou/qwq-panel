@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "批量签发邀请码或福利兑换码请求",
+  "description": "生成注册批次邀请码、一码一用福利兑换码（CDK）或一码多人限领 1 次的群共享口令码。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["cdk_single", "cdk_shared", "invite"],
+      "description": "签发类型：cdk_single 单用兑换码、cdk_shared 群口令共享码、invite 注册邀请码。"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "可选福利活动标题或说明。"
+    },
+    "amount_micros": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 5000000,
+      "description": "单次领取或注册附赠的统计微点额度（CDK 模式必须 > 0）。"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 1,
+      "description": "单用码/邀请码表示生成个数；cdk_shared 群口令模式表示最大可领人数。"
+    },
+    "max_uses": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "default": 1,
+      "description": "invite 邀请码模式下单个邀请码可用次数。"
+    },
+    "grant_group": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "default": "default",
+      "description": "invite 邀请码注册时默认分配的分组。"
+    },
+    "custom_code": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "可选自定义口令文本（仅 cdk_shared 或 count=1 时生效）。"
+    },
+    "expires_in_hours": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8760,
+      "default": 0,
+      "description": "有效期小时数（0 表示永不过期）。"
+    }
+  }
+}

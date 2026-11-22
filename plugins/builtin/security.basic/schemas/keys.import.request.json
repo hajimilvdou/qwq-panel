@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "导入 SSH 公钥请求",
+  "description": "向指定用户的 authorized_keys 幂等导入一条合法 SSH 公钥（拒绝 DSA 及小于 3072 位 RSA）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user", "public_key"],
+  "properties": {
+    "user": {
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_.-]{0,31}$",
+      "description": "目标系统用户名。"
+    },
+    "public_key": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 8192,
+      "description": "单行 OpenSSH 公钥文本（仅公钥，严禁传入私钥）。"
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "可选 account/<user>/keys 期望修订号。"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "永久删除无绑定引用证书资源请求（对齐 hostauth.CertificateTargetArgs）",
+  "required": [
+    "certificate_id",
+    "attempt_id"
+  ],
+  "properties": {
+    "certificate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "待删除的证书资源 ID"
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "本次删除幂等尝试 ID"
+    }
+  }
+}

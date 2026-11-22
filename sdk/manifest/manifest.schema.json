@@ -1,0 +1,291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qwq:plugin-manifest:v1",
+  "title": "qwq Plugin Package Manifest v1",
+  "description": "Signed by signatures/manifest.sig (Ed25519 over the raw bytes of manifest.json). Verify before parsing; reject duplicate keys. Installer-only rules are listed in docs/ARCHITECTURE.md §5.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "id", "version", "name", "summary", "publisher", "abi", "engine_constraint",
+    "target", "entrypoint", "files", "provenance", "placement", "lifecycle", "operations",
+    "capabilities", "dependencies", "state", "config", "resources"
+  ],
+  "$defs": {
+    "relpath": {
+      "type": "string", "maxLength": 255,
+      "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$"
+    },
+    "plugin_id": { "type": "string", "maxLength": 128, "pattern": "^[a-z][a-z0-9]*([.-][a-z0-9]+)*$" },
+    "semver": {
+      "type": "string", "maxLength": 64,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "range": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[0-9A-Za-z.*^~<>=|+ -]+$" },
+    "https_origin": {
+      "type": "string",
+      "pattern": "^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?$"
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "line": {
+      "description": "Untrusted single-line text shown to users: no C0/C1 controls, DEL, or bidi overrides/isolates",
+      "type": "string", "pattern": "^[^\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]*$"
+    },
+    "multiline": {
+      "description": "As line, but \\n is allowed",
+      "type": "string", "pattern": "^[^\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]*$"
+    },
+    "text": { "$ref": "#/$defs/line", "minLength": 1, "maxLength": 120 },
+    "capability_name": { "type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$" },
+    "approval": { "enum": ["auto", "confirm", "ai_confirm"] },
+    "ui_path": { "type": "string", "maxLength": 128, "pattern": "^/[a-z0-9._/:-]*$" },
+    "scope": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:/@-]+$" }
+  },
+  "properties": {
+    "schema_version": {
+      "description": "1.N. Hosts accept N <= their supported minor and reject higher minors explicitly. This document is 1.3 (ui.widgets and operations[].reachability, ADR-0018); 1.2 enforces the permission naming rules (ADR-0014) and 1.1 added the operation approval metadata (ADR-0010). 1.0 to 1.2 manifests stay valid, but a member added in a later minor is refused in a manifest that declares an older one.",
+      "examples": ["1.3"],
+      "type": "string", "pattern": "^1\\.(0|[1-9][0-9]*)$"
+    },
+    "id": { "$ref": "#/$defs/plugin_id" },
+    "version": { "$ref": "#/$defs/semver" },
+    "name": { "$ref": "#/$defs/line", "minLength": 1, "maxLength": 64 },
+    "summary": { "$ref": "#/$defs/text" },
+    "description": { "$ref": "#/$defs/multiline", "minLength": 1, "maxLength": 2000 },
+    "license": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9.+:() -]+$", "description": "SPDX expression" },
+    "homepage": { "type": "string", "maxLength": 256, "pattern": "^https://[!-~]+$" },
+    "icon": { "allOf": [{ "$ref": "#/$defs/relpath" }, { "pattern": "^assets/.+\\.(png|svg)$" }] },
+    "publisher": {
+      "type": "object", "additionalProperties": false, "required": ["id", "key_id"],
+      "properties": {
+        "id": { "type": "string", "maxLength": 64, "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" },
+        "key_id": { "type": "string", "pattern": "^ed25519:[a-f0-9]{64}$", "description": "ed25519: + lower-case hex SHA-256 of the raw 32-byte public key" }
+      }
+    },
+    "abi": {
+      "type": "object", "additionalProperties": false, "required": ["major", "minimum_minor"],
+      "properties": {
+        "major": { "const": 1 },
+        "minimum_minor": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      }
+    },
+    "engine_constraint": { "$ref": "#/$defs/range" },
+    "target": { "enum": ["linux/amd64", "linux/arm64", "linux/riscv64", "linux/arm/v6", "linux/arm/v7"] },
+    "entrypoint": { "allOf": [{ "$ref": "#/$defs/relpath" }, { "pattern": "^bin/[A-Za-z0-9_-][A-Za-z0-9._-]*$" }] },
+    "files": {
+      "description": "Every file in the package except manifest.json and signatures/*, which must not be listed. Unlisted files are rejected; no path may be both a file and a directory.",
+      "type": "object", "minProperties": 1, "maxProperties": 4096,
+      "propertyNames": { "$ref": "#/$defs/relpath" },
+      "additionalProperties": { "$ref": "#/$defs/digest" }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false, "required": ["sbom"],
+      "properties": {
+        "sbom": { "allOf": [{ "$ref": "#/$defs/relpath" }, { "pattern": "^attestations/" }] },
+        "build": { "allOf": [{ "$ref": "#/$defs/relpath" }, { "pattern": "^attestations/" }] }
+      }
+    },
+    "placement": { "enum": ["node", "controller"] },
+    "lifecycle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["startup", "background", "update_strategy"],
+      "properties": {
+        "startup": { "enum": ["eager", "on_demand"] },
+        "background": {
+          "type": "boolean",
+          "description": "Runs timers or subscriptions after Activate. Background plugins must be eager."
+        },
+        "update_strategy": { "enum": ["auto", "blue_green", "restart"] },
+        "overlap_safe": {
+          "type": "boolean", "default": true,
+          "description": "false = cannot tolerate even a short blue/green overlap; host forces restart."
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "background": { "const": true } } },
+          "then": { "properties": { "startup": { "const": "eager" } } } },
+        { "if": { "properties": { "overlap_safe": { "const": false } }, "required": ["overlap_safe"] },
+          "then": { "properties": { "update_strategy": { "const": "restart" } } } }
+      ]
+    },
+    "node_requirements": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "cgroup_v2": { "type": "boolean" },
+        "systemd_min": { "type": "integer", "minimum": 230, "maximum": 9999 },
+        "kernel_min": { "type": "string", "maxLength": 16, "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}$" },
+        "host_features": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/scope" } }
+      }
+    },
+    "operations": {
+      "type": "array", "maxItems": 256,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "api_version", "permission", "mode", "effect", "risk", "idempotent",
+                     "timeout_ms", "summary", "request_schema", "response_schema"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$" },
+          "api_version": { "type": "string", "maxLength": 8, "pattern": "^v[1-9][0-9]{0,5}$" },
+          "permission": { "type": "string", "maxLength": 128, "pattern": "^[a-z][a-z0-9_.-]*:[a-z][a-z0-9_]*$" },
+          "capabilities": {
+            "description": "Capabilities this operation may use; a subset of the top-level capabilities. Omitted = all of them (ADR-0007). An empty list is rejected because protobuf cannot tell it from omitted.",
+            "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+            "items": {
+              "type": "object", "additionalProperties": false, "required": ["name", "scope"],
+              "properties": { "name": { "$ref": "#/$defs/capability_name" }, "scope": { "$ref": "#/$defs/scope" } }
+            }
+          },
+          "mode": { "enum": ["invoke", "job"] },
+          "effect": { "enum": ["read", "write", "destructive"] },
+          "risk": { "enum": ["low", "medium", "high"], "description": "Declared risk; host applies a capability floor" },
+          "idempotent": { "type": "boolean" },
+          "plannable": { "type": "boolean", "default": false },
+          "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000 },
+          "summary": { "$ref": "#/$defs/text" },
+          "docs": { "allOf": [{ "$ref": "#/$defs/relpath" }, { "pattern": "^docs/.+\\.md$" }] },
+          "undo": { "type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$" },
+          "ui_route": { "$ref": "#/$defs/ui_path" },
+          "approval": {
+            "description": "When the host asks the user before running this operation (ADR-0010). Omitted = derived from effect: read -> auto, write -> confirm, destructive -> confirm. A host hard rule (destructive effect, effective risk high) always asks, whatever this says.",
+            "$ref": "#/$defs/approval"
+          },
+          "approval_summary": {
+            "description": "Confirmation-card title written by the plugin author; required for confirm and ai_confirm. Untrusted text: render as plain text.",
+            "$ref": "#/$defs/line", "minLength": 1, "maxLength": 200
+          },
+          "approval_description": {
+            "description": "Expanded text behind the confirmation card: what the operation does, its impact, whether it can be undone and what happens on failure. Markdown, untrusted; render as text, never as HTML.",
+            "$ref": "#/$defs/multiline", "minLength": 1, "maxLength": 2000
+          },
+          "reachability": {
+            "description": "Schema 1.3 (ADR-0018). true = the operation can cut the administrator off from the server or the panel (firewall, SSH, panel port or TLS). Such an operation must change something, declare risk high and may not declare approval auto; the host shows a lockout warning before it runs and may set the flag itself from the capabilities the operation uses.",
+            "type": "boolean", "default": false
+          },
+          "request_schema": { "allOf": [{ "$ref": "#/$defs/relpath" }, { "pattern": "^schemas/.+\\.json$" }] },
+          "response_schema": { "allOf": [{ "$ref": "#/$defs/relpath" }, { "pattern": "^schemas/.+\\.json$" }] }
+        },
+        "allOf": [
+          { "if": { "properties": { "effect": { "const": "destructive" } } },
+            "then": { "properties": { "risk": { "const": "high" } } } },
+          { "if": { "properties": { "effect": { "const": "read" } } },
+            "then": { "properties": { "idempotent": { "const": true } } } },
+          { "if": { "properties": { "approval": { "enum": ["confirm", "ai_confirm"] } }, "required": ["approval"] },
+            "then": { "required": ["approval_summary"] } },
+          { "if": { "properties": { "reachability": { "const": true } }, "required": ["reachability"] },
+            "then": { "properties": {
+              "effect": { "enum": ["write", "destructive"] },
+              "risk": { "const": "high" },
+              "approval": { "enum": ["confirm", "ai_confirm"] } } } }
+        ]
+      }
+    },
+    "capabilities": {
+      "type": "array", "maxItems": 64,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["name", "scope", "reason"],
+        "properties": {
+          "name": { "$ref": "#/$defs/capability_name" },
+          "scope": { "$ref": "#/$defs/scope" },
+          "reason": { "$ref": "#/$defs/line", "minLength": 1, "maxLength": 512 }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array", "maxItems": 32,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["kind", "id", "constraint", "required"],
+        "properties": {
+          "kind": { "enum": ["plugin", "service"] },
+          "id": { "$ref": "#/$defs/plugin_id" },
+          "constraint": { "$ref": "#/$defs/range" },
+          "required": { "type": "boolean" }
+        }
+      }
+    },
+    "conflicts": {
+      "type": "array", "maxItems": 16, "uniqueItems": true,
+      "items": { "type": "object", "additionalProperties": false, "required": ["id", "constraint"],
+        "properties": { "id": { "$ref": "#/$defs/plugin_id" }, "constraint": { "$ref": "#/$defs/range" } } }
+    },
+    "replaces": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/$defs/plugin_id" } },
+    "state": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "minimum_rollback_version", "backup_paths"],
+      "properties": {
+        "schema_version": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[A-Za-z0-9._-]+$" },
+        "minimum_rollback_version": { "$ref": "#/$defs/semver" },
+        "backup_paths": {
+          "description": "Relative to the instance data_dir",
+          "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "$ref": "#/$defs/relpath" }
+        }
+      }
+    },
+    "config": {
+      "type": "object", "additionalProperties": false, "required": ["schema", "hot_apply"],
+      "properties": {
+        "schema": { "const": "schemas/config.schema.json",
+          "description": "Secret fields must be marked writeOnly: true or x-secret: true; the host stores them as secret references." },
+        "hot_apply": { "type": "boolean" }
+      }
+    },
+    "resources": {
+      "type": "object", "additionalProperties": false,
+      "required": ["memory_max_mb", "cpu_quota_percent", "pids_max", "fds_max", "disk_max_mb"],
+      "properties": {
+        "memory_max_mb": { "type": "integer", "minimum": 16, "maximum": 65536 },
+        "cpu_quota_percent": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "pids_max": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "fds_max": { "type": "integer", "minimum": 16, "maximum": 65536 },
+        "disk_max_mb": { "type": "integer", "minimum": 1, "maximum": 1048576, "description": "Soft limit: periodic accounting + alert" },
+        "kv_max_kb": { "type": "integer", "minimum": 1, "maximum": 1048576, "default": 4096 }
+      }
+    },
+    "ui": {
+      "type": "object", "additionalProperties": false, "required": ["entry", "sandbox", "connect_sources", "routes"],
+      "properties": {
+        "entry": { "allOf": [{ "$ref": "#/$defs/relpath" }, { "pattern": "^ui/" }] },
+        "sandbox": { "const": true },
+        "kit_major": { "type": "integer", "minimum": 1, "maximum": 999, "description": "Liquid UI Kit major version bundled" },
+        "connect_sources": {
+          "description": "Sensitive: shown in the install wizard",
+          "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/$defs/https_origin" }
+        },
+        "routes": {
+          "type": "array", "maxItems": 32,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["path", "title", "permission"],
+            "properties": {
+              "path": { "$ref": "#/$defs/ui_path" },
+              "title": { "$ref": "#/$defs/line", "minLength": 1, "maxLength": 32 },
+              "nav": { "type": "boolean", "default": false },
+              "permission": { "type": "string", "maxLength": 128, "pattern": "^[a-z][a-z0-9_.-]*:[a-z][a-z0-9_]*$" }
+            }
+          }
+        },
+        "widgets": {
+          "description": "Schema 1.3 (ADR-0018). Overview cards the Web Shell draws itself from the result of a read operation; no plugin code runs in the page. The operation is polled with an empty payload ({}), so its request schema must accept that.",
+          "type": "array", "maxItems": 16,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["id", "title", "kind", "operation", "refresh_seconds", "size"],
+            "properties": {
+              "id": { "type": "string", "maxLength": 32, "pattern": "^[a-z][a-z0-9_-]*$" },
+              "title": { "$ref": "#/$defs/line", "minLength": 1, "maxLength": 32 },
+              "kind": { "enum": ["stat", "series", "checks", "list"], "description": "Fixes the result shape the Shell expects" },
+              "operation": {
+                "description": "An operation of this plugin with effect read and mode invoke",
+                "type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+              },
+              "refresh_seconds": { "type": "integer", "minimum": 2, "maximum": 86400 },
+              "size": { "enum": ["s", "m", "l"] },
+              "icon": {
+                "description": "Name of a Shell icon; an unknown name falls back to the icon of the kind",
+                "type": "string", "maxLength": 32, "pattern": "^[a-z][a-z0-9-]*$"
+              },
+              "color": { "enum": ["blue", "indigo", "violet", "teal", "cyan", "green", "amber", "orange", "red", "pink", "slate"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

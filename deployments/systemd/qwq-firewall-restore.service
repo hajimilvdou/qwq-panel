@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# 无特权客户端只发送恢复请求；root 执行保持在独立 capability helper 中。
+[Unit]
+Description=Restore the saved qwq firewall input policy
+After=network.target systemd-tmpfiles-setup.service qwq-capability.socket ssh.socket sshd.socket ssh.service sshd.service
+Requires=qwq-capability.socket
+Before=qwq-controller.service
+ConditionPathExists=/etc/nftables.d/qwq.nft
+
+[Service]
+Type=oneshot
+User=qwq
+Group=qwq
+ExecStart=/opt/qwq/current/bin/qwq firewall-restore
+TimeoutStartSec=40s
+RemainAfterExit=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+MemoryMax=32M
+TasksMax=16

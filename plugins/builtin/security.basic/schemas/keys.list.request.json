@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "列举用户 SSH 公钥请求",
+  "description": "按系统用户名查询其 authorized_keys 中的公钥条目。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user"],
+  "properties": {
+    "user": {
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_.-]{0,31}$",
+      "description": "目标系统用户名（如 root、ubuntu）。"
+    }
+  }
+}

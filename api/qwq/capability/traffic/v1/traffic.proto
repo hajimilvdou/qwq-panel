@@ -1,0 +1,62 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.capability.traffic.v1;
+
+import "qwq/platform/v1/platform.proto";
+
+// Host Capability service: traffic (ADR-0023 H4).
+// Capability: system.traffic.shape; scope: self.
+//
+// Controls per-user HTB shaping in isolated nftables table inet qwq_shape for
+// reserved fwmark range 0x5100..0x51FF (20736..20991). Unmarked traffic (mark=0,
+// including SSH and panel HTTP) always routes through high-priority default
+// class 1:999 without throttling.
+service TrafficService {
+  rpc GetShapingStatus(GetShapingStatusRequest) returns (GetShapingStatusResponse);
+  rpc ApplyShapingRules(ApplyShapingRulesRequest) returns (ApplyShapingRulesResponse);
+  rpc ClearShapingRules(ClearShapingRulesRequest) returns (ClearShapingRulesResponse);
+}
+
+message UserShapingClass {
+  uint32 traffic_mark = 1;
+  uint32 down_limit_kbps = 2;
+  uint32 up_limit_kbps = 3;
+}
+
+message GetShapingStatusRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+}
+
+message GetShapingStatusResponse {
+  bool supported = 1;
+  bool uplink_ifb_supported = 2;
+  string degraded_reason = 3;
+  string egress_interface = 4;
+  repeated UserShapingClass classes = 5;
+  string revision = 6;
+  qwq.platform.v1.ErrorDetail error = 7;
+}
+
+message ApplyShapingRulesRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  repeated UserShapingClass classes = 2;
+  string expected_revision = 3;
+}
+
+message ApplyShapingRulesResponse {
+  string revision = 1;
+  bool degraded_uplink = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+message ClearShapingRulesRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string expected_revision = 2;
+}
+
+message ClearShapingRulesResponse {
+  string revision = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}

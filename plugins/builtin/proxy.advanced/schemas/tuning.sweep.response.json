@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "运行 iperf3 限速器拐点探测响应",
+  "description": "返回 iperf3 可用状态、吞吐与重传分析或不可用提示。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "iperf3_available",
+    "peer",
+    "port"
+  ],
+  "properties": {
+    "iperf3_available": {
+      "type": "boolean"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "peer": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer"
+    },
+    "sent_mbps": {
+      "type": "number"
+    },
+    "recv_mbps": {
+      "type": "number"
+    },
+    "retransmits": {
+      "type": "integer"
+    },
+    "advice": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    },
+    "command_hint": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "高级代理概览查询请求",
+  "description": "查询套餐与多用户汇总状态；首页微件轮询时保持 include_traffic_status=false 以避免多余系统调用。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "include_traffic_status": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否在概览中附带一次内核带宽限速状态探测。"
+    }
+  }
+}

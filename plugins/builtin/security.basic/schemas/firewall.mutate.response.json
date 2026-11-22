@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "防火墙变更响应",
+  "description": "应用或重置防火墙规则集后返回的最新修订号。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["revision"],
+  "properties": {
+    "revision": {
+      "type": "string",
+      "description": "更新后的 firewall/ruleset 修订号。"
+    }
+  }
+}

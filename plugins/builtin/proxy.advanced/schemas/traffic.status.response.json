@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "内核带宽限速状态响应",
+  "description": "反映节点内核 sch_htb / ifb 真实能力、出口网卡、降级原因及当前限速类。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "supported",
+    "uplink_ifb_supported",
+    "degraded_reason",
+    "egress_interface",
+    "revision",
+    "classes"
+  ],
+  "properties": {
+    "supported": { "type": "boolean", "description": "内核是否支持 HTB 下行流量整形。" },
+    "uplink_ifb_supported": { "type": "boolean", "description": "内核是否支持 IFB 上行流量整形。" },
+    "degraded_reason": { "type": "string", "description": "不支持或降级时的宿主诊断原因。" },
+    "egress_interface": { "type": "string", "description": "挂载整形队列的默认出口网卡名。" },
+    "revision": { "type": "string", "description": "当前限速规则修订号。" },
+    "classes": {
+      "type": "array",
+      "description": "当前生效的逐用户 HTB 限速类列表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["traffic_mark", "down_limit_kbps", "up_limit_kbps"],
+        "properties": {
+          "traffic_mark": { "type": "integer", "minimum": 20736, "maximum": 20991, "description": "nftables/tc fwmark 标记。" },
+          "down_limit_kbps": { "type": "integer", "minimum": 0, "description": "下行速率上限（kbps）。" },
+          "up_limit_kbps": { "type": "integer", "minimum": 0, "description": "上行速率上限（kbps）。" }
+        }
+      }
+    }
+  }
+}

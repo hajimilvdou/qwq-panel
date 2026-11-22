@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "删除未被任何消费者引用的历史证书代请求（对齐 hostauth.CertificateTargetArgs）",
+  "required": [
+    "certificate_id",
+    "attempt_id",
+    "generation"
+  ],
+  "properties": {
+    "certificate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "证书资源 ID"
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "本次删除代幂等尝试 ID"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "待删除的历史证书代号（不能为当前活跃代或被绑定引用代）"
+    }
+  }
+}

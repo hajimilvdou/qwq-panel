@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "防爆破封禁列表响应",
+  "description": "当前 inet qwq 封禁集合中的活跃 IP 列表及 fail2ban 旁观模式状态。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["revision", "bans", "fail2ban_observer", "cursor"],
+  "properties": {
+    "revision": { "type": "string", "description": "ban/set 当前修订号。" },
+    "bans": {
+      "type": "array",
+      "description": "当前生效的封禁 IP 条目列表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ip", "expires_at"],
+        "properties": {
+          "ip": { "type": "string", "description": "被封禁的 IPv4 或 IPv6 地址。" },
+          "expires_at": { "type": "integer", "minimum": 0, "description": "nftables 集合条目到期时间（Unix 毫秒）。" }
+        }
+      }
+    },
+    "fail2ban_observer": {
+      "type": "boolean",
+      "description": "是否因检测到活跃 fail2ban 而处于只读旁观模式。"
+    },
+    "cursor": {
+      "type": "string",
+      "description": "最近一次 journald 增量扫描保存的游标。"
+    }
+  }
+}

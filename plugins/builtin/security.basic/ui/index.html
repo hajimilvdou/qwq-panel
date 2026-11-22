@@ -1,0 +1,95 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>基础安全</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --fg: #182026;
+      --muted: #5c7080;
+      --border: #d8e1e8;
+      --card: #f7f9fb;
+      --accent: #0f62fe;
+      --warn: #b45309;
+    }
+    html[data-theme="dark"] {
+      --bg: #12161b;
+      --fg: #edf2f7;
+      --muted: #94a3b8;
+      --border: #2d3748;
+      --card: #1a202c;
+      --accent: #4589ff;
+      --warn: #f59e0b;
+    }
+    body { margin: 0; font: 14px/1.5 system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); }
+    main { max-width: 960px; margin: 0 auto; padding: 16px; display: grid; gap: 12px; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: 18px; }
+    h2 { margin: 0 0 8px; font-size: 15px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .card { border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 12px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .warn { color: var(--warn); font-size: 12px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+    input, button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #ffffff; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    pre { margin: 8px 0 0; font: 12px/1.4 ui-monospace, SFMono-Regular, monospace; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <main id="security-root">
+    <header>
+      <div>
+        <h1>基础安全</h1>
+        <div id="status" class="muted">正在连接宿主…</div>
+      </div>
+      <div class="row">
+        <button id="refresh" type="button">刷新状态</button>
+      </div>
+    </header>
+
+    <section class="grid">
+      <article class="card">
+        <h2>安全概览</h2>
+        <div id="overview-summary">等待读取…</div>
+        <div id="overview-sub" class="muted"></div>
+      </article>
+      <article class="card">
+        <h2>防火墙与共存检测</h2>
+        <div id="fw-summary">等待读取…</div>
+        <div id="conflicts-summary" class="muted"></div>
+      </article>
+      <article class="card">
+        <h2>SSH 基线与改端口事务</h2>
+        <div id="sshd-summary">等待读取…</div>
+        <div id="saga-summary" class="muted"></div>
+      </article>
+      <article class="card">
+        <h2>防爆破封禁</h2>
+        <div id="ban-summary">等待读取…</div>
+        <div id="ban-mode" class="muted"></div>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>浏览器本地生成 Ed25519 SSH 密钥</h2>
+      <div class="muted">私钥仅在浏览器本地生成并触发下载，绝不上传至服务器；仅自动提交 OpenSSH 公钥（不支持 WebCrypto Ed25519 时将提示回退路径）。</div>
+      <div class="row">
+        <label for="key-user">目标用户</label>
+        <input id="key-user" type="text" value="root" placeholder="root" autocomplete="off">
+        <label for="key-comment">公钥备注</label>
+        <input id="key-comment" type="text" value="qwq-browser" placeholder="qwq-browser" autocomplete="off">
+        <button id="gen-ed25519" class="primary" type="button">本地生成并下载私钥</button>
+      </div>
+      <div id="key-feedback" class="muted" aria-live="polite"></div>
+      <pre id="key-pubkey" hidden></pre>
+    </section>
+  </main>
+  <script src="security.js"></script>
+</body>
+</html>

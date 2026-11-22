@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Runs qwq-backup.service once a day (DEP-04). Persistent= catches up a run
+# missed while the machine was off; the random delay spreads the I/O.
+
+[Unit]
+Description=Daily qwq backup
+Documentation=https://github.com/qwq-panel/qwq
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

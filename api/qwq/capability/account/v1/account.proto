@@ -1,0 +1,133 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.capability.account.v1;
+
+import "qwq/platform/v1/platform.proto";
+
+// Host Capability service: account (ADR-0019 decision 3.3).
+// Capabilities: system.account.keys:<user> for the key RPCs and system.account.password:<user> for
+// SetPassword; the scope must match the RPC's user parameter (capability gate, ADR-0019 decision 4).
+// The reserved scope "all" matches any user. user is validated against ^[a-z_][a-z0-9_.-]{0,31}$;
+// path traversal is rejected.
+//
+// Keys live in ~<user>/.ssh/authorized_keys (0600, owned by <user>); file mode and ownership are
+// preserved on every write. ImportKey rejects DSA and RSA shorter than 3072 bits (ADR-0009 rule 5)
+// and is idempotent on the fingerprint. RemoveKey refuses to delete the last key while password
+// login is disabled (anti-lockout, PRECONDITION_FAILED). GenerateKey is the fallback path: the
+// default is browser WebCrypto generation with only the public key uploaded; a server-generated
+// private key is returned exactly once in private_key_pem, never written to disk, logs, events or
+// audit, and is zeroed by the host right after forwarding.
+//
+// SetPassword passes the new password as a secret reference (ADR-0009 rule 6). The reveal happens
+// on the host side (owner-bound, operation-dispatch checked); the plugin never calls RevealSecret
+// and never sees the plaintext. The helper feeds chpasswd via stdin, never argv, and never logs
+// the password.
+//
+// Errors follow the Platform ABI convention (ADR-0007): gRPC status codes report transport and
+// host-side failures; a call that reached its handler reports the business outcome in
+// ErrorDetail.code with gRPC OK. Codes: VALIDATION_FAILED (with FieldViolation), PRECONDITION_FAILED
+// (revision mismatch or anti-lockout), PERMISSION_DENIED, CONFLICT, RESOURCE_EXHAUSTED, UNAVAILABLE,
+// INTERNAL.
+//
+// Write RPCs need the operation_id currently dispatched to this instance; read RPCs only need the
+// capability. Versioned independently of the Platform ABI: append-only once frozen, not counted in
+// sdk/abi.Minor. go_package is supplied by Buf managed mode; do not hard-code it here.
+
+service AccountService {
+  // Lists the user's authorized keys. effect=read, risk=low.
+  rpc ListKeys(ListKeysRequest) returns (ListKeysResponse);
+  // Appends one public key; duplicate fingerprints are idempotent. effect=write, risk=high.
+  rpc ImportKey(ImportKeyRequest) returns (ImportKeyResponse);
+  // Removes the key with the given fingerprint; anti-lockout applies.
+  // effect=write, risk=high, reachability.
+  rpc RemoveKey(RemoveKeyRequest) returns (RemoveKeyResponse);
+  // Server-side key generation fallback (default: browser WebCrypto). The public key is imported
+  // as usual; private_key_pem is returned once and never persisted by the host or the helper.
+  // effect=write, risk=high.
+  rpc GenerateKey(GenerateKeyRequest) returns (GenerateKeyResponse);
+  // Sets the user's password from a secret reference; the host reveals it, the plugin never sees
+  // the plaintext. effect=write, risk=high, reachability.
+  rpc SetPassword(SetPasswordRequest) returns (SetPasswordResponse);
+}
+
+message ListKeysRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string user = 2;
+}
+message ListKeysResponse {
+  repeated Key keys = 1;
+  // Revision of account/<user>/keys.
+  string revision = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+// One authorized key.
+message Key {
+  // Key type, e.g. ed25519, ecdsa, rsa.
+  string type = 1;
+  uint32 bits = 2;
+  string fingerprint_sha256 = 3;
+  string comment = 4;
+  // Position of the key line in authorized_keys.
+  uint32 line_index = 5;
+}
+
+message ImportKeyRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string user = 2;
+  // One authorized_keys line; DSA and RSA < 3072 bits are rejected.
+  string public_key = 3;
+  string expected_revision = 4;
+}
+message ImportKeyResponse {
+  string fingerprint_sha256 = 1;
+  string type = 2;
+  uint32 bits = 3;
+  string comment = 4;
+  string revision = 5;
+  qwq.platform.v1.ErrorDetail error = 6;
+}
+
+message RemoveKeyRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string user = 2;
+  string fingerprint_sha256 = 3;
+  string expected_revision = 4;
+}
+message RemoveKeyResponse {
+  string revision = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+
+message GenerateKeyRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string user = 2;
+  // Key type; empty defaults to ed25519.
+  string type = 3;
+  string expected_revision = 4;
+}
+message GenerateKeyResponse {
+  string public_key = 1;
+  string fingerprint_sha256 = 2;
+  // The private key PEM, returned exactly once on the server-generation fallback path; empty on
+  // the default browser path. Never logged, never persisted.
+  bytes private_key_pem = 3;
+  qwq.platform.v1.ErrorDetail error = 4;
+  // 导入生成公钥后的 account/<user>/keys revision；追加字段保持已有 wire 兼容。
+  string revision = 5;
+}
+
+message SetPasswordRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string user = 2;
+  // Reference to the password secret; the host reveals it owner-bound, the plugin never sees the
+  // plaintext. Weak passwords are rejected by the host with VALIDATION_FAILED.
+  string secret_ref = 3;
+  string expected_revision = 4;
+}
+message SetPasswordResponse {
+  string revision = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}

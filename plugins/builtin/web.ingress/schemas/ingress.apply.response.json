@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "applied",
+    "active_routes",
+    "engine",
+    "written_files"
+  ],
+  "properties": {
+    "applied": {
+      "type": "boolean"
+    },
+    "active_routes": {
+      "type": "integer"
+    },
+    "engine": {
+      "type": "string"
+    },
+    "written_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

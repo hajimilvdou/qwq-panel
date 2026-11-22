@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "创建或更新代理套餐请求",
+  "description": "按套餐 ID 创建新套餐或更新已有套餐的流量配额、限速与重置周期。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9._-]{0,31}$",
+      "description": "套餐唯一 ID（如 basic-100g、pro-1t）。"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "套餐中文或英文名称。"
+    },
+    "quota_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "周期总流量配额（字节，0 表示不限流量）。"
+    },
+    "down_limit_kbps": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000000,
+      "default": 0,
+      "description": "下行带宽限速（kbps，0 表示不限速）。"
+    },
+    "up_limit_kbps": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000000,
+      "default": 0,
+      "description": "上行带宽限速（kbps，0 表示不限速）。"
+    },
+    "billing_reset_day": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 28,
+      "default": 1,
+      "description": "每月自动归零配额的日期（1..28；0 表示关闭月度重置）。"
+    },
+    "validity_days": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3650,
+      "default": 0,
+      "description": "新建归属用户的默认有效天数（0 表示长期有效）。"
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "可选更新时的乐观并发修订号。"
+    },
+    "max_connections": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "default": 0,
+      "description": "套餐默认最大并发 TCP 连接数（0 表示不限）。"
+    },
+    "max_ips": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1024,
+      "default": 0,
+      "description": "套餐默认最大同时在线 IP 数（0 表示不限）。"
+    }
+  }
+}

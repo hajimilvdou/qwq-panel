@@ -1,0 +1,50 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "校验 DNS 记录在权威与公共解析器中是否已生效的请求（对齐 hostauth.DNSArgs）",
+  "required": [
+    "provider_id",
+    "zone_id",
+    "name",
+    "type",
+    "value"
+  ],
+  "properties": {
+    "provider_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "DNS 提供商资源 ID"
+    },
+    "zone_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "已授权托管域 ID"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "description": "待校验的完整域名"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "A",
+        "AAAA",
+        "CNAME",
+        "TXT"
+      ],
+      "description": "待校验的记录类型"
+    },
+    "value": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "期望观测到的记录目标值"
+    }
+  }
+}

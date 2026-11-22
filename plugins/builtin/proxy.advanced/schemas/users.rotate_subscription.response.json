@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "轮换用户订阅令牌响应",
+  "description": "一次性返回新签发的订阅令牌、公开订阅路径与最新修订号。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user_id", "subscription_token", "subscription_path", "revision"],
+  "properties": {
+    "user_id": { "type": "string", "description": "代理用户 ID。" },
+    "subscription_token": { "type": "string", "description": "一次性返回的新高熵订阅令牌。" },
+    "subscription_path": { "type": "string", "description": "新的公开订阅路径（/p/proxy.advanced/sub/<token>）。" },
+    "revision": { "type": "integer", "minimum": 1, "description": "轮换后的用户修订号。" }
+  }
+}

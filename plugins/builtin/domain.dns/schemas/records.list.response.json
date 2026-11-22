@@ -1,0 +1,68 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "已授权托管域的 DNS 解析记录快照响应",
+  "required": [
+    "revision",
+    "records"
+  ],
+  "properties": {
+    "revision": {
+      "type": "string",
+      "description": "当前域记录快照的乐观锁版本，用于后续 records.apply 校验"
+    },
+    "records": {
+      "type": "array",
+      "description": "解析记录公开列表",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "type",
+          "name",
+          "value",
+          "ttl",
+          "proxied",
+          "revision",
+          "managed_challenge"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "提供商侧记录 ID"
+          },
+          "type": {
+            "type": "string",
+            "description": "记录类型（A、AAAA、CNAME、TXT 等）"
+          },
+          "name": {
+            "type": "string",
+            "description": "规范化完整域名"
+          },
+          "value": {
+            "type": "string",
+            "description": "记录值"
+          },
+          "ttl": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "TTL 秒数"
+          },
+          "proxied": {
+            "type": "boolean",
+            "description": "是否启用 CDN 代理（仅 Cloudflare 支持）"
+          },
+          "revision": {
+            "type": "string",
+            "description": "单条记录完整内容指纹版本"
+          },
+          "managed_challenge": {
+            "type": "boolean",
+            "description": "是否由宿主 ACME DNS-01 挑战托管"
+          }
+        }
+      }
+    }
+  }
+}

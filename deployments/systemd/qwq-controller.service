@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# qwq controller (standalone role). Installed as /etc/systemd/system/qwq-controller.service
+# from the release tree; see deployments/README.md for the on-disk layout.
+#
+# The binary is static and runs as the unprivileged qwq user. It may bind :80/:443
+# for ACME or the panel listener, hence CAP_NET_BIND_SERVICE; everything else is
+# dropped. Configuration is read-only; only the state directory and
+# /run/qwq/host are writable. Logs go to journald only.
+
+[Unit]
+Description=qwq controller
+Documentation=https://github.com/qwq-panel/qwq
+After=network-online.target systemd-tmpfiles-setup.service qwq-privileged.socket qwq-capability.socket qwq-firewall-restore.service
+Wants=network-online.target qwq-privileged.socket qwq-capability.socket qwq-firewall-restore.service
+ConditionPathExists=/etc/qwq/qwq.json
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=qwq
+Group=qwq
+ExecStart=/opt/qwq/current/bin/qwq serve-controller --config /etc/qwq/qwq.json
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+KillMode=mixed
+KillSignal=SIGTERM
+
+# The state directory is created and owned by systemd (0700, matching
+# deployments/tmpfiles/qwq.conf). /run/qwq belongs to root and is created by
+# tmpfiles; the controller only writes /run/qwq/host (ADR-0012). There is
+# deliberately no RuntimeDirectory=: systemd would rm -rf /run/qwq (helper
+# socket, plugin sockets, bind targets) on every stop and chown the whole tree
+# to qwq on start. ProtectSystem=strict keeps everything else read-only.
+StateDirectory=qwq
+StateDirectoryMode=0700
+ConfigurationDirectory=qwq
+ReadWritePaths=/run/qwq/host
+UMask=0077
+
+# Sandbox. AF_NETLINK is needed by net.Interfaces (self-signed SAN enumeration).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# The controller supervises plugins and must survive plugin memory spikes.
+OOMScoreAdjust=-500
+LimitNOFILE=65535
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "读取 SSHD 状态请求",
+  "description": "可选按 Match 条件（用户与来源地址）查询 sshd -T 生效配置。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "match_user": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "可选 Match 用户名，用于精确评估 Match User 覆盖。"
+    },
+    "match_address": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "可选 Match 来源 IP 地址，用于精确评估 Match Address 覆盖。"
+    }
+  }
+}

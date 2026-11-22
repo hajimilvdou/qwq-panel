@@ -1,0 +1,65 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "证书自动续期策略公开状态响应",
+  "required": [
+    "renewal"
+  ],
+  "properties": {
+    "renewal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "certificate_id",
+        "revision",
+        "enabled",
+        "status",
+        "attempts"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "续期策略 ID"
+        },
+        "certificate_id": {
+          "type": "string",
+          "description": "关联证书 ID"
+        },
+        "revision": {
+          "type": "string",
+          "description": "策略当前乐观锁版本"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "后台自动续期是否已启用"
+        },
+        "status": {
+          "type": "string",
+          "description": "策略当前状态"
+        },
+        "next_at": {
+          "type": "string",
+          "description": "下一次计划续期时间（RFC3339）"
+        },
+        "expires_at": {
+          "type": "string",
+          "description": "授权或证书到期时间（RFC3339）"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "连续失败重试次数"
+        },
+        "last_error": {
+          "type": "string",
+          "description": "最近一次脱敏错误码"
+        },
+        "alert": {
+          "type": "string",
+          "description": "告警级别或提示"
+        }
+      }
+    }
+  }
+}

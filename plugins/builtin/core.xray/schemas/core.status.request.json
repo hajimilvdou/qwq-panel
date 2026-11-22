@@ -1,0 +1,7 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {},
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qwq:plugin:core.xray:core.status:request:v1"
+}

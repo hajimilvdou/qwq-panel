@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "查询或撤销自动续期策略请求（严格对齐 hostauth.RenewalTargetArgs）",
+  "required": [
+    "policy_id",
+    "certificate_id"
+  ],
+  "properties": {
+    "policy_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "续期策略 ID"
+    },
+    "certificate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "关联证书资源 ID"
+    }
+  }
+}

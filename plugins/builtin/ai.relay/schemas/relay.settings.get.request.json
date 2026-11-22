@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "读取门户注册与额度策略请求",
+  "description": "读取门户注册开关、LinuxDo 信任分级映射与签到补水设置（敏感凭据自动脱敏不返回明文）。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "include_tier_rules": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否在响应中包含 LinuxDo TL0..TL4 分级映射表。"
+    }
+  }
+}

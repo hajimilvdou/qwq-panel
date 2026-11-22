@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "列举分发门户用户请求",
+  "description": "按分组、状态或注册来源查询独立分发门户用户列表与虚拟配额余额。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "group_name": {
+      "type": "string",
+      "maxLength": 32,
+      "description": "可选按所属分组过滤。"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["", "active", "disabled"],
+      "description": "可选按账号状态过滤。"
+    },
+    "signup_source": {
+      "type": "string",
+      "enum": ["", "admin", "invite", "email", "linuxdo"],
+      "description": "可选按注册来源渠道过滤。"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500,
+      "default": 100,
+      "description": "最多返回的用户条目数。"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "服务端回退生成 SSH 密钥对响应",
+  "description": "返回新导入的公钥、指纹、修订号以及一次性私钥文本（请立即保存）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["public_key", "fingerprint_sha256", "private_key_pem", "revision"],
+  "properties": {
+    "public_key": { "type": "string", "description": "已自动导入至 authorized_keys 的 OpenSSH 公钥。" },
+    "fingerprint_sha256": { "type": "string", "description": "公钥 SHA-256 指纹。" },
+    "private_key_pem": {
+      "type": "string",
+      "x-secret": true,
+      "description": "一次性返回的私钥 PEM 文本，宿主与插件均不落盘、不记录日志。"
+    },
+    "revision": { "type": "string", "description": "导入后的 account/<user>/keys 修订号。" }
+  }
+}

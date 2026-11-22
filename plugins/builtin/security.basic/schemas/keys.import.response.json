@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "导入 SSH 公钥响应",
+  "description": "返回成功导入的公钥指纹、算法属性与新修订号。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["fingerprint_sha256", "type", "bits", "comment", "revision"],
+  "properties": {
+    "fingerprint_sha256": { "type": "string", "description": "公钥 SHA-256 指纹。" },
+    "type": { "type": "string", "description": "公钥算法类型。" },
+    "bits": { "type": "integer", "minimum": 0, "description": "密钥位长。" },
+    "comment": { "type": "string", "description": "公钥备注。" },
+    "revision": { "type": "string", "description": "导入后的 account/<user>/keys 修订号。" }
+  }
+}

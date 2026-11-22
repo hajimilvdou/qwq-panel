@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "预览服务端链式出口配置请求",
+  "description": "渲染包含 proxySettings.tag 与路由规则的 Xray 链式出口脱敏预览。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

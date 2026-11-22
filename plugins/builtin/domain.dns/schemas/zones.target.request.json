@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "按提供商 ID 与托管域 ID 选择目标域的请求",
+  "required": [
+    "provider_id",
+    "zone_id"
+  ],
+  "properties": {
+    "provider_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "DNS 提供商资源 ID"
+    },
+    "zone_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "提供商侧托管域唯一 ID"
+    }
+  }
+}

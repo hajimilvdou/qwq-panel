@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "证书删除确认响应",
+  "required": [
+    "certificate_id",
+    "removed"
+  ],
+  "properties": {
+    "certificate_id": {
+      "type": "string",
+      "description": "已删除的证书资源 ID"
+    },
+    "removed": {
+      "type": "boolean",
+      "description": "证书及其全部材料是否已删除"
+    }
+  }
+}

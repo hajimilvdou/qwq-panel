@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "设置 SSH 登录策略请求",
+  "description": "配置密码登录开关与 root 登录模式；permit_root_login 与 root_login_mode 互斥，不可同时设置。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "password_auth": {
+      "type": "boolean",
+      "description": "是否允许密码登录（PasswordAuthentication）。留空表示保持不变。"
+    },
+    "permit_root_login": {
+      "type": "boolean",
+      "description": "布尔方式设置是否允许 root 登录（与 root_login_mode 互斥）。"
+    },
+    "root_login_mode": {
+      "type": "string",
+      "enum": ["allow", "deny", "keys_only"],
+      "description": "精细设置 root 登录模式：allow（允许）、deny（禁止）、keys_only（仅公钥 prohibit-password）；与 permit_root_login 互斥。"
+    },
+    "recovery_user": {
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_.-]{0,31}$",
+      "description": "收紧登录策略时用于防锁死校验的恢复用户名（需具备有效公钥登录路径）。"
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "可选 sshd/config 期望修订号。"
+    }
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "domain",
+    "upstream_url"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 253
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "upstream_url": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 512
+    },
+    "path_prefix": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "websocket": {
+      "type": "boolean"
+    },
+    "tls_mode": {
+      "type": "string",
+      "enum": [
+        "off",
+        "managed",
+        "custom"
+      ]
+    },
+    "cert_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "force_https": {
+      "type": "boolean"
+    },
+    "rate_limit_rps": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "rate_limit_burst": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 20000
+    },
+    "basic_auth_user": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "basic_auth_pass": {
+      "type": "string",
+      "maxLength": 128,
+      "writeOnly": true
+    },
+    "clear_basic_auth": {
+      "type": "boolean"
+    },
+    "extra_headers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 256
+      }
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 256
+    }
+  }
+}

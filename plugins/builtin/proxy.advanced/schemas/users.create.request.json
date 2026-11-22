@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "创建代理用户请求",
+  "description": "创建新多协议代理用户、分配唯一 traffic_mark 与高熵订阅令牌，并同步下发 core.xray 配置与 HTB 限速。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "display_name",
+    "plan_id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9._-]{0,31}$",
+      "description": "用户唯一 ID（同步作为 core.xray 用户标识）。"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "用户展示备注名称。"
+    },
+    "plan_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9._-]{0,31}$",
+      "description": "绑定的套餐 ID（须已存在）。"
+    },
+    "expires_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "可选自定义到期时间戳（Unix 毫秒）；留空时按套餐 validity_days 自动推导。"
+    },
+    "skip_traffic_mark": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否跳过分配 0x5100..0x51FF 限速标记（默认 false 自动分配最小空闲槽位）。"
+    },
+    "max_connections_override": {
+      "type": "integer",
+      "minimum": -1,
+      "maximum": 65535,
+      "default": -1,
+      "description": "单用户最大并发连接覆盖（-1 继承套餐，0 不限，>0 显式上限）。"
+    },
+    "max_ips_override": {
+      "type": "integer",
+      "minimum": -1,
+      "maximum": 1024,
+      "default": -1,
+      "description": "单用户最大同时在线 IP 覆盖（-1 继承套餐，0 不限，>0 显式上限）。"
+    },
+    "chain_id": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "可选指定链式代理落地节点 ID。"
+    }
+  }
+}

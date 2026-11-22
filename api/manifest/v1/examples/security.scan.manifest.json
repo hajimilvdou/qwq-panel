@@ -1,0 +1,175 @@
+{
+  "schema_version": "1.2",
+  "id": "security.scan",
+  "version": "0.4.1",
+  "name": "安全巡检",
+  "summary": "定期检查 SSH 配置、开放端口与弱口令策略",
+  "description": "示例 manifest：files 中的摘要是占位值（文件名的 sha256），不对应真实文件；publisher.key_id 也是占位值，不对应真实密钥。",
+  "license": "Apache-2.0",
+  "icon": "assets/icon.svg",
+  "publisher": {
+    "id": "qwq-builtin",
+    "key_id": "ed25519:4f1c2b7d9a2e6c014f1c2b7d9a2e6c014f1c2b7d9a2e6c014f1c2b7d9a2e6c01"
+  },
+  "abi": {
+    "major": 1,
+    "minimum_minor": 0
+  },
+  "engine_constraint": ">=0.1.0 <1.0.0",
+  "target": "linux/amd64",
+  "entrypoint": "bin/plugin",
+  "files": {
+    "bin/plugin": "sha256:e42bc0a08e1ec54095e250394969340b3404a1b0dec5f8095b479a454a76efe9",
+    "schemas/config.schema.json": "sha256:2039bc4b8f1809fe2f666b0fd8f6db3aeaeecd5f5f68e968670d1bab976351a9",
+    "schemas/scan.run.request.json": "sha256:b79454f358c427521ff031c70340cf7a06ddf0c91b28031de65ca79e46b15780",
+    "schemas/scan.run.response.json": "sha256:d821a4887957fdf4b56c7313da0bf99a6bd64824c83267ea1040d88d7b4f002b",
+    "schemas/baseline.enable.request.json": "sha256:d11cee05da7e089fc2f724a02235e74b1ecd4a0f1a1e4f17bede31c6bfdb49e6",
+    "schemas/baseline.enable.response.json": "sha256:6cd67e100a2af1687d54d07bd9082e06ea7c4c470ae64666d2e16b84afa7e9d0",
+    "schemas/baseline.disable.request.json": "sha256:de6fdee6a3ef342206d73beb5ea64021aed52f79c2bc15bbf330a2c5c5de5133",
+    "schemas/baseline.disable.response.json": "sha256:b68ec70454926cdd012cdfe808212ca7acc3d4b7740cd03fad51d76d9db56a16",
+    "docs/baseline.enable.md": "sha256:2fc82d8063aaea87b7987ea5612736d60eeaf062a8649ff8069cee6e972c0494",
+    "attestations/sbom.spdx.json": "sha256:dbbeca47945e1152fa5f594fce50ff6d945256fb0a21c3cc96584675dba3b5c1",
+    "attestations/build.intoto.jsonl": "sha256:a3c080cf5f09ed44b713085a1e51881ce1eb28703521102a389c944e8ddde385",
+    "assets/icon.svg": "sha256:d0786480a462432e607e4b0d62628ffd7f59c9283ba7822c2e6f9c1ee42cd93c",
+    "ui/index.html": "sha256:88636d2769930e3e701c64fbf0ef7d46810b89d9798446fee7e9c2d47597ddf8",
+    "ui/app.js": "sha256:439741fcbcb50bdc62ed07dfc1a9fe7ac3c4f04fd3e5ec85b59f215c88db273c"
+  },
+  "provenance": {
+    "sbom": "attestations/sbom.spdx.json",
+    "build": "attestations/build.intoto.jsonl"
+  },
+  "placement": "node",
+  "lifecycle": {
+    "startup": "eager",
+    "background": true,
+    "update_strategy": "auto"
+  },
+  "node_requirements": {
+    "cgroup_v2": true,
+    "systemd_min": 247
+  },
+  "operations": [
+    {
+      "name": "scan.run",
+      "api_version": "v1",
+      "request_schema": "schemas/scan.run.request.json",
+      "response_schema": "schemas/scan.run.response.json",
+      "permission": "security.scan:read",
+      "capabilities": [
+        { "name": "system.config.read", "scope": "sshd" },
+        { "name": "metrics.read", "scope": "host:ports" },
+        { "name": "state.kv.write", "scope": "self" }
+      ],
+      "mode": "job",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 120000,
+      "summary": "立即执行一次巡检并返回发现的问题",
+      "ui_route": "/plugins/security.scan/report"
+    },
+    {
+      "name": "baseline.enable",
+      "api_version": "v1",
+      "request_schema": "schemas/baseline.enable.request.json",
+      "response_schema": "schemas/baseline.enable.response.json",
+      "permission": "security.scan:configure",
+      "capabilities": [
+        { "name": "state.kv.write", "scope": "self" }
+      ],
+      "mode": "job",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "plannable": true,
+      "timeout_ms": 60000,
+      "summary": "开启 SSH、端口与弱口令的定期巡检",
+      "approval": "ai_confirm",
+      "approval_summary": "开启定期安全巡检",
+      "approval_description": "写入巡检计划并立即开始计时。\n\n- 作用：按计划检查 SSH 配置、监听端口与弱口令策略\n- 影响范围：只修改本插件自己的计划数据，不改动 sshd 配置\n- 是否可撤销：可以，随时可关闭，历史报告保留\n- 失败时：计划不生效，操作记录为 FAILED，不会留下半开启状态",
+      "docs": "docs/baseline.enable.md",
+      "undo": "baseline.disable",
+      "ui_route": "/plugins/security.scan/settings"
+    },
+    {
+      "name": "baseline.disable",
+      "api_version": "v1",
+      "request_schema": "schemas/baseline.disable.request.json",
+      "response_schema": "schemas/baseline.disable.response.json",
+      "permission": "security.scan:configure",
+      "capabilities": [
+        { "name": "state.kv.write", "scope": "self" }
+      ],
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "plannable": true,
+      "timeout_ms": 10000,
+      "summary": "关闭定期巡检，保留历史报告",
+      "undo": "baseline.enable",
+      "ui_route": "/plugins/security.scan/settings"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "system.config.read",
+      "scope": "sshd",
+      "reason": "读取 sshd_config 判断是否允许密码登录与 root 登录"
+    },
+    {
+      "name": "metrics.read",
+      "scope": "host:ports",
+      "reason": "列出本机监听端口"
+    },
+    {
+      "name": "events.publish",
+      "scope": "security.alert",
+      "reason": "发现高危问题时发出告警"
+    },
+    {
+      "name": "state.kv.write",
+      "scope": "self",
+      "reason": "保存巡检计划与历史报告"
+    }
+  ],
+  "dependencies": [],
+  "state": {
+    "schema_version": "2",
+    "minimum_rollback_version": "0.3.0",
+    "backup_paths": [
+      "reports"
+    ]
+  },
+  "config": {
+    "schema": "schemas/config.schema.json",
+    "hot_apply": true
+  },
+  "resources": {
+    "memory_max_mb": 32,
+    "cpu_quota_percent": 20,
+    "pids_max": 16,
+    "fds_max": 128,
+    "disk_max_mb": 64,
+    "kv_max_kb": 1024
+  },
+  "ui": {
+    "entry": "ui/index.html",
+    "sandbox": true,
+    "kit_major": 1,
+    "connect_sources": [],
+    "routes": [
+      {
+        "path": "/plugins/security.scan/report",
+        "title": "巡检报告",
+        "nav": true,
+        "permission": "security.scan:read"
+      },
+      {
+        "path": "/plugins/security.scan/settings",
+        "title": "巡检设置",
+        "permission": "security.scan:configure"
+      }
+    ]
+  }
+}

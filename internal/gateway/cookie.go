@@ -1,0 +1,54 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+package gateway
+
+import (
+	"net/http"
+	"time"
+)
+
+// SessionCookieName is the session cookie of the public API. It matches
+// identity.SessionCookieName and the sessionCookie security scheme: the
+// __Secure- prefix stops a network attacker from planting it over plain HTTP,
+// and Path=/api/ keeps it away from public plugin routes under /p/
+// (ARCH §4.1.1).
+const SessionCookieName = "__Secure-qwq_session"
+
+// sessionCookiePath is the cookie path required by the contract.
+const sessionCookiePath = "/api/"
+
+// SetSessionCookie writes the session cookie. ttl is the remaining lifetime;
+// a non-positive ttl writes a session cookie (no Max-Age).
+//
+// The Secure attribute is always set except when Config.InsecureCookies is on,
+// which exists for tests on plain HTTP. Browsers reject a __Secure- cookie
+// without Secure, which is exactly the protection the prefix promises.
+func (g *Gateway) SetSessionCookie(w http.ResponseWriter, value string, ttl time.Duration) {
+	c := &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    value,
+		Path:     sessionCookiePath,
+		HttpOnly: true,
+		Secure:   !g.cfg.InsecureCookies,
+		SameSite: http.SameSiteLaxMode,
+	}
+	if ttl > 0 {
+		c.MaxAge = int(ttl / time.Second)
+		c.Expires = g.clock.Now().Add(ttl)
+	}
+	http.SetCookie(w, c)
+}
+
+// ClearSessionCookie expires the session cookie.
+func (g *Gateway) ClearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    "",
+		Path:     sessionCookiePath,
+		HttpOnly: true,
+		Secure:   !g.cfg.InsecureCookies,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(1, 0).UTC(),
+	})
+}

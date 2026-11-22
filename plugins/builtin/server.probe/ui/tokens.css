@@ -1,0 +1,42 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+:root, [data-theme="light"] {
+  --bg: #f6f3ed;
+  --surface: #fdfbf8;
+  --surface-2: #f1ece3;
+  --line: #e8e1d6;
+  --line-strong: #d5cbbe;
+  --text: #2a211b;
+  --text-2: #685a50;
+  --text-3: #96887d;
+  --cocoa: #6b4c3b;
+  --on-cocoa: #fdfbf8;
+  --berry: #b83b6a;
+  --berry-soft: #fae8ef;
+  --jade: #1e9c8b;
+  --jade-soft: #e2f5f2;
+  --amber: #d99422;
+  --amber-soft: #fbf0db;
+  --brick: #b5352b;
+  --brick-soft: #fae5e3;
+}
+
+[data-theme="dark"] {
+  --bg: #151210;
+  --surface: #1e1a17;
+  --surface-2: #28221e;
+  --line: #312923;
+  --line-strong: #463b32;
+  --text: #f3ede6;
+  --text-2: #b5a89d;
+  --text-3: #83766c;
+  --cocoa: #9d755d;
+  --on-cocoa: #17120e;
+  --berry: #e05d8e;
+  --berry-soft: rgba(224, 93, 142, 0.18);
+  --jade: #32c2ae;
+  --jade-soft: rgba(50, 194, 174, 0.16);
+  --amber: #ebb044;
+  --amber-soft: rgba(235, 176, 68, 0.16);
+  --brick: #ef6b61;
+  --brick-soft: rgba(239, 107, 97, 0.18);
+}

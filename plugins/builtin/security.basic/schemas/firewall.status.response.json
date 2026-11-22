@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "防火墙状态响应",
+  "description": "inet qwq 表当前规则集、修订号、强制保留端口及持久化差异状态。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ruleset", "revision", "preserved_ports", "persistence_pending"],
+  "properties": {
+    "ruleset": {
+      "type": "object",
+      "description": "nft -j list table inet qwq 形态的规则集 JSON 对象。"
+    },
+    "revision": {
+      "type": "string",
+      "description": "firewall/ruleset 当前修订号。"
+    },
+    "preserved_ports": {
+      "type": "array",
+      "description": "宿主强制保留的 TCP 端口列表（含当前 SSH 与面板端口）。",
+      "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+    },
+    "persistence_pending": {
+      "type": "boolean",
+      "description": "实时 input 策略是否与持久化配置存在差异。"
+    }
+  }
+}

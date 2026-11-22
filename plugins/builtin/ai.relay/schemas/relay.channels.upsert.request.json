@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "新增或编辑上游渠道请求",
+  "description": "创建或更新上游 AI 模型渠道及 Sub2API OAuth 池配置；凭据经 AES-256-GCM 加密落盘。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "kind", "base_url"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "可选渠道 ID；留空表示新建渠道，传入已有 ID 表示更新。"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "渠道展示名称。"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "openai_compatible",
+        "anthropic_native",
+        "gemini_native",
+        "sub2api_claude_oauth",
+        "sub2api_codex_oauth",
+        "sub2api_gemini_oauth"
+      ],
+      "description": "上游渠道协议或 Sub2API OAuth 订阅池类型。"
+    },
+    "base_url": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 512,
+      "description": "上游 API 根地址（默认受 SSRF 防护禁止私网地址）。"
+    },
+    "credential": {
+      "type": "string",
+      "maxLength": 8192,
+      "x-secret": true,
+      "writeOnly": true,
+      "description": "上游 API Key 或 OAuth Token JSON 凭据（新建必填，更新留空表示保留原凭据）。"
+    },
+    "groups": {
+      "type": "array",
+      "maxItems": 32,
+      "description": "允许调度该渠道的分发用户分组列表（默认 [\"default\"]）。",
+      "items": { "type": "string", "minLength": 1, "maxLength": 32 }
+    },
+    "models": {
+      "type": "array",
+      "maxItems": 256,
+      "description": "该渠道声明支持的模型列表（空表示通配）。",
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+    },
+    "model_mapping": {
+      "type": "object",
+      "description": "下游请求模型名到上游真实模型名的映射字典。",
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 128 }
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": -100,
+      "maximum": 1000,
+      "default": 0,
+      "description": "路由优先级，数值越大越优先调度。"
+    },
+    "weight": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "default": 10,
+      "description": "同优先级层内的加权值。"
+    },
+    "max_concurrent": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 512,
+      "default": 16,
+      "description": "单渠道并发保护槽位数（Sub2API OAuth 池防封控）。"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否启用该渠道参与路由。"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "应用并热重载 TCP Brutal 接管监听请求",
+  "description": "按当前绑定表对账启动/更新/停止全部 TCP Brutal 透明接管端口。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "创建或更新 TCP Brutal 端口透明接管绑定响应",
+  "description": "返回保存后的接管绑定记录。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "binding",
+    "created"
+  ],
+  "properties": {
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "inbound_tag",
+        "protocol",
+        "enabled",
+        "listen_port",
+        "target_port",
+        "bandwidth_mbps",
+        "oversend_pct",
+        "cwnd_gain",
+        "effective_mbps",
+        "enable_in_sub",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "inbound_tag": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "vless",
+            "shadowsocks",
+            "trojan",
+            "tcp"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "listen_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "target_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "bandwidth_mbps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "oversend_pct": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 250
+        },
+        "cwnd_gain": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 50
+        },
+        "effective_mbps": {
+          "type": "number",
+          "minimum": 1
+        },
+        "enable_in_sub": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updated_at": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "created": {
+      "type": "boolean"
+    }
+  }
+}

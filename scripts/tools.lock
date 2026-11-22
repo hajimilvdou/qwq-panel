@@ -1,0 +1,8 @@
+# 工具链锁定（IMPLEMENTATION-PLAN.md §2）。scripts/bootstrap-tools.sh 读取本文件。
+# Go 工具链：版本与 sha256 取自 https://go.dev/dl/?mode=json（2026-11-11 查询）。
+# Go 编写的工具（buf、protoc-gen-go、protoc-gen-go-grpc、staticcheck、govulncheck）
+# 由 tools/go.mod 的 tool 指令锁定版本，tools/go.sum 经 Go 校验库校验，不在这里重复记录。
+# 发布工具（cyclonedx-gomod v1.12.0、go-licenses v2.0.1，DEP-03）同理，锁在 tools/release/go.mod。
+GO_VERSION=1.27.4
+GO_SHA256_linux_amd64=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
+GO_SHA256_linux_arm64=3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92

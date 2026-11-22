@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "logs",
+    "truncated"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "logs": {
+      "type": "string"
+    },
+    "truncated": {
+      "type": "boolean"
+    }
+  }
+}

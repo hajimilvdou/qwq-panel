@@ -1,0 +1,29 @@
+{
+  "schema_version": "1",
+  "project": "XTLS/Xray-core",
+  "tag": "v26.11.9",
+  "commit": "676eaf66f8f05d4d558ee7a74b4736623d3feeb9",
+  "license": "MPL-2.0",
+  "target": "linux/amd64",
+  "release": {
+    "url": "https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-linux-64.zip",
+    "sha256": "b651f7e1d9966ee2c1b1ee1bf8b52c72771824d3065dce96bbc8bcc19ed95f82"
+  },
+  "binary": {
+    "path": "bin/xray",
+    "sha256": "e87bce586acdb9136aa5b1f1d9c8db9f1ea1d145b6d86368c7f6f662f9f6a66d"
+  },
+  "evidence": "docs/plugins/core-xray/SUPPLY-CHAIN.md，X0 2026-11-14 三方哈希与隔离版本核验",
+  "verified": [
+    "release_sha256",
+    "binary_sha256",
+    "reported_version",
+    "reported_commit"
+  ],
+  "pending": [
+    "native_preflight",
+    "private_uds",
+    "real_forwarding",
+    "per_user_mark"
+  ]
+}

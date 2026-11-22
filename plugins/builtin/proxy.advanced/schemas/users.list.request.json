@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "列举代理用户请求",
+  "description": "按状态或套餐过滤查询多用户列表与当期配额用量。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["", "active", "suspended_quota", "expired", "disabled"],
+      "description": "可选按用户状态过滤。"
+    },
+    "plan_id": {
+      "type": "string",
+      "maxLength": 32,
+      "description": "可选按所属套餐 ID 过滤。"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256,
+      "default": 256,
+      "description": "最多返回的用户条目数。"
+    }
+  }
+}

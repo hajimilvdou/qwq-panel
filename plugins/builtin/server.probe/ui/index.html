@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="zh-CN" data-theme="light" data-motion="reduced">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>服务器探针中心</title>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="probe-panel.css">
+  <script src="probe-panel.js" defer></script>
+</head>
+<body>
+<main id="probe-app">
+  <header class="head">
+    <div>
+      <h1>服务器探针中心 (server.probe)</h1>
+      <p id="conn-status">正在通过 MessageChannel 连接宿主插件运行时…</p>
+    </div>
+    <div class="seg" role="group" aria-label="前后台模式切换">
+      <button type="button" data-mode="admin" aria-pressed="true">探针操作后台</button>
+      <button type="button" data-mode="visitor-preview" aria-pressed="false">展示给外人的前端预览</button>
+    </div>
+  </header>
+
+  <section id="admin-pane">
+    <article class="card">
+      <div class="head" style="margin-bottom:8px">
+        <div>
+          <strong>双轨域名与 HTTPS 绑定中心</strong>
+          <p id="dnc-track-hint">正在检测面板 domain.dns 与 tls.certificates 插件状态…</p>
+        </div>
+        <span class="badge" id="track-badge">自动探测</span>
+      </div>
+      <div class="field-row">
+        <input id="domain-input" type="text" placeholder="探针独立域名，如 status.example.com">
+        <select id="track-select">
+          <option value="auto">自动选择（有面板 DNC 则借用，否则走内置闭环）</option>
+          <option value="panel_dnc">轨道 A：借用面板 domain.dns + tls.certificates (certbind_*)</option>
+          <option value="builtin_acme">轨道 B1：探针内置自动 ACME (Let's Encrypt)</option>
+          <option value="builtin_pem">轨道 B2：导入自定义 PEM / Cloudflare 15 年源站证书</option>
+          <option value="reverse_proxy">轨道 B3：反向代理 / 宝塔共存 / CF Tunnel 免端口绑定</option>
+        </select>
+        <button type="button" class="btn berry" id="bind-domain-btn">应用域名绑定</button>
+      </div>
+      <pre class="code" id="proxy-snippet-box" hidden></pre>
+    </article>
+
+    <article class="card">
+      <div class="head" style="margin-bottom:8px">
+        <div>
+          <strong>纳管服务器与一键单向 Agent 部署</strong>
+          <p>本机已免装 Agent 自动复用 metrics.read:self；外部小鸡使用零入站、零远程执行安全上报。</p>
+        </div>
+      </div>
+      <div class="field-row">
+        <input id="node-name" type="text" placeholder="新节点名称，如 东京软银 · 02">
+        <input id="node-region" type="text" placeholder="地区码 (HK / JP / US / SG)" value="JP">
+        <select id="node-quota-mode">
+          <option value="both">双向合计计费 (in + out)</option>
+          <option value="max">单向取大计费 max(in, out)</option>
+          <option value="out_only">仅计出站流量 (out_only)</option>
+        </select>
+        <button type="button" class="btn primary" id="add-node-btn">添加节点并生成安装命令</button>
+      </div>
+      <pre class="code" id="install-cmd-box" hidden></pre>
+      <div class="grid" id="admin-nodes-grid"></div>
+    </article>
+  </section>
+
+  <section id="visitor-pane" hidden>
+    <article class="card">
+      <div class="head" style="margin-bottom:10px">
+        <div>
+          <strong id="preview-title">qwq Probe · 全球服务器实时探针</strong>
+          <p>当前为【外人实际可见脱敏视图】——真实 IP、SSH 备注与节点密钥已物理剥离</p>
+        </div>
+        <span class="badge">All Systems Operational</span>
+      </div>
+      <div class="grid" id="visitor-nodes-grid"></div>
+    </article>
+  </section>
+</main>
+</body>
+</html>

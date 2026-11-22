@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "id",
+    "memory_mb",
+    "cpus"
+  ],
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "id": {
+      "type": "string"
+    },
+    "memory_mb": {
+      "type": "integer"
+    },
+    "cpus": {
+      "type": "number"
+    }
+  }
+}

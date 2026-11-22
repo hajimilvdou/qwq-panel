@@ -1,0 +1,483 @@
+{
+  "schema_version": "1.3",
+  "id": "tls.certificates",
+  "version": "0.1.0",
+  "name": "TLS 证书",
+  "summary": "受控 ACME 证书签发、外部导入、消费者部署回滚与自动续期策略管理",
+  "description": "按需启动的控制器插件，通过宿主受控证书能力执行签发、导入、消费者部署验证与续期策略管理；私钥全程由宿主加密材料库托管，插件与状态库不接触明文私钥。",
+  "license": "AGPL-3.0-only",
+  "publisher": {
+    "id": "qwq-builtin",
+    "key_id": "ed25519:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "abi": {
+    "major": 1,
+    "minimum_minor": 0
+  },
+  "engine_constraint": ">=0.1.0 <1.0.0",
+  "target": "linux/amd64",
+  "entrypoint": "bin/plugin",
+  "files": {
+    "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "attestations/sbom.spdx.json": "sha256:23bd322258f9d4497f7815665bec31d11d505649b76ab70bdaded1e1fb48b804",
+    "schemas/bindings.bind.request.json": "sha256:24f2ebe1b4de85bb8c9c5f294523377c711b4d05a2ec9cbd0d80ff6af3cec52c",
+    "schemas/bindings.mutate.request.json": "sha256:a326684c86cc54c6f853ef66ab4b25b25c4795e492db438e1ad65d5c0db95d50",
+    "schemas/certificates.get.request.json": "sha256:a9e6c6672aacc2ee8ee59c9424bd198acf6ce71c8a7234c2685e63a7fc826924",
+    "schemas/certificates.import.request.json": "sha256:10099346dfbf82f108297c6b87c66e80d92f4d13f302c7e95ba66f669575128a",
+    "schemas/certificates.issue.request.json": "sha256:1012dc56edef41a14d091067c729729953eb017a62f05b0bce8e27e47e3fddc5",
+    "schemas/certificates.list.response.json": "sha256:f09f21142105021376d1de042b25bbd79a347ba469a428f498b4eadb6a5877ca",
+    "schemas/certificates.remove.request.json": "sha256:2b5e78b5db5bf04f76822afd4afcb83e9b5a77d83568076946dcbc17db1796b9",
+    "schemas/certificates.remove.response.json": "sha256:a6a6738a1a86c451986e6ff3d884956223e2eac922d5aacccb771c962c629643",
+    "schemas/certificates.summary.response.json": "sha256:439fc476a31a9b50019f93efb8a8a86703b53a940f2af2cba8ca5241d90ca70c",
+    "schemas/certificates.task.response.json": "sha256:d19aca10da20718459da71420fc20414cfb3c0933b4d9f7f69f457ab87412633",
+    "schemas/certificates.test.request.json": "sha256:37e7d36ca0783e32838c3165fcdb3c22b92dded856a746256ddfc90767eac1c4",
+    "schemas/certificates.view.response.json": "sha256:03c130d6c34620e32bcf9881cafc3a83417c6f2d1f893f5d511c8eb8a920b007",
+    "schemas/config.schema.json": "sha256:374dfa3da07c0a68188b20d2dbc9449e0df80c0b76f736a3de6e6e3a330bfe7a",
+    "schemas/empty.request.json": "sha256:51bace26fd009dfac9ff182f3bd8ef61235951f3e91ccb7c3e40d91c2488a648",
+    "schemas/generations.remove.request.json": "sha256:6f5abad584f956241f96b3293e5936abb8cf4ca42e7f797f792fbf69d2991d1a",
+    "schemas/renew_existing.request.json": "sha256:382b407c16cf65b1bcf50412afa3af1c73678b1ae874fa4e1f95114c61a0416d",
+    "schemas/renewal.configure.request.json": "sha256:4816c9d35f55f24bb8d01b53bf100debe82b919b63790f3838fee35392a15db9",
+    "schemas/renewal.target.request.json": "sha256:98617422a6140266126f3172aac462a55f35c00fb4228f04f4fc82ee9101fc3d",
+    "schemas/renewal.view.response.json": "sha256:b7a5e6a68129bdfc3fd5013576682fa27140cbb274a7a6045af017ad4444d0e7",
+    "ui/certs.js": "sha256:e1b76468e883809af480b614f877078270234e38a8d14deb8c3fb93ae3552c8a",
+    "ui/index.html": "sha256:2341ebad545a688f27c33ea0a11bf52a13de0e885c4ee980310b0b33ddf899c0"
+  },
+  "provenance": {
+    "sbom": "attestations/sbom.spdx.json"
+  },
+  "placement": "controller",
+  "lifecycle": {
+    "startup": "on_demand",
+    "background": false,
+    "update_strategy": "auto"
+  },
+  "operations": [
+    {
+      "name": "certificates.summary",
+      "api_version": "v1",
+      "permission": "tls.certificates:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "读取本地缓存的 TLS 证书脱敏状态摘要",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/certificates.summary.response.json"
+    },
+    {
+      "name": "certificates.list",
+      "api_version": "v1",
+      "permission": "tls.certificates:read",
+      "mode": "job",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "summary": "列出全部已登记 TLS 证书的公开元数据与绑定状态",
+      "capabilities": [
+        {
+          "name": "certificates.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/certificates.list.response.json"
+    },
+    {
+      "name": "certificates.get",
+      "api_version": "v1",
+      "permission": "tls.certificates:read",
+      "mode": "job",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "summary": "查看单份 TLS 证书的代历史与消费者绑定状态",
+      "capabilities": [
+        {
+          "name": "certificates.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/certificates.get.request.json",
+      "response_schema": "schemas/certificates.view.response.json"
+    },
+    {
+      "name": "certificates.issue",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "通过受控 ACME DNS-01 签发新的 TLS 证书",
+      "approval_description": "宿主将在加密库中生成私钥，使用已授权 DNS 域执行 DNS-01 挑战验证并在取消或结束后自动清理临时 TXT 记录。",
+      "idempotent": true,
+      "timeout_ms": 300000,
+      "summary": "通过受控 ACME DNS-01 流程签发新证书或新证书代",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        },
+        {
+          "name": "certificates.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/certificates.issue.request.json",
+      "response_schema": "schemas/certificates.task.response.json"
+    },
+    {
+      "name": "certificates.import",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "导入外部 TLS 证书链与私钥至宿主加密材料库",
+      "approval_description": "私钥由宿主在派发前提前提取并加密保存，校验链与私钥配对、SAN 与信任级别后写入新证书代。",
+      "idempotent": true,
+      "timeout_ms": 120000,
+      "summary": "导入外部证书链与私钥并校验完整性",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        },
+        {
+          "name": "certificates.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/certificates.import.request.json",
+      "response_schema": "schemas/certificates.task.response.json"
+    },
+    {
+      "name": "certificates.test",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "生成仅用于受控测试环境的自签名证书",
+      "approval_description": "自签名测试证书仅允许绑定到明确标记为测试用途的消费者，不能冒充生产受信任证书。",
+      "idempotent": true,
+      "timeout_ms": 60000,
+      "summary": "生成受控自签名测试证书",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        },
+        {
+          "name": "certificates.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/certificates.test.request.json",
+      "response_schema": "schemas/certificates.task.response.json"
+    },
+    {
+      "name": "bindings.bind",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "将授权证书代绑定并部署到目标消费者",
+      "approval_description": "宿主将把指定证书代写入消费者私有隔离目录、触发运行时生效并通过真实 TLS 握手探针确认生效。",
+      "idempotent": true,
+      "timeout_ms": 60000,
+      "summary": "确认消费者绑定并将目标证书代部署生效",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/bindings.bind.request.json",
+      "response_schema": "schemas/certificates.view.response.json"
+    },
+    {
+      "name": "bindings.deploy",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "reachability": true,
+      "approval": "confirm",
+      "approval_summary": "切换目标消费者运行时正在提供的证书代",
+      "approval_description": "切换消费者 TLS 证书可能短暂影响服务或面板连通性；宿主将在握手验证失败时自动回滚至前代快照。",
+      "idempotent": true,
+      "timeout_ms": 60000,
+      "summary": "部署新证书代到已有消费者绑定并执行握手验证",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/bindings.mutate.request.json",
+      "response_schema": "schemas/certificates.view.response.json"
+    },
+    {
+      "name": "bindings.rollback",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "reachability": true,
+      "approval": "confirm",
+      "approval_summary": "将消费者运行时证书回滚至上一有效代",
+      "approval_description": "把消费者切换回上一已验证证书代快照并重新执行真实 TLS 握手核验。",
+      "idempotent": true,
+      "timeout_ms": 60000,
+      "summary": "将指定消费者绑定回滚至上一证书代",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/bindings.mutate.request.json",
+      "response_schema": "schemas/certificates.view.response.json"
+    },
+    {
+      "name": "bindings.unbind",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "destructive",
+      "risk": "high",
+      "reachability": true,
+      "approval": "confirm",
+      "approval_summary": "解除消费者证书绑定并安全清理消费者私有材料",
+      "approval_description": "宿主将先确认消费者已停止使用该证书，再安全清理消费者私有隔离目录并撤销绑定许可。",
+      "idempotent": true,
+      "timeout_ms": 60000,
+      "summary": "解除指定消费者绑定并清理其私有证书文件",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/bindings.mutate.request.json",
+      "response_schema": "schemas/certificates.view.response.json"
+    },
+    {
+      "name": "generations.remove",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "destructive",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "永久删除未被任何消费者引用的历史证书代",
+      "approval_description": "仅当目标代不是当前代且宿主引用账本中无任何 current/previous/pending 引用时才允许删除加密材料。",
+      "idempotent": true,
+      "timeout_ms": 30000,
+      "summary": "删除无引用的历史证书代及其加密材料",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/generations.remove.request.json",
+      "response_schema": "schemas/certificates.view.response.json"
+    },
+    {
+      "name": "certificates.remove",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "destructive",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "永久删除无绑定引用的证书资源及全部材料",
+      "approval_description": "删除整份证书资源及其所有历史代私钥材料；若仍存在消费者绑定或待部署引用则拒绝删除。",
+      "idempotent": true,
+      "timeout_ms": 30000,
+      "summary": "删除无任何绑定引用的证书资源",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/certificates.remove.request.json",
+      "response_schema": "schemas/certificates.remove.response.json"
+    },
+    {
+      "name": "renewal.configure",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "登记或更新证书自动续期策略范围",
+      "approval_description": "锁定自动续期允许使用的 DNS 域、受控 CA、目标消费者集合与授权截止时间，后续需由真人同步入口绑定受限服务账号。",
+      "idempotent": true,
+      "timeout_ms": 30000,
+      "summary": "配置证书自动续期策略与固定授权范围",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/renewal.configure.request.json",
+      "response_schema": "schemas/renewal.view.response.json"
+    },
+    {
+      "name": "renewal.revoke",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "destructive",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "撤销证书自动续期策略并停用后台续期",
+      "approval_description": "立即撤销续期策略授权并停止后续自动续期调度，不影响当前已部署的证书。",
+      "idempotent": true,
+      "timeout_ms": 30000,
+      "summary": "撤销指定证书自动续期策略",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/renewal.target.request.json",
+      "response_schema": "schemas/renewal.view.response.json"
+    },
+    {
+      "name": "renewal.get",
+      "api_version": "v1",
+      "permission": "tls.certificates:read",
+      "mode": "job",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "summary": "查询证书自动续期策略的公开状态与下次计划时间",
+      "capabilities": [
+        {
+          "name": "certificates.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/renewal.target.request.json",
+      "response_schema": "schemas/renewal.view.response.json"
+    },
+    {
+      "name": "renew_existing",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "medium",
+      "approval": "ai_confirm",
+      "approval_summary": "按已确认自动续期策略执行既有证书续期",
+      "approval_description": "专供宿主受控自动续期调度器使用受限服务账号执行既有证书续期与消费者滚动部署。",
+      "idempotent": true,
+      "timeout_ms": 300000,
+      "summary": "宿主受控调度器专用的既有证书自动续期作业",
+      "capabilities": [
+        {
+          "name": "certificates.renew_existing",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/renew_existing.request.json",
+      "response_schema": "schemas/certificates.view.response.json"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "certificates.read",
+      "scope": "self",
+      "reason": "读取证书公开元数据、异步任务进度与自动续期状态"
+    },
+    {
+      "name": "system.certificates.manage",
+      "scope": "self",
+      "reason": "执行受控签发、导入、绑定部署、回滚、删除与续期策略管理"
+    },
+    {
+      "name": "certificates.renew_existing",
+      "scope": "self",
+      "reason": "声明宿主自动续期调度器使用的既有证书续期目录动作"
+    },
+    {
+      "name": "state.kv.read",
+      "scope": "self",
+      "reason": "为首页只读微件读取脱敏的证书数量摘要"
+    },
+    {
+      "name": "state.kv.write",
+      "scope": "self",
+      "reason": "更新首页微件使用的非敏感证书状态计数摘要"
+    }
+  ],
+  "dependencies": [],
+  "state": {
+    "schema_version": "1",
+    "minimum_rollback_version": "0.1.0",
+    "backup_paths": []
+  },
+  "config": {
+    "schema": "schemas/config.schema.json",
+    "hot_apply": true
+  },
+  "resources": {
+    "memory_max_mb": 32,
+    "cpu_quota_percent": 10,
+    "pids_max": 16,
+    "fds_max": 128,
+    "disk_max_mb": 16,
+    "kv_max_kb": 64
+  },
+  "ui": {
+    "widgets": [
+      {
+        "id": "certificates",
+        "kind": "stat",
+        "operation": "certificates.summary",
+        "refresh_seconds": 30,
+        "size": "s",
+        "title": "TLS 证书"
+      }
+    ],
+    "entry": "ui/index.html",
+    "sandbox": true,
+    "connect_sources": [],
+    "routes": [
+      {
+        "path": "/certificates",
+        "title": "TLS 证书",
+        "nav": true,
+        "permission": "tls.certificates:read"
+      }
+    ]
+  }
+}

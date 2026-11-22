@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qwq:plugin:noop:wait.response:v1",
+  "title": "noop.wait result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["steps"],
+  "properties": {
+    "steps": { "type": "integer", "minimum": 1 }
+  }
+}

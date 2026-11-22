@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "导出标准客户端配置请求",
+  "description": "按运行中的核心配置导出 VLESS Reality、Hysteria2 或 Shadowsocks-2022 的标准分享链接、Clash Meta 节点与 sing-box outbound。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "host": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "description": "可选公网连接主机名或 IPv4/IPv6 地址；留空时由服务端从监听地址推导或报错提示。"
+    },
+    "profile_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "可选按指定协议 profile ID 过滤导出条目。"
+    },
+    "user_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "可选按指定用户 ID 过滤导出条目。"
+    },
+    "label_prefix": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "可选客户端节点备注名称前缀。"
+    }
+  }
+}

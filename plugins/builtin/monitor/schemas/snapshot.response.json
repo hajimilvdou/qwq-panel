@@ -1,0 +1,187 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "current",
+    "points",
+    "status",
+    "reset_epoch",
+    "uptime_seconds",
+    "disks",
+    "primary_disk_mount"
+  ],
+  "properties": {
+    "current": {
+      "$ref": "#/$defs/point"
+    },
+    "points": {
+      "type": "array",
+      "maxItems": 600,
+      "items": {
+        "$ref": "#/$defs/point"
+      }
+    },
+    "status": {
+      "enum": [
+        "ready",
+        "unavailable"
+      ]
+    },
+    "reset_epoch": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "uptime_seconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "primary_disk_mount": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "disks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/disk"
+      }
+    }
+  },
+  "$defs": {
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "t",
+        "cpu_pct",
+        "mem_pct",
+        "disk_pct",
+        "net_rx_bps",
+        "net_tx_bps",
+        "load1",
+        "disk_read_bps",
+        "disk_write_bps"
+      ],
+      "properties": {
+        "t": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cpu_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "mem_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "disk_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "net_rx_bps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "net_tx_bps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "load1": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "disk_read_bps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "disk_write_bps": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "threshold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "warn",
+        "crit"
+      ],
+      "properties": {
+        "warn": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "crit": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mount",
+        "used_pct",
+        "level",
+        "thresholds"
+      ],
+      "properties": {
+        "mount": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "used_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "level": {
+          "enum": [
+            "ok",
+            "warn",
+            "bad",
+            "unavailable"
+          ]
+        },
+        "thresholds": {
+          "$ref": "#/$defs/threshold"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.capability.ban.v1;
+
+import "qwq/platform/v1/platform.proto";
+
+// Host Capability service: ban (ADR-0019 decision 3.4).
+// Capability: system.ban.manage; the scope is fixed to qwq's own objects (self).
+// Lightweight in-plugin banning (ADR-0009): sshd authentication failures are read from journald and
+// written into nftables sets with timeouts (table inet qwq, sets ban_v4/ban_v6 with flags timeout,
+// elements expire on their own, no resident unbanning process). When fail2ban is detected the plugin
+// only shows its status and does not run a second ban system (coexistence: ADR-0021).
+//
+// The host forcibly excludes the current management session's source IP and the whitelist from
+// every ban; they are injected by the host forwarder and re-checked by the helper, the plugin
+// cannot ban them (PRECONDITION_FAILED). The set size is capped at 4096 entries (1C1G budget);
+// exceeding it returns RESOURCE_EXHAUSTED and the plugin evicts by LRU/earliest expiry.
+// The ban policy (thresholds/window/duration/whitelist) lives in the unprivileged plugin; the
+// helper only executes scan/apply.
+//
+// Errors follow the Platform ABI convention (ADR-0007): gRPC status codes report transport and
+// host-side failures; a call that reached its handler reports the business outcome in
+// ErrorDetail.code with gRPC OK. Codes: VALIDATION_FAILED (with FieldViolation), PRECONDITION_FAILED
+// (revision mismatch or protected IP), PERMISSION_DENIED, CONFLICT, RESOURCE_EXHAUSTED, UNAVAILABLE,
+// INTERNAL.
+//
+// Write RPCs need the operation_id currently dispatched to this instance; read RPCs only need the
+// capability. Versioned independently of the Platform ABI: append-only once frozen, not counted in
+// sdk/abi.Minor. go_package is supplied by Buf managed mode; do not hard-code it here.
+
+service BanService {
+  // Reads new sshd authentication failures from journald incrementally; the plugin stores the
+  // cursor in KV. since_seconds is capped at 3600, unit is whitelist-restricted.
+  // effect=read, risk=low; separately rate limited (default <= 6/min).
+  rpc ScanAuthFailures(ScanAuthFailuresRequest) returns (ScanAuthFailuresResponse);
+  // Adds timed elements to the ban sets. effect=write, risk=high, reachability.
+  rpc ApplyBans(ApplyBansRequest) returns (ApplyBansResponse);
+  // Removes one ban. effect=write, risk=high.
+  rpc RemoveBan(RemoveBanRequest) returns (RemoveBanResponse);
+  // Lists the active bans. effect=read, risk=low.
+  rpc ListBans(ListBansRequest) returns (ListBansResponse);
+}
+
+message ScanAuthFailuresRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  // journald cursor from the previous scan; empty = start from since_seconds ago.
+  string cursor = 2;
+  // Lookback window in seconds, capped at 3600.
+  uint32 since_seconds = 3;
+  // journald unit, whitelist-restricted (ssh.service / sshd.service).
+  string unit = 4;
+}
+message ScanAuthFailuresResponse {
+  repeated AuthFailure failures = 1;
+  // Cursor to pass to the next scan.
+  string next_cursor = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+// One aggregated authentication failure.
+message AuthFailure {
+  string ip = 1;
+  string user = 2;
+  // Unix milliseconds of the most recent failure.
+  int64 occurred_at = 3;
+  // Number of failures in the scanned window.
+  uint32 count = 4;
+}
+
+message ApplyBansRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  repeated BanEntry entries = 2;
+  // Optimistic concurrency guard on ban/set; mismatch -> PRECONDITION_FAILED.
+  string expected_revision = 3;
+}
+message ApplyBansResponse {
+  string revision = 1;
+  uint32 active_count = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+// One ban to apply.
+message BanEntry {
+  string ip = 1;
+  uint32 ttl_seconds = 2;
+}
+
+message RemoveBanRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string ip = 2;
+  string expected_revision = 3;
+}
+message RemoveBanResponse {
+  string revision = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+
+message ListBansRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+}
+message ListBansResponse {
+  repeated ActiveBan bans = 1;
+  string revision = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+// One active ban.
+message ActiveBan {
+  string ip = 1;
+  // Unix milliseconds when the element expires.
+  int64 expires_at = 2;
+}

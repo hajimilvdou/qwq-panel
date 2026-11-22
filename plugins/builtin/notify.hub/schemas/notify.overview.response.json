@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "channels",
+    "rules",
+    "deliveries",
+    "sent_24h",
+    "failed_24h",
+    "suppressed_24h"
+  ],
+  "properties": {
+    "channels": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "deliveries": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "sent_24h": {
+      "type": "integer"
+    },
+    "failed_24h": {
+      "type": "integer"
+    },
+    "suppressed_24h": {
+      "type": "integer"
+    }
+  }
+}

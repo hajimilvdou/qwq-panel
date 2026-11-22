@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "用户 SSH 公钥列表响应",
+  "description": "返回目标用户 authorized_keys 中的全部已解析公钥与当前修订号。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user", "revision", "keys"],
+  "properties": {
+    "user": {
+      "type": "string",
+      "description": "查询的系统用户名。"
+    },
+    "revision": {
+      "type": "string",
+      "description": "account/<user>/keys 当前修订号。"
+    },
+    "keys": {
+      "type": "array",
+      "description": "已解析的 SSH 公钥列表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "bits", "fingerprint_sha256", "comment", "line_index"],
+        "properties": {
+          "type": { "type": "string", "description": "密钥算法类型（如 ssh-ed25519、ssh-rsa）。" },
+          "bits": { "type": "integer", "minimum": 0, "description": "密钥位长。" },
+          "fingerprint_sha256": { "type": "string", "description": "SHA-256 指纹。" },
+          "comment": { "type": "string", "description": "公钥备注。" },
+          "line_index": { "type": "integer", "minimum": 0, "description": "在 authorized_keys 中的行号。" }
+        }
+      }
+    }
+  }
+}

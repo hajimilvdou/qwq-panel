@@ -1,0 +1,432 @@
+{
+  "schema_version": "1.3",
+  "id": "server.probe",
+  "version": "0.1.0",
+  "name": "服务器探针中心",
+  "summary": "多机单向安全探针、90天在线率、三网拨测、前后台切换、零开销AI操控与双轨域名绑定",
+  "description": "融合极简探针与现代边缘状态探针特性的双栖服务器探针插件：本机免装 Agent 自动复用 metrics.read:self，外部服务器采用零入站、零远程执行单向 HTTPS 上报；内置月流量配额（双向/取大/单出站）、账单到期提醒、90 天 SLA 状态条、三网与 HTTP/TCP 延迟拨测、卡片/列表/极客终端多主题展示；原生对齐 ADR-0004 AI 操作面（<2KiB 紧凑摘要、无副作用 Plan、revision 冲突保护与一键回滚，常驻额外开销为 0）；既可在 qwq 面板内管理与预览，也可通过独立探针页原地切换前后台管理，并支持借用面板证书套件或启用探针自身独立域名与 HTTPS 绑定闭环。",
+  "license": "AGPL-3.0-only",
+  "publisher": {
+    "id": "qwq-builtin",
+    "key_id": "ed25519:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "abi": {
+    "major": 1,
+    "minimum_minor": 0
+  },
+  "engine_constraint": ">=0.1.0 <1.0.0",
+  "target": "linux/amd64",
+  "entrypoint": "bin/plugin",
+  "files": {
+    "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "attestations/sbom.spdx.json": "sha256:87eb0de34b56a5183a0513178fdead6c6f318aca97b8e8c6bb8994eb77afe9a5",
+    "schemas/checks.response.json": "sha256:0a0d6ab06d3c7172465ebdd09af2b67ad4e8c502f159c78545343213d66d44d6",
+    "schemas/config.schema.json": "sha256:c1c2ddc16a8afa41adcaaff41701a6b24e5d92b64270c7ba4c497aa3410a74d9",
+    "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
+    "schemas/probe.ai.digest.response.json": "sha256:827985ce08b49d30fc1e0bba4de0d739bd1c76aa7fb41b0f14cb46b3361b4974",
+    "schemas/probe.domain.bind.request.json": "sha256:b5878ab037141f1c614a771a88a527dfdfb92be9d765aa73f3785b9207e0e063",
+    "schemas/probe.domain.bind.response.json": "sha256:e7ba8dfa1fcad25c393c9e71962aa2502ad243a2b27405bb749c845bf2af00ef",
+    "schemas/probe.nodes.remove.request.json": "sha256:94b6382be7e0bb471952ea5e274d039c44640acecec4fcfd8dd7c05421e476f8",
+    "schemas/probe.nodes.remove.response.json": "sha256:1069e4313449ff4b62fc4415c2d13e7c13ba4c1560e495be8f60ddb33c2468a4",
+    "schemas/probe.nodes.upsert.request.json": "sha256:1678cc0786a715df39c586a2bc00f31afe2b64b5e2cdcaf1e3afea6a27814349",
+    "schemas/probe.nodes.upsert.response.json": "sha256:e7033478158883cc7c0731d9490b737449bafb76b5abc64772f6570b61f51d0a",
+    "schemas/probe.overview.response.json": "sha256:8af51b090679a0f9cdc9de2cb15405d020def052cafe35e9d5fe289e4350beed",
+    "schemas/probe.settings.rollback.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
+    "schemas/probe.settings.update.request.json": "sha256:920767c032d970282eebbd5e4d0f83d9d7e16848510aa8288ee78816e602bb9c",
+    "schemas/probe.settings.update.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
+    "schemas/series.response.json": "sha256:86977b76b12b7ea46a896e25369cda90bd52f030baad418056113daae519ce2a",
+    "schemas/stat.response.json": "sha256:9dbcaeb1ff5098999b6b92c85076137faa4dae34b0c886994669a1115d038745",
+    "ui/index.html": "sha256:a3b22916c606f91d20d32d0d87f67b0d10de7489a299e81428f15e4eeb86943f",
+    "ui/probe-panel.css": "sha256:c34a9052e7bfecf438f26b6ac1469181025f4a524c0c65821404d9e2efcf2c6c",
+    "ui/probe-panel.js": "sha256:042af880ecc6fc88814ed2729b6875a031ca277ee4ff496f28577cfb5002c9e9",
+    "ui/tokens.css": "sha256:4c6de5c9232e4461bfc32497ff7ba097abbe542328fdc3443e876a74d12004e2"
+  },
+  "provenance": {
+    "sbom": "attestations/sbom.spdx.json"
+  },
+  "placement": "node",
+  "lifecycle": {
+    "startup": "eager",
+    "background": true,
+    "update_strategy": "restart",
+    "overlap_safe": false
+  },
+  "operations": [
+    {
+      "name": "probe.stat.online",
+      "api_version": "v1",
+      "permission": "server.probe:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "在线服务器节点数与在线率",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/stat.response.json"
+    },
+    {
+      "name": "probe.stat.bandwidth",
+      "api_version": "v1",
+      "permission": "server.probe:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "全网节点实时上下行聚合带宽",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/stat.response.json"
+    },
+    {
+      "name": "probe.series.latency",
+      "api_version": "v1",
+      "permission": "server.probe:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "三网与全球基准目标平均延迟趋势",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/series.response.json"
+    },
+    {
+      "name": "probe.checks.sla",
+      "api_version": "v1",
+      "permission": "server.probe:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "纳管节点与服务拨测存活状态矩阵",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/checks.response.json"
+    },
+    {
+      "name": "probe.ai.digest",
+      "api_version": "v1",
+      "permission": "server.probe:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "ui_route": "/probe",
+      "summary": "生成小于 2KiB 的异常优先紧凑全景摘要供原生 AI 极低 Token 诊断",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/probe.ai.digest.response.json"
+    },
+    {
+      "name": "probe.overview",
+      "api_version": "v1",
+      "permission": "server.probe:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 8000,
+      "ui_route": "/probe",
+      "summary": "读取探针管理后台全景、访客实时预览与双轨域名能力快照",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/probe.overview.response.json"
+    },
+    {
+      "name": "probe.nodes.upsert",
+      "api_version": "v1",
+      "permission": "server.probe:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "plannable": true,
+      "ui_route": "/probe",
+      "timeout_ms": 15000,
+      "approval": "confirm",
+      "approval_summary": "新增或修改被监控服务器节点并签发单向只读上报令牌",
+      "summary": "新增或编辑探针监控节点",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/probe.nodes.upsert.request.json",
+      "response_schema": "schemas/probe.nodes.upsert.response.json"
+    },
+    {
+      "name": "probe.nodes.remove",
+      "api_version": "v1",
+      "permission": "server.probe:manage",
+      "mode": "job",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "ui_route": "/probe",
+      "timeout_ms": 15000,
+      "approval": "confirm",
+      "approval_summary": "移除指定探针节点并立即吊销其单向上报令牌与历史趋势",
+      "summary": "移除监控节点并吊销令牌",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/probe.nodes.remove.request.json",
+      "response_schema": "schemas/probe.nodes.remove.response.json"
+    },
+    {
+      "name": "probe.settings.update",
+      "api_version": "v1",
+      "permission": "server.probe:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "plannable": true,
+      "undo": "probe.settings.rollback",
+      "ui_route": "/probe",
+      "timeout_ms": 15000,
+      "approval": "confirm",
+      "approval_summary": "更新公开探针展示主题、访客 IP/价格隐私脱敏开关与状态公告",
+      "summary": "更新公开探针外观与隐私脱敏策略",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "secret.reveal",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/probe.settings.update.request.json",
+      "response_schema": "schemas/probe.settings.update.response.json"
+    },
+    {
+      "name": "probe.settings.rollback",
+      "api_version": "v1",
+      "permission": "server.probe:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "low",
+      "idempotent": true,
+      "ui_route": "/probe",
+      "timeout_ms": 10000,
+      "approval": "confirm",
+      "approval_summary": "一键回滚探针展示与隐私策略到上一次修改前的快照",
+      "summary": "撤销上一次探针外观或隐私策略修改",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/probe.settings.rollback.response.json"
+    },
+    {
+      "name": "probe.domain.bind",
+      "api_version": "v1",
+      "permission": "server.probe:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "idempotent": true,
+      "plannable": true,
+      "ui_route": "/probe",
+      "timeout_ms": 60000,
+      "approval": "ai_confirm",
+      "approval_summary": "为服务器探针绑定独立域名与 HTTPS 证书（自动联动面板证书套件或启用探针内置闭环）",
+      "summary": "绑定探针独立域名与 TLS 证书",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "secret.reveal",
+          "scope": "self"
+        },
+        {
+          "name": "network.listen",
+          "scope": "custom-domain"
+        }
+      ],
+      "request_schema": "schemas/probe.domain.bind.request.json",
+      "response_schema": "schemas/probe.domain.bind.response.json"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "metrics.read",
+      "scope": "self",
+      "reason": "免安装外部 Agent 直接采集本机 CPU、内存、磁盘、网卡吞吐与系统负载"
+    },
+    {
+      "name": "public.route",
+      "scope": "portal",
+      "reason": "暴露无面板会话污染的对外服务器探针状态页与独立探针前后台切换入口"
+    },
+    {
+      "name": "public.route",
+      "scope": "agent",
+      "reason": "接收外部多台服务器小鸡的单向零指令 HTTPS 遥测上报"
+    },
+    {
+      "name": "network.egress",
+      "scope": "probe",
+      "reason": "执行防 SSRF 校验的公网 HTTP/TCP 延迟拨测并发送离线与流量告警通知"
+    },
+    {
+      "name": "network.listen",
+      "scope": "custom-domain",
+      "reason": "在未安装面板域名/证书插件或只装探针时，支持探针自身独立绑定域名与内置 ACME/PEM 证书监听"
+    },
+    {
+      "name": "secret.reveal",
+      "scope": "self",
+      "reason": "安全读取导入的探针自定义证书私钥、告警 Webhook 凭据与独立管理口令密文"
+    },
+    {
+      "name": "state.kv.read",
+      "scope": "self",
+      "reason": "读取微件摘要与域名绑定快照"
+    },
+    {
+      "name": "state.kv.write",
+      "scope": "self",
+      "reason": "保存脱敏微件摘要与独立域名路由元数据"
+    }
+  ],
+  "dependencies": [
+    {
+      "kind": "plugin",
+      "id": "domain.dns",
+      "constraint": ">=0.1.0 <1.0.0",
+      "required": false
+    },
+    {
+      "kind": "plugin",
+      "id": "tls.certificates",
+      "constraint": ">=0.1.0 <1.0.0",
+      "required": false
+    }
+  ],
+  "state": {
+    "schema_version": "1",
+    "minimum_rollback_version": "0.1.0",
+    "backup_paths": [
+      "probe.db"
+    ]
+  },
+  "config": {
+    "schema": "schemas/config.schema.json",
+    "hot_apply": true
+  },
+  "resources": {
+    "memory_max_mb": 32,
+    "cpu_quota_percent": 10,
+    "pids_max": 16,
+    "fds_max": 256,
+    "disk_max_mb": 128,
+    "kv_max_kb": 256
+  },
+  "ui": {
+    "widgets": [
+      {
+        "id": "online",
+        "title": "探针在线节点",
+        "kind": "stat",
+        "operation": "probe.stat.online",
+        "refresh_seconds": 3,
+        "size": "s",
+        "color": "teal"
+      },
+      {
+        "id": "bandwidth",
+        "title": "全网实时带宽",
+        "kind": "stat",
+        "operation": "probe.stat.bandwidth",
+        "refresh_seconds": 2,
+        "size": "s",
+        "color": "pink"
+      },
+      {
+        "id": "latency",
+        "title": "三网基准延迟",
+        "kind": "series",
+        "operation": "probe.series.latency",
+        "refresh_seconds": 5,
+        "size": "m",
+        "color": "violet"
+      },
+      {
+        "id": "sla",
+        "title": "节点 SLA 健康度",
+        "kind": "checks",
+        "operation": "probe.checks.sla",
+        "refresh_seconds": 5,
+        "size": "m",
+        "color": "green"
+      }
+    ],
+    "entry": "ui/index.html",
+    "sandbox": true,
+    "connect_sources": [],
+    "routes": [
+      {
+        "path": "/probe",
+        "title": "服务器探针",
+        "nav": true,
+        "permission": "server.probe:read"
+      }
+    ]
+  }
+}

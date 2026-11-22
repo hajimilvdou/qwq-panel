@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.capability.metrics.v1;
+
+import "qwq/platform/v1/platform.proto";
+
+// Host Capability service: metrics (ADR-0020 decision 1).
+// Capability: metrics.read:self (self = this node's own metrics, ARCH §10.3); read stays RiskLow.
+// The fifth capability package next to ADR-0019's four: transport, capability gate and SDK are
+// shared, but the forwarder runs locally inside the agent (no qwq-capability root helper) because
+// every source (/proc/stat, /proc/meminfo, /proc/loadavg, /proc/diskstats, /proc/net/dev,
+// /sys/class/net, statfs) is world-readable. The plugin sandbox stays fully closed
+// (PrivateNetwork=yes, ProcSubset=pid): the agent reads the host netns and the full /proc.
+//
+// ReadMetrics is an instantaneous sample: the agent returns the current counter values and a
+// timestamp, rates and percentages are computed by the plugin from two adjacent samples (the agent
+// keeps no per-plugin state). A missing source leaves the affected fields at their defaults and the
+// rest is still returned; overall unavailability reports UNAVAILABLE. Per-instance rate limit:
+// default <= 2/s, exceeding it returns RESOURCE_EXHAUSTED.
+//
+// Errors follow the Platform ABI convention (ADR-0007): gRPC status codes report transport and
+// host-side failures; a call that reached its handler reports the business outcome in
+// ErrorDetail.code with gRPC OK.
+//
+// Read RPCs only need the capability, no operation_id. Versioned independently of the Platform ABI:
+// append-only once frozen, not counted in sdk/abi.Minor. go_package is supplied by Buf managed
+// mode; do not hard-code it here.
+
+service MetricsService {
+  // Samples the node's current metrics. effect=read, risk=low.
+  rpc ReadMetrics(ReadMetricsRequest) returns (ReadMetricsResponse);
+}
+
+message ReadMetricsRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+}
+message ReadMetricsResponse {
+  MetricsSnapshot snapshot = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+
+message MetricsSnapshot {
+  // Agent sampling time, Unix milliseconds.
+  int64 collected_at_unix_ms = 1;
+  Cpu cpu = 2;
+  Memory memory = 3;
+  // One entry per monitored mount/device.
+  repeated Disk disks = 4;
+  // One entry per interface, including the host's real NICs.
+  repeated NetIf nets = 5;
+  Load load = 6;
+  uint64 uptime_seconds = 7;
+}
+
+message Cpu {
+  // Cumulative jiffies of the aggregate cpu line in /proc/stat; diff adjacent samples for usage.
+  uint64 user = 1;
+  uint64 nice = 2;
+  uint64 system = 3;
+  uint64 idle = 4;
+  uint64 iowait = 5;
+  uint64 irq = 6;
+  uint64 softirq = 7;
+  uint64 steal = 8;
+  uint32 core_count = 9;
+}
+
+message Memory {
+  uint64 total_bytes = 1;
+  uint64 available_bytes = 2;
+  uint64 buffers_bytes = 3;
+  uint64 cached_bytes = 4;
+  uint64 swap_total_bytes = 5;
+  uint64 swap_free_bytes = 6;
+}
+
+message Disk {
+  string device = 1;
+  string mount = 2;
+  // statfs capacity.
+  uint64 total_bytes = 3;
+  uint64 used_bytes = 4;
+  // Cumulative /proc/diskstats counters (sector = 512 bytes).
+  uint64 read_sectors = 5;
+  uint64 write_sectors = 6;
+  uint64 io_ticks_ms = 7;
+}
+
+message NetIf {
+  string name = 1;
+  // Cumulative /proc/net/dev counters of the host netns.
+  uint64 rx_bytes = 2;
+  uint64 tx_bytes = 3;
+  uint64 rx_packets = 4;
+  uint64 tx_packets = 5;
+}
+
+message Load {
+  // /proc/loadavg.
+  double load1 = 1;
+  double load5 = 2;
+  double load15 = 3;
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "containers.docker plugin configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "docker_socket": {
+      "type": "string",
+      "maxLength": 255,
+      "default": "/var/run/docker.sock"
+    },
+    "http_timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60,
+      "default": 10
+    }
+  }
+}

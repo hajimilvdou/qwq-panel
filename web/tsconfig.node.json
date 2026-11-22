@@ -1,0 +1,9 @@
+{
+  "//": "Node 侧：vite/vitest 配置、模拟后端、测试。",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "vite/client"]
+  },
+  "include": ["vite.config.ts", "vitest.config.ts", "mock/**/*.ts", "test/**/*.ts"]
+}

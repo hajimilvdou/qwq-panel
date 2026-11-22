@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qwq:plugin:core.xray:core.validate:response:v1",
+  "description": "指定 desired 的纯静态校验；不解引用秘密、不写状态、不启动原生预检。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "config_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 19,
+      "pattern": "^[1-9][0-9]{0,18}$"
+    },
+    "valid": {
+      "type": "boolean"
+    },
+    "native_preflight_performed": {
+      "const": false
+    },
+    "violations": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "pointer": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "pointer",
+          "code",
+          "message"
+        ]
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "pointer": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "pointer",
+          "code",
+          "message"
+        ]
+      }
+    }
+  },
+  "required": [
+    "valid",
+    "native_preflight_performed",
+    "violations",
+    "warnings"
+  ]
+}

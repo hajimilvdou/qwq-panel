@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qwq:plugin:noop:wait.request:v1",
+  "title": "noop.wait request",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "step_delay_ms": { "type": "integer", "minimum": 0, "maximum": 60000, "default": 0 }
+  }
+}

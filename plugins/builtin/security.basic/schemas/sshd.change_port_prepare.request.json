@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "双端口切换 SSH 端口准备请求",
+  "description": "启动 7 步双端口零断连 SSH 端口切换：放行新端口并保持旧端口可用，探测通过后等待用户确认提交。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["new_port"],
+  "properties": {
+    "new_port": {
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 65535,
+      "description": "目标新 SSH 端口（限制在 1024-65535 非特权端口范围且不得等于当前旧端口）。"
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600,
+      "description": "可选确认超时秒数；留空时采用插件配置（默认 600 秒），超时未确认将自动回滚。"
+    },
+    "skip_firewall": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否跳过 inet qwq 防火墙规则变更（仅当节点由外部防火墙人工维护时设为 true）。"
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "可选 sshd/config 期望修订号；留空时读取 preconditions 或当前快照修订号。"
+    }
+  }
+}

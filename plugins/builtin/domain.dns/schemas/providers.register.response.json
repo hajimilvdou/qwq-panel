@@ -1,0 +1,91 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "登记 DNS 提供商并发现托管域的公开响应",
+  "required": [
+    "provider",
+    "zones"
+  ],
+  "properties": {
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "revision",
+        "enabled",
+        "zone_count"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "提供商资源 ID"
+        },
+        "kind": {
+          "type": "string",
+          "description": "提供商类型"
+        },
+        "name": {
+          "type": "string",
+          "description": "提供商显示名称"
+        },
+        "revision": {
+          "type": "string",
+          "description": "最新资源版本"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "是否启用"
+        },
+        "zone_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "发现的托管域数量"
+        },
+        "last_error": {
+          "type": "string",
+          "description": "最近错误码"
+        }
+      }
+    },
+    "zones": {
+      "type": "array",
+      "description": "提供商返回的托管域公开列表",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider_id",
+          "zone_id",
+          "name",
+          "revision",
+          "authorized"
+        ],
+        "properties": {
+          "provider_id": {
+            "type": "string",
+            "description": "所属提供商 ID"
+          },
+          "zone_id": {
+            "type": "string",
+            "description": "托管域 ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "域名"
+          },
+          "revision": {
+            "type": "string",
+            "description": "域授权版本"
+          },
+          "authorized": {
+            "type": "boolean",
+            "description": "是否已授权给面板管理"
+          }
+        }
+      }
+    }
+  }
+}

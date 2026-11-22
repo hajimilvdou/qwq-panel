@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "更新用户连接数与链式代理覆盖响应",
+  "description": "返回更新后的代理用户记录与最新生效上限。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "user"
+  ],
+  "properties": {
+    "user": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "display_name",
+        "plan_id",
+        "traffic_mark",
+        "status",
+        "expires_at",
+        "quota_bytes",
+        "down_limit_kbps",
+        "up_limit_kbps",
+        "period_up_bytes",
+        "period_down_bytes",
+        "total_up_bytes",
+        "total_down_bytes",
+        "created_at",
+        "updated_at",
+        "revision"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "用户唯一 ID。"
+        },
+        "display_name": {
+          "type": "string",
+          "description": "用户显示名称。"
+        },
+        "plan_id": {
+          "type": "string",
+          "description": "绑定套餐 ID。"
+        },
+        "traffic_mark": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20991,
+          "description": "内核 HTB 流量标记（0 或 20736..20991）。"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "suspended_quota",
+            "expired",
+            "disabled"
+          ],
+          "description": "用户当前状态。"
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "到期时间戳（Unix 毫秒，0 表示长期有效）。"
+        },
+        "quota_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "所属套餐周期配额（字节）。"
+        },
+        "down_limit_kbps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "下行限速（kbps）。"
+        },
+        "up_limit_kbps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "上行限速（kbps）。"
+        },
+        "max_connections_override": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 65535,
+          "description": "单用户最大并发连接覆盖（-1 继承套餐，0 不限，>0 显式上限）。"
+        },
+        "max_ips_override": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 1024,
+          "description": "单用户最大同时在线 IP 覆盖（-1 继承套餐，0 不限，>0 显式上限）。"
+        },
+        "effective_max_connections": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "当前生效最大并发连接数（0 表示不限）。"
+        },
+        "effective_max_ips": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024,
+          "description": "当前生效最大同时在线 IP 数（0 表示不限）。"
+        },
+        "active_connections": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "当前实时活跃连接数。"
+        },
+        "active_ips": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "当前实时在线 IP 数。"
+        },
+        "chain_id": {
+          "type": "string",
+          "description": "绑定的链式代理落地节点 ID（留空表示跟随全局默认或直连）。"
+        },
+        "period_up_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "当期累计上行流量（字节）。"
+        },
+        "period_down_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "当期累计下行流量（字节）。"
+        },
+        "total_up_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "历史累计上行流量（字节）。"
+        },
+        "total_down_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "历史累计下行流量（字节）。"
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "创建时间戳（Unix 毫秒）。"
+        },
+        "updated_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "更新时间戳（Unix 毫秒）。"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "用户修订号。"
+        }
+      }
+    }
+  }
+}

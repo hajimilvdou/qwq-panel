@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "删除 TCP Brutal 接管绑定请求",
+  "description": "删除指定 TCP Brutal 透明接管绑定并自动停止其监听端口。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "空请求参数",
+  "description": "无需输入参数的查询请求。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

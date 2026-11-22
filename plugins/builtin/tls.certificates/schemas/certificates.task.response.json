@@ -1,0 +1,196 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "异步证书签发、导入或测试任务完成后的公开响应",
+  "required": [
+    "task"
+  ],
+  "properties": {
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "certificate_id",
+        "status",
+        "stage",
+        "percent",
+        "revision"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "宿主任务 ID"
+        },
+        "certificate_id": {
+          "type": "string",
+          "description": "证书资源 ID"
+        },
+        "status": {
+          "type": "string",
+          "description": "任务终态（succeeded、failed、cancelled、outcome_unknown）"
+        },
+        "stage": {
+          "type": "string",
+          "description": "当前或最后执行阶段"
+        },
+        "percent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "进度百分比"
+        },
+        "error_code": {
+          "type": "string",
+          "description": "脱敏错误码"
+        },
+        "retry_at": {
+          "type": "string",
+          "description": "建议重试时间（RFC3339）"
+        },
+        "revision": {
+          "type": "string",
+          "description": "任务收据版本"
+        }
+      }
+    },
+    "certificate": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "任务成功后同步读取的最新证书公开视图（可选）",
+      "required": [
+        "id",
+        "revision",
+        "sans",
+        "purpose",
+        "status",
+        "latest_generation",
+        "generations",
+        "bindings"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "证书资源 ID"
+        },
+        "revision": {
+          "type": "string",
+          "description": "最新乐观锁版本"
+        },
+        "sans": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "精确域名列表"
+        },
+        "purpose": {
+          "type": "string",
+          "description": "证书用途"
+        },
+        "status": {
+          "type": "string",
+          "description": "综合状态"
+        },
+        "latest_generation": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "最新代号"
+        },
+        "generations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "number",
+              "fingerprint",
+              "issuer",
+              "not_before",
+              "not_after",
+              "trust"
+            ],
+            "properties": {
+              "number": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "fingerprint": {
+                "type": "string"
+              },
+              "issuer": {
+                "type": "string"
+              },
+              "not_before": {
+                "type": "string"
+              },
+              "not_after": {
+                "type": "string"
+              },
+              "trust": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "binding_ref",
+              "plugin_id",
+              "profile_id",
+              "node_id",
+              "server_name",
+              "purpose",
+              "generation",
+              "running_generation",
+              "policy_revision",
+              "status"
+            ],
+            "properties": {
+              "binding_ref": {
+                "type": "string"
+              },
+              "plugin_id": {
+                "type": "string"
+              },
+              "profile_id": {
+                "type": "string"
+              },
+              "node_id": {
+                "type": "string"
+              },
+              "server_name": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "running_generation": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "policy_revision": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "previous_generation": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

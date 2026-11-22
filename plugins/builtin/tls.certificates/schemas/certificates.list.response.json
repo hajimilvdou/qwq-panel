@@ -1,0 +1,170 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "证书资源公开列表响应（不含私钥或内部材料引用）",
+  "required": [
+    "certificates"
+  ],
+  "properties": {
+    "certificates": {
+      "type": "array",
+      "description": "已登记的证书资源公开视图列表",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "revision",
+          "sans",
+          "purpose",
+          "status",
+          "latest_generation",
+          "generations",
+          "bindings"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "证书资源 ID"
+          },
+          "revision": {
+            "type": "string",
+            "description": "当前乐观锁版本"
+          },
+          "sans": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "证书覆盖的精确域名（SAN）集合"
+          },
+          "purpose": {
+            "type": "string",
+            "description": "证书用途（tls_server 或 tls_server_test）"
+          },
+          "status": {
+            "type": "string",
+            "description": "综合状态（ready、issued_deployment_failed、not_ready、pending_*）"
+          },
+          "latest_generation": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "最新证书代号"
+          },
+          "generations": {
+            "type": "array",
+            "description": "公开证书代历史（不含私钥）",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "number",
+                "fingerprint",
+                "issuer",
+                "not_before",
+                "not_after",
+                "trust"
+              ],
+              "properties": {
+                "number": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "证书代号"
+                },
+                "fingerprint": {
+                  "type": "string",
+                  "description": "叶证书 SHA-256 指纹"
+                },
+                "issuer": {
+                  "type": "string",
+                  "description": "签发者"
+                },
+                "not_before": {
+                  "type": "string",
+                  "description": "生效时间（RFC3339）"
+                },
+                "not_after": {
+                  "type": "string",
+                  "description": "过期时间（RFC3339）"
+                },
+                "trust": {
+                  "type": "string",
+                  "description": "信任级别（public、staging、test）"
+                }
+              }
+            }
+          },
+          "bindings": {
+            "type": "array",
+            "description": "已关联消费者绑定状态列表",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "binding_ref",
+                "plugin_id",
+                "profile_id",
+                "node_id",
+                "server_name",
+                "purpose",
+                "generation",
+                "running_generation",
+                "policy_revision",
+                "status"
+              ],
+              "properties": {
+                "binding_ref": {
+                  "type": "string",
+                  "description": "宿主稳定绑定引用 ID"
+                },
+                "plugin_id": {
+                  "type": "string",
+                  "description": "消费者插件 ID"
+                },
+                "profile_id": {
+                  "type": "string",
+                  "description": "消费者逻辑配置 ID"
+                },
+                "node_id": {
+                  "type": "string",
+                  "description": "消费者所在节点 ID"
+                },
+                "server_name": {
+                  "type": "string",
+                  "description": "消费者 TLS SNI"
+                },
+                "purpose": {
+                  "type": "string",
+                  "description": "消费者用途"
+                },
+                "generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "目标授权证书代"
+                },
+                "running_generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "运行时实测生效的证书代"
+                },
+                "policy_revision": {
+                  "type": "string",
+                  "description": "绑定许可版本"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "消费者部署验证状态"
+                },
+                "previous_generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "可供回滚的上一证书代"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

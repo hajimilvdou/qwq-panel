@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "应用并热重载 TCP Brutal 接管监听响应",
+  "description": "返回对账结果与最新实时监听指标。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "applied",
+    "error",
+    "env",
+    "live_listeners"
+  ],
+  "properties": {
+    "applied": {
+      "type": "boolean"
+    },
+    "error": {
+      "type": "string"
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kernel_version",
+        "current_cc",
+        "brutal_available",
+        "ebpf_pinned",
+        "install_hint"
+      ],
+      "properties": {
+        "kernel_version": {
+          "type": "string"
+        },
+        "available_cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "current_cc": {
+          "type": "string"
+        },
+        "brutal_available": {
+          "type": "boolean"
+        },
+        "ebpf_pinned": {
+          "type": "boolean"
+        },
+        "brutalctl_path": {
+          "type": "string"
+        },
+        "install_hint": {
+          "type": "string"
+        },
+        "degraded_guidance": {
+          "type": "string"
+        }
+      }
+    },
+    "live_listeners": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "binding_id",
+          "inbound_tag",
+          "running",
+          "active_conns",
+          "total_conns",
+          "brutal_applied_conns",
+          "fallback_conns",
+          "bytes_tx",
+          "bytes_rx"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "inbound_tag": {
+            "type": "string"
+          },
+          "bound_addr": {
+            "type": "string"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "active_conns": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_conns": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "brutal_applied_conns": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "fallback_conns": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "bytes_tx": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "bytes_rx": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_sockopt_error": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

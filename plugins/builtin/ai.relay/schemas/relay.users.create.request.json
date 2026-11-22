@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "管理员直接创建分发用户请求",
+  "description": "由管理员直接发号创建分发门户成员并授予初始统计额度与可选周期自动回血上限。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["username", "password"],
+  "properties": {
+    "username": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 32,
+      "pattern": "^[A-Za-z0-9._-]{3,32}$",
+      "description": "门户登录用户名。"
+    },
+    "password": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "x-secret": true,
+      "writeOnly": true,
+      "description": "初始登录密码（采用 Argon2id 加盐哈希存储）。"
+    },
+    "email": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "可选绑定电子邮箱。"
+    },
+    "group_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "default": "default",
+      "description": "分配的上游路由分组名。"
+    },
+    "init_micros": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 5000000,
+      "description": "初始统计微点额度（1,000,000 = $1.00）。"
+    },
+    "daily_refill_micros": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "可选周期自动回血上限（micros，0 表示不启用）。"
+    },
+    "auto_refill_cycle": {
+      "type": "string",
+      "enum": ["none", "daily", "monthly"],
+      "default": "none",
+      "description": "自动回血周期（当 daily_refill_micros > 0 且此项为 none 时自动设为 daily）。"
+    }
+  }
+}

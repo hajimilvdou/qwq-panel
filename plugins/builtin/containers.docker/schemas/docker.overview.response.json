@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "daemon",
+    "compose_available",
+    "containers",
+    "images",
+    "stacks"
+  ],
+  "properties": {
+    "daemon": {
+      "type": "object"
+    },
+    "compose_available": {
+      "type": "boolean"
+    },
+    "containers": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "stacks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

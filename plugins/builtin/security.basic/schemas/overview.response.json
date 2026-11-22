@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "基础安全概览微件响应",
+  "description": "首页 stat 微件展示的轻量安全状态摘要，仅读取插件本地 KV 缓存。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "value",
+    "unit",
+    "sub",
+    "level",
+    "active_ban_count",
+    "fail2ban_observer",
+    "port_saga_pending",
+    "active_conflicts",
+    "updated_at"
+  ],
+  "properties": {
+    "value": {
+      "type": "number",
+      "description": "主统计数值（当前生效封禁数量）。"
+    },
+    "unit": {
+      "type": "string",
+      "description": "主统计单位。"
+    },
+    "percent": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "封禁容量占用百分比（基于 4096 上限）。"
+    },
+    "sub": {
+      "type": "string",
+      "description": "副标题安全状态提示。"
+    },
+    "level": {
+      "type": "string",
+      "enum": ["ok", "warn", "crit", "muted"],
+      "description": "状态告警级别。"
+    },
+    "spark": {
+      "type": "array",
+      "description": "最近巡检封禁数趋势点。",
+      "items": { "type": "number" }
+    },
+    "active_ban_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "最近巡检观察到的活跃封禁 IP 数量。"
+    },
+    "fail2ban_observer": {
+      "type": "boolean",
+      "description": "是否因检测到活跃 fail2ban 而处于只读旁观模式。"
+    },
+    "port_saga_pending": {
+      "type": "boolean",
+      "description": "是否存在待确认的 SSH 双端口切换事务。"
+    },
+    "active_conflicts": {
+      "type": "array",
+      "description": "最近一次探测到的活跃外部管理器名称列表。",
+      "items": { "type": "string" }
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "缓存最后更新时间戳（RFC3339）。"
+    }
+  }
+}

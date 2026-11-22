@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="zh-CN" data-theme="light" data-motion="reduced">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TLS 证书</title>
+  <script src="certs.js" defer></script>
+</head>
+<body>
+<main id="certs-app">
+  <header>
+    <h1>TLS 证书与消费者绑定</h1>
+    <p id="status" role="status">正在连接宿主...</p>
+  </header>
+  <section aria-label="证书概览">
+    <p>已就绪证书：<strong id="ready-count">—</strong> / <span id="total-count">—</span></p>
+    <p>待处理或异常：<strong id="attention-count">—</strong></p>
+    <p id="summary-sub">等待宿主摘要同步</p>
+    <button id="refresh" type="button">刷新摘要</button>
+  </section>
+</main>
+</body>
+</html>

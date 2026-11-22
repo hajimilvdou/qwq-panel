@@ -1,0 +1,64 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+:root {
+  --bg: #f6f3ed;
+  --surface: #fdfbf8;
+  --surface-2: #f1ece3;
+  --line: #e8e1d6;
+  --text: #2a211b;
+  --text-2: #685a50;
+  --cocoa: #6b4c3b;
+  --berry: #b83b6a;
+  --jade: #1e9c8b;
+}
+[data-theme="dark"] {
+  --bg: #151210;
+  --surface: #1e1a17;
+  --surface-2: #28221e;
+  --line: #312923;
+  --text: #f3ede6;
+  --text-2: #b5a89d;
+  --cocoa: #9d755d;
+  --berry: #e05d8e;
+  --jade: #32c2ae;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI Variable Text", -apple-system, "PingFang SC", "Microsoft YaHei UI", sans-serif;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 24px 18px 48px; }
+.topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 14px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; margin-bottom: 20px;
+}
+.pill {
+  height: 32px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--surface-2); color: var(--text); font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.pill.active { background: var(--cocoa); color: #fff; border-color: transparent; }
+.pill.berry { background: var(--berry); color: #fff; border-color: transparent; }
+.banner {
+  padding: 12px 18px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; font-size: 13.5px;
+}
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 18px; }
+.sla-bar { display: grid; grid-template-columns: repeat(45, 1fr); gap: 2px; margin-top: 10px; }
+.sla-bar i { display: block; height: 14px; border-radius: 3px; background: var(--jade); }
+.tty {
+  background: #131110; color: #e7f6ee; border-radius: 18px; padding: 18px;
+  font-family: Consolas, "Cascadia Code", monospace; font-size: 13px; line-height: 1.55;
+}
+.tty input {
+  background: transparent; border: 0; color: #6de2d1; font: inherit; outline: none; width: 75%;
+}
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(24, 16, 12, 0.45); display: grid; place-items: center; padding: 16px;
+}
+.modal-mask[hidden] { display: none; }
+.modal { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 22px; width: min(460px, 100%); }
+.modal input, .card input, .card select {
+  width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); margin: 6px 0;
+}

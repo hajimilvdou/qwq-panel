@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+// qwq plugin units (P2-T5). Installed as
+// /etc/polkit-1/rules.d/60-qwq-plugin.rules (root:root 0644).
+//
+// The unprivileged agent may start, stop, restart, try-restart, reload and
+// kill only qwq-plugin@<id>.service and qwq-plugin@<id>.socket. It cannot
+// define unit content (only `qwq privileged install` writes those files), and
+// every other unit or action is left unhandled, so polkit falls back to its
+// default: an interactive administrator authentication, or a refusal when
+// nobody can answer.
+//
+// The subject.user below must be the user the agent unit runs as, and the same
+// name must be passed to `qwq privileged install -agent-user` so that the
+// socket owner matches. ADR-0003 section 5 spells this user as qwq-agent,
+// while the current deployment layout (deployments/README.md, tmpfiles) uses
+// qwq for both host processes; qwq is the default here until the agent unit is
+// introduced.
+//
+// Requires polkit >= 0.106: Ubuntu 22.04 ships 0.105, which reads only .pkla
+// files and ignores this JavaScript rule, so every plugin start/stop/kill from
+// the controller is denied there. `qwq doctor` reports it as a failing
+// sandbox-polkit check (PRIV-06).
+//
+// The unit pattern follows the manifest plugin id grammar
+// (^[a-z][a-z0-9]*([.-][a-z0-9]+)*$), so ids such as security.scan match.
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (subject.user !== "qwq") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    if (!unit || !verb) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (!/^qwq-plugin@[a-z][a-z0-9]*([.-][a-z0-9]+)*\.(service|socket)$/.test(unit)) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var allowed = ["start", "stop", "restart", "try-restart", "reload", "kill"];
+    if (allowed.indexOf(verb) < 0) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    return polkit.Result.YES;
+});

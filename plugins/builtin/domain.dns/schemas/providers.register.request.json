@@ -1,0 +1,41 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "登记 DNS 提供商与受控凭据请求（凭据字段由宿主提前提取加密存储，不进入日志或插件状态）",
+  "required": [
+    "provider_id",
+    "kind",
+    "name",
+    "credential"
+  ],
+  "properties": {
+    "provider_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "提供商唯一资源 ID（如 cf-primary）"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "cloudflare",
+        "aliyun"
+      ],
+      "description": "受控 DNS 提供商类型"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "便于识别的提供商显示名称"
+    },
+    "credential": {
+      "type": "object",
+      "x-secret": true,
+      "writeOnly": true,
+      "additionalProperties": true,
+      "description": "提供商 API 凭据对象（Cloudflare 填 token；阿里云填 access_key_id 与 access_key_secret），提交后由宿主加密托管"
+    }
+  }
+}

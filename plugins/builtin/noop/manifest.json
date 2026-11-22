@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.2",
+  "id": "noop",
+  "version": "0.1.0",
+  "name": "空插件",
+  "summary": "内置示例插件：生命周期为空，提供 echo、可取消的 wait 与可预演的 set",
+  "description": "P2-T4 的空插件，同时是 sdk/pluginsdk 的参考实现。manifest 中 files 的摘要与 publisher.key_id 都是占位值，打包（P2-T3）时重新生成；bin/plugin 由构建产生，不在源码树中。",
+  "license": "AGPL-3.0-only",
+  "publisher": {
+    "id": "qwq-builtin",
+    "key_id": "ed25519:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "abi": {
+    "major": 1,
+    "minimum_minor": 0
+  },
+  "engine_constraint": ">=0.1.0 <1.0.0",
+  "target": "linux/amd64",
+  "entrypoint": "bin/plugin",
+  "files": {
+    "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemas/config.schema.json": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemas/noop.echo.request.json": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemas/noop.echo.response.json": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemas/noop.wait.request.json": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemas/noop.wait.response.json": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemas/noop.set.request.json": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "schemas/noop.set.response.json": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "attestations/sbom.spdx.json": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "provenance": {
+    "sbom": "attestations/sbom.spdx.json"
+  },
+  "placement": "node",
+  "lifecycle": {
+    "startup": "eager",
+    "background": false,
+    "update_strategy": "auto"
+  },
+  "operations": [
+    {
+      "name": "noop.echo",
+      "api_version": "v1",
+      "permission": "noop:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "原样返回一条消息",
+      "request_schema": "schemas/noop.echo.request.json",
+      "response_schema": "schemas/noop.echo.response.json"
+    },
+    {
+      "name": "noop.wait",
+      "api_version": "v1",
+      "permission": "noop:read",
+      "mode": "job",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 60000,
+      "summary": "三步进度示例任务，可取消",
+      "request_schema": "schemas/noop.wait.request.json",
+      "response_schema": "schemas/noop.wait.response.json"
+    },
+    {
+      "name": "noop.set",
+      "api_version": "v1",
+      "permission": "noop:write",
+      "capabilities": [
+        { "name": "state.kv.read", "scope": "self" },
+        { "name": "state.kv.write", "scope": "self" }
+      ],
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "low",
+      "idempotent": false,
+      "plannable": true,
+      "timeout_ms": 10000,
+      "summary": "在实例 KV 中保存一个值，支持预演与前置条件",
+      "request_schema": "schemas/noop.set.request.json",
+      "response_schema": "schemas/noop.set.response.json"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "state.kv.read",
+      "scope": "self",
+      "reason": "noop.set 的预演读取当前值与 revision"
+    },
+    {
+      "name": "state.kv.write",
+      "scope": "self",
+      "reason": "noop.set 按前置条件原子写入实例 KV"
+    }
+  ],
+  "dependencies": [],
+  "state": {
+    "schema_version": "1",
+    "minimum_rollback_version": "0.1.0",
+    "backup_paths": []
+  },
+  "config": {
+    "schema": "schemas/config.schema.json",
+    "hot_apply": true
+  },
+  "resources": {
+    "memory_max_mb": 16,
+    "cpu_quota_percent": 5,
+    "pids_max": 8,
+    "fds_max": 64,
+    "disk_max_mb": 16,
+    "kv_max_kb": 64
+  }
+}

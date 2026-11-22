@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "创建或更新 TCP Brutal 端口透明接管绑定请求",
+  "description": "为指定 TCP 订阅入站配置透明接管端口、基准带宽与手调超发倍率（默认 125%，支持 100..250%）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "inbound_tag",
+    "target_port"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9._-]{0,31}$"
+    },
+    "inbound_tag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9._-]{0,31}$"
+    },
+    "protocol": {
+      "type": "string",
+      "enum": [
+        "vless",
+        "shadowsocks",
+        "trojan",
+        "tcp"
+      ],
+      "default": "vless"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "listen_port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "target_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "bandwidth_mbps": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000,
+      "default": 100
+    },
+    "oversend_pct": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 250,
+      "default": 125,
+      "description": "超发包倍率百分比（原始默认 125，允许 100..250 手调）。"
+    },
+    "cwnd_gain": {
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 50,
+      "default": 20,
+      "description": "拥塞窗口增益（0.1x 单位，20 = 2.0x）。"
+    },
+    "enable_in_sub": {
+      "type": "boolean",
+      "default": true
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 64
+    }
+  }
+}

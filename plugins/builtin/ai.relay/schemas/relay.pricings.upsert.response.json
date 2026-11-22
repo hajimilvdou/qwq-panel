@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "保存模型统计倍率响应",
+  "description": "返回已生效的模型统计计费倍率记录。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "model_name",
+    "billing_mode",
+    "input_micros_per_1k",
+    "output_micros_per_1k",
+    "cache_read_ratio",
+    "cache_write_ratio",
+    "per_call_micros",
+    "updated_at"
+  ],
+  "properties": {
+    "model_name": { "type": "string", "description": "模型标识。" },
+    "billing_mode": { "type": "string", "enum": ["token", "per_call"], "description": "计费模式。" },
+    "input_micros_per_1k": { "type": "integer", "minimum": 0, "description": "每 1K 输入微点。" },
+    "output_micros_per_1k": { "type": "integer", "minimum": 0, "description": "每 1K 输出微点。" },
+    "cache_read_ratio": { "type": "number", "description": "缓存读倍率。" },
+    "cache_write_ratio": { "type": "number", "description": "缓存写倍率。" },
+    "per_call_micros": { "type": "integer", "minimum": 0, "description": "按次微点。" },
+    "updated_at": { "type": "integer", "minimum": 0, "description": "更新时间戳（Unix 毫秒）。" }
+  }
+}

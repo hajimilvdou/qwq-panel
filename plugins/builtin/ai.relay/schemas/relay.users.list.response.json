@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "分发门户用户列表响应",
+  "description": "返回分发用户安全视图（不含密码哈希）与虚拟统计微点余额。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["users"],
+  "properties": {
+    "users": {
+      "type": "array",
+      "description": "分发门户用户列表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "username",
+          "email",
+          "group_name",
+          "status",
+          "signup_source",
+          "balance_micros",
+          "used_micros",
+          "request_count",
+          "auto_refill_cap_micros",
+          "auto_refill_cycle",
+          "personal_invite_code",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": { "type": "string", "description": "分发用户唯一 ID。" },
+          "username": { "type": "string", "description": "门户登录用户名。" },
+          "email": { "type": "string", "description": "绑定邮箱（可选）。" },
+          "group_name": { "type": "string", "description": "所属路由分组。" },
+          "status": { "type": "string", "enum": ["active", "disabled"], "description": "账号状态。" },
+          "signup_source": { "type": "string", "enum": ["admin", "invite", "email", "linuxdo"], "description": "注册来源。" },
+          "balance_micros": { "type": "integer", "minimum": 0, "description": "当前实时可用统计微点。" },
+          "used_micros": { "type": "integer", "minimum": 0, "description": "累计已消耗统计微点。" },
+          "request_count": { "type": "integer", "minimum": 0, "description": "累计调用次数。" },
+          "auto_refill_cap_micros": { "type": "integer", "minimum": 0, "description": "周期定额自动回血上限（micros）。" },
+          "auto_refill_cycle": { "type": "string", "enum": ["none", "daily", "monthly"], "description": "周期回血类型。" },
+          "personal_invite_code": { "type": "string", "description": "成员个人邀请码。" },
+          "created_at": { "type": "integer", "minimum": 0, "description": "创建时间戳（Unix 毫秒）。" },
+          "updated_at": { "type": "integer", "minimum": 0, "description": "更新时间戳（Unix 毫秒）。" }
+        }
+      }
+    }
+  }
+}

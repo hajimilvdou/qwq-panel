@@ -1,0 +1,232 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+package agentsession
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"strings"
+
+	"github.com/qwq-panel/qwq/internal/operations"
+	"github.com/qwq-panel/qwq/internal/platform/problem"
+)
+
+// DSHCore adapts DeepSeek Harness (`deepseek-ai/deepseek-harness`, CLI `dsh`)
+// to qwq.
+//
+// Transports supported:
+//  1. Primary: `dsh acp` (Agent Client Protocol JSON-RPC 2.0 over stdio via
+//     GenericACPCore), including:
+//     - `agent_message_chunk` & `agent_thought_chunk` (streaming + reasoning)
+//     - `plan` entries -> `plan.updated` (Task Execution Sheet)
+//     - `tool_call` / `tool_call_update` -> unified tool timeline
+//     - `session/request_permission` -> host ApprovalRouter (allow_once / reject_once)
+//     - `dsh/telemetry` -> DSH-grade Session Stats / Token Cache / Context Breakdown
+//     - Direct `@deepseek-ai/dsh-commands` bridge & `@deepseek-ai/dsh-skill` sync
+//  2. Fallback: `dsh --profile headless` NDJSON stream.
+
+type DSHConfig struct {
+	Binary       string   `json:"binary,omitempty"`    // default "dsh"
+	Transport    string   `json:"transport,omitempty"` // acp (default) | headless
+	Profile      string   `json:"profile,omitempty"`   // code | standard | headless
+	Model        string   `json:"model,omitempty"`
+	WorkDir      string   `json:"work_dir,omitempty"`
+	PlanMode     bool     `json:"plan_mode,omitempty"`
+	ActiveSkills []string `json:"active_skills,omitempty"`
+}
+
+// DSHOptions configures DSHCore.
+type DSHOptions struct {
+	Launcher  ProcessLauncher
+	Minter    HostApprovalMinter
+	Bridge    ApprovalBridge
+	Providers ProviderResolver
+	Skills    *SkillRegistry
+	Binary    string
+}
+
+// DSHCore implements Core, CapableCore, PreflightableCore, and CompactableCore.
+type DSHCore struct {
+	launcher  ProcessLauncher
+	minter    HostApprovalMinter
+	bridge    ApprovalBridge
+	providers ProviderResolver
+	skills    *SkillRegistry
+	bin       string
+}
+
+// NewDSHCore constructs the DeepSeek Harness adapter.
+func NewDSHCore(opts DSHOptions) *DSHCore {
+	launcher := opts.Launcher
+	if launcher == nil {
+		launcher = OSProcessLauncher{}
+	}
+	bin := opts.Binary
+	if bin == "" {
+		bin = "dsh"
+	}
+	skills := opts.Skills
+	if skills == nil {
+		skills = NewSkillRegistry()
+	}
+	return &DSHCore{
+		launcher: launcher, minter: opts.Minter, bridge: opts.Bridge,
+		providers: opts.Providers, skills: skills, bin: bin,
+	}
+}
+
+// Preflight implements PreflightableCore.
+func (c *DSHCore) Preflight(_ context.Context, rawConfig json.RawMessage) error {
+	if err := refusePlaintextSecrets(rawConfig); err != nil {
+		return err
+	}
+	cfg := DSHConfig{Binary: c.bin}
+	if len(rawConfig) > 0 {
+		_ = json.Unmarshal(rawConfig, &cfg)
+		if cfg.Binary == "" {
+			cfg.Binary = c.bin
+		}
+	}
+	if _, isReal := c.launcher.(OSProcessLauncher); isReal {
+		if ok, reason := probeBinary(cfg.Binary); !ok {
+			return problem.New(problem.Unavailable, "DeepSeek Harness (dsh) is not installed on this host (%s).", reason)
+		}
+	}
+	return nil
+}
+
+func (c *DSHCore) Name() string { return string(CoreDSH) }
+
+// Descriptor implements CapableCore.
+func (c *DSHCore) Descriptor(context.Context) CoreDescriptor {
+	ok, reason := probeBinary(c.bin)
+	return CoreDescriptor{
+		Name:        CoreDSH,
+		DisplayName: "DeepSeek Harness (dsh)",
+		Protocol:    "dsh-acp-jsonrpc",
+		Fallback:    "dsh-headless-jsonl",
+		Binary:      c.bin,
+		Available:   ok,
+		Reason:      reason,
+		Capabilities: CoreCapabilities{
+			Streaming:             true,
+			Reasoning:             true,
+			PlanChecklist:         true,
+			PlanMode:              true,
+			Telemetry:             true,
+			Compaction:            true,
+			SlashCommands:         true,
+			Skills:                true,
+			Fork:                  true,
+			Revert:                true,
+			BidirectionalApproval: true,
+			MCPHostTools:          true,
+			ReasoningEffort:       true,
+		},
+	}
+}
+
+// MapDSHMode maps qwq PermissionMode + PlanMode onto DSH session mode identifiers.
+func MapDSHMode(mode operations.PermissionMode, planMode bool) string {
+	if planMode || mode == operations.PermissionReadOnly {
+		return "plan"
+	}
+	if mode == operations.PermissionFull {
+		return "workspace_write"
+	}
+	return "ask"
+}
+
+// Run implements Core.
+func (c *DSHCore) Run(ctx context.Context, turn Turn, emit Emit) error {
+	if err := refusePlaintextSecrets(turn.Config); err != nil {
+		return err
+	}
+	cfg := DSHConfig{Binary: c.bin, Transport: "acp", Profile: "code"}
+	if len(turn.Config) > 0 {
+		_ = json.Unmarshal(turn.Config, &cfg)
+		if cfg.Binary == "" {
+			cfg.Binary = c.bin
+		}
+		if cfg.Transport == "" {
+			cfg.Transport = "acp"
+		}
+	}
+	if cfg.Transport == "headless" {
+		return c.runHeadless(ctx, cfg, turn, emit)
+	}
+
+	acp := NewGenericACPCore(GenericACPOptions{
+		CoreName:    CoreDSH,
+		DisplayName: "DeepSeek Harness (dsh)",
+		Binary:      cfg.Binary,
+		Args:        []string{"acp", "--mode", MapDSHMode(turn.PermissionMode, cfg.PlanMode)},
+		Launcher:    c.launcher,
+		Minter:      c.minter,
+		Bridge:      c.bridge,
+		Providers:   c.providers,
+		Skills:      c.skills,
+	})
+	return acp.Run(ctx, turn, emit)
+}
+
+// Compact implements CompactableCore.
+func (c *DSHCore) Compact(ctx context.Context, req CompactRequest) (CompactionResult, error) {
+	_, res, err := CompactTranscript(ctx, req.Messages, req.Options, nil)
+	return res, err
+}
+
+// runHeadless drives `dsh --profile headless` as a non-ACP fallback.
+func (c *DSHCore) runHeadless(ctx context.Context, cfg DSHConfig, turn Turn, emit Emit) error {
+	args := []string{"--profile", "headless", "--format", "jsonl"}
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	args = append(args, latestUserMessage(turn.Messages))
+
+	proc, err := c.launcher.Start(ctx, cfg.Binary, args, nil, cfg.WorkDir)
+	if err != nil {
+		return err
+	}
+	defer proc.Close(defaultChildGracePeriod)
+
+	sc := bufio.NewScanner(proc.Stdout())
+	sc.Buffer(make([]byte, 0, 64<<10), maxCLILine)
+	events := 0
+	for sc.Scan() {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		if events++; events > maxExternalTurnEvents {
+			return problem.New(problem.PluginError, "DSH headless stream exceeded event limit.")
+		}
+		var ev struct {
+			Type      string             `json:"type"`
+			Delta     string             `json:"delta"`
+			Plan      []PlanItem         `json:"plan"`
+			Telemetry *TelemetrySnapshot `json:"telemetry"`
+		}
+		if json.Unmarshal(line, &ev) != nil {
+			continue
+		}
+		switch strings.ToLower(ev.Type) {
+		case "delta", "message.delta":
+			if err := emit(Event{Type: EventMessageDelta, SessionID: turn.SessionID, Delta: ev.Delta}); err != nil {
+				return err
+			}
+		case "reasoning", "reasoning.delta":
+			_ = emitExtended(emit, EventReasoningDelta, map[string]string{"delta": ev.Delta})
+		case "plan", "plan.updated":
+			_ = emitExtended(emit, EventPlanUpdated, ev.Plan)
+		case "telemetry", "telemetry.updated":
+			if ev.Telemetry != nil {
+				ev.Telemetry.ComputeDerived()
+				_ = emitExtended(emit, EventTelemetryUpdated, *ev.Telemetry)
+			}
+		}
+	}
+	return sc.Err()
+}

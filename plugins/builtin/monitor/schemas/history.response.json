@@ -1,0 +1,101 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "points",
+    "resolution_ms",
+    "reset_epoch"
+  ],
+  "properties": {
+    "points": {
+      "type": "array",
+      "maxItems": 720,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "t",
+          "cpu_pct",
+          "mem_pct",
+          "disk_pct",
+          "net_rx_bps",
+          "net_tx_bps",
+          "load1",
+          "disk_read_bps",
+          "disk_write_bps"
+        ],
+        "properties": {
+          "t": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cpu_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "mem_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "disk_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "net_rx_bps": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "net_tx_bps": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "load1": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "disk_read_bps": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "disk_write_bps": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "resolution_ms": {
+      "type": "integer",
+      "minimum": 500,
+      "maximum": 60000
+    },
+    "reset_epoch": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

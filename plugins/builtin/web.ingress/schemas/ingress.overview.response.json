@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "backend",
+    "active_routes",
+    "sites",
+    "snapshots"
+  ],
+  "properties": {
+    "backend": {
+      "type": "object"
+    },
+    "bound_addr": {
+      "type": "string"
+    },
+    "active_routes": {
+      "type": "integer"
+    },
+    "sites": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "snapshots": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

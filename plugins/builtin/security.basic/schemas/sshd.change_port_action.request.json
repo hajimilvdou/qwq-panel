@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SSH 端口切换提交或回滚请求",
+  "description": "依据 transaction_ref 提交或回滚双端口 SSH 端口切换事务。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "transaction_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "准备阶段返回的事务引用标识（commit 阶段必填，rollback 阶段留空时默认匹配当前挂起事务）。"
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "可选 sshd/config 期望修订号。"
+    }
+  }
+}

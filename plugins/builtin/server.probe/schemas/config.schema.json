@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "server.probe plugin configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "collect_local_host": { "type": "boolean", "default": true },
+    "local_node_name": { "type": "string", "minLength": 1, "maxLength": 64, "default": "本机主控节点" },
+    "local_region_code": { "type": "string", "minLength": 2, "maxLength": 8, "default": "HK" },
+    "rollup_retention_days": { "type": "integer", "minimum": 1, "maximum": 90, "default": 30 },
+    "sla_retention_days": { "type": "integer", "minimum": 7, "maximum": 365, "default": 90 },
+    "standalone_admin_password": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "writeOnly": true,
+      "x-secret": true
+    }
+  }
+}

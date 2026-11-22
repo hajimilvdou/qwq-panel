@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "添加封禁响应",
+  "description": "封禁应用成功后返回的修订号与当前活跃封禁总数。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["revision", "active_count"],
+  "properties": {
+    "revision": { "type": "string", "description": "更新后的 ban/set 修订号。" },
+    "active_count": { "type": "integer", "minimum": 0, "description": "当前活跃封禁 IP 总数。" }
+  }
+}

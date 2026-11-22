@@ -1,0 +1,96 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 18px;
+  font-family: "Segoe UI Variable Text", -apple-system, "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.head h1 { margin: 0; font-size: 19px; }
+.head p { margin: 3px 0 0; font-size: 12.5px; color: var(--text-2); }
+.seg {
+  display: inline-flex;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  gap: 4px;
+}
+.seg button, .btn {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-2);
+}
+.seg button[aria-pressed="true"], .btn.primary {
+  background: var(--cocoa);
+  color: var(--on-cocoa);
+}
+.btn.berry { background: var(--berry); color: #fff; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px;
+  margin-bottom: 14px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.node-card {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--jade-soft);
+  color: var(--jade);
+}
+.badge.warn { background: var(--amber-soft); color: var(--amber); }
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  margin: 10px 0;
+}
+input, select, textarea {
+  width: 100%;
+  padding: 8px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+}
+pre.code {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  overflow-x: auto;
+  font-size: 12px;
+}

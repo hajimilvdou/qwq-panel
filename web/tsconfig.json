@@ -1,0 +1,9 @@
+{
+  "//": "浏览器侧：shell 与 kit。不含 node 类型，误用 Node 全局会直接报错。",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"]
+  },
+  "include": ["shell/src/**/*.ts", "shell/src/**/*.svelte", "kit/src/**/*.ts"]
+}

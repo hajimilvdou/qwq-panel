@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询 TCP Brutal 状态请求",
+  "description": "查询宿主机 tcp-brutal/eBPF 支持情况、可选 TCP 订阅入站、绑定与实时监听遥测。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

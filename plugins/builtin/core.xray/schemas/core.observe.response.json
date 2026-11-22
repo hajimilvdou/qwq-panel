@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qwq:plugin:core.xray:core.observe:response:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "reset_epoch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "collected_at": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 40,
+      "format": "date-time"
+    },
+    "source": {
+      "const": "xray"
+    },
+    "series": {
+      "type": "array",
+      "maxItems": 257,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "inbound",
+              "user"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9._-]{0,31}$"
+          },
+          "present": {
+            "type": "boolean"
+          },
+          "uplink_present": {
+            "type": "boolean"
+          },
+          "downlink_present": {
+            "type": "boolean"
+          },
+          "uplink_bytes": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 19,
+            "pattern": "^(?:0|[1-9][0-9]{0,18})$"
+          },
+          "downlink_bytes": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 19,
+            "pattern": "^(?:0|[1-9][0-9]{0,18})$"
+          },
+          "reset_epoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "collected_at": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 40,
+            "format": "date-time"
+          },
+          "source": {
+            "const": "xray"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "present",
+          "uplink_present",
+          "downlink_present",
+          "reset_epoch",
+          "collected_at",
+          "source"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "uplink_present": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "uplink_bytes"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "uplink_bytes"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "downlink_present": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "downlink_bytes"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "downlink_bytes"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "uplink_present": {
+                  "const": true
+                },
+                "downlink_present": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "present": {
+                  "const": true
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "present": {
+                  "const": false
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "required": [
+    "reset_epoch",
+    "collected_at",
+    "source",
+    "series"
+  ],
+  "description": "当前进程代次的原始累计字节，以精确十进制字符串返回；缺失方向省略字节值并明确 present=false，永不 reset。"
+}

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "custom_domain"
+  ],
+  "properties": {
+    "custom_domain": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 253
+    },
+    "binding_track": {
+      "type": "string",
+      "enum": [
+        "panel_dnc",
+        "builtin_acme",
+        "custom_pem",
+        "reverse_proxy"
+      ]
+    },
+    "panel_cert_binding_ref": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "acme_email": {
+      "type": "string",
+      "maxLength": 254
+    },
+    "cert_pem": {
+      "type": "string",
+      "maxLength": 65536
+    },
+    "key_pem": {
+      "type": "string",
+      "maxLength": 65536,
+      "x-secret": true,
+      "writeOnly": true
+    },
+    "trust_cloudflare_ips": {
+      "type": "boolean"
+    }
+  }
+}

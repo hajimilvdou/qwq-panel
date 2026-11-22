@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI 中转概览查询请求",
+  "description": "查询首页微件与控制台使用的实时健康渠道、分发用户数与今日消耗微点。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "window_hours": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 168,
+      "default": 24,
+      "description": "统计调用次数与虚拟消耗额度的回溯小时数（默认 24 小时）。"
+    }
+  }
+}

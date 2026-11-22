@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "deployed",
+    "dry_run",
+    "stack"
+  ],
+  "properties": {
+    "deployed": {
+      "type": "boolean"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "stack": {
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,410 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qwq:plugin:core.xray:config:v2",
+  "title": "Core Intent v1/v2",
+  "description": "完整期望快照；支持 Core Intent v1（单 VLESS REALITY 入站）与 Core Intent v2（多 profile：VLESS+REALITY、Hysteria2+受控TLS、Shadowsocks-2022）。字段间一致性与协议细则由 Go 语义校验强制。",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/intentV1"
+    },
+    {
+      "$ref": "#/$defs/intentV2"
+    }
+  ],
+  "$defs": {
+    "secretRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "$secret": {
+          "type": "string",
+          "pattern": "^sec_[0-7][0123456789abcdefghjkmnpqrstvwxyz]{25}$",
+          "minLength": 30,
+          "maxLength": 30
+        }
+      },
+      "required": [
+        "$secret"
+      ]
+    },
+    "secretValue128": {
+      "x-secret": true,
+      "writeOnly": true,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        {
+          "$ref": "#/$defs/secretRef"
+        }
+      ]
+    },
+    "secretValue256": {
+      "x-secret": true,
+      "writeOnly": true,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "$ref": "#/$defs/secretRef"
+        }
+      ]
+    },
+    "listenAddr": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 45,
+      "anyOf": [
+        {
+          "format": "ipv4"
+        },
+        {
+          "format": "ipv6"
+        }
+      ]
+    },
+    "realitySecurity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "reality"
+        },
+        "target": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 259,
+          "description": "合法 DNS 名或 IP 加明确端口；DNS/IP、端口范围及目标与 SNI 的关联由 Go 语义校验强制。"
+        },
+        "server_names": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\\.?$"
+          }
+        },
+        "private_key": {
+          "$ref": "#/$defs/secretValue128"
+        },
+        "short_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^([0-9a-fA-F]{2}){1,8}$",
+            "minLength": 2,
+            "maxLength": 16
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "target",
+        "server_names",
+        "private_key",
+        "short_ids"
+      ]
+    },
+    "outboundDirect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "direct"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "intentV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "inbound": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "pattern": "^[a-z][a-z0-9._-]{0,31}$"
+            },
+            "listen": {
+              "$ref": "#/$defs/listenAddr"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 65535
+            },
+            "protocol": {
+              "const": "vless"
+            },
+            "transport": {
+              "const": "raw"
+            },
+            "flow": {
+              "const": "xtls-rprx-vision"
+            },
+            "security": {
+              "$ref": "#/$defs/realitySecurity"
+            },
+            "users": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32,
+                    "pattern": "^[a-z][a-z0-9._-]{0,31}$"
+                  },
+                  "uuid": {
+                    "$ref": "#/$defs/secretValue128"
+                  }
+                },
+                "required": [
+                  "id",
+                  "uuid"
+                ]
+              }
+            }
+          },
+          "required": [
+            "id",
+            "listen",
+            "port",
+            "protocol",
+            "transport",
+            "flow",
+            "security",
+            "users"
+          ]
+        },
+        "outbound": {
+          "$ref": "#/$defs/outboundDirect"
+        }
+      },
+      "required": [
+        "schema_version",
+        "enabled",
+        "inbound",
+        "outbound"
+      ]
+    },
+    "intentV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "2"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "profiles": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "pattern": "^[a-z][a-z0-9._-]{0,31}$"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "listen": {
+                "$ref": "#/$defs/listenAddr"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 65535
+              },
+              "protocol": {
+                "enum": [
+                  "vless",
+                  "hysteria2",
+                  "shadowsocks2022"
+                ]
+              },
+              "users": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 256,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 32,
+                      "pattern": "^[a-z][a-z0-9._-]{0,31}$"
+                    },
+                    "uuid": {
+                      "$ref": "#/$defs/secretValue128"
+                    },
+                    "auth": {
+                      "$ref": "#/$defs/secretValue256"
+                    },
+                    "psk": {
+                      "$ref": "#/$defs/secretValue128"
+                    },
+                    "traffic_mark": {
+                      "type": "integer",
+                      "minimum": 20736,
+                      "maximum": 20991,
+                      "description": "可选内核流量整形标记（0x5100..0x51FF，实例内唯一）"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              },
+              "vless": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "transport": {
+                    "const": "raw"
+                  },
+                  "flow": {
+                    "const": "xtls-rprx-vision"
+                  },
+                  "security": {
+                    "$ref": "#/$defs/realitySecurity"
+                  }
+                },
+                "required": [
+                  "transport",
+                  "flow",
+                  "security"
+                ]
+              },
+              "hysteria2": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "tls": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "binding_ref": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "server_name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 253
+                      }
+                    },
+                    "required": [
+                      "binding_ref",
+                      "server_name"
+                    ]
+                  }
+                },
+                "required": [
+                  "tls"
+                ]
+              },
+              "shadowsocks2022": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "method": {
+                    "enum": [
+                      "2022-blake3-aes-128-gcm",
+                      "2022-blake3-aes-256-gcm"
+                    ]
+                  },
+                  "server_key": {
+                    "$ref": "#/$defs/secretValue128"
+                  },
+                  "obfs": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "mode": {
+                        "enum": [
+                          "none",
+                          "http",
+                          "tls"
+                        ]
+                      },
+                      "host": {
+                        "type": "string",
+                        "maxLength": 253
+                      }
+                    },
+                    "required": [
+                      "mode"
+                    ]
+                  },
+                  "udp": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "method",
+                  "server_key",
+                  "obfs"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "enabled",
+              "listen",
+              "port",
+              "protocol",
+              "users"
+            ]
+          }
+        },
+        "outbound": {
+          "$ref": "#/$defs/outboundDirect"
+        }
+      },
+      "required": [
+        "schema_version",
+        "enabled",
+        "profiles",
+        "outbound"
+      ]
+    }
+  }
+}

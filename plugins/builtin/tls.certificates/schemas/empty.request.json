@@ -1,0 +1,6 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "空请求参数",
+  "properties": {}
+}

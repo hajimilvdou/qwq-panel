@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# qwq privileged helper socket (P3 real-systemd install). Installed as
+# /etc/systemd/system/qwq-privileged.socket.
+#
+# The controller runs as the unprivileged qwq user and cannot write
+# /etc/systemd/system. It hands one UnitSpec per request to this socket; the
+# socket unit starts qwq-privileged.service for the connection and the helper
+# exits as soon as it answered. An idle host therefore has no root helper
+# process, only the listening socket.
+#
+# The socket is root:qwq 0660: qwq may connect, no plugin (DynamicUser) and no
+# other local user can. /run/qwq is created by deployments/tmpfiles/qwq.conf;
+# a socket unit cannot create the directory it listens on.
+
+[Unit]
+Description=qwq privileged helper socket
+Documentation=https://github.com/qwq-panel/qwq
+
+[Socket]
+ListenStream=/run/qwq/privileged.sock
+SocketMode=0660
+SocketGroup=qwq
+Service=qwq-privileged.service
+# The socket inode is a runtime object; do not leave it behind after stop.
+RemoveOnStop=yes
+TriggerLimitIntervalSec=2s
+TriggerLimitBurst=20
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,40 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* ======================== 监控详情布局 ======================== */
+* { box-sizing: border-box; }
+html { background: var(--c-bg); }
+html[data-theme="light"] { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
+body { margin: 0; background: transparent; color: var(--c-text); font: 14px/1.5 var(--font-sans); }
+h1,h2,h3,p { margin: 0; }
+button { font: inherit; color: inherit; cursor: pointer; border: 1px solid var(--c-border); background: var(--c-surface); border-radius: 8px; padding: 7px 13px; }
+button:focus-visible { outline: 3px solid var(--c-focus); outline-offset: 3px; }
+button[aria-pressed="true"] { background: var(--c-primary-soft); color: var(--c-primary-fg); border-color: var(--c-primary); }
+main { padding: 8px 2px; display: flex; flex-direction: column; gap: 24px; }
+.page-head,.history-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+h1 { font-size: 22px; font-weight: 650; }
+h2 { font-size: 16px; font-weight: 600; }
+h3 { font-size: 15px; font-weight: 600; }
+.page-head p,.resource p,.chart-note,.history-note { color: var(--c-text-3); font-size: 12px; }
+.controls { display: flex; align-items: center; gap: 12px; }
+#status { color: var(--c-text-2); font-size: 12px; max-width: 240px; }
+.gauges { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); padding: 28px 18px 20px; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 16px; }
+.resource { min-width: 0; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.resource p { max-width: 100%; overflow-wrap: anywhere; }
+.meter { --fill: 0%; width: 124px; height: 124px; border: 6px solid var(--c-surface-3); border-radius: 50%; display: grid; place-items: center; background: linear-gradient(to top,var(--c-primary-soft) var(--fill),var(--c-surface) var(--fill)); box-shadow: inset 0 0 0 1px var(--c-border); }
+.meter span { font-size: 27px; font-weight: 620; font-variant-numeric: tabular-nums; }
+.segments { display: flex; gap: 5px; }
+.charts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.chart { min-width: 0; background: var(--c-surface); padding: 17px 18px 12px; border: 1px solid var(--c-border); border-radius: 12px; }
+.chart header { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 9px; }
+.chart header p { display: flex; flex-wrap: wrap; gap: 10px; color: var(--c-text-2); font-size: 12px; }
+.chart svg { display: block; width: 100%; height: 175px; overflow: visible; margin-top: 12px; }
+.grid { fill: none; stroke: var(--c-border); stroke-width: 1; }
+.line { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.teal { color: var(--c-primary-fg); }
+.violet { color: light-dark(#7057a3,#b8a0ec); }
+.teal-line { stroke: var(--c-primary); }
+.violet-line { stroke: light-dark(#8465bb,#b8a0ec); }
+.chart-note { min-height: 18px; }
+.history-note { text-align: left; }
+@media(max-width:700px) { .charts { grid-template-columns: 1fr; } .page-head { align-items: flex-start; } .controls { flex-direction: column; align-items: flex-end; } .meter { width: 100px; height: 100px; } .meter span { font-size: 23px; } }
+@media(max-width:430px) { main { gap: 18px; } .gauges { padding: 20px 5px 14px; gap: 4px; } .meter { width: 81px; height: 81px; border-width: 4px; } .meter span { font-size: 19px; } .resource p { font-size: 11px; } .history-head { align-items: flex-start; flex-direction: column; gap: 10px; } .segments { width: 100%; } .segments button { flex: 1; } .chart { padding: 14px 13px 10px; } }

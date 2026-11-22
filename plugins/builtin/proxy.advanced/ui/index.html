@@ -1,0 +1,456 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>高级代理管理 · 链式代理 · 网络调优与 Brutal</title>
+  <style>
+    :root, [data-theme="light"] {
+      color-scheme: light;
+      --bg: #f6f3ed; --surface: #fdfbf8; --surface-2: #f1ece3;
+      --line: #e8e1d6; --line-strong: #d5cbbe;
+      --text: #2a211b; --text-2: #685a50; --text-3: #96887d;
+      --cocoa: #6b4c3b; --on-cocoa: #fdfbf8;
+      --jade: #1e9c8b; --jade-soft: #e2f5f2;
+      --amber: #d99422; --amber-soft: #fbf0db;
+      --brick: #b5352b; --brick-soft: #fae5e3;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #151210; --surface: #1e1a17; --surface-2: #28221e;
+      --line: #312923; --line-strong: #463b32;
+      --text: #f3ede6; --text-2: #b5a89d; --text-3: #83766c;
+      --cocoa: #9d755d; --on-cocoa: #17120e;
+      --jade: #32c2ae; --jade-soft: rgba(50, 194, 174, 0.16);
+      --amber: #ebb044; --amber-soft: rgba(235, 176, 68, 0.16);
+      --brick: #ef6b61; --brick-soft: rgba(239, 107, 97, 0.18);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; background: var(--bg); color: var(--text); font-variant-numeric: tabular-nums; }
+    main { max-width: 1180px; margin: 0 auto; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+    .title { margin: 0; font-size: 18px; font-weight: 650; }
+    .sub { font-size: 12px; color: var(--text-2); margin-top: 3px; }
+    .tabs { display: flex; gap: 6px; background: var(--surface); padding: 4px; border: 1px solid var(--line); border-radius: 10px; flex-wrap: wrap; }
+    .tabs button { background: transparent; color: var(--text-2); border: 0; padding: 7px 14px; border-radius: 7px; font-weight: 550; cursor: pointer; font-size: 13px; }
+    .tabs button.active { background: var(--cocoa); color: var(--on-cocoa); }
+    .banner { padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-2); font-size: 12px; color: var(--text-2); margin-bottom: 14px; display: none; }
+    .banner.show { display: block; }
+    .banner.ok { border-color: var(--jade); background: var(--jade-soft); color: var(--jade); }
+    .banner.warn { border-color: var(--amber); background: var(--amber-soft); color: var(--amber); }
+    .banner.err { border-color: var(--brick); background: var(--brick-soft); color: var(--brick); }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+    .stat .k { font-size: 12px; color: var(--text-2); }
+    .stat .v { font-size: 19px; font-weight: 700; margin-top: 4px; }
+    .stat .d { font-size: 11px; color: var(--text-3); margin-top: 4px; }
+    .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+    .card h3 { margin: 0 0 6px; font-size: 15px; }
+    .card-desc { font-size: 12px; color: var(--text-2); margin: 0 0 12px; line-height: 1.5; }
+    .form-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); margin-top: 10px; }
+    label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-2); }
+    label.check { flex-direction: row; align-items: center; gap: 8px; padding-top: 18px; color: var(--text); }
+    input, select, pre { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--bg); color: var(--text); font-size: 13px; }
+    input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
+    input[type="range"] { padding: 0; border: 0; background: transparent; }
+    pre { overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; max-height: 280px; margin: 10px 0 0; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+    .btn { padding: 7px 14px; border-radius: 8px; border: 0; background: var(--cocoa); color: var(--on-cocoa); font-weight: 550; cursor: pointer; font-size: 13px; }
+    .btn.sm { padding: 4px 10px; font-size: 12px; }
+    .btn.ghost { background: transparent; border: 1px solid var(--line-strong); color: var(--text); }
+    .btn.danger { background: var(--brick-soft); color: var(--brick); }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--surface-2); color: var(--text-2); }
+    .badge.ok, .badge.active { background: var(--jade-soft); color: var(--jade); }
+    .badge.warn, .badge.suspended_quota, .badge.expired { background: var(--amber-soft); color: var(--amber); }
+    .badge.err, .badge.disabled { background: var(--brick-soft); color: var(--brick); }
+    .bar { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; margin-top: 4px; }
+    .bar > span { display: block; height: 100%; background: var(--cocoa); }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+    th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    th { font-size: 12px; color: var(--text-2); font-weight: 600; white-space: nowrap; }
+    .muted { color: var(--text-2); font-size: 12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .hidden { display: none !important; }
+    .oversend-box { display: flex; align-items: center; gap: 8px; }
+    .oversend-box input[type="range"] { flex: 1; }
+    .oversend-box input[type="number"] { width: 78px; }
+  </style>
+</head>
+<body>
+  <main id="proxy-root">
+    <div class="topbar">
+      <div>
+        <h2 class="title" id="page-title">高级代理管理</h2>
+        <div class="sub">多用户配额与连接限制 · 链式代理出口 · tcpfit 动态调优与 TCP Brutal 端口透明接管 · <span id="status">连接宿主中…</span></div>
+      </div>
+      <div class="actions" style="margin-top:0">
+        <div class="tabs" id="nav-tabs">
+          <button data-route="/proxy" class="active" type="button">用户与限速</button>
+          <button data-route="/proxy/chains" type="button">链式代理</button>
+          <button data-route="/proxy/tuning" type="button">网络调优 &amp; Brutal</button>
+        </div>
+        <button id="refresh" class="btn ghost" type="button">刷新</button>
+      </div>
+    </div>
+
+    <div id="action-banner" class="banner" role="status" aria-live="polite"></div>
+
+    <!-- ==================== 视图 1: /proxy 用户、套餐、限速与连接数控制 ==================== -->
+    <section data-view="/proxy">
+      <section class="stats">
+        <div class="stat">
+          <div class="k">活跃 / 总用户</div>
+          <div class="v" id="overview-value">—</div>
+          <div class="d" id="overview-sub">等待同步</div>
+        </div>
+        <div class="stat">
+          <div class="k">内核带宽限速 (HTB)</div>
+          <div class="v" id="traffic-status">—</div>
+          <div class="d" id="traffic-detail"></div>
+        </div>
+        <div class="stat">
+          <div class="k">套餐与连接策略</div>
+          <div class="v" id="plans-summary">—</div>
+          <div class="d" id="plans-detail"></div>
+        </div>
+        <div class="stat">
+          <div class="k">Brutal 接管监听</div>
+          <div class="v" id="brutal-mini-count">—</div>
+          <div class="d" id="brutal-mini-sub">可按 TCP 订阅独立开启</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>套餐列表与默认连接限制</h3>
+        <p class="card-desc">在原有速率限制（HTB 下行/上行 kbps）基础上，为套餐配置默认最大并发 TCP 连接数与最大同时在线 IP 数（0 表示不限制）。</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>套餐 ID</th>
+                <th>名称</th>
+                <th>周期配额</th>
+                <th>下行 / 上行限速</th>
+                <th>最大连接 / 最大 IP</th>
+                <th>重置日 / 有效天数</th>
+              </tr>
+            </thead>
+            <tbody id="plans-body">
+              <tr><td colspan="6" class="muted">等待加载…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="form-grid" style="margin-top:16px">
+          <label>套餐 ID <input id="p-id" placeholder="如 pro-100g" /></label>
+          <label>名称 <input id="p-name" placeholder="专业 100G" /></label>
+          <label>配额 (GiB, 0=不限) <input id="p-quota-gb" type="number" min="0" value="100" /></label>
+          <label>下行限速 (kbps) <input id="p-down" type="number" min="0" value="50000" /></label>
+          <label>上行限速 (kbps) <input id="p-up" type="number" min="0" value="20000" /></label>
+          <label>默认最大连接数 (0=不限) <input id="p-max-conns" type="number" min="0" max="65535" value="128" /></label>
+          <label>默认最大在线 IP (0=不限) <input id="p-max-ips" type="number" min="0" max="1024" value="3" /></label>
+        </div>
+        <div class="actions">
+          <button id="btn-plan-save" class="btn" type="button">保存 / 更新套餐</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>多用户管理 · 并发连接数 / 在线 IP 限制</h3>
+        <div id="copy-feedback" class="muted" aria-live="polite"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>用户</th>
+                <th>套餐</th>
+                <th>状态</th>
+                <th>当期用量 / 配额</th>
+                <th>活跃连接 / 上限</th>
+                <th>活跃 IP / 上限</th>
+                <th>绑定链式落地</th>
+                <th>流量标记</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="users-body">
+              <tr><td colspan="9" class="muted">等待加载…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top:18px">单用户连接数 / IP / 链式落地覆盖</h3>
+        <p class="card-desc">覆盖值说明：<code>-1</code> 继承所属套餐默认上限，<code>0</code> 表示该用户不限制，正整数为显式上限。</p>
+        <div class="form-grid">
+          <label>目标用户
+            <select id="ul-user"><option value="">请先加载用户</option></select>
+          </label>
+          <label>最大连接覆盖 (-1 继承 / 0 不限) <input id="ul-conns" type="number" min="-1" max="65535" value="-1" /></label>
+          <label>最大 IP 覆盖 (-1 继承 / 0 不限) <input id="ul-ips" type="number" min="-1" max="1024" value="-1" /></label>
+          <label>指定链式代理 ID（留空=默认/直连）
+            <select id="ul-chain"><option value="">（跟随默认 / 直连）</option></select>
+          </label>
+        </div>
+        <div class="actions">
+          <button id="btn-user-limits" class="btn" type="button">保存用户限制与链式绑定</button>
+          <button id="btn-nft-preview" class="btn ghost" type="button">预览 nftables 连接限流规则</button>
+        </div>
+        <pre id="nft-preview" class="hidden"></pre>
+      </section>
+    </section>
+
+    <!-- ==================== 视图 2: /proxy/chains 链式代理独立页 ==================== -->
+    <section data-view="/proxy/chains" class="hidden">
+      <section class="card">
+        <h3>新增 / 更新链式代理落地节点</h3>
+        <p class="card-desc">同时支持服务端出口链式转发（Xray <code>proxySettings.tag</code>）与客户端订阅链式导出（Clash <code>dialer-proxy</code> / sing-box <code>detour</code>）。密码与 UUID 采用本地 AES-256-GCM 加密存储，列表与预览永不明文回显。</p>
+        <div class="form-grid">
+          <label>节点 ID <input id="c-id" placeholder="如 jp-home-socks" /></label>
+          <label>显示名称 <input id="c-name" placeholder="日本家宽落地" /></label>
+          <label>工作模式
+            <select id="c-mode">
+              <option value="both">服务端转发 + 客户端订阅 (both)</option>
+              <option value="server_forward">仅服务端出口转发 (server_forward)</option>
+              <option value="client_dialer">仅客户端订阅 dialer-proxy (client_dialer)</option>
+            </select>
+          </label>
+          <label>落地协议
+            <select id="c-proto">
+              <option value="socks5">SOCKS5</option>
+              <option value="http">HTTP / HTTPS</option>
+              <option value="vless">VLESS</option>
+              <option value="trojan">Trojan</option>
+              <option value="shadowsocks">Shadowsocks</option>
+            </select>
+          </label>
+          <label>落地地址 (域名/IP) <input id="c-server" placeholder="landing.example.com" /></label>
+          <label>落地端口 <input id="c-port" type="number" min="1" max="65535" value="1080" /></label>
+          <label>用户名 (SOCKS5/HTTP) <input id="c-user" placeholder="可选" /></label>
+          <label>密码 / PSK (更新留空则保留原密文) <input id="c-pass" type="password" placeholder="加密保存" /></label>
+          <label>UUID (VLESS 必填) <input id="c-uuid" placeholder="可选" /></label>
+          <label>加密方式 (SS) <input id="c-method" placeholder="aes-256-gcm" /></label>
+          <label>TLS SNI <input id="c-sni" placeholder="可选" /></label>
+          <label>下一跳 ID (多跳级联，自动检环)
+            <select id="c-next"><option value="">（无，本节点即为最终落地）</option></select>
+          </label>
+          <label class="check"><input id="c-tls" type="checkbox" /> 启用 TLS</label>
+          <label class="check"><input id="c-default" type="checkbox" /> 设为全局默认落地</label>
+          <label class="check"><input id="c-enabled" type="checkbox" checked /> 启用该链式节点</label>
+        </div>
+        <div class="actions">
+          <button id="btn-chain-save" class="btn" type="button">保存链式代理节点</button>
+          <button id="btn-chain-preview" class="btn ghost" type="button">预览 Xray 服务端链式出口 JSON</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>已配置链式代理节点</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID / 名称</th>
+                <th>模式</th>
+                <th>协议与落地地址</th>
+                <th>多跳 / 默认</th>
+                <th>凭据脱敏摘要</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="chains-body">
+              <tr><td colspan="7" class="muted">暂无链式代理节点</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <pre id="chain-xray-preview" class="hidden"></pre>
+      </section>
+    </section>
+
+    <!-- ==================== 视图 3: /proxy/tuning tcpfit 调优 + TCP Brutal 接管 ==================== -->
+    <section data-view="/proxy/tuning" class="hidden">
+      <section class="stats">
+        <div class="stat">
+          <div class="k">宿主机内存 / Swap</div>
+          <div class="v" id="t-ram">—</div>
+          <div class="d" id="t-kernel">—</div>
+        </div>
+        <div class="stat">
+          <div class="k">当前拥塞算法 / qdisc</div>
+          <div class="v" id="t-cc">—</div>
+          <div class="d" id="t-avail-cc">—</div>
+        </div>
+        <div class="stat">
+          <div class="k">TCP Brutal 内核支持</div>
+          <div class="v" id="b-env-status">—</div>
+          <div class="d" id="b-env-detail">—</div>
+        </div>
+        <div class="stat">
+          <div class="k">iperf3 实测探针</div>
+          <div class="v" id="t-iperf-status">—</div>
+          <div class="d" id="t-snap-count">—</div>
+        </div>
+      </section>
+
+      <!-- Section A: tcpfit 动态网络调优 -->
+      <section class="card">
+        <h3>tcpfit 动态网络栈调优（BDP + 1C1G 内存防 OOM + 一键快照回滚）</h3>
+        <p class="card-desc">参考 <code>Kylin010/tcpfit</code> 架构：结合宿主机实时物理内存、带宽与 RTT 自动计算 BDP 与安全的 <code>rmem/wmem</code> 缓冲区上限，应用前自动留存基线快照并生成 <code>/etc/sysctl.d/99-qwq-tcpfit.conf</code>。</p>
+        <div class="form-grid">
+          <label>节点角色
+            <select id="t-role">
+              <option value="proxy">代理出口节点 (proxy)</option>
+              <option value="relay">中转转发节点 (relay)</option>
+              <option value="web">Web / 建站节点 (web)</option>
+            </select>
+          </label>
+          <label>标称/实测带宽 (Mbps) <input id="t-bw" type="number" min="1" max="100000" value="200" /></label>
+          <label>典型 RTT (ms) <input id="t-rtt" type="number" min="1" max="2000" value="150" /></label>
+          <label>TCP 内存预算上限 (5%–30%) <input id="t-mem-pct" type="number" min="5" max="30" value="12" /></label>
+          <label>偏好拥塞算法
+            <select id="t-prefer-cc">
+              <option value="auto">自动选择 (优先 BBR)</option>
+              <option value="bbr">BBR</option>
+              <option value="brutal">Brutal (需内核模块)</option>
+              <option value="cubic">CUBIC</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions">
+          <button id="btn-tuning-plan" class="btn" type="button">推导动态调优方案</button>
+          <button id="btn-tuning-dry" class="btn ghost" type="button">演练保存基线 (Dry-Run)</button>
+          <button id="btn-tuning-apply" class="btn danger" type="button">应用到宿主机内核</button>
+        </div>
+        <div id="t-plan-summary" class="muted" style="margin-top:10px"></div>
+        <div id="t-swap-warn" class="banner warn" style="margin-top:10px"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>sysctl 参数</th>
+                <th>当前值</th>
+                <th>推荐值</th>
+                <th>推导依据</th>
+              </tr>
+            </thead>
+            <tbody id="t-diff-body">
+              <tr><td colspan="4" class="muted">点击“推导动态调优方案”生成差异表</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <pre id="t-conf-preview" class="hidden"></pre>
+
+        <h3 style="margin-top:18px">iperf3 限速器拐点探测（可选）</h3>
+        <div class="form-grid">
+          <label>对端主机 (IP/域名) <input id="sw-host" placeholder="如 iperf.example.com" /></label>
+          <label>端口 <input id="sw-port" type="number" min="1" max="65535" value="5201" /></label>
+          <label>时长 (1–15s) <input id="sw-dur" type="number" min="1" max="15" value="5" /></label>
+        </div>
+        <div class="actions">
+          <button id="btn-tuning-sweep" class="btn ghost" type="button">运行 iperf3 探测</button>
+        </div>
+        <pre id="t-sweep-out" class="hidden"></pre>
+
+        <h3 style="margin-top:18px">调优历史快照与一键回滚</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>版本</th>
+                <th>说明</th>
+                <th>参数 (角色 / 带宽 / RTT)</th>
+                <th>是否落盘生效</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="t-snaps-body">
+              <tr><td colspan="5" class="muted">暂无快照</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Section B: TCP Brutal + Brutal Custom 端口透明接管 -->
+      <section class="card">
+        <h3>TCP Brutal + Brutal Custom 端口透明接管（按 TCP 订阅独立开启 + 手调超发倍率）</h3>
+        <p class="card-desc">在母机网络被恶意抢占带宽且无法使用 UDP 的场景下，通过纯 Go 透明 TCP 接管层为选定的单个 TCP 入站端口设置 <code>TCP_CONGESTION=brutal</code> 与 <code>TCP_BRUTAL_PARAMS(23301)</code>；未选中的其他 TCP 订阅保持原端口直连。支持手动调节超发包倍率（原始默认 <strong>125%</strong>，范围 100%–250%）。</p>
+        <div id="b-guidance" class="banner warn"></div>
+
+        <div class="form-grid">
+          <label>绑定 ID <input id="b-id" placeholder="如 brutal-vless" /></label>
+          <label>快捷选择 TCP 订阅入站
+            <select id="b-inbound-preset"><option value="">手动填写</option></select>
+          </label>
+          <label>入站标识 (inbound_tag) <input id="b-tag" placeholder="vless-tcp" /></label>
+          <label>协议类型
+            <select id="b-proto">
+              <option value="vless">VLESS (TCP)</option>
+              <option value="shadowsocks">Shadowsocks-2022 (TCP)</option>
+              <option value="trojan">Trojan (TCP)</option>
+              <option value="tcp">通用 TCP</option>
+            </select>
+          </label>
+          <label>对外接管端口 (listen_port) <input id="b-listen" type="number" min="1" max="65535" value="2443" /></label>
+          <label>本机后端端口 (target_port) <input id="b-target" type="number" min="1" max="65535" value="443" /></label>
+          <label>基准带宽 (Mbps) <input id="b-bw" type="number" min="1" max="10000" value="100" /></label>
+          <label>超发包倍率 % (原始默认 125，100–250)
+            <div class="oversend-box">
+              <input id="b-oversend-range" type="range" min="100" max="250" step="5" value="125" />
+              <input id="b-oversend" type="number" min="100" max="250" value="125" />
+            </div>
+            <span id="b-eff-preview" class="muted">折算等效发包速率：125.0 Mbps</span>
+          </label>
+          <label>拥塞窗口增益 cwnd_gain (10–50, 20=2.0x) <input id="b-gain" type="number" min="10" max="50" value="20" /></label>
+          <label class="check"><input id="b-sub" type="checkbox" checked /> 自动切换该 TCP 订阅节点端口到此接管端口</label>
+          <label class="check"><input id="b-enabled" type="checkbox" checked /> 启用该 Brutal 接管绑定</label>
+        </div>
+        <div class="actions">
+          <button id="btn-brutal-save" class="btn" type="button">保存接管绑定</button>
+          <button id="btn-brutal-apply" class="btn ghost" type="button">立即应用 / 热重载所有接管端口</button>
+        </div>
+
+        <h3 style="margin-top:16px">已配置的 TCP 接管绑定</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID / 入站</th>
+                <th>接管端口 -&gt; 后端端口</th>
+                <th>基准 × 超发倍率 = 有效速率</th>
+                <th>cwnd_gain</th>
+                <th>订阅重写 / 状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="b-bindings-body">
+              <tr><td colspan="6" class="muted">暂无 Brutal 接管绑定</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top:16px">透明接管端口实时遥测</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>绑定 ID</th>
+                <th>监听地址</th>
+                <th>活跃 / 累计连接</th>
+                <th>Brutal 生效 / 回退</th>
+                <th>上行 / 下行字节</th>
+                <th>最近 sockopt 信息</th>
+              </tr>
+            </thead>
+            <tbody id="b-metrics-body">
+              <tr><td colspan="6" class="muted">当前无运行中的接管监听器</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+  <script src="proxy.js"></script>
+</body>
+</html>

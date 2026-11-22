@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询用户实时连接与 nftables 规则响应",
+  "description": "返回各用户实时连接/IP 快照与可选 nftables 规则。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "items"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "user_id",
+          "active_connections",
+          "active_ips",
+          "max_connections",
+          "max_ips",
+          "rejected_total"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "string"
+          },
+          "active_connections": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "active_ips": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_connections": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_ips": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rejected_total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "nftables_rules": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "调整分发用户额度或分组请求",
+  "description": "由管理员增减指定用户的虚拟统计额度，或更新其分组、状态与周期自动回血上限，并写入不可篡改审计流水。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user_id"],
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "目标分发用户 ID。"
+    },
+    "delta_micros": {
+      "type": "integer",
+      "default": 0,
+      "description": "统计额度调整增量（正数为增额，负数为扣减，最低扣至 0）。"
+    },
+    "group_name": {
+      "type": "string",
+      "maxLength": 32,
+      "description": "可选更新所属路由分组。"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["", "active", "disabled"],
+      "description": "可选启用或停用账号。"
+    },
+    "auto_refill_cap_micros": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "可选更新周期自动回血上限（micros）。"
+    },
+    "auto_refill_cycle": {
+      "type": "string",
+      "enum": ["", "none", "daily", "monthly"],
+      "description": "可选更新周期回血频率。"
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "写入 quota_ledger 审计流水的调额备注。"
+    }
+  }
+}

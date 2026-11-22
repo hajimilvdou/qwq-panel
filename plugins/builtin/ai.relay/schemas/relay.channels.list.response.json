@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "上游渠道列表响应",
+  "description": "返回脱敏后的上游渠道列表、健康状态与首字延迟。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["channels"],
+  "properties": {
+    "channels": {
+      "type": "array",
+      "description": "上游渠道列表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "base_url",
+          "groups",
+          "models",
+          "model_mapping",
+          "priority",
+          "weight",
+          "max_concurrent",
+          "enabled",
+          "health_state",
+          "cooldown_until",
+          "last_ttft_ms",
+          "last_error",
+          "updated_at"
+        ],
+        "properties": {
+          "id": { "type": "string", "description": "渠道唯一 ID。" },
+          "name": { "type": "string", "description": "渠道显示名称。" },
+          "kind": { "type": "string", "description": "渠道协议或 Sub2API OAuth 类型。" },
+          "base_url": { "type": "string", "description": "上游 API 根地址。" },
+          "groups": { "type": "array", "description": "允许访问的用户分组列表。", "items": { "type": "string" } },
+          "models": { "type": "array", "description": "支持的模型列表。", "items": { "type": "string" } },
+          "model_mapping": { "type": "object", "description": "下游模型名到上游模型名的映射表。" },
+          "priority": { "type": "integer", "description": "优先级（越大越优先）。" },
+          "weight": { "type": "integer", "minimum": 1, "description": "同层加权值。" },
+          "max_concurrent": { "type": "integer", "minimum": 1, "description": "并发槽位信号量上限。" },
+          "enabled": { "type": "boolean", "description": "是否启用。" },
+          "health_state": { "type": "string", "enum": ["healthy", "cooling", "tripped"], "description": "健康状态。" },
+          "cooldown_until": { "type": "integer", "minimum": 0, "description": "冷却结束时间戳（Unix 毫秒）。" },
+          "last_ttft_ms": { "type": "integer", "minimum": 0, "description": "最近测速首字延迟（毫秒）。" },
+          "last_error": { "type": "string", "description": "最近一次故障摘要。" },
+          "updated_at": { "type": "integer", "minimum": 0, "description": "最后更新时间戳（Unix 毫秒）。" }
+        }
+      }
+    }
+  }
+}

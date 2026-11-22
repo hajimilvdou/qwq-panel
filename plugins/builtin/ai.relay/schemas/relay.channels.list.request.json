@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "列举上游渠道请求",
+  "description": "查询全部上游 API 渠道与 Sub2API OAuth 订阅池（脱敏视图，不返回明文凭据）。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "",
+        "openai_compatible",
+        "anthropic_native",
+        "gemini_native",
+        "sub2api_claude_oauth",
+        "sub2api_codex_oauth",
+        "sub2api_gemini_oauth"
+      ],
+      "description": "可选按渠道协议类型过滤。"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256,
+      "default": 100,
+      "description": "最多返回的渠道数量。"
+    }
+  }
+}

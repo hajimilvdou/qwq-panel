@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "高级代理管理插件配置",
+  "description": "公网多协议订阅入口参数、后台流量采样间隔与订阅路径前缀配置。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "public_host": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "description": "客户端连接的公网域名或 IPv4/IPv6 地址（IPv6 将自动补充方括号）。"
+    },
+    "public_base_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "default": "/p/proxy.advanced",
+      "description": "订阅路径展示前缀，默认 /p/proxy.advanced。"
+    },
+    "vless_port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "default": 0,
+      "description": "VLESS+REALITY 公网端口（0 表示不在订阅中输出 VLESS 节点）。"
+    },
+    "reality_sni": {
+      "type": "string",
+      "maxLength": 253,
+      "description": "VLESS+REALITY 伪装目标 SNI 域名。"
+    },
+    "reality_public_key": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "由 REALITY 私钥派生的公钥（base64url）。"
+    },
+    "reality_short_id": {
+      "type": "string",
+      "maxLength": 32,
+      "description": "可选 REALITY shortId（十六进制）。"
+    },
+    "hy2_port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "default": 0,
+      "description": "Hysteria2 公网端口（0 表示不在订阅中输出 Hysteria2 节点）。"
+    },
+    "hy2_sni": {
+      "type": "string",
+      "maxLength": 253,
+      "description": "Hysteria2 TLS SNI 域名。"
+    },
+    "hy2_public_trusted": {
+      "type": "boolean",
+      "default": true,
+      "description": "Hysteria2 证书是否为公信 CA 签发（true 时强制 insecure=0）。"
+    },
+    "hy2_cert_pin_sha256": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "非公信证书时附带的 SHA-256 证书指纹。"
+    },
+    "ss_port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "default": 0,
+      "description": "Shadowsocks-2022 公网端口（0 表示不在订阅中输出 SS2022 节点）。"
+    },
+    "ss_method": {
+      "type": "string",
+      "enum": ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm"],
+      "default": "2022-blake3-aes-128-gcm",
+      "description": "Shadowsocks-2022 加密套件。"
+    },
+    "ss_server_key": {
+      "type": "string",
+      "maxLength": 128,
+      "x-secret": true,
+      "writeOnly": true,
+      "description": "Shadowsocks-2022 服务端 PSK（用于合成多用户订阅链接）。"
+    },
+    "ss_obfs_mode": {
+      "type": "string",
+      "enum": ["", "none", "http", "tls"],
+      "default": "none",
+      "description": "可选 simple-obfs 混淆模式。"
+    },
+    "ss_obfs_host": {
+      "type": "string",
+      "maxLength": 253,
+      "description": "simple-obfs 伪装主机名（缺省为 www.bing.com）。"
+    },
+    "ss_udp": {
+      "type": "boolean",
+      "default": true,
+      "description": "Shadowsocks-2022 节点是否声明支持 UDP 转发。"
+    },
+    "sync_interval_seconds": {
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 300,
+      "default": 30,
+      "description": "后台采样 core.xray 流量并执行配额/到期巡检的周期秒数（默认 30 秒）。"
+    }
+  }
+}

@@ -1,0 +1,399 @@
+{
+  "schema_version": "1.3",
+  "id": "containers.docker",
+  "version": "0.1.0",
+  "name": "轻量容器与 Compose 管理",
+  "summary": "直连 Docker Unix Socket 的极简容器运维、动态资源限额、有界日志、镜像清理与受管 Compose 编排",
+  "description": "面向 1C1G 低内存 VPS 的轻量容器与 Compose 插件：零重型 Docker SDK 依赖，直接通过标准库 Unix Socket 通信 Docker Engine API；支持容器健康与 OOMKilled 检测、64KiB/500行有界多路复用日志解包、动态内存/CPU 限额调整、悬空镜像清理，以及内置特权/宿主机挂载安全静态扫描的 Compose 编排栈管理；原生提供 <2KiB AI 异常诊断摘要与审批护栏。",
+  "license": "AGPL-3.0-only",
+  "publisher": {
+    "id": "qwq-builtin",
+    "key_id": "ed25519:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "abi": {
+    "major": 1,
+    "minimum_minor": 0
+  },
+  "engine_constraint": ">=0.1.0 <1.0.0",
+  "target": "linux/amd64",
+  "entrypoint": "bin/plugin",
+  "files": {
+    "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "attestations/sbom.spdx.json": "sha256:96d52cb06056302286a21b3f4b163eb05331a25f9184b2463bd505c91d753f93",
+    "schemas/checks.response.json": "sha256:ddafab2ab01b1da2df7e66256923fd59c988ed77c39b619f188131dc05fda94a",
+    "schemas/config.schema.json": "sha256:ef61e31cabdd57ce8b76b89d70bfd1e691b081122e9ddeeb33e619b9a8dd0528",
+    "schemas/docker.ai.digest.response.json": "sha256:ecce6f7c2dbee53ea71977162ab6e9602acf854af31bdbf30b6fb3a6161ee63e",
+    "schemas/docker.compose.deploy.request.json": "sha256:8e115a58115ba4ef1f0d5dff77f51e2b258c9e7716d9cbde94b8ca2f6b86bff6",
+    "schemas/docker.compose.deploy.response.json": "sha256:4ebb5dab6b8919e7b9d6c01921dda7857a94f728979b74644c2418d6ae0a96cd",
+    "schemas/docker.compose.remove.request.json": "sha256:d6adcdd22271742d0fbf5abec1c594643a5037ac81b6f459d445792070e01fa8",
+    "schemas/docker.compose.remove.response.json": "sha256:7fa650916dfeccdae16e93967d9dec3f8ccf6979c1b9292f128eca766d0bcfaf",
+    "schemas/docker.container.action.request.json": "sha256:123d5b65b1baab7e4c577086755c421a82088655c93aa47a5f17facc8fb6e4de",
+    "schemas/docker.container.action.response.json": "sha256:e895e7f429e282eef875d50dd4641d402f5c624e7f53977683a8c49b19fddcd1",
+    "schemas/docker.container.inspect.response.json": "sha256:9eacf927f16bb554effdd0c3039d9dca0552aa39f23071297d7a602595712b64",
+    "schemas/docker.container.limits.request.json": "sha256:cc11765cbe64ff72383f01817a1faf822c314b1b05a91f10e0cea1e92cb13f75",
+    "schemas/docker.container.limits.response.json": "sha256:f96e3a839aeaf2c1062bf10ee2adf14e6453bb2f630560479b4ac6130050fa42",
+    "schemas/docker.container.logs.request.json": "sha256:cb7b851e4f4028ffb98ffc53867980f86faea4e54191d0724135bf96b124c863",
+    "schemas/docker.container.logs.response.json": "sha256:36406a35a36df719c4a32874b29cd2627e9b2e447149bad9c02ebcb16fcd84d8",
+    "schemas/docker.container.remove.request.json": "sha256:68b02b10be86cff1cd8029e2034fc3d15831508d6f3063c34cae36c8d7bfccfb",
+    "schemas/docker.container.remove.response.json": "sha256:cfdf197544d5d23cf1cf01c925ec49968593c3e684e7da68ec5a31c54a478144",
+    "schemas/docker.id.request.json": "sha256:8c2849bb64263076eb92f54103a62d65ffb04d4557e35274dd73df73cb2a4715",
+    "schemas/docker.images.prune.request.json": "sha256:ec4eef70cc273857a90d1b15b9409662b2c3fb3a2c5fed15eea669cb44f41f99",
+    "schemas/docker.images.prune.response.json": "sha256:59b082cefbbb2eca92cf0fef9e1896378cbf1bb725ea9c33c41d37858673a7a3",
+    "schemas/docker.overview.response.json": "sha256:923fca39cfe6e5f16f32fbcedaadf785d837ff36ec8e55f14712f221a34f417c",
+    "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
+    "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
+    "ui/index.html": "sha256:572856904c6777509a97342d70e9488b652726977f89f8c5432353d5b520492c"
+  },
+  "provenance": {
+    "sbom": "attestations/sbom.spdx.json"
+  },
+  "placement": "node",
+  "lifecycle": {
+    "startup": "on_demand",
+    "background": false,
+    "update_strategy": "restart",
+    "overlap_safe": false
+  },
+  "operations": [
+    {
+      "name": "docker.stat.containers",
+      "api_version": "v1",
+      "permission": "containers.docker:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "运行中与总容器数量概览",
+      "capabilities": [
+        {
+          "name": "system.docker.read",
+          "scope": "local"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/stat.response.json"
+    },
+    {
+      "name": "docker.checks.health",
+      "api_version": "v1",
+      "permission": "containers.docker:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 8000,
+      "summary": "全部容器运行与健康状态检查列表",
+      "capabilities": [
+        {
+          "name": "system.docker.read",
+          "scope": "local"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/checks.response.json"
+    },
+    {
+      "name": "docker.overview",
+      "api_version": "v1",
+      "permission": "containers.docker:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "ui_route": "/containers",
+      "summary": "查看 Docker 守护进程状态、容器列表、本地镜像与受管 Compose 栈",
+      "capabilities": [
+        {
+          "name": "system.docker.read",
+          "scope": "local"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/docker.overview.response.json"
+    },
+    {
+      "name": "docker.ai.digest",
+      "api_version": "v1",
+      "permission": "containers.docker:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 8000,
+      "summary": "输出低于 2KiB 的容器异常、OOM 与退出口摘要供原生 AI 排查",
+      "capabilities": [
+        {
+          "name": "system.docker.read",
+          "scope": "local"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/docker.ai.digest.response.json"
+    },
+    {
+      "name": "docker.container.inspect",
+      "api_version": "v1",
+      "permission": "containers.docker:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "查询单个容器详情、实时 CPU/内存占用与 OOMKilled 状态",
+      "capabilities": [
+        {
+          "name": "system.docker.read",
+          "scope": "local"
+        }
+      ],
+      "request_schema": "schemas/docker.id.request.json",
+      "response_schema": "schemas/docker.container.inspect.response.json"
+    },
+    {
+      "name": "docker.container.logs",
+      "api_version": "v1",
+      "permission": "containers.docker:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "读取容器最近 N 行有界日志（上限 500 行 / 64 KiB）",
+      "capabilities": [
+        {
+          "name": "system.docker.read",
+          "scope": "local"
+        }
+      ],
+      "request_schema": "schemas/docker.container.logs.request.json",
+      "response_schema": "schemas/docker.container.logs.response.json"
+    },
+    {
+      "name": "docker.container.action",
+      "api_version": "v1",
+      "permission": "containers.docker:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": false,
+      "timeout_ms": 30000,
+      "approval": "ai_confirm",
+      "approval_summary": "启动、停止或重启 Docker 容器",
+      "approval_description": "对指定容器执行 start / stop / restart 生命周期控制。",
+      "summary": "执行容器启动、停止或重启",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "local"
+        }
+      ],
+      "request_schema": "schemas/docker.container.action.request.json",
+      "response_schema": "schemas/docker.container.action.response.json"
+    },
+    {
+      "name": "docker.container.limits",
+      "api_version": "v1",
+      "permission": "containers.docker:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "approval": "ai_confirm",
+      "approval_summary": "调整运行中容器的内存或 CPU 上限",
+      "approval_description": "通过 Docker Engine /update 接口实时更新容器 cgroup 内存与 CPU 限额，防止小鸡被单个容器 OOM 拖垮。",
+      "summary": "动态更新容器内存与 CPU 资源限额",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "local"
+        }
+      ],
+      "request_schema": "schemas/docker.container.limits.request.json",
+      "response_schema": "schemas/docker.container.limits.response.json"
+    },
+    {
+      "name": "docker.container.remove",
+      "api_version": "v1",
+      "permission": "containers.docker:delete",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "approval": "confirm",
+      "approval_summary": "删除指定 Docker 容器",
+      "approval_description": "不可逆移除容器及其可写层数据（数据卷不会自动删除）。",
+      "summary": "删除指定 Docker 容器",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "local"
+        }
+      ],
+      "request_schema": "schemas/docker.container.remove.request.json",
+      "response_schema": "schemas/docker.container.remove.response.json"
+    },
+    {
+      "name": "docker.images.prune",
+      "api_version": "v1",
+      "permission": "containers.docker:delete",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 60000,
+      "approval": "confirm",
+      "approval_summary": "清理无用 Docker 镜像释放磁盘空间",
+      "approval_description": "删除未被任何容器引用的悬空或闲置镜像，释放 VPS 磁盘空间。",
+      "summary": "清理未使用的 Docker 镜像并报告释放空间",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "local"
+        }
+      ],
+      "request_schema": "schemas/docker.images.prune.request.json",
+      "response_schema": "schemas/docker.images.prune.response.json"
+    },
+    {
+      "name": "docker.compose.deploy",
+      "api_version": "v1",
+      "permission": "containers.docker:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "high",
+      "idempotent": true,
+      "plannable": true,
+      "timeout_ms": 90000,
+      "approval": "confirm",
+      "approval_summary": "安全扫描并部署 Compose 编排栈",
+      "approval_description": "对 compose.yml 进行特权/宿主机挂载风险扫描，原子保存并执行 docker compose up -d。",
+      "summary": "校验、保存并部署 Docker Compose 编排栈",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "local"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/docker.compose.deploy.request.json",
+      "response_schema": "schemas/docker.compose.deploy.response.json"
+    },
+    {
+      "name": "docker.compose.remove",
+      "api_version": "v1",
+      "permission": "containers.docker:delete",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 45000,
+      "approval": "confirm",
+      "approval_summary": "停止并移除 Compose 编排栈",
+      "approval_description": "执行 docker compose down 并删除该编排栈记录及工作目录中的 compose.yml。",
+      "summary": "停止并删除指定 Compose 编排栈",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "local"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/docker.compose.remove.request.json",
+      "response_schema": "schemas/docker.compose.remove.response.json"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "system.docker.read",
+      "scope": "local",
+      "reason": "通过只读 Unix Socket 接口查询容器状态、实时资源占用、OOM 标记与有界日志"
+    },
+    {
+      "name": "system.docker.manage",
+      "scope": "local",
+      "reason": "在审批通过后执行容器启停、动态资源限额更新、镜像清理与受管 Compose 编排"
+    },
+    {
+      "name": "state.kv.read",
+      "scope": "self",
+      "reason": "读取已保存的受管 Compose 编排栈清单与安全告警"
+    },
+    {
+      "name": "state.kv.write",
+      "scope": "self",
+      "reason": "持久化受管 Compose 编排栈定义与版本元数据"
+    }
+  ],
+  "dependencies": [],
+  "state": {
+    "schema_version": "1",
+    "minimum_rollback_version": "0.1.0",
+    "backup_paths": [
+      "docker.db",
+      "stacks"
+    ]
+  },
+  "config": {
+    "schema": "schemas/config.schema.json",
+    "hot_apply": true
+  },
+  "resources": {
+    "memory_max_mb": 32,
+    "cpu_quota_percent": 15,
+    "pids_max": 24,
+    "fds_max": 256,
+    "disk_max_mb": 128,
+    "kv_max_kb": 256
+  },
+  "ui": {
+    "widgets": [
+      {
+        "id": "containers",
+        "title": "Docker 容器",
+        "kind": "stat",
+        "operation": "docker.stat.containers",
+        "refresh_seconds": 10,
+        "size": "s",
+        "color": "cyan"
+      },
+      {
+        "id": "health",
+        "title": "容器健康状态",
+        "kind": "checks",
+        "operation": "docker.checks.health",
+        "refresh_seconds": 15,
+        "size": "m",
+        "color": "blue"
+      }
+    ],
+    "entry": "ui/index.html",
+    "sandbox": true,
+    "connect_sources": [],
+    "routes": [
+      {
+        "path": "/containers",
+        "title": "容器编排",
+        "nav": true,
+        "permission": "containers.docker:read"
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "服务端回退生成 SSH 密钥对请求",
+  "description": "仅在浏览器不支持 WebCrypto Ed25519 时作为回退路径使用；私钥仅一次性返回且不落盘。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user"],
+  "properties": {
+    "user": {
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_.-]{0,31}$",
+      "description": "目标系统用户名。"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["ed25519", "rsa"],
+      "default": "ed25519",
+      "description": "密钥算法类型，默认 ed25519。"
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "可选 account/<user>/keys 期望修订号。"
+    }
+  }
+}

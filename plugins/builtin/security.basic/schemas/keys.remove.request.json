@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "移除 SSH 公钥请求",
+  "description": "按 SHA-256 指纹从目标用户 authorized_keys 移除公钥；密码登录关闭时禁止移除最后一把公钥。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user", "fingerprint_sha256"],
+  "properties": {
+    "user": {
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_.-]{0,31}$",
+      "description": "目标系统用户名。"
+    },
+    "fingerprint_sha256": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "description": "待移除公钥的 SHA-256 指纹。"
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "可选 account/<user>/keys 期望修订号。"
+    }
+  }
+}

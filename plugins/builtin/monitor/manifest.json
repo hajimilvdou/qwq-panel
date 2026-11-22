@@ -1,0 +1,260 @@
+{
+  "schema_version": "1.3",
+  "id": "monitor.basic",
+  "version": "0.1.0",
+  "name": "基础监控",
+  "summary": "宿主指标与有限内存历史",
+  "description": "通过宿主只读 metrics 能力采样，保持默认插件沙箱；历史在内存环中保留，重启后重建。",
+  "license": "AGPL-3.0-only",
+  "publisher": {
+    "id": "qwq-builtin",
+    "key_id": "ed25519:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "abi": {
+    "major": 1,
+    "minimum_minor": 0
+  },
+  "engine_constraint": ">=0.1.0 <1.0.0",
+  "target": "linux/amd64",
+  "entrypoint": "bin/plugin",
+  "files": {
+    "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "attestations/sbom.spdx.json": "sha256:9ae35912ea3c027415f87306755bf4d57015de1b094738c5bf3af03433a50d8d",
+    "schemas/config.schema.json": "sha256:9d743670f8ccdf8779f9e457fc2597ed6db78ed218fe41d6a51959738b720f3c",
+    "schemas/empty.request.json": "sha256:8491177ce18b8c2860389a81e3022162f5ba7d98024abf04251bf0eb8d16bd57",
+    "schemas/history.request.json": "sha256:e49f982b3886681fa98e791dff2a04b58a1c8d7f0c041118daba73fcfc921b90",
+    "schemas/history.response.json": "sha256:a8d4774ffbcd5c1a9d4fc131900f5c2dbef9363d18f1c39990dd7f88c21eb99f",
+    "schemas/series.response.json": "sha256:2dedeb6cd2638ddd70ad26d4aa5ea00e4227ccf23222c9d85d491468399372ed",
+    "schemas/snapshot.response.json": "sha256:d73dc8fc6ba84124bb0d372675c9772e193d679475d98cc55dad5c2060a28072",
+    "schemas/stat.response.json": "sha256:605e5bdfd16b5b8977ac464f513acbfbb513469c367afab246f093fd8833af45",
+    "ui/index.html": "sha256:7138cf306a1f7842765b28e40ac97990806186102649eea1377b7999df78bcd7",
+    "ui/monitor.css": "sha256:341011a9c14da75eaa89b82e6bc46124002c08e37f76cebb36528cb50c4d4256",
+    "ui/monitor.js": "sha256:d0f10d25058c55c3bb48402c7bbc336ec99070f064cb71f7e86efa9302454ba4",
+    "ui/tokens.css": "sha256:757918310e30a806d3ab03efc6026cc46ee44c3d7978b429a9ceba1c1d684124",
+    "ui/LICENSE.tokens.txt": "sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  "provenance": {
+    "sbom": "attestations/sbom.spdx.json"
+  },
+  "placement": "node",
+  "lifecycle": {
+    "startup": "eager",
+    "background": true,
+    "update_strategy": "auto"
+  },
+  "operations": [
+    {
+      "name": "monitor.stat.cpu",
+      "api_version": "v1",
+      "permission": "monitor.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "CPU 使用率",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/stat.response.json"
+    },
+    {
+      "name": "monitor.stat.mem",
+      "api_version": "v1",
+      "permission": "monitor.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "内存使用率",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/stat.response.json"
+    },
+    {
+      "name": "monitor.stat.disk",
+      "api_version": "v1",
+      "permission": "monitor.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "根盘使用率",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/stat.response.json"
+    },
+    {
+      "name": "monitor.series.net",
+      "api_version": "v1",
+      "permission": "monitor.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "网络吞吐趋势",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/series.response.json"
+    },
+    {
+      "name": "monitor.series.load",
+      "api_version": "v1",
+      "permission": "monitor.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "CPU 与内存趋势",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/series.response.json"
+    },
+    {
+      "name": "monitor.snapshot",
+      "api_version": "v1",
+      "permission": "monitor.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "当前指标与细粒度历史",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/snapshot.response.json"
+    },
+    {
+      "name": "monitor.history",
+      "api_version": "v1",
+      "permission": "monitor.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "短期监控历史",
+      "capabilities": [
+        {
+          "name": "metrics.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/history.request.json",
+      "response_schema": "schemas/history.response.json"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "metrics.read",
+      "scope": "self",
+      "reason": "读取本节点 CPU、内存、磁盘、网络与负载"
+    }
+  ],
+  "dependencies": [],
+  "state": {
+    "schema_version": "1",
+    "minimum_rollback_version": "0.1.0",
+    "backup_paths": []
+  },
+  "config": {
+    "schema": "schemas/config.schema.json",
+    "hot_apply": true
+  },
+  "resources": {
+    "memory_max_mb": 24,
+    "cpu_quota_percent": 5,
+    "pids_max": 8,
+    "fds_max": 64,
+    "disk_max_mb": 16,
+    "kv_max_kb": 64
+  },
+  "ui": {
+    "widgets": [
+      {
+        "id": "cpu",
+        "kind": "stat",
+        "operation": "monitor.stat.cpu",
+        "refresh_seconds": 2,
+        "size": "s",
+        "title": "CPU"
+      },
+      {
+        "id": "mem",
+        "kind": "stat",
+        "operation": "monitor.stat.mem",
+        "refresh_seconds": 2,
+        "size": "s",
+        "title": "内存"
+      },
+      {
+        "id": "disk",
+        "kind": "stat",
+        "operation": "monitor.stat.disk",
+        "refresh_seconds": 5,
+        "size": "s",
+        "title": "根盘"
+      },
+      {
+        "id": "net",
+        "kind": "series",
+        "operation": "monitor.series.net",
+        "refresh_seconds": 2,
+        "size": "m",
+        "title": "网络吞吐"
+      },
+      {
+        "id": "load",
+        "kind": "series",
+        "operation": "monitor.series.load",
+        "refresh_seconds": 2,
+        "size": "m",
+        "title": "CPU 与内存"
+      }
+    ],
+    "entry": "ui/index.html",
+    "sandbox": true,
+    "connect_sources": [],
+    "routes": [
+      {
+        "path": "/monitor",
+        "title": "监控",
+        "nav": true,
+        "permission": "monitor.basic:read"
+      }
+    ]
+  }
+}

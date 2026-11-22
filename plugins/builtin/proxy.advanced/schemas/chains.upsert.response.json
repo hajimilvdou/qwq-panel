@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "创建或更新链式代理节点响应",
+  "description": "返回脱敏保存后的链式节点记录。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "chain",
+    "created"
+  ],
+  "properties": {
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "enabled",
+        "mode",
+        "protocol",
+        "server",
+        "port",
+        "config_masked",
+        "apply_default",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "server_forward",
+            "client_dialer",
+            "both"
+          ]
+        },
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "socks5",
+            "http",
+            "vless",
+            "trojan",
+            "shadowsocks"
+          ]
+        },
+        "server": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "config_masked": {
+          "type": "object"
+        },
+        "next_hop_id": {
+          "type": "string"
+        },
+        "apply_default": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updated_at": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "created": {
+      "type": "boolean"
+    }
+  }
+}

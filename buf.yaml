@@ -1,0 +1,14 @@
+# Buf 配置（IMPLEMENTATION-PLAN.md P0-T3）。模块根是 api/：proto package qwq.platform.v1
+# 位于 api/qwq/platform/v1/，满足 PACKAGE_DIRECTORY_MATCH。api/ 下的 JSON/YAML 文件 buf 不处理。
+version: v2
+modules:
+  - path: api
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE
+  # 节点协议是内部协议，随 P4（多节点）冻结，在此之前不做兼容检查（ADR-0007）
+  ignore:
+    - qwq/node

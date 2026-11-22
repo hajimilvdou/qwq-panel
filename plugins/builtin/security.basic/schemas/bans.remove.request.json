@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "解除封禁 IP 请求",
+  "description": "从 inet qwq 封禁集合中移除指定来源 IP。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ip"],
+  "properties": {
+    "ip": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 64,
+      "description": "待解封的 IPv4 或 IPv6 地址。"
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "可选 ban/set 期望修订号。"
+    }
+  }
+}

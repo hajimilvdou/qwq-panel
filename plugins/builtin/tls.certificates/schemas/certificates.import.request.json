@@ -1,0 +1,82 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "导入外部证书链与私钥请求（严格对齐 hostauth.ImportCertificateArgs，private_key 由宿主提前提取加密托管）",
+  "required": [
+    "certificate_id",
+    "attempt_id",
+    "spec",
+    "chain_pem",
+    "private_key",
+    "trust"
+  ],
+  "properties": {
+    "certificate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "证书资源唯一 ID"
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "本次导入幂等尝试 ID"
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "证书精确域名集合与用途规格",
+      "required": [
+        "sans",
+        "purpose"
+      ],
+      "properties": {
+        "sans": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": "证书覆盖的精确 SAN 域名列表"
+        },
+        "purpose": {
+          "type": "string",
+          "enum": [
+            "tls_server",
+            "tls_server_test"
+          ],
+          "description": "证书材料用途"
+        }
+      }
+    },
+    "chain_pem": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536,
+      "description": "完整 PEM 证书链（叶证书在前，不含私钥）"
+    },
+    "private_key": {
+      "type": "string",
+      "writeOnly": true,
+      "x-secret": true,
+      "minLength": 1,
+      "maxLength": 32768,
+      "description": "与叶证书配对的 PEM 私钥，由宿主提前提取并加密保存，插件绝不读取明文"
+    },
+    "trust": {
+      "type": "string",
+      "enum": [
+        "public",
+        "staging",
+        "test"
+      ],
+      "description": "证书链信任级别"
+    }
+  }
+}

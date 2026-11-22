@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "上游渠道探活测速请求",
+  "description": "向指定上游渠道发起最小 HTTP 探活请求并记录首字延迟（TTFT）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "目标上游渠道 ID。"
+    },
+    "model": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "可选指定测试模型名；留空时取该渠道首个配置模型。"
+    }
+  }
+}

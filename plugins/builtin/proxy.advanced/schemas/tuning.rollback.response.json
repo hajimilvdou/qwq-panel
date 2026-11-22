@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "回滚 tcpfit 内核调优快照响应",
+  "description": "返回回滚状态、快照详情与渲染后的 sysctl 配置。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rolled_back",
+    "applied",
+    "dry_run",
+    "snapshot",
+    "output",
+    "error",
+    "rendered_conf"
+  ],
+  "properties": {
+    "rolled_back": {
+      "type": "boolean"
+    },
+    "applied": {
+      "type": "boolean"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision",
+        "reason",
+        "role",
+        "bandwidth_mbps",
+        "rtt_ms",
+        "applied",
+        "created_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "bandwidth_mbps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rtt_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "applied": {
+          "type": "boolean"
+        },
+        "sysctl_map": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "output": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    },
+    "rendered_conf": {
+      "type": "string"
+    }
+  }
+}

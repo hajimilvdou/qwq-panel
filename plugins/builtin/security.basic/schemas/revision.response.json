@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "资源修订响应",
+  "description": "变更完成后返回的最新资源修订号。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["revision"],
+  "properties": {
+    "revision": {
+      "type": "string",
+      "description": "变更后宿主返回的最新资源修订号。"
+    }
+  }
+}

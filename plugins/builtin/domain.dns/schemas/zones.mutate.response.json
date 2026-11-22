@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "授权或撤销托管域后的公开视图响应",
+  "required": [
+    "zone"
+  ],
+  "properties": {
+    "zone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id",
+        "zone_id",
+        "name",
+        "revision",
+        "authorized"
+      ],
+      "properties": {
+        "provider_id": {
+          "type": "string",
+          "description": "所属提供商 ID"
+        },
+        "zone_id": {
+          "type": "string",
+          "description": "托管域 ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "域名"
+        },
+        "revision": {
+          "type": "string",
+          "description": "域授权最新乐观锁版本"
+        },
+        "authorized": {
+          "type": "boolean",
+          "description": "该域是否处于已授权状态"
+        }
+      }
+    }
+  }
+}

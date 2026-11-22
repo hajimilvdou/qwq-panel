@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "列举链式代理请求",
+  "description": "列举已配置的全部链式代理落地节点（脱敏视图）。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

@@ -1,0 +1,135 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profile",
+    "role",
+    "bandwidth_mbps",
+    "rtt_ms",
+    "bdp_bytes",
+    "max_buffer_bytes",
+    "mem_budget_bytes",
+    "selected_cc",
+    "changes",
+    "sysctl_map",
+    "rendered_conf"
+  ],
+  "properties": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "kernel_version",
+        "cpus",
+        "total_ram_mb",
+        "swap_total_mb",
+        "swap_free_mb",
+        "iperf3_available",
+        "sysctl_available",
+        "current_sysctl"
+      ],
+      "properties": {
+        "os": {
+          "type": "string"
+        },
+        "kernel_version": {
+          "type": "string"
+        },
+        "cpus": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "total_ram_mb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "swap_total_mb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "swap_free_mb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "iperf3_available": {
+          "type": "boolean"
+        },
+        "sysctl_available": {
+          "type": "boolean"
+        },
+        "current_sysctl": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "role": {
+      "type": "string"
+    },
+    "bandwidth_mbps": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "rtt_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "bdp_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_buffer_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "mem_budget_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "selected_cc": {
+      "type": "string"
+    },
+    "swap_recommendation": {
+      "type": "string"
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "current",
+          "recommended",
+          "reason"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "current": {
+            "type": "string"
+          },
+          "recommended": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "sysctl_map": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "rendered_conf": {
+      "type": "string"
+    }
+  }
+}

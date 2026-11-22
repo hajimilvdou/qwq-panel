@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "消费者绑定部署、回滚或解绑请求（严格对齐 hostauth.BindCertificateArgs）",
+  "required": [
+    "certificate_id",
+    "binding_ref",
+    "attempt_id",
+    "generation"
+  ],
+  "properties": {
+    "certificate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "证书资源 ID"
+    },
+    "binding_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "宿主稳定绑定引用 ID"
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "本次部署/回滚/解绑幂等尝试 ID"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "目标或当前绑定的证书代号"
+    }
+  }
+}

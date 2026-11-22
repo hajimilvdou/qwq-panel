@@ -1,0 +1,18 @@
+# 代码生成（IMPLEMENTATION-PLAN.md P0-T3）。proto 中不写 go_package，由 managed mode 统一设置；
+# 生成代码提交到 sdk/gen/，插件作者不需要安装 buf。scripts/check.sh 检查生成结果没有漂移。
+version: v2
+clean: true
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/qwq-panel/qwq/sdk/gen
+plugins:
+  - local: protoc-gen-go
+    out: sdk/gen
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: sdk/gen
+    opt: paths=source_relative
+inputs:
+  - directory: api

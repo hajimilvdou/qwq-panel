@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qwq:plugin:core.xray:core.status:response:v1",
+  "description": "驱动 RPC、代理进程、私有 API 与 desired/running 配置的独立状态；无秘密或本地路径。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "state": {
+      "type": "string",
+      "enum": [
+        "UNCONFIGURED",
+        "PENDING_APPLY",
+        "RUNNING",
+        "STOPPED",
+        "DEGRADED",
+        "FAILED",
+        "APPLYING"
+      ]
+    },
+    "driver_state": {
+      "type": "string",
+      "enum": [
+        "SERVING",
+        "NOT_SERVING"
+      ]
+    },
+    "process_state": {
+      "type": "string",
+      "enum": [
+        "RUNNING",
+        "STOPPED",
+        "STARTING",
+        "STOPPING",
+        "UNKNOWN"
+      ]
+    },
+    "api_state": {
+      "type": "string",
+      "enum": [
+        "READY",
+        "UNAVAILABLE",
+        "UNKNOWN"
+      ]
+    },
+    "proxy_available": {
+      "type": "boolean"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "desired_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 19,
+      "pattern": "^[1-9][0-9]{0,18}$"
+    },
+    "running_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 19,
+      "pattern": "^[1-9][0-9]{0,18}$"
+    },
+    "config_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "core_version": {
+      "type": "string",
+      "enum": [
+        "",
+        "26.11.9"
+      ]
+    },
+    "reset_epoch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "last_error": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    }
+  },
+  "required": [
+    "state",
+    "driver_state",
+    "process_state",
+    "api_state",
+    "proxy_available",
+    "enabled",
+    "core_version"
+  ]
+}

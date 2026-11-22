@@ -1,0 +1,578 @@
+{
+  "schema_version": "1.3",
+  "id": "security.basic",
+  "version": "0.1.0",
+  "name": "基础安全",
+  "summary": "防火墙规则、SSH 安全基线、密钥账号与轻量防爆破",
+  "description": "节点级基础安全插件：提供受限 inet qwq 防火墙规则集管理、7 步双端口零断连 SSH 改端口事务、登录策略防锁死配置、SSH 公钥与密文口令管理以及轻量级增量防爆破巡检（检测到 fail2ban 活跃时自动切入只读旁观模式）。",
+  "license": "AGPL-3.0-only",
+  "publisher": {
+    "id": "qwq-builtin",
+    "key_id": "ed25519:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "abi": {
+    "major": 1,
+    "minimum_minor": 0
+  },
+  "engine_constraint": ">=0.1.0 <1.0.0",
+  "target": "linux/amd64",
+  "entrypoint": "bin/plugin",
+  "files": {
+    "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "attestations/sbom.spdx.json": "sha256:1688e47f963a532c88a1debeadf1efb1e3eb8bb1b49e3d45dcc2aef15e4a5128",
+    "schemas/account.set_password.request.json": "sha256:1f4f27fa971dbf76cb94fd9463213bfa5a2b4f2cea5a593f41413d3909887be8",
+    "schemas/bans.add.request.json": "sha256:d6d1649580a52de9800d0fa14da2ec754a4316fef0002b245c07e5cbda441452",
+    "schemas/bans.add.response.json": "sha256:859a3b4c0df7f617da4ab94bb4b65380f287e5b20ad26aa02f0bca0d218c008c",
+    "schemas/bans.list.response.json": "sha256:d774083bd28a103382e89034da413868dcb0b614864233dc71ca9ea36bebeab4",
+    "schemas/bans.remove.request.json": "sha256:0c36b8f8016b0f772e036790dda3a25527c63c19e4f63dcef6309802da7fb404",
+    "schemas/config.schema.json": "sha256:c0920d09e3cc74d5380cd5e8b0fc618ad7493ff030ee46df5fd58201715430b6",
+    "schemas/conflicts.detect.response.json": "sha256:2b4e3d9a94aa4b11e4e8f92bdedeb8f46b37905183eabffebfa654d82f837c90",
+    "schemas/empty.request.json": "sha256:74c931cca7887a4806a898b30616bae25c4929638eaf5d77fe4cd1f3656522bf",
+    "schemas/firewall.apply.request.json": "sha256:e7e352139b453dd417f3786034aa3a99f31ebc4640975b6a326360cf3ddbcf7f",
+    "schemas/firewall.mutate.response.json": "sha256:0052cb780494a385cdb8e55379a6b932f064f14737d7889318b1743cfed263d8",
+    "schemas/firewall.status.response.json": "sha256:2d337ae0280a898ba0edd1c79959fe33dc029e3bec3e361cadda03a90fb13c11",
+    "schemas/keys.generate.request.json": "sha256:8256e7a265a073c9da9698f560911e374445eee16da19b652bdca7763b277590",
+    "schemas/keys.generate.response.json": "sha256:b6b1373f47ae8222cd2c7427923572904b81ab45fd0a397278764bd655c6c382",
+    "schemas/keys.import.request.json": "sha256:f6352ba95e0a0510a1f5f75f1004c5f65b7418be111449472a8bfdbe50b15d8f",
+    "schemas/keys.import.response.json": "sha256:f58d22f9d70d348e8ae1940a5cb47e01592649f1dc4c987cdae4c4a6476c51c3",
+    "schemas/keys.list.request.json": "sha256:7fa3ecbd145694f0835f826930883b81c4414839c8d010527ff382566bb074b6",
+    "schemas/keys.list.response.json": "sha256:038a374c84184c30a043be37a0d2bcb5ee31aea19388ecb1b855cae8afeb1434",
+    "schemas/keys.remove.request.json": "sha256:522b37db94cf3bd9e41c395d4b61184f8efb87c8dcfcc57874fc8c660606258e",
+    "schemas/overview.response.json": "sha256:7e656cba561984fed322308c38f0ae5180b1cd39d6c140d81d6c76c424e35edf",
+    "schemas/revision.request.json": "sha256:20c3e517a1da6814d808a3d08e6d44e418e49b88554064d51748943baf27d2ce",
+    "schemas/revision.response.json": "sha256:8a6cd1ab8a30f6b0761c891070aa707512573d36256692b662ef6ada26f5024e",
+    "schemas/sshd.change_port_action.request.json": "sha256:b0a5a029b4318e6f041363db516087dbf2fed6f4b266e40d316118bbcf0728c0",
+    "schemas/sshd.change_port_prepare.request.json": "sha256:25090b7b9d5efd0de800f70110642dccb814b02c83e15a02247822b58760ca62",
+    "schemas/sshd.port_saga.response.json": "sha256:66d724cd8db336c73ea226d8996d22ca00ad9e0b1a57010062fa0dd6156bdde4",
+    "schemas/sshd.set_login_policy.request.json": "sha256:ebe804da41ed9ea029768ed8621f39f980dded490ef71cf28b2f0fa1ae69e08a",
+    "schemas/sshd.set_login_policy.response.json": "sha256:24a128ac1dafb289eca8f383ea39773af8109347d98ef4f640b0c64656bd665e",
+    "schemas/sshd.status.request.json": "sha256:8797461339fd07222572571dff7c67658ad403cd5df23c515dfd2923e10428a9",
+    "schemas/sshd.status.response.json": "sha256:f8fa9a329bfdeb79856a39fc72622215017001a1153ac747487766b99b9971fc",
+    "ui/index.html": "sha256:b32f1cdc3f887ebc714a3a31adb1bdf64760fa2d8e8d44aad11d53d215bdd770",
+    "ui/security.js": "sha256:b19540247773568ec08242906f705ea30cc117873b2fed3540321aaeb7c9ce9d"
+  },
+  "provenance": {
+    "sbom": "attestations/sbom.spdx.json"
+  },
+  "placement": "node",
+  "lifecycle": {
+    "startup": "eager",
+    "background": true,
+    "update_strategy": "restart",
+    "overlap_safe": false
+  },
+  "resources": {
+    "memory_max_mb": 32,
+    "cpu_quota_percent": 20,
+    "pids_max": 16,
+    "fds_max": 128,
+    "disk_max_mb": 16,
+    "kv_max_kb": 64
+  },
+  "capabilities": [
+    {
+      "name": "system.firewall.manage",
+      "scope": "self",
+      "reason": "读取、应用与重置 inet qwq 防火墙规则集并探测共存防火墙管理器"
+    },
+    {
+      "name": "system.sshd.configure",
+      "scope": "self",
+      "reason": "读取 sshd 生效配置、执行双端口零断连改端口事务与设置 SSH 登录策略"
+    },
+    {
+      "name": "system.account.keys",
+      "scope": "all",
+      "reason": "列举、导入、回退生成与移除系统用户 authorized_keys 公钥"
+    },
+    {
+      "name": "system.account.password",
+      "scope": "all",
+      "reason": "通过宿主密文引用修改系统用户口令（插件全程不接触明文）"
+    },
+    {
+      "name": "system.ban.manage",
+      "scope": "self",
+      "reason": "增量扫描 SSH 认证失败日志并维护 inet qwq 封禁集合"
+    },
+    {
+      "name": "state.kv.read",
+      "scope": "self",
+      "reason": "读取防爆破扫描游标、安全概览缓存与 SSH 端口切换事务状态"
+    },
+    {
+      "name": "state.kv.write",
+      "scope": "self",
+      "reason": "持久化防爆破扫描游标、安全概览缓存与 SSH 端口切换事务状态"
+    }
+  ],
+  "operations": [
+    {
+      "name": "security.overview",
+      "api_version": "v1",
+      "permission": "security.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "基础安全概览（首页微件）",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/overview.response.json"
+    },
+    {
+      "name": "security.firewall.status",
+      "api_version": "v1",
+      "permission": "security.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "读取 inet qwq 防火墙规则集与保留端口状态",
+      "capabilities": [
+        {
+          "name": "system.firewall.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/firewall.status.response.json"
+    },
+    {
+      "name": "security.sshd.status",
+      "api_version": "v1",
+      "permission": "security.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "读取 SSHD 生效配置、00-qwq.conf 与改端口事务状态",
+      "capabilities": [
+        {
+          "name": "system.sshd.configure",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/sshd.status.request.json",
+      "response_schema": "schemas/sshd.status.response.json"
+    },
+    {
+      "name": "security.keys.list",
+      "api_version": "v1",
+      "permission": "security.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "列举指定系统用户的 SSH 公钥",
+      "capabilities": [
+        {
+          "name": "system.account.keys",
+          "scope": "all"
+        }
+      ],
+      "request_schema": "schemas/keys.list.request.json",
+      "response_schema": "schemas/keys.list.response.json"
+    },
+    {
+      "name": "security.bans.list",
+      "api_version": "v1",
+      "permission": "security.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "列举当前生效的防爆破封禁条目与旁观模式状态",
+      "capabilities": [
+        {
+          "name": "system.ban.manage",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/bans.list.response.json"
+    },
+    {
+      "name": "security.conflicts.detect",
+      "api_version": "v1",
+      "permission": "security.basic:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "探测节点上共存的防火墙与防爆破管理器",
+      "capabilities": [
+        {
+          "name": "system.firewall.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/conflicts.detect.response.json"
+    },
+    {
+      "name": "security.firewall.apply",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "reachability": true,
+      "approval": "confirm",
+      "approval_summary": "将原子替换 inet qwq 防火墙 input 链规则（自动保留 SSH 与面板端口），请确认规则不会阻断业务端口",
+      "timeout_ms": 30000,
+      "summary": "应用 inet qwq 防火墙规则集",
+      "capabilities": [
+        {
+          "name": "system.firewall.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/firewall.apply.request.json",
+      "response_schema": "schemas/firewall.mutate.response.json",
+      "idempotent": false
+    },
+    {
+      "name": "security.firewall.reset",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "reachability": true,
+      "approval": "confirm",
+      "approval_summary": "将重置 inet qwq 防火墙 input 链为默认放行基线并保留 SSH 与面板端口",
+      "timeout_ms": 30000,
+      "summary": "重置 inet qwq 防火墙为默认放行基线",
+      "capabilities": [
+        {
+          "name": "system.firewall.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/revision.request.json",
+      "response_schema": "schemas/firewall.mutate.response.json",
+      "idempotent": false
+    },
+    {
+      "name": "security.sshd.change_port_prepare",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "reachability": true,
+      "approval": "confirm",
+      "approval_summary": "将放行新 SSH 端口并开启双端口监听探测（保留旧端口），超时未确认将自动回滚",
+      "timeout_ms": 30000,
+      "summary": "准备双端口零断连 SSH 端口切换",
+      "capabilities": [
+        {
+          "name": "system.firewall.manage",
+          "scope": "self"
+        },
+        {
+          "name": "system.sshd.configure",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/sshd.change_port_prepare.request.json",
+      "response_schema": "schemas/sshd.port_saga.response.json",
+      "idempotent": false
+    },
+    {
+      "name": "security.sshd.change_port_commit",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "reachability": true,
+      "approval": "confirm",
+      "approval_summary": "将确认新 SSH 端口可达、切换 sshd 仅监听新端口并移除旧端口防火墙放行",
+      "timeout_ms": 30000,
+      "summary": "确认提交新 SSH 端口并关闭旧端口",
+      "capabilities": [
+        {
+          "name": "system.firewall.manage",
+          "scope": "self"
+        },
+        {
+          "name": "system.sshd.configure",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/sshd.change_port_action.request.json",
+      "response_schema": "schemas/sshd.port_saga.response.json",
+      "idempotent": false
+    },
+    {
+      "name": "security.sshd.change_port_rollback",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "将把 sshd 监听端口与防火墙规则回滚至切换前的旧端口并清理挂起事务",
+      "timeout_ms": 30000,
+      "summary": "回滚未确认的 SSH 端口切换事务",
+      "capabilities": [
+        {
+          "name": "system.firewall.manage",
+          "scope": "self"
+        },
+        {
+          "name": "system.sshd.configure",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/sshd.change_port_action.request.json",
+      "response_schema": "schemas/sshd.port_saga.response.json",
+      "idempotent": false
+    },
+    {
+      "name": "security.sshd.set_login_policy",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "reachability": true,
+      "approval": "confirm",
+      "approval_summary": "将修改 SSH 密码登录或 root 登录策略，收紧策略前请确保恢复用户具备可用公钥",
+      "timeout_ms": 30000,
+      "summary": "设置 SSH 密码登录与 root 登录策略",
+      "capabilities": [
+        {
+          "name": "system.sshd.configure",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/sshd.set_login_policy.request.json",
+      "response_schema": "schemas/sshd.set_login_policy.response.json",
+      "idempotent": false
+    },
+    {
+      "name": "security.keys.import",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "将向目标系统用户的 authorized_keys 导入一条 SSH 公钥",
+      "timeout_ms": 15000,
+      "summary": "为系统用户导入 SSH 公钥",
+      "capabilities": [
+        {
+          "name": "system.account.keys",
+          "scope": "all"
+        }
+      ],
+      "request_schema": "schemas/keys.import.request.json",
+      "response_schema": "schemas/keys.import.response.json",
+      "idempotent": true
+    },
+    {
+      "name": "security.keys.generate_fallback",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "将在服务端回退生成 SSH 密钥对、导入公钥并一次性返回私钥（推荐优先使用浏览器本地生成）",
+      "timeout_ms": 15000,
+      "summary": "服务端回退生成 SSH 密钥对（私钥仅返回一次）",
+      "capabilities": [
+        {
+          "name": "system.account.keys",
+          "scope": "all"
+        }
+      ],
+      "request_schema": "schemas/keys.generate.request.json",
+      "response_schema": "schemas/keys.generate.response.json",
+      "idempotent": false
+    },
+    {
+      "name": "security.keys.remove",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "reachability": true,
+      "approval": "confirm",
+      "approval_summary": "将从目标用户 authorized_keys 移除指定指纹的 SSH 公钥，可能导致该密钥无法继续登录",
+      "timeout_ms": 15000,
+      "summary": "移除系统用户的一条 SSH 公钥",
+      "capabilities": [
+        {
+          "name": "system.account.keys",
+          "scope": "all"
+        }
+      ],
+      "request_schema": "schemas/keys.remove.request.json",
+      "response_schema": "schemas/revision.response.json",
+      "idempotent": false
+    },
+    {
+      "name": "security.account.set_password",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "reachability": true,
+      "approval": "confirm",
+      "approval_summary": "将通过宿主密文引用更新目标系统用户的登录口令（插件全程不接触明文）",
+      "timeout_ms": 15000,
+      "summary": "修改系统用户登录口令",
+      "capabilities": [
+        {
+          "name": "system.account.password",
+          "scope": "all"
+        }
+      ],
+      "request_schema": "schemas/account.set_password.request.json",
+      "response_schema": "schemas/revision.response.json",
+      "idempotent": false
+    },
+    {
+      "name": "security.bans.add",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "reachability": true,
+      "approval": "confirm",
+      "approval_summary": "将把指定来源 IP 写入 inet qwq 封禁集合，请确认不包含当前管理会话来源 IP",
+      "timeout_ms": 15000,
+      "summary": "手动封禁指定来源 IP",
+      "capabilities": [
+        {
+          "name": "system.ban.manage",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/bans.add.request.json",
+      "response_schema": "schemas/bans.add.response.json",
+      "idempotent": true
+    },
+    {
+      "name": "security.bans.remove",
+      "api_version": "v1",
+      "permission": "security.basic:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "将从 inet qwq 封禁集合中移除指定来源 IP 的封禁条目",
+      "timeout_ms": 15000,
+      "summary": "解除指定 IP 的封禁",
+      "capabilities": [
+        {
+          "name": "system.ban.manage",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/bans.remove.request.json",
+      "response_schema": "schemas/revision.response.json",
+      "idempotent": true
+    }
+  ],
+  "ui": {
+    "entry": "ui/index.html",
+    "sandbox": true,
+    "connect_sources": [],
+    "routes": [
+      {
+        "path": "/security",
+        "title": "基础安全",
+        "nav": true,
+        "permission": "security.basic:read"
+      }
+    ],
+    "widgets": [
+      {
+        "id": "security-overview",
+        "kind": "stat",
+        "operation": "security.overview",
+        "refresh_seconds": 15,
+        "size": "s",
+        "title": "基础安全"
+      }
+    ]
+  },
+  "dependencies": [],
+  "state": {
+    "schema_version": "1",
+    "minimum_rollback_version": "0.1.0",
+    "backup_paths": []
+  },
+  "config": {
+    "schema": "schemas/config.schema.json",
+    "hot_apply": true
+  }
+}

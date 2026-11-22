@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "channels_total",
+    "channels_enabled",
+    "rules_total",
+    "sent_24h",
+    "failed_24h",
+    "suppressed_24h"
+  ],
+  "properties": {
+    "channels_total": {
+      "type": "integer"
+    },
+    "channels_enabled": {
+      "type": "integer"
+    },
+    "rules_total": {
+      "type": "integer"
+    },
+    "sent_24h": {
+      "type": "integer"
+    },
+    "failed_24h": {
+      "type": "integer"
+    },
+    "suppressed_24h": {
+      "type": "integer"
+    },
+    "unhealthy_channels": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "recent_failures": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

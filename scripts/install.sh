@@ -1,0 +1,387 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-only
+# =============================================================================
+#  install.sh —— 安装或升级 qwq（随发布包分发，可重复幂等执行）
+# -----------------------------------------------------------------------------
+#  用法：
+#    sudo bash install.sh --offline qwq-vX.Y.Z-linux-amd64.tar.gz [--minimal | --plugins <csv|all> --plugin-dir <dir>]
+#    sudo bash install.sh --version vX.Y.Z [--mirror URL] [--minimal | --plugins <csv|all>]
+#
+#  默认必装范围（Track 10 架构）：
+#    初始强制必装且仅必装：原面板底座（qwq / qwq-privileged / qwq-capability）+ 基础安全插件（security.basic）。
+#    其余 10 款官方插件（monitor.basic / server.probe / domain.dns / tls.certificates / core.xray /
+#    proxy.advanced / ai.relay / web.ingress / containers.docker / notify.hub）全部为独立可选 .qwqpkg 包：
+#    交互终端下可勾选安装（直接回车仅装必装底座），非交互可用 --plugins 按需选装。
+#
+#  与宿主共存（宝塔等）：不碰 nginx、ufw、firewalld；默认配置只监听 127.0.0.1。
+#  第二次执行同一版本不会改变任何东西，也不会重启服务。
+#  退出码：0 成功 / 1 失败 / 2 用法错误
+# =============================================================================
+set -euo pipefail
+
+# 发布公钥（PEM，Ed25519）由 release.sh 在打包时写入；为空时只允许 --offline。
+RELEASE_PUBKEY_PEM=''
+DEFAULT_MIRROR=https://github.com/hajimilvdou/qwq-panel/releases/download
+
+PREFIX=/opt/qwq
+UNIT_DIR=/etc/systemd/system
+ETC=/etc/qwq
+LISTEN_CHECK=https://127.0.0.1:8443/readyz
+
+readonly OPTIONAL_PLUGIN_IDS=(
+  "monitor.basic"
+  "server.probe"
+  "domain.dns"
+  "tls.certificates"
+  "core.xray"
+  "proxy.advanced"
+  "ai.relay"
+  "web.ingress"
+  "containers.docker"
+  "notify.hub"
+)
+
+declare -A PLUGIN_SUMMARY=(
+  ["monitor.basic"]="基础监控（CPU / 内存 / 磁盘 / 网络实时趋势微件，~18 MiB）"
+  ["server.probe"]="服务器探针中心（多机单向安全探针 / 90天SLA / 三网拨测 / 前后台切换，~32 MiB）"
+  ["domain.dns"]="域名与 DNS 管理（Cloudflare / 阿里云解析管理，按需唤醒）"
+  ["tls.certificates"]="TLS 证书与 ACME DNS-01 自动签发续期（按需唤醒）"
+  ["core.xray"]="Xray 三协议核心驱动（VLESS+REALITY / Hysteria2 / SS2022）"
+  ["proxy.advanced"]="高级代理多用户配额、HTB 限速与订阅中心（自动连带安装 core.xray）"
+  ["ai.relay"]="AI API 聚合中转、四协议互转与团体自服务分发门户"
+  ["web.ingress"]="轻量反向代理与站点托管（零依赖内置 Go 反代 / Caddy & Nginx 渲染 / 快照回滚，按需唤醒）"
+  ["containers.docker"]="轻量容器与 Compose 管理（直连 Unix Socket / 动态限额 / 有界日志 / 安全扫描，按需唤醒）"
+  ["notify.hub"]="统一告警与通知中枢（Telegram / 飞书 / 钉钉 / 企微 / Discord / SMTP / 签名 Webhook，按需唤醒）"
+)
+
+die() { echo "install.sh: $*" >&2; exit 1; }
+log() { echo "==> $*"; }
+usage() { sed -n '5,8p' "$0" | sed 's/^#  //' >&2; exit 2; }
+
+# ── 参数 ─────────────────────────────────────────────────────────────────────
+offline='' version='' mirror=$DEFAULT_MIRROR
+mode_minimal=0 csv_plugins='' offline_plugin_dir=''
+while (($#)); do
+  case $1 in
+    --offline)    offline=${2:?}; shift 2 ;;
+    --version)    version=${2:?}; shift 2 ;;
+    --mirror)     mirror=${2:?}; shift 2 ;;
+    --minimal)    mode_minimal=1; shift ;;
+    --plugins)    csv_plugins=${2:?}; shift 2 ;;
+    --plugin-dir) offline_plugin_dir=${2:?}; shift 2 ;;
+    -h|--help)    usage ;;
+    *) echo "未知参数：$1" >&2; usage ;;
+  esac
+done
+[[ -n $offline || -n $version ]] || usage
+[[ -n $offline && -n $version ]] && { echo "--offline 与 --version 只能二选一" >&2; usage; }
+((mode_minimal)) && [[ -n $csv_plugins ]] && { echo "--minimal 与 --plugins 不能同时指定" >&2; usage; }
+
+# ── 平台 ─────────────────────────────────────────────────────────────────────
+[[ $EUID == 0 ]] || die "需要 root（sudo bash install.sh …）"
+case $(uname -m) in
+  x86_64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) die "不支持的架构 $(uname -m)" ;;
+esac
+command -v systemctl >/dev/null && [[ -d /run/systemd/system ]] || die "需要以 systemd 启动的系统"
+for c in tar sha256sum systemd-sysusers systemd-tmpfiles install; do
+  command -v "$c" >/dev/null || die "缺少命令 $c"
+done
+
+if [[ -e /var/lib/qwq/plugin-data || -L /var/lib/qwq/plugin-data ]]; then
+  die "发现旧插件数据树 /var/lib/qwq/plugin-data；请先按 docs/operations/plugin-data-layout.md 停服迁移，旧数据未修改"
+fi
+
+# ── 解析可选插件选择与拓扑依赖排序 ───────────────────────────────────────────
+SELECTED_PLUGINS=()
+select_optional_plugins() {
+  if ((mode_minimal)); then
+    return 0
+  fi
+  if [[ -n $csv_plugins ]]; then
+    if [[ $csv_plugins == "none" ]]; then
+      return 0
+    elif [[ $csv_plugins == "all" ]]; then
+      SELECTED_PLUGINS=("${OPTIONAL_PLUGIN_IDS[@]}")
+    else
+      IFS=',' read -r -a raw_items <<<"$csv_plugins"
+      local item
+      for item in "${raw_items[@]}"; do
+        item=${item//[[:space:]]/}
+        [[ -z $item || $item == "security.basic" ]] && continue
+        [[ -n ${PLUGIN_SUMMARY[$item]+x} ]] || die "未知的官方可选插件 ID：$item"
+        SELECTED_PLUGINS+=("$item")
+      done
+    fi
+  elif [[ -t 0 && -t 1 && ( -n $version || -n $offline_plugin_dir ) ]]; then
+    echo ""
+    echo "==> 默认必装组件（已锁定）："
+    echo "    [*] qwq 原面板底座 + security.basic（基础安全防护：防火墙 / 防失联改 SSH / 公钥 / 防爆破）"
+    echo ""
+    echo "==> 可选安装的官方插件（按需选择，安装后也可随时在面板内一键补装或卸载）："
+    local idx pid
+    for idx in "${!OPTIONAL_PLUGIN_IDS[@]}"; do
+      pid=${OPTIONAL_PLUGIN_IDS[$idx]}
+      printf "    [%d] %-18s %s\n" "$((idx + 1))" "$pid" "${PLUGIN_SUMMARY[$pid]}"
+    done
+    echo ""
+    local reply=""
+    read -r -p "请输入要额外安装的编号（多个用空格或逗号分隔，直接回车仅安装面板+安全插件）: " reply || reply=""
+    reply=${reply//,/ }
+    local tok
+    for tok in $reply; do
+      if [[ $tok == "all" ]]; then
+        SELECTED_PLUGINS=("${OPTIONAL_PLUGIN_IDS[@]}")
+        break
+      elif [[ $tok =~ ^[0-9]+$ ]] && ((tok >= 1 && tok <= ${#OPTIONAL_PLUGIN_IDS[@]})); then
+        SELECTED_PLUGINS+=("${OPTIONAL_PLUGIN_IDS[$((tok - 1))]}")
+      else
+        die "无效的选项编号：$tok（请输入 1~${#OPTIONAL_PLUGIN_IDS[@]}、all 或直接回车跳过）"
+      fi
+    done
+  fi
+
+  local need_xray=0 has_certs=0 has_dns=0 p
+  for p in "${SELECTED_PLUGINS[@]}"; do
+    [[ $p == "proxy.advanced" ]] && need_xray=1
+    [[ $p == "tls.certificates" ]] && has_certs=1
+    [[ $p == "domain.dns" ]] && has_dns=1
+  done
+  if ((need_xray)); then
+    log "已自动补齐 proxy.advanced 的前置依赖插件：core.xray"
+  fi
+  if ((has_certs && !has_dns)); then
+    echo "提示：已选择 tls.certificates 但未选 domain.dns；如需使用 DNS-01 自动签发证书，建议后续在面板内补装 domain.dns。" >&2
+  fi
+
+  local ordered=() candidate
+  for candidate in "${OPTIONAL_PLUGIN_IDS[@]}"; do
+    if [[ $candidate == "core.xray" && $need_xray == 1 ]]; then
+      ordered+=("core.xray")
+      continue
+    fi
+    for p in "${SELECTED_PLUGINS[@]}"; do
+      if [[ $p == "$candidate" ]]; then
+        ordered+=("$candidate")
+        break
+      fi
+    done
+  done
+  SELECTED_PLUGINS=("${ordered[@]}")
+}
+
+select_optional_plugins
+if ((${#SELECTED_PLUGINS[@]} > 0)) && [[ -n $offline && -z $offline_plugin_dir ]]; then
+  die "离线模式下通过 --plugins 选择可选插件时，请同时指定 --plugin-dir <目录>"
+fi
+
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+
+# ── 获取发布包 ───────────────────────────────────────────────────────────────
+if [[ -n $version ]]; then
+  [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || die "版本号格式应为 vX.Y.Z"
+  [[ -n $RELEASE_PUBKEY_PEM ]] || die "此脚本未内嵌发布公钥，只能使用 --offline"
+  command -v curl >/dev/null || die "在线安装需要 curl"
+  command -v openssl >/dev/null || die "在线安装需要 openssl（验签）"
+  name=qwq-$version-linux-$ARCH.tar.gz
+  for f in "$name" SHA256SUMS SHA256SUMS.sig; do
+    curl -fsSL --proto '=https' --retry 3 -o "$T/$f" "$mirror/$version/$f" || die "下载 $f 失败"
+  done
+  printf '%s\n' "$RELEASE_PUBKEY_PEM" >"$T/release.pub"
+  openssl pkeyutl -verify -pubin -inkey "$T/release.pub" -rawin \
+    -in "$T/SHA256SUMS" -sigfile "$T/SHA256SUMS.sig" >/dev/null || die "SHA256SUMS 签名无效"
+  (cd "$T" && sha256sum --ignore-missing --strict -c SHA256SUMS >/dev/null) || die "发布包校验和不符"
+  TAR=$T/$name
+else
+  [[ -f $offline ]] || die "找不到发布包 $offline"
+  TAR=$offline
+fi
+
+mkdir "$T/pkg"
+tar -C "$T/pkg" --no-same-owner -xzf "$TAR" || die "解包失败"
+P=$T/pkg
+[[ -f $P/VERSION && -x $P/bin/qwq && -x $P/bin/qwq-privileged && -x $P/bin/qwq-capability && -d $P/share/systemd ]] || die "发布包布局不完整"
+[[ -f $P/share/polkit/qwq-plugin.rules ]] || die "发布包缺少插件管理所需的 polkit 规则"
+V=$(tr -d '[:space:]' <"$P/VERSION")
+[[ $V =~ ^[0-9A-Za-z._+-]+$ ]] || die "发布包 VERSION 非法"
+[[ -z $version || $version == "$V" || $version == "v$V" ]] || die "发布包版本 $V 与 --version $version 不一致"
+
+# ── 安装前检查（DEP-05：0 通过 / 1 警告 / 3 失败）──────────────────────────
+rc=0; "$P/bin/qwq" doctor --preinstall || rc=$?
+case $rc in
+  0|1) ;;
+  3) die "安装前检查失败，按上面的提示修复后重试" ;;
+  *) die "qwq doctor --preinstall 异常退出（$rc）" ;;
+esac
+
+# ── 发布树（不可变；同版本重复安装须内容一致）────────────────────────────────
+R=$PREFIX/releases/$V
+if [[ -d $R ]]; then
+  diff -rq "$P" "$R" >/dev/null || die "$R 已存在且内容不同；发布树不可变，请换版本号"
+  log "发布树 $R 已存在且一致"
+else
+  install -d -m0755 "$PREFIX" "$PREFIX/releases"
+  cp -a "$P" "$R.tmp"
+  chown -R root:root "$R.tmp"
+  chmod -R go-w "$R.tmp"
+  chmod 0755 "$R.tmp"
+  mv -T "$R.tmp" "$R"
+  log "已安装发布树 $R"
+fi
+
+# changed 记录本次是否改动了需要重启/重载的东西。
+changed=0
+put() { # put <mode> <src> <dst>：内容或权限不同才写入
+  local mode=$1 src=$2 dst=$3
+  if [[ -f $dst ]] && cmp -s "$src" "$dst" && [[ $(stat -c %a "$dst") == "${mode#0}" ]]; then
+    return 0
+  fi
+  install -D -m"$mode" "$src" "$dst"
+  changed=1
+}
+
+# ── 用户、目录骨架 ───────────────────────────────────────────────────────────
+put 0644 "$R/share/sysusers/qwq.conf" /usr/lib/sysusers.d/qwq.conf
+systemd-sysusers /usr/lib/sysusers.d/qwq.conf
+put 0644 "$R/share/tmpfiles/qwq.conf" /usr/lib/tmpfiles.d/qwq.conf
+
+if [[ -d /var/lib/qwq/plugins && ! -L /var/lib/qwq/plugins ]]; then
+  log "迁移旧布局 /var/lib/qwq/plugins → /var/lib/qwq-plugins"
+  systemctl stop qwq-controller.service 'qwq-plugin@*.service' 'qwq-plugin@*.socket' 2>/dev/null || true
+  install -d -m0755 -o root -g root /var/lib/qwq-plugins
+  for d in /var/lib/qwq/plugins/*; do
+    [[ -e $d ]] || continue
+    [[ ! -e /var/lib/qwq-plugins/${d##*/} ]] || die "迁移冲突：/var/lib/qwq-plugins/${d##*/} 已存在"
+    mv -T "$d" "/var/lib/qwq-plugins/${d##*/}"
+  done
+  chown -R root:root /var/lib/qwq-plugins
+  rmdir /var/lib/qwq/plugins
+  install -d -m0700 -o root -g root /var/lib/qwq-privileged /var/lib/qwq-privileged/creds
+  for c in /run/qwq/creds/*.token; do
+    if [[ -f $c ]]; then install -m0600 -o root -g root "$c" /var/lib/qwq-privileged/creds/; fi
+  done
+  for f in "$UNIT_DIR"/qwq-plugin@*.service "$UNIT_DIR"/qwq-plugin@*.service.d/*.conf /etc/tmpfiles.d/qwq-plugin-*.conf; do
+    [[ -f $f ]] || continue
+    sed -i -e 's|/var/lib/qwq/plugins/|/var/lib/qwq-plugins/|g' \
+      -e 's|/run/qwq/creds/|/var/lib/qwq-privileged/creds/|g' "$f"
+  done
+  changed=1
+fi
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/qwq.conf
+
+# ── unit、polkit、配置、信任根 ───────────────────────────────────────────────
+for u in "$R"/share/systemd/*; do
+  put 0644 "$u" "$UNIT_DIR/${u##*/}"
+done
+if [[ -f $R/share/polkit/qwq-plugin.rules ]]; then
+  install -d -m0755 /etc/polkit-1/rules.d
+  put 0644 "$R/share/polkit/qwq-plugin.rules" /etc/polkit-1/rules.d/60-qwq-plugin.rules
+fi
+install -d -m0750 -o root -g qwq "$ETC"
+install -d -m0755 -o root -g root "$ETC/trust"
+for k in "$R"/share/trust/*.pem; do
+  if [[ -f $k && ! -e $ETC/trust/${k##*/} ]]; then
+    install -m0644 "$k" "$ETC/trust/"
+    changed=1
+  fi
+done
+if [[ ! -f $ETC/qwq.json ]]; then
+  install -m0640 -o root -g qwq "$R/share/config/qwq.json.example" "$ETC/qwq.json"
+  changed=1
+fi
+
+if command -v getenforce >/dev/null && [[ $(getenforce) == Enforcing ]]; then
+  echo "注意：SELinux 为 Enforcing，qwq 不提供策略模块；qwq 与插件的单元可能因文件标签被拒绝执行（203/EXEC）。排查：qwq doctor、journalctl -u qwq-controller、ausearch -m avc -ts recent" >&2
+fi
+
+# ── 切换版本 ─────────────────────────────────────────────────────────────────
+if [[ $(readlink "$PREFIX/current" 2>/dev/null) != "$R" ]]; then
+  ln -sfn "$R" "$PREFIX/current.new"
+  mv -T "$PREFIX/current.new" "$PREFIX/current"
+  changed=1
+  log "当前版本 → $V"
+fi
+if [[ $(readlink /usr/local/bin/qwq 2>/dev/null) != "$PREFIX/current/bin/qwq" ]]; then
+  ln -sfn "$PREFIX/current/bin/qwq" /usr/local/bin/qwq
+fi
+
+# ── 启动 ─────────────────────────────────────────────────────────────────────
+systemctl daemon-reload
+systemctl enable --now qwq-privileged.socket            # 先 socket，controller 依赖它
+systemctl enable --now qwq-capability.socket            # 空闲没有 root 能力进程
+systemctl enable qwq-controller.service
+systemctl enable --now qwq-backup.timer                 # 每日备份到 /var/lib/qwq/backups（DEP-04）
+if ((changed)); then
+  systemctl restart qwq-controller.service
+else
+  systemctl start qwq-controller.service
+fi
+
+for _ in $(seq 30); do
+  systemctl is-active --quiet qwq-controller.service && break
+  sleep 1
+done
+systemctl is-active --quiet qwq-controller.service ||
+  die "qwq-controller 未能启动；查看 journalctl -u qwq-controller -n 50 与 qwq doctor"
+if command -v curl >/dev/null; then
+  for _ in $(seq 30); do
+    curl -skf --max-time 2 "$LISTEN_CHECK" >/dev/null && break
+    sleep 1
+  done || true
+  curl -skf --max-time 2 "$LISTEN_CHECK" >/dev/null || echo "提示：$LISTEN_CHECK 暂无响应（若改过 http.listen 可忽略）" >&2
+fi
+
+# ── 激活默认必装安全插件（security.basic）与用户按需选装的官方插件 ──────────
+bootstrap_pkgs=()
+if [[ -f $R/share/bootstrap-plugins/security.basic.qwqpkg ]]; then
+  bootstrap_pkgs+=("$R/share/bootstrap-plugins/security.basic.qwqpkg")
+fi
+if ((${#SELECTED_PLUGINS[@]} > 0)); then
+  rel_tag=$V
+  [[ $rel_tag == v* ]] || rel_tag="v$rel_tag"
+  for pid in "${SELECTED_PLUGINS[@]}"; do
+    fname="${pid}-${rel_tag}-linux-${ARCH}.qwqpkg"
+    alt_fname="${pid}-${V}-linux-${ARCH}.qwqpkg"
+    if [[ -n $offline_plugin_dir ]]; then
+      if [[ -f "$offline_plugin_dir/$fname" ]]; then
+        bootstrap_pkgs+=("$offline_plugin_dir/$fname")
+      elif [[ -f "$offline_plugin_dir/$alt_fname" ]]; then
+        bootstrap_pkgs+=("$offline_plugin_dir/$alt_fname")
+      elif [[ -f "$offline_plugin_dir/plugins/$fname" ]]; then
+        bootstrap_pkgs+=("$offline_plugin_dir/plugins/$fname")
+      elif [[ -f "$offline_plugin_dir/plugins/$alt_fname" ]]; then
+        bootstrap_pkgs+=("$offline_plugin_dir/plugins/$alt_fname")
+      else
+        die "离线插件目录 $offline_plugin_dir 中未找到 $fname"
+      fi
+    else
+      target_pkg="$T/$fname"
+      log "下载可选插件 $pid ($fname) …"
+      curl -fsSL --proto '=https' --retry 3 -o "$target_pkg" "$mirror/$rel_tag/$fname" ||
+        die "下载可选插件 $fname 失败"
+      if ! (cd "$T" && awk -v f="$fname" '$2 == f { found = 1; print } END { exit !found }' SHA256SUMS | sha256sum --strict -c - >/dev/null); then
+        die "可选插件 $fname SHA-256 校验失败"
+      fi
+      bootstrap_pkgs+=("$target_pkg")
+    fi
+  done
+fi
+if ((${#bootstrap_pkgs[@]} > 0)); then
+  log "正在验签并部署官方插件（共 ${#bootstrap_pkgs[@]} 个）…"
+  "$PREFIX/current/bin/qwq" plugin bootstrap --config "$ETC/qwq.json" "${bootstrap_pkgs[@]}"
+fi
+
+rc=0; qwq setup-token || rc=$?
+case $rc in
+  0) ;;
+  3) log "已初始化；忘记密码请用 sudo qwq recover" ;;
+  *) echo "获取初始化链接失败，可稍后执行 sudo qwq setup-token" >&2 ;;
+esac
+cat <<'EOF'
+
+面板默认只监听 127.0.0.1:8443；远程访问：
+  ssh -L 8443:127.0.0.1:8443 root@<服务器>   然后浏览器打开上面的链接
+如改为 0.0.0.0（见 /opt/qwq/current/share/config/qwq.json.example.md），
+请自行在宝塔「安全」页 / ufw / firewalld 放行端口，并核对上面打印的证书指纹。
+EOF

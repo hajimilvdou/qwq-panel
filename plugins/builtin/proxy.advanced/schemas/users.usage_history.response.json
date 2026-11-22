@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "用户小时级流量历史响应",
+  "description": "返回按小时桶升序排列的上行与下行流量历史数据点。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["user_id", "hours", "points"],
+  "properties": {
+    "user_id": { "type": "string", "description": "查询的代理用户 ID。" },
+    "hours": { "type": "integer", "minimum": 1, "description": "查询时间窗口（小时）。" },
+    "points": {
+      "type": "array",
+      "description": "按小时聚合的流量曲线点。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["bucket_hour_ms", "up_bytes", "down_bytes"],
+        "properties": {
+          "bucket_hour_ms": { "type": "integer", "minimum": 0, "description": "UTC 整点小时桶时间戳（Unix 毫秒）。" },
+          "up_bytes": { "type": "integer", "minimum": 0, "description": "该小时桶上行字节数。" },
+          "down_bytes": { "type": "integer", "minimum": 0, "description": "该小时桶下行字节数。" }
+        }
+      }
+    }
+  }
+}

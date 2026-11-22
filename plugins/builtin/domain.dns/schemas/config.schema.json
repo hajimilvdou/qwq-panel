@@ -1,0 +1,6 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "DNS 托管控制器插件配置（无敏感字段，凭据仅通过宿主受控能力登记）",
+  "properties": {}
+}

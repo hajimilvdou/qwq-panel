@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "kind",
+    "config"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "telegram",
+        "feishu",
+        "dingtalk",
+        "wecom",
+        "discord",
+        "smtp",
+        "webhook"
+      ]
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bot_token": {
+          "type": "string",
+          "maxLength": 256,
+          "writeOnly": true
+        },
+        "chat_id": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "thread_id": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "api_base": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "webhook_url": {
+          "type": "string",
+          "maxLength": 1024,
+          "writeOnly": true
+        },
+        "secret": {
+          "type": "string",
+          "maxLength": 256,
+          "writeOnly": true
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "smtp_host": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "smtp_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "smtp_user": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "smtp_pass": {
+          "type": "string",
+          "maxLength": 256,
+          "writeOnly": true
+        },
+        "smtp_from": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "smtp_to": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 255
+          }
+        },
+        "smtp_tls": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

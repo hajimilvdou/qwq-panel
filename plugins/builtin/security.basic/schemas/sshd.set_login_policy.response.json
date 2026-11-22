@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "设置 SSH 登录策略响应",
+  "description": "策略写入并经 sshd -t 校验后返回的修订号与生效配置。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["revision", "effective"],
+  "properties": {
+    "revision": {
+      "type": "string",
+      "description": "更新后的 sshd/config 修订号。"
+    },
+    "effective": {
+      "type": "array",
+      "description": "变更后 sshd -T 生效配置项列表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "value", "source_file", "overridden_by"],
+        "properties": {
+          "key": { "type": "string", "description": "配置键名。" },
+          "value": { "type": "string", "description": "生效配置值。" },
+          "source_file": { "type": "string", "description": "来源配置文件路径。" },
+          "overridden_by": { "type": "string", "description": "覆盖来源（若有）。" }
+        }
+      }
+    }
+  }
+}

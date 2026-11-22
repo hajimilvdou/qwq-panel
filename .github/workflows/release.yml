@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# 发布流水线（DEP-03，docs/operations/release.md）。推送 v* 标签触发：
+# 门禁 → 构建并嵌入 Web Shell → 同一提交构建两次并比对（可复现）→ Ed25519 签名 SHA256SUMS → 创建 GitHub Release。
+# 整个 job 绑定 release environment：须人工批准后才运行，签名私钥只存在于该
+# environment 的 secrets：QWQ_RELEASE_SIGNING_KEY（发布签名）与 QWQ_PLUGIN_SIGNING_KEY（官方插件签名）。
+# 第三方 action 按提交哈希固定。
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  QWQ_DEV_HOME: ${{ github.workspace }}
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: write # gh release create
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: bootstrap
+        run: source scripts/dev-env.sh && bash scripts/bootstrap-tools.sh
+      - name: check
+        run: |
+          source scripts/dev-env.sh
+          if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            export QWQ_BREAKING_AGAINST=".git#ref=HEAD~1,subdir=api"
+          else
+            export QWQ_BREAKING_AGAINST=".git#ref=HEAD,subdir=api"
+          fi
+          bash scripts/check.sh
+      - name: build web
+        run: |
+          node -v
+          (cd web && npm ci && npm run build)
+          bash scripts/embed-web.sh
+      - name: build twice and compare
+        env:
+          PLUGIN_KEY: ${{ secrets.QWQ_PLUGIN_SIGNING_KEY }}
+        run: |
+          source scripts/dev-env.sh
+          test -f deployments/release.pub || { echo "deployments/release.pub 缺失：先按 docs/operations/release.md 生成发布密钥" >&2; exit 1; }
+          test -f deployments/plugin-trust.pub || { echo "deployments/plugin-trust.pub 缺失：先按 docs/operations/release.md 生成官方插件签名密钥" >&2; exit 1; }
+          test -n "$PLUGIN_KEY" || { echo "release environment 缺少 secret QWQ_PLUGIN_SIGNING_KEY" >&2; exit 1; }
+          PLUGIN_KEY_FILE="$RUNNER_TEMP/plugin-signing.key"
+          trap 'rm -f "$PLUGIN_KEY_FILE"' EXIT
+          (umask 077 && printf '%s\n' "$PLUGIN_KEY" >"$PLUGIN_KEY_FILE")
+          export QWQ_PLUGIN_SIGNING_KEY="$PLUGIN_KEY_FILE"
+          export QWQ_PLUGIN_TRUST_PUB="deployments/plugin-trust.pub"
+          export QWQ_RELEASE_MIRROR="https://github.com/${{ github.repository }}/releases/download"
+          bash scripts/release.sh "$GITHUB_REF_NAME" dist
+          bash scripts/release.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/rebuild"
+          diff dist/SHA256SUMS "$RUNNER_TEMP/rebuild/SHA256SUMS"
+      - name: sign
+        env:
+          KEY: ${{ secrets.QWQ_RELEASE_SIGNING_KEY }}
+        run: |
+          test -n "$KEY" || { echo "release environment 缺少 secret QWQ_RELEASE_SIGNING_KEY" >&2; exit 1; }
+          openssl pkeyutl -sign -inkey <(printf '%s\n' "$KEY") -rawin -in dist/SHA256SUMS -out dist/SHA256SUMS.sig
+          openssl pkeyutl -verify -pubin -inkey deployments/release.pub -rawin \
+            -in dist/SHA256SUMS -sigfile dist/SHA256SUMS.sig
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes dist/*

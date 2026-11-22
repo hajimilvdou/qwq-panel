@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "range": {
+      "enum": [
+        "5m",
+        "1h"
+      ]
+    },
+    "metric": {
+      "enum": [
+        "cpu",
+        "mem",
+        "disk",
+        "net",
+        "load",
+        "disk_io"
+      ]
+    }
+  }
+}

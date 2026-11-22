@@ -1,0 +1,174 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* 设计令牌（Shell 与插件 UI Kit 共用）
+ * 颜色与弹簧曲线由 tools/palette.py --write 生成，标记区块内不要手改。
+ * 主题：<html data-theme="light|dark">；动效：data-motion="full|reduced|off"；密度：data-density="comfortable|compact"。
+ */
+:root {
+  color-scheme: light dark;
+  /* palette:begin */
+  --c-bg: light-dark(#f2f7f8, #0e1319);
+  --c-surface: light-dark(#fbfdfe, #141b21);
+  --c-surface-2: light-dark(#ebf1f3, #1b232a);
+  --c-surface-3: light-dark(#dfe8eb, #222d35);
+  --c-border: light-dark(#d8dfe2, #2a333a);
+  --c-border-strong: light-dark(#848e93, #5f6b74);
+  --c-text: light-dark(#212c33, #d9e1e5);
+  --c-text-2: light-dark(#4b555d, #aab4ba);
+  --c-text-3: light-dark(#656f76, #8a9499);
+  --c-primary: light-dark(#00787d, #4fc6c6);
+  --c-primary-hover: light-dark(#00686e, #69d5d5);
+  --c-on-primary: light-dark(#f8fdfd, #051920);
+  --c-primary-soft: light-dark(#d3f0f1, #07393e);
+  --c-primary-fg: light-dark(#005860, #8bdddc);
+  --c-focus: light-dark(#008b96, #3aced6);
+  --c-success: light-dark(#19966e, #5ed8a9);
+  --c-success-soft: light-dark(#d8f5e7, #133529);
+  --c-success-fg: light-dark(#095b41, #8ae1bc);
+  --c-warning: light-dark(#c5770f, #f0ba59);
+  --c-warning-soft: light-dark(#feefcf, #3e2d15);
+  --c-warning-fg: light-dark(#7e4917, #f5cf7d);
+  --c-danger: light-dark(#af2c1f, #e66f62);
+  --c-danger-soft: light-dark(#ffe9e6, #47211e);
+  --c-danger-fg: light-dark(#9e2d26, #ffb0a5);
+  --c-info: light-dark(#2765a5, #64a4e0);
+  --c-info-soft: light-dark(#e2f0fe, #192f46);
+  --c-info-fg: light-dark(#1d558e, #a3d1fe);
+  --c-chart-1: light-dark(#0b67a9, #51a1d5);
+  --c-chart-2: light-dark(#c47212, #f7ac4d);
+  --c-chart-3: light-dark(#29926d, #65d3a7);
+  --c-chart-4: light-dark(#812e63, #bc6398);
+  /* palette:end */
+
+  --shadow-color: light-dark(rgb(16 42 58 / 0.10), rgb(0 0 0 / 0.45));
+  --highlight: light-dark(rgb(255 255 255 / 0.70), rgb(255 255 255 / 0.05));
+  --scrim: light-dark(rgb(18 30 38 / 0.32), rgb(0 0 0 / 0.55));
+  --shadow-1: 0 1px 2px var(--shadow-color);
+  --shadow-2: 0 1px 2px var(--shadow-color), 0 6px 18px -6px var(--shadow-color);
+  --shadow-3: 0 2px 6px var(--shadow-color), 0 18px 40px -12px var(--shadow-color);
+
+  /* 字体：只用系统字体，零字体下载 */
+  --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, "Noto Sans Mono CJK SC", monospace;
+  --fs-12: 0.75rem; --fs-13: 0.8125rem; --fs-14: 0.875rem; --fs-16: 1rem;
+  --fs-18: 1.125rem; --fs-20: 1.25rem; --fs-24: 1.5rem; --fs-32: 2rem;
+  --lh-tight: 1.3; --lh-body: 1.6;
+
+  /* 间距（4px 栅格）与圆角 */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+  --r-xs: 6px; --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-xl: 22px; --r-pill: 999px;
+  --control-h: 36px;
+  --row-h: 44px;
+  --sidebar-w: 232px;
+  --topbar-h: 56px;
+
+  /* 动效时长 */
+  --dur-1: 120ms; --dur-2: 200ms; --dur-3: 320ms; --dur-4: 520ms; --dur-5: 760ms;
+
+  /* 不支持 linear() 时的缓动回退 */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-liquid: cubic-bezier(0.34, 1.32, 0.64, 1);
+  --ease-jelly: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    /* easing:begin */
+    --ease-liquid: linear(0, 0.004 1.2%, 0.017 2.5%, 0.036 3.8%, 0.061 5%, 0.125 7.5%, 0.161 8.8%, 0.242 11.2%, 0.456 17.5%, 0.578 21.2%, 0.687 25%, 0.751 27.5%, 0.807 30%, 0.878 33.8%, 0.916 36.2%, 0.961 40%, 0.994 43.8%, 1.016 47.5%, 1.029 51.2%, 1.037 56.2%, 1.036 63.7%, 1.011 85%, 1);
+    --ease-jelly: linear(0, 0.007 1.2%, 0.026 2.5%, 0.055 3.8%, 0.093 5%, 0.138 6.2%, 0.189 7.5%, 0.244 8.8%, 0.541 15%, 0.655 17.5%, 0.757 20%, 0.848 22.5%, 0.923 25%, 0.985 27.5%, 1.032 30%, 1.051 31.2%, 1.079 33.8%, 1.097 36.2%, 1.105 38.8%, 1.107 41.2%, 1.102 43.8%, 1.089 47.5%, 1.039 57.5%, 1.018 62.5%, 1.003 67.5%, 0.994 72.5%, 0.989 77.5%, 0.989 83.8%, 0.996 98.8%, 1);
+    /* easing:end */
+  }
+}
+
+/* 减弱/关闭动效：去掉过冲，缩短时长 */
+:root[data-motion="reduced"] {
+  --ease-liquid: var(--ease-out); --ease-jelly: var(--ease-out);
+  --dur-3: 200ms; --dur-4: 240ms; --dur-5: 280ms;
+}
+:root[data-motion="off"] {
+  --ease-liquid: linear; --ease-jelly: linear;
+  --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; --dur-4: 0ms; --dur-5: 0ms;
+}
+
+/* 密度 */
+:root[data-density="compact"] { --control-h: 30px; --row-h: 36px; --sp-4: 12px; --sp-5: 16px; --sp-6: 18px; }
+
+/* 显式主题 */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+/* 不支持 light-dark() 的浏览器：按 data-theme 选择两套值 */
+@supports not (color: light-dark(#000, #fff)) {
+  :root {
+    /* fallback-light:begin */
+    --c-bg: #f2f7f8;
+    --c-surface: #fbfdfe;
+    --c-surface-2: #ebf1f3;
+    --c-surface-3: #dfe8eb;
+    --c-border: #d8dfe2;
+    --c-border-strong: #848e93;
+    --c-text: #212c33;
+    --c-text-2: #4b555d;
+    --c-text-3: #656f76;
+    --c-primary: #00787d;
+    --c-primary-hover: #00686e;
+    --c-on-primary: #f8fdfd;
+    --c-primary-soft: #d3f0f1;
+    --c-primary-fg: #005860;
+    --c-focus: #008b96;
+    --c-success: #19966e;
+    --c-success-soft: #d8f5e7;
+    --c-success-fg: #095b41;
+    --c-warning: #c5770f;
+    --c-warning-soft: #feefcf;
+    --c-warning-fg: #7e4917;
+    --c-danger: #af2c1f;
+    --c-danger-soft: #ffe9e6;
+    --c-danger-fg: #9e2d26;
+    --c-info: #2765a5;
+    --c-info-soft: #e2f0fe;
+    --c-info-fg: #1d558e;
+    --c-chart-1: #0b67a9;
+    --c-chart-2: #c47212;
+    --c-chart-3: #29926d;
+    --c-chart-4: #812e63;
+    /* fallback-light:end */
+    --shadow-color: rgb(16 42 58 / 0.10); --highlight: rgb(255 255 255 / 0.70); --scrim: rgb(18 30 38 / 0.32);
+  }
+  :root[data-theme="dark"] {
+    /* fallback-dark:begin */
+    --c-bg: #0e1319;
+    --c-surface: #141b21;
+    --c-surface-2: #1b232a;
+    --c-surface-3: #222d35;
+    --c-border: #2a333a;
+    --c-border-strong: #5f6b74;
+    --c-text: #d9e1e5;
+    --c-text-2: #aab4ba;
+    --c-text-3: #8a9499;
+    --c-primary: #4fc6c6;
+    --c-primary-hover: #69d5d5;
+    --c-on-primary: #051920;
+    --c-primary-soft: #07393e;
+    --c-primary-fg: #8bdddc;
+    --c-focus: #3aced6;
+    --c-success: #5ed8a9;
+    --c-success-soft: #133529;
+    --c-success-fg: #8ae1bc;
+    --c-warning: #f0ba59;
+    --c-warning-soft: #3e2d15;
+    --c-warning-fg: #f5cf7d;
+    --c-danger: #e66f62;
+    --c-danger-soft: #47211e;
+    --c-danger-fg: #ffb0a5;
+    --c-info: #64a4e0;
+    --c-info-soft: #192f46;
+    --c-info-fg: #a3d1fe;
+    --c-chart-1: #51a1d5;
+    --c-chart-2: #f7ac4d;
+    --c-chart-3: #65d3a7;
+    --c-chart-4: #bc6398;
+    /* fallback-dark:end */
+    --shadow-color: rgb(0 0 0 / 0.45); --highlight: rgb(255 255 255 / 0.05); --scrim: rgb(0 0 0 / 0.55);
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "matched_rules",
+    "sent",
+    "failed",
+    "suppressed",
+    "deliveries"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string"
+    },
+    "matched_rules": {
+      "type": "integer"
+    },
+    "sent": {
+      "type": "integer"
+    },
+    "failed": {
+      "type": "integer"
+    },
+    "suppressed": {
+      "type": "integer"
+    },
+    "deliveries": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

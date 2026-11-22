@@ -1,0 +1,57 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "DNS 提供商公开列表响应",
+  "required": [
+    "providers"
+  ],
+  "properties": {
+    "providers": {
+      "type": "array",
+      "description": "已登记的 DNS 提供商公开视图列表（不含凭据）",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "revision",
+          "enabled",
+          "zone_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "提供商资源 ID"
+          },
+          "kind": {
+            "type": "string",
+            "description": "提供商类型（cloudflare 或 aliyun）"
+          },
+          "name": {
+            "type": "string",
+            "description": "提供商显示名称"
+          },
+          "revision": {
+            "type": "string",
+            "description": "当前资源乐观锁版本"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "提供商授权是否启用"
+          },
+          "zone_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "已发现托管域数量"
+          },
+          "last_error": {
+            "type": "string",
+            "description": "最近一次脱敏错误码"
+          }
+        }
+      }
+    }
+  }
+}

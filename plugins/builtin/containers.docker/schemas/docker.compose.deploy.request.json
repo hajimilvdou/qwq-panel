@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "compose_yaml"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 48
+    },
+    "compose_yaml": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 131072
+    },
+    "dry_run": {
+      "type": "boolean"
+    }
+  }
+}

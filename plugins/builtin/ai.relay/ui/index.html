@@ -1,0 +1,318 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI 中转与分发管理后台</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f8fafc; --card: #ffffff; --fg: #0f172a; --muted: #64748b; --border: #e2e8f0;
+      --accent: #2563eb; --ok: #16a34a; --warn: #d97706;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+    :root[data-theme="dark"] {
+      --bg: #0b1120; --card: #111827; --fg: #f1f5f9; --muted: #94a3b8; --border: #1e293b; --accent: #3b82f6;
+    }
+    body { margin: 0; padding: 20px; background: var(--bg); color: var(--fg); font-variant-numeric: tabular-nums; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+    .tabs { display: flex; gap: 6px; background: var(--card); padding: 4px; border: 1px solid var(--border); border-radius: 10px; }
+    .tabs button { background: transparent; color: var(--muted); border: 0; padding: 7px 14px; border-radius: 7px; font-weight: 500; cursor: pointer; }
+    .tabs button.active { background: var(--accent); color: #fff; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+    h2 { margin: 0 0 6px; font-size: 16px; }
+    p.sub { margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+    .form-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+    input, select, textarea { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--fg); font-size: 13px; }
+    .btn { padding: 8px 14px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; font-weight: 500; cursor: pointer; font-size: 13px; }
+    .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--fg); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <main id="ai-relay-root">
+    <div class="topbar">
+      <div>
+        <h2 style="margin:0">AI API 聚合中转与团体分发控制台</h2>
+        <span style="font-size:12px;color:var(--muted)">分发门户：<code>/p/ai.relay/portal/</code> · 统一网关：<code>/p/ai.relay/v1</code> · <span id="bridge-status">连接中…</span></span>
+      </div>
+      <div class="tabs" id="nav-tabs">
+        <button data-tab="channels" class="active" type="button">上游渠道与 Sub2API 池</button>
+        <button data-tab="auth" type="button">注册开关与 LinuxDo 分级</button>
+        <button data-tab="codes" type="button">邀请码与福利兑换码</button>
+        <button data-tab="users" type="button">团体成员与配额</button>
+      </div>
+    </div>
+
+    <section data-pane="channels" class="card">
+      <h2>新增上游 API 渠道 / OAuth 订阅账号池</h2>
+      <p class="sub">支持标准 API Key 与 Claude Max / Codex / Gemini OAuth 池聚合，自动会话粘性命中 Prompt Cache 1 折缓存。</p>
+      <div class="form-grid">
+        <label>渠道名称 <input id="ch-name" placeholder="如 Claude-Max-Pool-01" /></label>
+        <label>渠道类型
+          <select id="ch-kind">
+            <option value="openai_compatible">OpenAI 兼容 (DeepSeek/OpenRouter/百炼等)</option>
+            <option value="anthropic_native">Anthropic Claude 原生 API</option>
+            <option value="gemini_native">Google Gemini 原生 API</option>
+            <option value="sub2api_claude_oauth">Sub2API · Claude Pro/Max OAuth 池</option>
+            <option value="sub2api_codex_oauth">Sub2API · ChatGPT Codex OAuth 池</option>
+            <option value="sub2api_gemini_oauth">Sub2API · Gemini CLI OAuth 池</option>
+          </select>
+        </label>
+        <label>上游 Base URL <input id="ch-url" value="https://api.anthropic.com" /></label>
+        <label>API Key 或 OAuth 凭据 (AES-GCM 加密存储) <input id="ch-secret" type="password" placeholder="sk-... 或 OAuth JSON" /></label>
+        <label>可见分组 (逗号分隔) <input id="ch-groups" value="default,standard,pro" /></label>
+        <label>支持模型列表 (逗号分隔) <input id="ch-models" value="claude-sonnet-4-5,gpt-4o,gemini-2.5-pro" /></label>
+        <label>优先级 <input id="ch-prio" value="10" type="number" /></label>
+      </div>
+      <div style="margin-top:12px">
+        <button class="btn" id="btn-save-channel" type="button">加密保存上游渠道</button>
+      </div>
+      <table>
+        <thead><tr><th>名称</th><th>协议类型</th><th>分组</th><th>健康状态</th><th>TTFT</th><th>操作</th></tr></thead>
+        <tbody id="channels-tbody"></tbody>
+      </table>
+    </section>
+
+    <section data-pane="auth" class="card" hidden>
+      <h2>四种注册通道与公益水龙头策略（零商业收付款）</h2>
+      <p class="sub">自由组合邀请码注册、邮箱白名单注册、LinuxDo 社区信任等级注册与低余额补水 / 周期回血。</p>
+      <div class="form-grid">
+        <label>站点名称 <input id="st-title" value="QWQ AI Relay Hub" /></label>
+        <label>允许邀请码注册
+          <select id="st-invite"><option value="1">开启</option><option value="0">关闭</option></select>
+        </label>
+        <label>允许邮箱验证码注册
+          <select id="st-email"><option value="0">关闭</option><option value="1">开启</option></select>
+        </label>
+        <label>邮箱域名白名单 (留空不限) <input id="st-email-domains" placeholder="如 example.org,stu.edu.cn" /></label>
+        <label>允许 LinuxDo OAuth2 注册
+          <select id="st-linuxdo"><option value="1">开启</option><option value="0">关闭</option></select>
+        </label>
+        <label>LinuxDo Client ID <input id="st-ld-id" placeholder="connect.linux.do Client ID" /></label>
+        <label>LinuxDo Client Secret <input id="st-ld-secret" type="password" placeholder="未修改请留空" /></label>
+        <label>最低允许注册 LinuxDo 等级
+          <select id="st-ld-mintl">
+            <option value="0">TL0 及以上</option>
+            <option value="1">TL1 及以上</option>
+            <option value="2" selected>TL2 及以上</option>
+            <option value="3">TL3 及以上</option>
+          </select>
+        </label>
+        <label>默认注册初始统计额度 ($) <input id="st-init-usd" type="number" value="5" step="0.5" /></label>
+        <label>每日签到低余额补水门槛 ($) <input id="st-drip-usd" type="number" value="10" step="1" /></label>
+      </div>
+      <div style="margin-top:12px">
+        <button class="btn" id="btn-save-settings" type="button">保存门户注册与福利策略</button>
+      </div>
+    </section>
+
+    <section data-pane="codes" class="card" hidden>
+      <h2>批量生成邀请码 / 福利统计额度兑换码（CDK & 群口令码）</h2>
+      <div class="form-grid">
+        <label>类型
+          <select id="cd-kind">
+            <option value="cdk_single">一码一用福利兑换码</option>
+            <option value="cdk_shared">群共享口令红包码</option>
+            <option value="invite">门户注册邀请码</option>
+          </select>
+        </label>
+        <label>单次面额 ($) <input id="cd-usd" type="number" value="10" /></label>
+        <label>生成数量 / 最大可领人数 <input id="cd-count" type="number" value="20" /></label>
+        <label>自定义口令码 (仅群口令模式选填) <input id="cd-custom" placeholder="如 HAPPY-HACKING-2026" /></label>
+      </div>
+      <div style="margin-top:12px">
+        <button class="btn" id="btn-gen-codes" type="button">立即签发</button>
+      </div>
+      <textarea id="cd-output" rows="5" style="width:100%;margin-top:12px;box-sizing:border-box" readonly placeholder="生成的邀请码或兑换码将显示在此处…"></textarea>
+    </section>
+
+    <section data-pane="users" class="card" hidden>
+      <h2>管理员直接创建成员账号 & 额度总览</h2>
+      <div class="form-grid">
+        <label>用户名 <input id="u-name" placeholder="team_alice" /></label>
+        <label>初始密码 <input id="u-pass" type="password" placeholder="至少 8 位" /></label>
+        <label>分配分组 <input id="u-group" value="pro" /></label>
+        <label>初始额度 ($) <input id="u-init-usd" type="number" value="50" /></label>
+        <label>每日自动回血上限 ($, 0为关闭) <input id="u-daily-usd" type="number" value="15" /></label>
+      </div>
+      <div style="margin-top:12px">
+        <button class="btn" id="btn-create-user" type="button">直接创建分发成员</button>
+      </div>
+      <table>
+        <thead><tr><th>用户名</th><th>来源</th><th>分组</th><th>剩余额度</th><th>累计已用</th><th>日回血上限</th></tr></thead>
+        <tbody id="users-tbody"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      'use strict';
+      const root = document.documentElement;
+      const pick = (v, list, fb) => (list.includes(v) ? v : fb);
+      const hash = new URLSearchParams(location.hash.slice(1));
+      root.dataset.theme = pick(hash.get('theme'), ['light', 'dark'], 'light');
+
+      for (const btn of document.querySelectorAll('#nav-tabs button')) {
+        btn.addEventListener('click', () => {
+          for (const b of document.querySelectorAll('#nav-tabs button')) b.classList.toggle('active', b === btn);
+          for (const p of document.querySelectorAll('[data-pane]')) p.hidden = p.dataset.pane !== btn.dataset.tab;
+        });
+      }
+
+      let port;
+      let seq = 0;
+      const pending = new Map();
+      const send = (msg) => { if (port) port.postMessage(msg); };
+      const setStatus = (t) => { document.getElementById('bridge-status').textContent = t; };
+
+      function invoke(operation, payload = {}) {
+        if (!port) return Promise.reject(new Error('宿主通道未就绪'));
+        const id = String(++seq);
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { pending.delete(id); reject(new Error('宿主响应超时')); }, 15000);
+          pending.set(id, { resolve, reject, timer });
+          send({ t: 'api.invoke', id, operation, payload });
+        });
+      }
+
+      function accept(data) {
+        if (!data || typeof data !== 'object') return;
+        if (data.t === 'api.result' && typeof data.id === 'string') {
+          const req = pending.get(data.id);
+          if (!req) return;
+          clearTimeout(req.timer);
+          pending.delete(data.id);
+          if (data.ok === true) {
+            const result = data.data?.result ?? data.data;
+            if (!result || typeof result !== 'object' || data.data?.error) req.reject(new Error(data.data?.error?.message || '操作返回异常'));
+            else req.resolve(result);
+          } else {
+            req.reject(new Error(data.error?.message || '请求失败'));
+          }
+        }
+        if (data.t === 'ui.settings' && data.theme) {
+          root.dataset.theme = pick(data.theme, ['light', 'dark'], root.dataset.theme);
+        }
+      }
+
+      async function loadInitialData() {
+        try {
+          const [chData, uData] = await Promise.all([
+            invoke('relay.channels.list', { limit: 100 }),
+            invoke('relay.users.list', { limit: 100 }),
+          ]);
+          const tbody = document.getElementById('channels-tbody');
+          tbody.replaceChildren();
+          for (const c of chData.channels || []) {
+            const tr = document.createElement('tr');
+            for (const txt of [c.name, c.kind, (c.groups || []).join(','), c.health_state, `${c.last_ttft_ms || 0} ms`]) {
+              const td = document.createElement('td');
+              td.textContent = txt;
+              tr.appendChild(td);
+            }
+            const actTd = document.createElement('td');
+            const testBtn = document.createElement('button');
+            testBtn.className = 'btn ghost';
+            testBtn.type = 'button';
+            testBtn.textContent = '测速验活';
+            testBtn.addEventListener('click', () => { void invoke('relay.channels.test', { id: c.id }).then(loadInitialData); });
+            actTd.appendChild(testBtn);
+            tr.appendChild(actTd);
+            tbody.appendChild(tr);
+          }
+
+          const utbody = document.getElementById('users-tbody');
+          utbody.replaceChildren();
+          const fmtUsd = (m) => `$${((m || 0) / 1e6).toFixed(2)}`;
+          for (const u of uData.users || []) {
+            const tr = document.createElement('tr');
+            for (const txt of [u.username, u.signup_source, u.group_name, fmtUsd(u.balance_micros), fmtUsd(u.used_micros), fmtUsd(u.auto_refill_cap_micros)]) {
+              const td = document.createElement('td');
+              td.textContent = txt;
+              tr.appendChild(td);
+            }
+            utbody.appendChild(tr);
+          }
+          setStatus('已连接');
+        } catch (err) {
+          setStatus(`加载失败：${err.message || '未知错误'}`);
+        }
+      }
+
+      document.getElementById('btn-save-channel').addEventListener('click', async () => {
+        await invoke('relay.channels.upsert', {
+          name: document.getElementById('ch-name').value.trim(),
+          kind: document.getElementById('ch-kind').value,
+          base_url: document.getElementById('ch-url').value.trim(),
+          credential: document.getElementById('ch-secret').value.trim(),
+          groups: document.getElementById('ch-groups').value.split(',').map((s) => s.trim()).filter(Boolean),
+          models: document.getElementById('ch-models').value.split(',').map((s) => s.trim()).filter(Boolean),
+          priority: Number(document.getElementById('ch-prio').value || 0),
+        });
+        document.getElementById('ch-secret').value = '';
+        await loadInitialData();
+      });
+
+      document.getElementById('btn-save-settings').addEventListener('click', async () => {
+        await invoke('relay.settings.update', {
+          site_title: document.getElementById('st-title').value.trim(),
+          allow_invite_signup: document.getElementById('st-invite').value === '1',
+          allow_email_signup: document.getElementById('st-email').value === '1',
+          email_domain_allowlist: document.getElementById('st-email-domains').value.split(',').map((s) => s.trim()).filter(Boolean),
+          allow_linuxdo_signup: document.getElementById('st-linuxdo').value === '1',
+          linuxdo_client_id: document.getElementById('st-ld-id').value.trim(),
+          linuxdo_client_secret: document.getElementById('st-ld-secret').value.trim(),
+          linuxdo_min_trust_level: Number(document.getElementById('st-ld-mintl').value || 1),
+          default_signup_micros: Math.round(Number(document.getElementById('st-init-usd').value || 5) * 1e6),
+          checkin_drip_below_micros: Math.round(Number(document.getElementById('st-drip-usd').value || 10) * 1e6),
+        });
+        document.getElementById('st-ld-secret').value = '';
+        setStatus('策略已保存');
+      });
+
+      document.getElementById('btn-gen-codes').addEventListener('click', async () => {
+        const res = await invoke('relay.codes.generate', {
+          kind: document.getElementById('cd-kind').value,
+          amount_micros: Math.round(Number(document.getElementById('cd-usd').value || 10) * 1e6),
+          count: Number(document.getElementById('cd-count').value || 1),
+          custom_code: document.getElementById('cd-custom').value.trim(),
+        });
+        document.getElementById('cd-output').value = (res.codes || []).join('\n');
+      });
+
+      document.getElementById('btn-create-user').addEventListener('click', async () => {
+        await invoke('relay.users.create', {
+          username: document.getElementById('u-name').value.trim(),
+          password: document.getElementById('u-pass').value,
+          group_name: document.getElementById('u-group').value.trim() || 'default',
+          init_micros: Math.round(Number(document.getElementById('u-init-usd').value || 0) * 1e6),
+          daily_refill_micros: Math.round(Number(document.getElementById('u-daily-usd').value || 0) * 1e6),
+        });
+        document.getElementById('u-pass').value = '';
+        await loadInitialData();
+      });
+
+      const observer = new ResizeObserver(() => {
+        send({ t: 'ui.resize', height: Math.ceil(document.getElementById('ai-relay-root').getBoundingClientRect().height) + 24 });
+      });
+      observer.observe(document.getElementById('ai-relay-root'));
+
+      window.addEventListener('message', (event) => {
+        if (event.source !== window.parent || event.data?.t !== 'plugin.port' || !event.ports[0] || port) return;
+        port = event.ports[0];
+        port.onmessage = (msg) => accept(msg.data);
+        send({ t: 'ui.ready' });
+        void loadInitialData();
+      });
+
+      window.parent.postMessage({ t: 'plugin.hello', kit_major: 1 }, '*');
+    })();
+  </script>
+</body>
+</html>

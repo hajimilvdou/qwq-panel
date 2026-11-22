@@ -1,0 +1,41 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "running",
+    "binding_ref",
+    "generation",
+    "policy_revision",
+    "fullchain_sha256",
+    "leaf_fingerprint",
+    "sni",
+    "endpoint"
+  ],
+  "properties": {
+    "running": {
+      "type": "boolean"
+    },
+    "binding_ref": {
+      "type": "string"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "policy_revision": {
+      "type": "string"
+    },
+    "fullchain_sha256": {
+      "type": "string"
+    },
+    "leaf_fingerprint": {
+      "type": "string"
+    },
+    "sni": {
+      "type": "string"
+    },
+    "endpoint": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "region_code": {
+      "type": "string",
+      "maxLength": 16
+    },
+    "group_name": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "quota_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "quota_mode": {
+      "type": "string",
+      "enum": [
+        "both",
+        "max",
+        "outbound"
+      ]
+    },
+    "reset_day": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 31
+    }
+  }
+}

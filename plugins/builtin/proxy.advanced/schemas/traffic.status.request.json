@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询内核带宽限速状态请求",
+  "description": "向宿主 TrafficService 查询节点 HTB 流量整形支持能力、降级原因与当前规则类。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "include_classes": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否在响应中包含当前生效的逐用户 HTB 限速类列表。"
+    }
+  }
+}

@@ -1,0 +1,165 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.capability.dns.v1;
+
+import "qwq/platform/v1/platform.proto";
+
+// ======================== 独立 DNS 能力与已接受 operation ========================
+// RPC 只选择资源及版本；记录内容、凭据和授权范围均从宿主已接受 Args 取得。
+// 不接收 owner、秘密引用、API URL 或请求模板。写入使用 system.dns.manage；
+// 公共检查使用 dns.read。所有外部请求仍重查真实 operation 与私有 scope。
+// 版本独立于 Platform ABI v1，固定后只追加字段。
+service DnsService {
+  rpc RegisterProvider(RegisterProviderRequest) returns (RegisterProviderResponse);
+  rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse);
+  rpc DiscoverZones(DiscoverZonesRequest) returns (DiscoverZonesResponse);
+  rpc RevokeProvider(RevokeProviderRequest) returns (RevokeProviderResponse);
+  rpc AuthorizeZone(AuthorizeZoneRequest) returns (AuthorizeZoneResponse);
+  rpc RevokeZone(RevokeZoneRequest) returns (RevokeZoneResponse);
+  rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
+  rpc ApplyRecord(ApplyRecordRequest) returns (ApplyRecordResponse);
+  rpc ReconcileRecord(ReconcileRecordRequest) returns (ReconcileRecordResponse);
+  rpc CheckDns(CheckDnsRequest) returns (CheckDnsResponse);
+}
+
+// ======================== 无凭据的公开视图 ========================
+message ProviderView {
+  string id = 1;
+  string kind = 2;
+  string name = 3;
+  string revision = 4;
+  bool enabled = 5;
+  uint32 zone_count = 6;
+  string last_error = 7;
+}
+message ZoneView {
+  string provider_id = 1;
+  string zone_id = 2;
+  string name = 3;
+  string revision = 4;
+  bool authorized = 5;
+}
+message RecordView {
+  string id = 1;
+  string type = 2;
+  string name = 3;
+  string value = 4;
+  uint32 ttl = 5;
+  bool proxied = 6;
+  string revision = 7;
+  // 自有 challenge 只返回归属状态，不展开内部 token 或清理标记。
+  bool managed_challenge = 8;
+}
+message ObservationView {
+  string source = 1;
+  string kind = 2;
+  repeated string values = 3;
+  string collected_at = 4;
+  string error_code = 5;
+}
+
+// ======================== 提供商和精确 zone 授权 ========================
+message RegisterProviderRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string provider_id = 2;
+  string expected_revision = 3;
+}
+message RegisterProviderResponse {
+  ProviderView provider = 1;
+  repeated ZoneView zones = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+message ListProvidersRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+}
+message ListProvidersResponse {
+  repeated ProviderView providers = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message DiscoverZonesRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string provider_id = 2;
+}
+message DiscoverZonesResponse {
+  repeated ZoneView zones = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message RevokeProviderRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string provider_id = 2;
+  string expected_revision = 3;
+}
+message RevokeProviderResponse {
+  ProviderView provider = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message AuthorizeZoneRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string provider_id = 2;
+  string zone_id = 3;
+  string expected_revision = 4;
+}
+message AuthorizeZoneResponse {
+  ZoneView zone = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message RevokeZoneRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string provider_id = 2;
+  string zone_id = 3;
+  string expected_revision = 4;
+}
+message RevokeZoneResponse {
+  ZoneView zone = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+
+// ======================== 记录提交、原意图对账与解析采样 ========================
+message ListRecordsRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string provider_id = 2;
+  string zone_id = 3;
+}
+message ListRecordsResponse {
+  repeated RecordView records = 1;
+  string revision = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+message ApplyRecordRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string provider_id = 2;
+  string zone_id = 3;
+  string attempt_id = 4;
+  string expected_revision = 5;
+}
+message ApplyRecordResponse {
+  string state = 1;
+  string revision = 2;
+  RecordView record = 3;
+  qwq.platform.v1.ErrorDetail error = 4;
+}
+message ReconcileRecordRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string provider_id = 2;
+  string zone_id = 3;
+  string attempt_id = 4;
+}
+message ReconcileRecordResponse {
+  string state = 1;
+  string revision = 2;
+  RecordView record = 3;
+  qwq.platform.v1.ErrorDetail error = 4;
+}
+message CheckDnsRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string provider_id = 2;
+  string zone_id = 3;
+}
+message CheckDnsResponse {
+  bool propagated = 1;
+  repeated ObservationView observations = 2;
+  string retry_at = 3;
+  qwq.platform.v1.ErrorDetail error = 4;
+}

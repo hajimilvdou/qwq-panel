@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI 中转概览响应",
+  "description": "兼容首页 stat 微件的实时渠道健康、分发成员及虚拟统计消耗摘要。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "value",
+    "unit",
+    "percent",
+    "sub",
+    "level",
+    "spark",
+    "total_channels",
+    "healthy_channels",
+    "total_users",
+    "active_users",
+    "window_requests",
+    "window_cost_micros"
+  ],
+  "properties": {
+    "value": { "type": "number", "description": "主数值：当前健康可用上游渠道数。" },
+    "unit": { "type": "string", "description": "主数值单位。" },
+    "percent": { "type": "number", "minimum": 0, "maximum": 100, "description": "健康渠道占比百分比。" },
+    "sub": { "type": "string", "description": "副标题摘要说明。" },
+    "level": { "type": "string", "enum": ["ok", "warn", "crit", "muted"], "description": "状态告警级别。" },
+    "spark": { "type": "array", "description": "近期健康渠道趋势序列。", "items": { "type": "number" } },
+    "total_channels": { "type": "integer", "minimum": 0, "description": "上游渠道总数。" },
+    "healthy_channels": { "type": "integer", "minimum": 0, "description": "处于健康状态的上游渠道数。" },
+    "total_users": { "type": "integer", "minimum": 0, "description": "分发门户用户总数。" },
+    "active_users": { "type": "integer", "minimum": 0, "description": "启用状态的分发用户数。" },
+    "window_requests": { "type": "integer", "minimum": 0, "description": "回溯窗口内累计调用次数。" },
+    "window_cost_micros": { "type": "integer", "minimum": 0, "description": "回溯窗口内累计折算微点消耗。" }
+  }
+}

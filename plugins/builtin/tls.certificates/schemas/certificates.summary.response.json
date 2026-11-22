@@ -1,0 +1,74 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "TLS 证书本地只读摘要响应（兼容首页 stat 微件）",
+  "required": [
+    "value",
+    "unit",
+    "percent",
+    "sub",
+    "level",
+    "spark",
+    "total",
+    "ready",
+    "attention"
+  ],
+  "properties": {
+    "value": {
+      "type": "number",
+      "minimum": 0,
+      "description": "已就绪证书数量"
+    },
+    "unit": {
+      "type": "string",
+      "description": "微件数值单位"
+    },
+    "percent": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "已就绪证书占比（0-100）"
+    },
+    "sub": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "微件辅助说明文字"
+    },
+    "level": {
+      "enum": [
+        "ok",
+        "warn",
+        "bad"
+      ],
+      "description": "健康等级"
+    },
+    "spark": {
+      "type": "array",
+      "maxItems": 60,
+      "items": {
+        "type": "number",
+        "minimum": 0
+      },
+      "description": "趋势序列"
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "证书资源总数"
+    },
+    "ready": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "签发且消费者均就绪的证书数量"
+    },
+    "attention": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "部署失败、待对账或未就绪的证书数量"
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "最近一次同步时间（RFC3339）"
+    }
+  }
+}

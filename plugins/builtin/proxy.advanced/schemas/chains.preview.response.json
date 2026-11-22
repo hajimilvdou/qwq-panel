@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "预览服务端链式出口配置响应",
+  "description": "返回 Xray 服务端链式出口 JSON 对象与格式化文本。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "xray_server_chain",
+    "xray_json",
+    "total_chains"
+  ],
+  "properties": {
+    "xray_server_chain": {
+      "type": "object"
+    },
+    "xray_json": {
+      "type": "string"
+    },
+    "total_chains": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

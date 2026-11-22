@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.capability.firewall.v1;
+
+import "qwq/platform/v1/platform.proto";
+
+// Host Capability service: firewall (ADR-0019 decision 3.1).
+// Capability: system.firewall.manage; the scope is fixed to qwq's own objects (self), arbitrary
+// table names are not accepted. Only the inet qwq table and its chains/sets are operated on; other
+// tables are never flushed or rewritten (ADR-0009 rule 2). Every ruleset preserves the current SSH
+// port and the panel port; the preserved ports are injected by the host and the plugin can only
+// declare a superset of them.
+//
+// Errors follow the Platform ABI convention (ADR-0007): gRPC status codes report transport and
+// host-side failures (UNAVAILABLE, PERMISSION_DENIED, UNAUTHENTICATED, RESOURCE_EXHAUSTED,
+// UNIMPLEMENTED); a call that reached its handler reports the business outcome in ErrorDetail.code
+// with gRPC OK. Codes: VALIDATION_FAILED (with FieldViolation), PRECONDITION_FAILED (revision
+// mismatch or missing preserved ports), PERMISSION_DENIED (capability/scope/operation binding),
+// CONFLICT (a coexisting manager has not been taken over), RESOURCE_EXHAUSTED, UNAVAILABLE
+// (underlying tool failure), INTERNAL.
+//
+// Write RPCs need the operation_id currently dispatched to this instance; read RPCs only need the
+// capability. Versioned independently of the Platform ABI: append-only once frozen, not counted in
+// sdk/abi.Minor. go_package is supplied by Buf managed mode; do not hard-code it here.
+
+service FirewallService {
+  // Reads the qwq table ruleset. effect=read, risk=low.
+  rpc GetRuleset(GetRulesetRequest) returns (GetRulesetResponse);
+  // Validates with nft -j --check, then atomically replaces the qwq table content.
+  // effect=write, risk=high, reachability.
+  rpc ApplyRuleset(ApplyRulesetRequest) returns (ApplyRulesetResponse);
+  // Deletes the qwq table and rebuilds the minimal preserved chains.
+  // effect=destructive, risk=high, reachability.
+  rpc ResetRuleset(ResetRulesetRequest) returns (ResetRulesetResponse);
+  // Detects coexisting firewall managers (ufw/firewalld/...); read-only status, no takeover here.
+  // effect=read, risk=low.
+  rpc DetectManagers(DetectManagersRequest) returns (DetectManagersResponse);
+}
+
+message GetRulesetRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+}
+message GetRulesetResponse {
+  // nft ruleset JSON of the qwq table (nft -j list table inet qwq shape).
+  bytes ruleset_json = 1;
+  string revision = 2;
+  // Ports the host preserves: the current SSH port and the panel port.
+  repeated uint32 preserved_ports = 3;
+  qwq.platform.v1.ErrorDetail error = 4;
+  // 实时 input 策略与已保存策略不同；重启可能恢复旧策略，需明确对账。
+  bool persistence_pending = 5;
+}
+
+message ApplyRulesetRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  // nft ruleset JSON restricted to table inet qwq; references to other tables, flushes of other
+  // tables and rules without the preserved ports are rejected with VALIDATION_FAILED.
+  bytes ruleset_json = 2;
+  // Optimistic concurrency guard on firewall/ruleset; mismatch -> PRECONDITION_FAILED.
+  string expected_revision = 3;
+  // Plugin-declared preserved ports; must be a superset of the host-injected preserved ports,
+  // otherwise VALIDATION_FAILED.
+  repeated uint32 preserved_ports = 4;
+}
+message ApplyRulesetResponse {
+  string revision = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+
+message ResetRulesetRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string expected_revision = 2;
+}
+message ResetRulesetResponse {
+  string revision = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+
+message DetectManagersRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+}
+message DetectManagersResponse {
+  repeated Manager managers = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+
+// One coexisting firewall manager detected on the node (takeover flow: ADR-0021).
+message Manager {
+  // Manager kind, e.g. ufw, firewalld, bt, 1panel, fail2ban.
+  string kind = 1;
+  bool active = 2;
+  string detail = 3;
+}

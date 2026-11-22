@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "site_id",
+    "domain",
+    "upstream_url",
+    "reachable",
+    "latency_ms"
+  ],
+  "properties": {
+    "site_id": {
+      "type": "string"
+    },
+    "domain": {
+      "type": "string"
+    },
+    "upstream_url": {
+      "type": "string"
+    },
+    "reachable": {
+      "type": "boolean"
+    },
+    "status_code": {
+      "type": "integer"
+    },
+    "latency_ms": {
+      "type": "integer"
+    },
+    "error": {
+      "type": "string"
+    }
+  }
+}

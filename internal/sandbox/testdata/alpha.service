@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# qwq plugin instance unit template (P2-T5). The host package installs this
+# file as /etc/systemd/system/qwq-plugin@.service. `qwq privileged install`
+# renders the concrete instance unit qwq-plugin@<id>.service from
+# internal/sandbox: the same body, with the version-pinned ExecStart and the
+# digest check filled in. Only the privileged helper writes below
+# /etc/systemd/system.
+#
+# The packaged template is not started directly: a plugin executable path is
+# only known after its package is installed and its digest verified. For that
+# reason the two commands below are placeholders and `systemd-analyze verify`
+# reports them as missing executables. That is the only error this file may
+# produce; every other verify diagnostic is a regression.
+#
+# Runtime layout (deployments/README.md, internal/sandbox/REPORT.md):
+#   /var/lib/qwq-plugins/<id>/<version>/  immutable package, root 0555/0444
+#   /run/qwq/plugin/<id>/plugin.sock      listener created by the socket unit
+#   /run/qwq/host/<id>/host.sock          agent reverse channel, 0660
+#   /run/qwq/link                         bind target for the host channel
+#   /var/lib/qwq-privileged/creds/<id>.token  plugin token, root 0600
+
+[Unit]
+Description=qwq plugin alpha
+Documentation=https://github.com/qwq-panel/qwq
+# The socket unit owns the listener and passes the file descriptor to the
+# plugin (socket activation, ADR-0003 decision 5). Starting the service pulls
+# the socket in; stopping the socket quarantines the service as well.
+Requires=qwq-plugin@alpha.socket
+After=qwq-plugin@alpha.socket
+IgnoreOnIsolate=yes
+# A supervisor/rollback may restart one plugin several times in a row (the
+# 100-cycle endurance baseline starts it 100 times). Keep crash-loop protection
+# but allow a realistic burst instead of the systemd default of five.
+StartLimitIntervalSec=60
+StartLimitBurst=120
+
+[Service]
+Type=exec
+# One dynamic uid per plugin and no system user. Nothing is left behind when
+# the plugin is uninstalled.
+DynamicUser=yes
+# The private group qwq-p-<id> owns the host channel directory and is the only
+# group that may connect to this instance's host.sock (P2-T1 section 5).
+SupplementaryGroups=qwq-p-alpha
+UMask=0077
+
+# Digest check before every start (ADR-0003 decision 3). The "+" prefix runs
+# the command as root outside the sandbox; it only reads the immutable version
+# directory, whose files the plugin cannot change.
+ExecStartPre=+/opt/qwq/current/bin/qwq privileged verify-entrypoint -dir /var/lib/qwq-plugins/alpha/1.2.3 -entrypoint bin/plugin -digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ExecStart=/var/lib/qwq-plugins/alpha/1.2.3/bin/plugin
+
+Restart=on-failure
+RestartSec=1s
+TimeoutStartSec=30s
+TimeoutStopSec=15s
+# KillMode=control-group makes "systemctl stop" and
+# "systemctl kill --kill-whom=main -s SIGKILL" clear the whole cgroup,
+# including any child process a plugin forks (P2-T1 acceptance 4).
+KillMode=control-group
+KillSignal=SIGTERM
+
+# The token arrives as a credential file, never through Environment= (which is
+# readable over D-Bus). The plugin reads $CREDENTIALS_DIRECTORY/qwq-token.
+LoadCredential=qwq-token:/var/lib/qwq-privileged/creds/alpha.token
+
+# Only this plugin's host channel is mapped into its mount namespace. The
+# target directory is created by /etc/tmpfiles.d/qwq-plugin-<id>.conf before
+# the unit starts.
+BindPaths=/run/qwq/host/alpha:/run/qwq/link
+Environment=QWQ_PLUGIN_ID=alpha
+Environment=QWQ_PLUGIN_SOCKET=/run/qwq/plugin/alpha/plugin.sock
+Environment=QWQ_HOST_SOCKET=/run/qwq/link/host.sock
+
+# Resource defaults. The rendered drop-in
+# qwq-plugin@<id>.service.d/10-resources.conf overrides all of them from the
+# verified manifest; these values keep the template safe on its own.
+# GOMEMLIMIT is 0.85 x MemoryMax, MemoryHigh is 0.9 x MemoryMax (ARCH section 13).
+MemoryMax=48M
+MemoryHigh=43M
+CPUQuota=100%
+TasksMax=32
+LimitNOFILE=256
+# Plugins are killed before the controller and the agent when memory runs out;
+# the host units carry negative values.
+OOMScoreAdjust=500
+Environment=GOMEMLIMIT=40MiB
+
+# Sandbox template (architecture review S2, ADR-0003 decision 7). A plugin
+# cannot ask for a directive; it can only request a capability that the host
+# maps to a reviewed relaxation.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+KeyringMode=private
+
+[Install]
+WantedBy=multi-user.target

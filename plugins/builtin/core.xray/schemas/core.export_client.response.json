@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "导出标准客户端配置响应",
+  "description": "返回当前运行修订对应的多格式标准客户端导出条目列表。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["running_revision", "api_version", "items"],
+  "properties": {
+    "running_revision": {
+      "type": "string",
+      "description": "当前生效运行配置的修订标识。"
+    },
+    "api_version": {
+      "type": "string",
+      "enum": ["v1", "v2"],
+      "description": "当前运行配置使用的核心意图 API 版本。"
+    },
+    "items": {
+      "type": "array",
+      "description": "按协议与用户展开的标准客户端导出条目列表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["protocol", "share_uri", "clash_node", "clash_yaml", "singbox_outbound"],
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "description": "所属协议配置 profile ID。"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "所属用户 ID。"
+          },
+          "protocol": {
+            "type": "string",
+            "description": "协议标识（vless-reality、hysteria2、shadowsocks-2022）。"
+          },
+          "share_uri": {
+            "type": "string",
+            "description": "标准客户端分享 URI（vless://、hysteria2://、ss://）。"
+          },
+          "clash_node": {
+            "type": "object",
+            "description": "Clash Meta（Mihomo）代理节点结构化对象。"
+          },
+          "clash_yaml": {
+            "type": "string",
+            "description": "规范缩进的单节点 Clash YAML 文本。"
+          },
+          "singbox_outbound": {
+            "type": "object",
+            "description": "sing-box 标准 outbound JSON 对象。"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# socket 激活、一请求后退出；沙箱真机收敛仍由 CAP-10 验收。
+[Unit]
+Description=qwq host capability helper
+Requires=qwq-capability.socket
+After=qwq-capability.socket
+StartLimitIntervalSec=60
+StartLimitBurst=60
+
+[Service]
+Type=exec
+ExecStart=/opt/qwq/current/bin/qwq-capability --socket /run/qwq/capability.sock
+Restart=no
+RuntimeMaxSec=120
+TimeoutStartSec=10s
+TimeoutStopSec=10s
+MemoryMax=48M
+Environment=GOMEMLIMIT=40MiB
+Environment=GOMAXPROCS=2
+TasksMax=24
+UMask=0022
+PrivateNetwork=no
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+ProtectSystem=strict
+ReadWritePaths=-/etc/ssh/sshd_config.d -/etc/nftables.d /run/qwq /var/lib/qwq-capability -/etc/shadow -/etc/gshadow
+ReadOnlyPaths=-/var/log/journal -/run/log/journal
+ProtectKernelLogs=no
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# --- ss 通过 /proc 核验常驻 SSH 监听归属；仍只挂载 PID 视图 ----------------------
+ProtectProc=default
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@clock @module @raw-io @reboot @swap @resources
+SystemCallErrorNumber=EPERM
+# 非 dumpable 的 sshd 需要通过 ptrace 访问检查，不能用进程名称代替真实 PID。
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_SETUID CAP_SETGID CAP_SYS_PTRACE
+AmbientCapabilities=
+NoNewPrivileges=yes
+KeyringMode=private

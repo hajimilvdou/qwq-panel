@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "调整分发用户额度响应",
+  "description": "返回调额与属性更新后的最新实时余额、分组和状态。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "user_id",
+    "group_name",
+    "status",
+    "balance_micros",
+    "auto_refill_cap_micros",
+    "auto_refill_cycle",
+    "updated_at"
+  ],
+  "properties": {
+    "user_id": { "type": "string", "description": "分发用户 ID。" },
+    "group_name": { "type": "string", "description": "最新分组。" },
+    "status": { "type": "string", "enum": ["active", "disabled"], "description": "最新账号状态。" },
+    "balance_micros": { "type": "integer", "minimum": 0, "description": "调整后最新余额（micros）。" },
+    "auto_refill_cap_micros": { "type": "integer", "minimum": 0, "description": "最新自动回血上限。" },
+    "auto_refill_cycle": { "type": "string", "description": "最新自动回血周期。" },
+    "updated_at": { "type": "integer", "minimum": 0, "description": "更新时间戳（Unix 毫秒）。" }
+  }
+}

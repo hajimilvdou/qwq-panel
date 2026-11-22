@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rolled_back",
+    "snapshot",
+    "active_routes"
+  ],
+  "properties": {
+    "rolled_back": {
+      "type": "boolean"
+    },
+    "snapshot": {
+      "type": "object"
+    },
+    "active_routes": {
+      "type": "integer"
+    }
+  }
+}

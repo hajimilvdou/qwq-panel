@@ -1,0 +1,235 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.capability.certificates.v1;
+
+import "qwq/platform/v1/platform.proto";
+
+// ======================== 无材料泄漏的证书和任务能力 ========================
+// 私钥/链输入、SAN、provider/zone/CA、consumer/SNI 来自已接受 operation Args。
+// 不接收 owner、材料引用或路径；长签发使用有界任务提交/查询，保持原 attempt。
+// 新签发/导入/绑定使用 system.certificates.manage；续期只使用固定资源策略。
+// 独立版本化，不改变 Platform ABI v1。
+service CertificatesService {
+  rpc ListCertificates(ListCertificatesRequest) returns (ListCertificatesResponse);
+  rpc GetCertificate(GetCertificateRequest) returns (GetCertificateResponse);
+  rpc SubmitIssue(SubmitIssueRequest) returns (SubmitIssueResponse);
+  rpc SubmitImport(SubmitImportRequest) returns (SubmitImportResponse);
+  rpc SubmitTestCertificate(SubmitTestCertificateRequest) returns (SubmitTestCertificateResponse);
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+  rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
+  rpc BindCertificate(BindCertificateRequest) returns (BindCertificateResponse);
+  rpc UnbindCertificate(UnbindCertificateRequest) returns (UnbindCertificateResponse);
+  rpc DeployBinding(DeployBindingRequest) returns (DeployBindingResponse);
+  rpc RollbackBinding(RollbackBindingRequest) returns (RollbackBindingResponse);
+  rpc RemoveGeneration(RemoveGenerationRequest) returns (RemoveGenerationResponse);
+  rpc RemoveCertificate(RemoveCertificateRequest) returns (RemoveCertificateResponse);
+  rpc ConfigureRenewal(ConfigureRenewalRequest) returns (ConfigureRenewalResponse);
+  rpc RevokeRenewal(RevokeRenewalRequest) returns (RevokeRenewalResponse);
+  rpc GetRenewal(GetRenewalRequest) returns (GetRenewalResponse);
+}
+
+// ======================== 公开证书、消费者和进度 ========================
+message GenerationView {
+  uint64 number = 1;
+  string fingerprint = 2;
+  string issuer = 3;
+  string not_before = 4;
+  string not_after = 5;
+  string trust = 6;
+}
+message BindingView {
+  string binding_ref = 1;
+  string plugin_id = 2;
+  string profile_id = 3;
+  string node_id = 4;
+  string server_name = 5;
+  string purpose = 6;
+  uint64 generation = 7;
+  uint64 running_generation = 8;
+  string policy_revision = 9;
+  string status = 10;
+  uint64 previous_generation = 11;
+}
+message CertificateView {
+  string id = 1;
+  string revision = 2;
+  repeated string sans = 3;
+  string purpose = 4;
+  string status = 5;
+  uint64 latest_generation = 6;
+  repeated GenerationView generations = 7;
+  repeated BindingView bindings = 8;
+}
+message TaskView {
+  string id = 1;
+  string certificate_id = 2;
+  string status = 3;
+  string stage = 4;
+  uint32 percent = 5;
+  string error_code = 6;
+  string retry_at = 7;
+  string revision = 8;
+}
+message RenewalView {
+  string id = 1;
+  string certificate_id = 2;
+  string revision = 3;
+  bool enabled = 4;
+  string status = 5;
+  string next_at = 6;
+  string expires_at = 7;
+  uint32 attempts = 8;
+  string last_error = 9;
+  string alert = 10;
+}
+
+// ======================== 申请/导入/测试及有界任务 ========================
+message ListCertificatesRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+}
+message ListCertificatesResponse {
+  repeated CertificateView certificates = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message GetCertificateRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+}
+message GetCertificateResponse {
+  CertificateView certificate = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message SubmitIssueRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+  string attempt_id = 3;
+  string expected_revision = 4;
+}
+message SubmitIssueResponse {
+  TaskView task = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message SubmitImportRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+  string attempt_id = 3;
+  string expected_revision = 4;
+}
+message SubmitImportResponse {
+  TaskView task = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message SubmitTestCertificateRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+  string attempt_id = 3;
+  string expected_revision = 4;
+}
+message SubmitTestCertificateResponse {
+  TaskView task = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message GetTaskRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string task_id = 2;
+}
+message GetTaskResponse {
+  TaskView task = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message CancelTaskRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string task_id = 2;
+}
+message CancelTaskResponse {
+  TaskView task = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+
+// ======================== 稳定绑定、部署和引用保护 ========================
+message BindCertificateRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+  string expected_revision = 3;
+}
+message BindCertificateResponse {
+  CertificateView certificate = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message UnbindCertificateRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+  string binding_ref = 3;
+  string expected_revision = 4;
+}
+message UnbindCertificateResponse {
+  CertificateView certificate = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message DeployBindingRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+  string binding_ref = 3;
+  string expected_revision = 4;
+}
+message DeployBindingResponse {
+  CertificateView certificate = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message RollbackBindingRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+  string binding_ref = 3;
+  string expected_revision = 4;
+}
+message RollbackBindingResponse {
+  CertificateView certificate = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message RemoveGenerationRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+  string expected_revision = 3;
+}
+message RemoveGenerationResponse {
+  CertificateView certificate = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message RemoveCertificateRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+  string expected_revision = 3;
+}
+message RemoveCertificateResponse {
+  qwq.platform.v1.ErrorDetail error = 1;
+}
+
+// ======================== 确认、撤销与可见的续期失败 ========================
+message ConfigureRenewalRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+  string expected_revision = 3;
+}
+message ConfigureRenewalResponse {
+  RenewalView renewal = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message RevokeRenewalRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string policy_id = 2;
+  string expected_revision = 3;
+}
+message RevokeRenewalResponse {
+  RenewalView renewal = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+message GetRenewalRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+}
+message GetRenewalResponse {
+  RenewalView renewal = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}

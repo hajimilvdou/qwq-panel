@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "删除上游渠道请求",
+  "description": "永久删除指定上游渠道及其加密凭据并刷新内存路由器。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "待删除的上游渠道 ID。"
+    }
+  }
+}

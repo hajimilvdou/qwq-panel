@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["value", "unit"],
+  "properties": {
+    "value": { "type": ["number", "null"] },
+    "unit": { "type": "string" },
+    "sub": { "type": "string" },
+    "percent": { "type": ["number", "null"] },
+    "level": { "type": "string", "enum": ["ok", "warn", "crit", "muted"] },
+    "spark": { "type": "array", "items": { "type": ["number", "null"] } }
+  }
+}

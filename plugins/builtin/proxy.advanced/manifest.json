@@ -1,0 +1,785 @@
+{
+  "schema_version": "1.3",
+  "id": "proxy.advanced",
+  "version": "0.1.0",
+  "name": "高级代理管理",
+  "summary": "多用户配额与连接限制、链式代理出口、tcpfit 动态调优与 TCP Brutal 端口透明接管",
+  "description": "基于本地 WAL SQLite 管理代理套餐、多用户凭证、并发连接/在线 IP 限制、AES-256-GCM 加密链式代理落地、tcpfit 动态 BDP 宿主机网络栈调优与 TCP Brutal 端口透明接管（可按 TCP 订阅独立开启并手调超发倍率）；通过受控公开路由提供 Clash/sing-box/v2ray 订阅并跨插件同步 core.xray 与 TrafficService。",
+  "license": "AGPL-3.0-only",
+  "publisher": {
+    "id": "qwq-builtin",
+    "key_id": "ed25519:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "abi": {
+    "major": 1,
+    "minimum_minor": 0
+  },
+  "engine_constraint": ">=0.1.0 <1.0.0",
+  "target": "linux/amd64",
+  "entrypoint": "bin/plugin",
+  "files": {
+    "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "attestations/sbom.spdx.json": "sha256:72ccf955bd786843436096bbcdb7bedeed9b07d047371a90664186e64fc842f6",
+    "schemas/brutal.apply.request.json": "sha256:bc308973fded20b1044e938349eca55f9a795cb217e983919c77bc5a44c8f959",
+    "schemas/brutal.apply.response.json": "sha256:561a9168b544f15058299552993182f5195324960263ccb0cfb88f128c102600",
+    "schemas/brutal.binding.delete.request.json": "sha256:5da1968b33072afe3304731fd99a08b1ba9b6942302804631be52b9d38fdcfe8",
+    "schemas/brutal.binding.delete.response.json": "sha256:8190842c9372e9a122c467685e826f1f77580c16031bab913767e4e1ab4f913f",
+    "schemas/brutal.binding.upsert.request.json": "sha256:a5c5cdfc880517fb7096420811f02557b4b169cbdc14a4056120f97a4f3cf5ca",
+    "schemas/brutal.binding.upsert.response.json": "sha256:85b09b4d73c4fe519d8d812cd34d28912e4604940e6b286987d1665b1c020ba3",
+    "schemas/brutal.status.request.json": "sha256:a4b24318882cb586f94848e3bb2bf64f57448f85ad9a2f96db6f31a92ca84f99",
+    "schemas/brutal.status.response.json": "sha256:3001fd0c5e697509eb2b8ab66dfa197ca33038109f661dcacb28c95784dc4bcf",
+    "schemas/chains.delete.request.json": "sha256:4ec771ddbdb1fe4a9219eda0877f3bd1b073cee9ffb51b6be27492b3753e9e7a",
+    "schemas/chains.delete.response.json": "sha256:d401d4f5532d934b2585beb58d99d896c6cccb620ae38a53bdcc9d2cf2e05e00",
+    "schemas/chains.list.request.json": "sha256:f0c8bc07bbe3bf59734872597e29faf9cc956d6acce8b42daadab631c3f493c8",
+    "schemas/chains.list.response.json": "sha256:0fa7bb6f045bd8b03449589623384113881e23e2ab8be17292ca4999ca431a00",
+    "schemas/chains.preview.request.json": "sha256:0d8eb751cb0a0dda5af42f8548acae5d7cd433ac2e726365df02feef2d1dc244",
+    "schemas/chains.preview.response.json": "sha256:3a445a00c8b04de93ba8592cf3ae15007784790c2dea79745907eeb6ee935797",
+    "schemas/chains.probe.request.json": "sha256:a50e2ed921874f9e69a7b2fd02ad8fcbc896991061bc06ebed26a0b65e0484f0",
+    "schemas/chains.probe.response.json": "sha256:ddc0ec1ebf94a196fd5f4f027aaf8e293e599244195aad6827b697a21571327d",
+    "schemas/chains.upsert.request.json": "sha256:66f249b396345414286bd284074e23d12a1a6b8e7553afd619d40776738b9ebf",
+    "schemas/chains.upsert.response.json": "sha256:78fef37747b34575d439619f75418bc1a226833135379675713e5fb209f0f9d9",
+    "schemas/config.schema.json": "sha256:36649ce8a22fbbf147ff65ef2162971581157b1c4dd8fe5380ecf6d7d4467043",
+    "schemas/plans.list.request.json": "sha256:d94e23cf74b60b53e680ad06c808fba1fc9a6e39889a2bd115c41da455ada3ce",
+    "schemas/plans.list.response.json": "sha256:97a15d7f1ae256d46b89e0c59b21824152b041e29d8645e7f152ef65e6f0876d",
+    "schemas/plans.upsert.request.json": "sha256:fb448ec813273eeb7a12316d485ddf8589c4b5244e4dd58f690053bf451e5a9b",
+    "schemas/plans.upsert.response.json": "sha256:e82cfc9a05526968f6c85389b241f4e1a744ee6af7726005fa49aceaae220ce2",
+    "schemas/proxy.overview.request.json": "sha256:d085279016004f0be2a6964cfd4eb04af6e69017a27cd2e1e0ee6e207f133c77",
+    "schemas/proxy.overview.response.json": "sha256:b5df7d2f85b7b9a87887355ec35c849f5b017e8289a53eb692582378dc1a38f6",
+    "schemas/traffic.status.request.json": "sha256:963ef466f9f272ae4f37054f08e9880636dfe9cd52cf1bab3e76c97add70cb09",
+    "schemas/traffic.status.response.json": "sha256:1a3e94df736e6b7f5dedebc3216f97d868656b06f9b8e40c24e1018c8a811d8a",
+    "schemas/tuning.apply.request.json": "sha256:a4728d471d2787a6ade055b32928fc3e6d0f56a3a0a030b1d89e28284cd517fa",
+    "schemas/tuning.apply.response.json": "sha256:7c9e3ddf8391fc5c81e7bd29c19e48179966af459d7a112e7aab3db1c900cf63",
+    "schemas/tuning.plan.request.json": "sha256:37619f0f837a9a77cc40d05e0d95039b3ca1bf444ccdc839f7c8307d9ec88a7c",
+    "schemas/tuning.plan.response.json": "sha256:e874eb6b0d223e0bd5a8a0f4303275417b621f31af651c2eafe2dc893a519256",
+    "schemas/tuning.rollback.request.json": "sha256:c6003082eea70fa192982e6adb8a62e2e85e16f0c7860f5adc983a5a5bf49435",
+    "schemas/tuning.rollback.response.json": "sha256:044935ca6db4ee39b69b83a0b8fc610086aeb8e290ac70ee611743c1f7e3c276",
+    "schemas/tuning.status.request.json": "sha256:261bc6ea1fec68d6290e27d77b2214bd02aa8245dbb508e56f3bf164dcd4f895",
+    "schemas/tuning.status.response.json": "sha256:46ca3237f2d58c607886fcb29399e30ddb63eb0fed2750d370fd9e29b47a4d95",
+    "schemas/tuning.sweep.request.json": "sha256:d2805c569c2275da79ad0862a82b2f07a988b38f3df19f2504d7111c0e915e9a",
+    "schemas/tuning.sweep.response.json": "sha256:b9ecad0693dfec5d848f3ad6ef46426dba21318f92c836298e42eed5aed35905",
+    "schemas/users.connections.status.request.json": "sha256:1d31684eb13c43edf4bc70c8ac99d5a7a1d2f9913785997ae911ad55d4337f31",
+    "schemas/users.connections.status.response.json": "sha256:df5360b0c65a5723e8893ddda2f36705bc82c452ff0da2e21399ec7a9cc845ed",
+    "schemas/users.create.request.json": "sha256:c03ae1fff9de030a8a01f3a84eb6cc90a187556be91ba7b9f68f0862e1016c6d",
+    "schemas/users.create.response.json": "sha256:5a2adf2014a1c67d2e95aad74605b32c2ea27c93df6dbda964fb24ba089863f8",
+    "schemas/users.list.request.json": "sha256:34747d21bce69af6638ac1c2972015eef876aa91660a012031a03bd1aee1cb6f",
+    "schemas/users.list.response.json": "sha256:a7e5820dc56eaf1bef00793cf755c37f13d14c3ffeaf5b94fb6643a7c2c99638",
+    "schemas/users.rotate_subscription.request.json": "sha256:f224221baf7e7e87a8b11f785e8ab52da13135675cc075769b6e02d8162a8761",
+    "schemas/users.rotate_subscription.response.json": "sha256:70810e87262fbebf98c4860d593392a26321f103bb4733958a1c55008f8e9ab5",
+    "schemas/users.set_limits.request.json": "sha256:651c1784b65230d9f1bca90f05f4e3dec95c738776dd2f5d11979f5d5210845a",
+    "schemas/users.set_limits.response.json": "sha256:d2638db58ff359e0b0afd58b7c1541a93433242d93416ac4bef238094e5f8965",
+    "schemas/users.set_status.request.json": "sha256:d40929961f89c3e72d7c6b9367b5c209d19243c018c2277b4d28ad3a29da887e",
+    "schemas/users.set_status.response.json": "sha256:f5a2e51c6ad4c2cb37fae618a44d68a918169ea648e5c21b61bee75add3bac53",
+    "schemas/users.usage_history.request.json": "sha256:8a0cbc374b51078f467077118950a16d5c288737eb26bd2326bb35563c6748a2",
+    "schemas/users.usage_history.response.json": "sha256:3961e5626b1934737ba9488427c7c03e633703b8bc07580d57c98cf68ae9c7be",
+    "ui/index.html": "sha256:d6f372f52c45d09d2d697baabf87055b27125c8c4a1e74ddad6512591064e397",
+    "ui/proxy.js": "sha256:cb05a737664638c1cd38aa3e0c92ea6f080d25d15e262967896b59db3555c2dd"
+  },
+  "provenance": {
+    "sbom": "attestations/sbom.spdx.json"
+  },
+  "placement": "node",
+  "lifecycle": {
+    "startup": "eager",
+    "background": true,
+    "update_strategy": "restart",
+    "overlap_safe": false
+  },
+  "dependencies": [],
+  "state": {
+    "schema_version": "1",
+    "minimum_rollback_version": "0.1.0",
+    "backup_paths": [
+      "proxy.db"
+    ]
+  },
+  "config": {
+    "schema": "schemas/config.schema.json",
+    "hot_apply": true
+  },
+  "resources": {
+    "memory_max_mb": 32,
+    "cpu_quota_percent": 25,
+    "pids_max": 16,
+    "fds_max": 512,
+    "disk_max_mb": 32,
+    "kv_max_kb": 128
+  },
+  "capabilities": [
+    {
+      "name": "state.kv.read",
+      "scope": "self",
+      "reason": "读取高级代理插件本地轻量状态缓存"
+    },
+    {
+      "name": "state.kv.write",
+      "scope": "self",
+      "reason": "持久化高级代理插件本地轻量状态缓存"
+    },
+    {
+      "name": "plugin.config.read",
+      "scope": "core.xray",
+      "reason": "读取 core.xray 脱敏配置快照以便保留既有密钥槽位合并多用户列表"
+    },
+    {
+      "name": "plugin.config.write",
+      "scope": "core.xray",
+      "reason": "同步活跃多用户列表与 traffic_mark 到 core.xray 并触发受控生效"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "core.xray/core.observe",
+      "reason": "按需查询 core.xray 运行流量计数器"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "core.xray/core.status",
+      "reason": "查询 core.xray 当前运行状态"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "core.xray/core.apply",
+      "reason": "触发 core.xray 应用最新多用户代理配置"
+    },
+    {
+      "name": "plugin.invoke.background",
+      "scope": "core.xray/core.observe",
+      "reason": "后台 30 秒周期采样 core.xray 逐用户流量以执行配额与到期巡检"
+    },
+    {
+      "name": "plugin.invoke.background",
+      "scope": "core.xray/core.status",
+      "reason": "后台巡检核对 core.xray 运行状态"
+    },
+    {
+      "name": "system.traffic.shape",
+      "scope": "self",
+      "reason": "查询内核 HTB 整形能力并下发 0x5100..0x51FF 逐用户限速类"
+    },
+    {
+      "name": "public.route",
+      "scope": "sub",
+      "reason": "通过高熵令牌对外提供 Clash/sing-box/v2ray 多协议订阅拉取接口"
+    },
+    {
+      "name": "network.listen",
+      "scope": "brutal",
+      "reason": "为选定 TCP 订阅入站启动 TCP Brutal 端口透明接管监听"
+    },
+    {
+      "name": "network.egress",
+      "scope": "chain",
+      "reason": "对链式代理落地节点发起 TCP 延迟探测与转发校验"
+    },
+    {
+      "name": "system.sysctl.tune",
+      "scope": "self",
+      "reason": "读取宿主机网络栈参数并执行带快照回滚的 tcpfit 动态调优"
+    }
+  ],
+  "operations": [
+    {
+      "name": "proxy.overview",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "高级代理多用户与配额概览（首页微件）",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "system.traffic.shape",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/proxy.overview.request.json",
+      "response_schema": "schemas/proxy.overview.response.json"
+    },
+    {
+      "name": "plans.list",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "列举代理流量配额与限速套餐",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/plans.list.request.json",
+      "response_schema": "schemas/plans.list.response.json"
+    },
+    {
+      "name": "plans.upsert",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "approval": "confirm",
+      "approval_summary": "将创建或更新代理套餐的流量配额、限速带宽与月度重置周期",
+      "timeout_ms": 15000,
+      "summary": "创建或更新代理套餐",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "system.traffic.shape",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/plans.upsert.request.json",
+      "response_schema": "schemas/plans.upsert.response.json"
+    },
+    {
+      "name": "users.list",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "列举多用户状态、流量标记与当期用量",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/users.list.request.json",
+      "response_schema": "schemas/users.list.response.json"
+    },
+    {
+      "name": "users.create",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "idempotent": false,
+      "approval": "confirm",
+      "approval_summary": "将新建代理用户、分配唯一 traffic_mark 与高熵订阅令牌，并同步下发 core.xray 配置与 HTB 限速",
+      "timeout_ms": 30000,
+      "summary": "创建代理用户并同步核心与限速",
+      "capabilities": [
+        {
+          "name": "plugin.config.read",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.config.write",
+          "scope": "core.xray"
+        },
+        {
+          "name": "system.traffic.shape",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/users.create.request.json",
+      "response_schema": "schemas/users.create.response.json"
+    },
+    {
+      "name": "users.rotate_subscription",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": false,
+      "approval": "confirm",
+      "approval_summary": "将立即作废该用户原有订阅链接并签发新订阅令牌",
+      "timeout_ms": 15000,
+      "summary": "轮换用户公开订阅令牌",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/users.rotate_subscription.request.json",
+      "response_schema": "schemas/users.rotate_subscription.response.json"
+    },
+    {
+      "name": "users.set_status",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "idempotent": true,
+      "approval": "confirm",
+      "approval_summary": "将修改代理用户启停状态并同步更新 core.xray 生效用户与内核限速规则",
+      "timeout_ms": 30000,
+      "summary": "启用或停用代理用户并同步核心",
+      "capabilities": [
+        {
+          "name": "plugin.config.read",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.config.write",
+          "scope": "core.xray"
+        },
+        {
+          "name": "system.traffic.shape",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/users.set_status.request.json",
+      "response_schema": "schemas/users.set_status.response.json"
+    },
+    {
+      "name": "users.usage_history",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "查询代理用户按小时聚合的流量曲线",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/users.usage_history.request.json",
+      "response_schema": "schemas/users.usage_history.response.json"
+    },
+    {
+      "name": "traffic.status",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "查询节点内核 HTB 带宽限速支持状态与当前规则",
+      "capabilities": [
+        {
+          "name": "system.traffic.shape",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/traffic.status.request.json",
+      "response_schema": "schemas/traffic.status.response.json"
+    },
+    {
+      "name": "users.set_limits",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "更新单用户并发连接数上限、最大在线 IP 上限与链式代理绑定",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/users.set_limits.request.json",
+      "response_schema": "schemas/users.set_limits.response.json",
+      "approval": "confirm",
+      "approval_summary": "将修改该代理用户的最大并发连接数、同时在线 IP 限制或链式代理绑定",
+      "ui_route": "/proxy"
+    },
+    {
+      "name": "users.connections.status",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "查询代理用户实时并发连接数、在线 IP 数及可选 nftables 限流规则",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/users.connections.status.request.json",
+      "response_schema": "schemas/users.connections.status.response.json",
+      "ui_route": "/proxy"
+    },
+    {
+      "name": "chains.list",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "列举链式代理落地节点（脱敏视图）",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/chains.list.request.json",
+      "response_schema": "schemas/chains.list.response.json",
+      "ui_route": "/proxy/chains"
+    },
+    {
+      "name": "chains.upsert",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "创建或更新链式代理落地节点（服务端出口转发 / 客户端 dialer-proxy）",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/chains.upsert.request.json",
+      "response_schema": "schemas/chains.upsert.response.json",
+      "approval": "confirm",
+      "approval_summary": "将保存或更新链式代理落地节点配置（凭据本地加密存储）",
+      "ui_route": "/proxy/chains"
+    },
+    {
+      "name": "chains.delete",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "删除链式代理落地节点并解除关联用户绑定",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/chains.delete.request.json",
+      "response_schema": "schemas/chains.delete.response.json",
+      "approval": "confirm",
+      "approval_summary": "将删除指定链式代理落地节点，关联用户将回退直连",
+      "ui_route": "/proxy/chains"
+    },
+    {
+      "name": "chains.probe",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "探测指定链式代理落地节点的 TCP 连通性与往返延迟",
+      "capabilities": [
+        {
+          "name": "network.egress",
+          "scope": "chain"
+        }
+      ],
+      "request_schema": "schemas/chains.probe.request.json",
+      "response_schema": "schemas/chains.probe.response.json",
+      "ui_route": "/proxy/chains"
+    },
+    {
+      "name": "chains.preview",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "预览 Xray 服务端链式代理出口与多跳路由 JSON（脱敏）",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/chains.preview.request.json",
+      "response_schema": "schemas/chains.preview.response.json",
+      "ui_route": "/proxy/chains"
+    },
+    {
+      "name": "brutal.status",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "查询 TCP Brutal 内核支持状态、可选 TCP 订阅入站、绑定列表与监听指标",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "network.listen",
+          "scope": "brutal"
+        }
+      ],
+      "request_schema": "schemas/brutal.status.request.json",
+      "response_schema": "schemas/brutal.status.response.json",
+      "ui_route": "/proxy/tuning"
+    },
+    {
+      "name": "brutal.binding.upsert",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "为选定 TCP 订阅入站创建或更新 Brutal 透明接管绑定与超发倍率",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.listen",
+          "scope": "brutal"
+        }
+      ],
+      "request_schema": "schemas/brutal.binding.upsert.request.json",
+      "response_schema": "schemas/brutal.binding.upsert.response.json",
+      "plannable": true,
+      "approval": "confirm",
+      "approval_summary": "将保存指定 TCP 端口的 Brutal 透明接管参数与超发倍率（默认 125%）",
+      "ui_route": "/proxy/tuning"
+    },
+    {
+      "name": "brutal.binding.delete",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "删除 TCP Brutal 透明接管绑定并停止对应监听端口",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.listen",
+          "scope": "brutal"
+        }
+      ],
+      "request_schema": "schemas/brutal.binding.delete.request.json",
+      "response_schema": "schemas/brutal.binding.delete.response.json",
+      "approval": "confirm",
+      "approval_summary": "将删除该 TCP Brutal 接管绑定并停止透明转发端口",
+      "ui_route": "/proxy/tuning"
+    },
+    {
+      "name": "brutal.apply",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "summary": "立即对账启动或热重载全部 TCP Brutal 透明接管端口监听",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.listen",
+          "scope": "brutal"
+        }
+      ],
+      "request_schema": "schemas/brutal.apply.request.json",
+      "response_schema": "schemas/brutal.apply.response.json",
+      "approval": "confirm",
+      "approval_summary": "将按当前绑定配置启动或热重载 TCP Brutal 透明接管端口",
+      "ui_route": "/proxy/tuning"
+    },
+    {
+      "name": "tuning.status",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "采集宿主机网络栈画像（内存/Swap/sysctl/Brutal/iperf3）与调优快照",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "system.sysctl.tune",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/tuning.status.request.json",
+      "response_schema": "schemas/tuning.status.response.json",
+      "ui_route": "/proxy/tuning"
+    },
+    {
+      "name": "tuning.plan",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "按 tcpfit 动态 BDP 与内存防 OOM 预算推导宿主机网络栈调优方案",
+      "capabilities": [
+        {
+          "name": "system.sysctl.tune",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/tuning.plan.request.json",
+      "response_schema": "schemas/tuning.plan.response.json",
+      "ui_route": "/proxy/tuning"
+    },
+    {
+      "name": "tuning.apply",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 20000,
+      "summary": "保存基线快照并应用 tcpfit 宿主机内核网络栈调优（支持 dry_run）",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "system.sysctl.tune",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/tuning.apply.request.json",
+      "response_schema": "schemas/tuning.apply.response.json",
+      "plannable": true,
+      "approval": "confirm",
+      "approval_summary": "将先保存宿主机基线快照，再写入 /etc/sysctl.d/99-qwq-tcpfit.conf 并应用内核参数",
+      "ui_route": "/proxy/tuning"
+    },
+    {
+      "name": "tuning.rollback",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 20000,
+      "summary": "按快照 ID 或版本号一键回滚宿主机 sysctl 网络栈参数",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "system.sysctl.tune",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/tuning.rollback.request.json",
+      "response_schema": "schemas/tuning.rollback.response.json",
+      "approval": "confirm",
+      "approval_summary": "将把宿主机网络栈 sysctl 配置回滚至指定历史快照",
+      "ui_route": "/proxy/tuning"
+    },
+    {
+      "name": "tuning.sweep",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 30000,
+      "summary": "运行可选 iperf3 线路限速器拐点探测（未安装时诚实返回不可用提示）",
+      "capabilities": [
+        {
+          "name": "system.sysctl.tune",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/tuning.sweep.request.json",
+      "response_schema": "schemas/tuning.sweep.response.json",
+      "ui_route": "/proxy/tuning"
+    }
+  ],
+  "ui": {
+    "entry": "ui/index.html",
+    "sandbox": true,
+    "connect_sources": [],
+    "routes": [
+      {
+        "path": "/proxy",
+        "title": "高级代理",
+        "nav": true,
+        "permission": "proxy.advanced:read"
+      },
+      {
+        "path": "/proxy/chains",
+        "title": "链式代理",
+        "nav": true,
+        "permission": "proxy.advanced:read"
+      },
+      {
+        "path": "/proxy/tuning",
+        "title": "网络调优",
+        "nav": true,
+        "permission": "proxy.advanced:read"
+      }
+    ],
+    "widgets": [
+      {
+        "id": "proxy-overview",
+        "kind": "stat",
+        "operation": "proxy.overview",
+        "refresh_seconds": 15,
+        "size": "s",
+        "title": "高级代理"
+      }
+    ]
+  }
+}

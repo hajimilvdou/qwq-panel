@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SSH 端口切换事务响应",
+  "description": "返回当前阶段结果、事务引用、监听端口与超时截止时间。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["stage", "transaction_ref", "old_port", "new_port", "listening_ports", "revision", "firewall_managed"],
+  "properties": {
+    "stage": {
+      "type": "string",
+      "enum": ["prepared", "committed", "rolled_back"],
+      "description": "端口切换事务当前结果状态。"
+    },
+    "transaction_ref": {
+      "type": "string",
+      "description": "事务引用标识。"
+    },
+    "old_port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "description": "切换前的旧 SSH 端口。"
+    },
+    "new_port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "description": "目标新 SSH 端口。"
+    },
+    "listening_ports": {
+      "type": "array",
+      "description": "操作完成后 sshd 当前监听的端口列表。",
+      "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+    },
+    "banner": {
+      "type": "string",
+      "description": "回环探测新端口返回的 SSH 版本横幅。"
+    },
+    "deadline_unix": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "待确认阶段的超时自动回滚时间戳（Unix 秒）；提交或回滚后为 0。"
+    },
+    "revision": {
+      "type": "string",
+      "description": "操作后的 sshd/config 最新修订号。"
+    },
+    "firewall_managed": {
+      "type": "boolean",
+      "description": "本次事务是否同步操作了 inet qwq 防火墙规则。"
+    }
+  }
+}

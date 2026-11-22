@@ -1,0 +1,45 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "value",
+    "unit",
+    "percent",
+    "sub",
+    "level",
+    "spark"
+  ],
+  "properties": {
+    "value": {
+      "type": "number",
+      "minimum": 0
+    },
+    "unit": {
+      "type": "string"
+    },
+    "percent": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "sub": {
+      "type": "string",
+      "maxLength": 120
+    },
+    "level": {
+      "enum": [
+        "ok",
+        "warn",
+        "bad"
+      ]
+    },
+    "spark": {
+      "type": "array",
+      "maxItems": 60,
+      "items": {
+        "type": "number",
+        "minimum": 0
+      }
+    }
+  }
+}

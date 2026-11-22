@@ -1,0 +1,36 @@
+{
+  "name": "qwq-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "qwq 面板的 Web Shell、插件 UI Kit 与开发用模拟后端",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/postbuild.mjs",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings && tsc -p tsconfig.node.json",
+    "test": "vitest run",
+    "e2e": "node e2e/run.mjs",
+    "gen:api": "node scripts/gen-api.mjs"
+  },
+  "devDependencies": {
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "@fontsource-variable/plus-jakarta-sans": "5.3.0",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@types/node": "24.19.2",
+    "openapi-typescript": "7.13.0",
+    "playwright-core": "1.65.0",
+    "svelte": "5.57.3",
+    "svelte-check": "4.7.8",
+    "typescript": "5.9.3",
+    "vite": "8.3.6",
+    "vitest": "5.1.0"
+  },
+  "dependencies": {
+    "uqr": "0.1.3"
+  }
+}

@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.capability.pluginconfig.v1;
+
+import "qwq/platform/v1/platform.proto";
+
+// Host Capability service: pluginconfig (ADR-0023 H2).
+// Capabilities:
+//   - plugin.config.read:<target_plugin_id>
+//   - plugin.config.write:<target_plugin_id>
+//
+// Secret isolation: GetConfig redacts every {"$secret":"sec_..."} slot to
+// {"$secret_present":true}. PutConfig supports {"$keep_secret":true} to keep
+// existing target secret references in place and extracts new plaintext values
+// under owner="plugins/<target_plugin_id>".
+service PluginConfigService {
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+  rpc PutConfig(PutConfigRequest) returns (PutConfigResponse);
+}
+
+message GetConfigRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string target_plugin_id = 2;
+}
+
+message GetConfigResponse {
+  bytes redacted_config_json = 1;
+  string revision = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+message PutConfigRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string target_plugin_id = 2;
+  bytes config_json = 3;
+  string expected_revision = 4;
+  bool trigger_apply = 5;
+}
+
+message PutConfigResponse {
+  string revision = 1;
+  string apply_operation_id = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}

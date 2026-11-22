@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# qwq privileged helper (P3 real-systemd install). Installed as
+# /etc/systemd/system/qwq-privileged.service.
+#
+# This is the only process that writes below /etc/systemd/system,
+# /etc/tmpfiles.d and /var/lib/qwq-plugins. It is socket activated by
+# qwq-privileged.socket, serves exactly one request per activation and exits,
+# so it never idles: "systemctl is-active qwq-privileged.service" is inactive
+# between requests while the socket unit stays active.
+#
+# The helper accepts one size-bounded JSON object per request and only paths
+# below the plugin root, the unit directory and the runtime base; no command
+# comes from a request (see cmd/qwq-privileged/REPORT.md).
+
+[Unit]
+Description=qwq privileged helper (socket activated)
+Documentation=https://github.com/qwq-panel/qwq
+Requires=qwq-privileged.socket
+After=qwq-privileged.socket
+# The service exits successfully after every request, so its start rate limit
+# must not be the template default: a batch of plugin installs would be counted
+# as repeated starts and systemd would refuse later activations. The socket
+# unit's own TriggerLimitBurst (20 per 2s) still guards against a trigger loop.
+StartLimitIntervalSec=60
+StartLimitBurst=60
+
+[Service]
+Type=exec
+ExecStart=/opt/qwq/current/bin/qwq-privileged --socket /run/qwq/privileged.sock
+# Deterministic modes for the plugin parent directory (0755); every file the
+# helper writes sets its own mode explicitly.
+UMask=0022
+# One request per activation, then exit; never restart on its own.
+Restart=no
+TimeoutStartSec=10s
+TimeoutStopSec=10s
+# Hard ceiling on one activation: a request that somehow blocks (for example
+# on a FIFO planted in the staging tree) must not keep the helper, and with it
+# every later request, hanging (PRIV-02).
+RuntimeMaxSec=120
+# The helper is a small Go program that copies a unit file and a token.
+MemoryMax=32M
+TasksMax=16
+# Keep the Go runtime's thread count well below TasksMax on large hosts.
+Environment=GOMAXPROCS=2
+
+# No network at all: the only sockets it uses are AF_UNIX (systemd's private
+# socket and the plugin runtime directories).
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+
+# It must write the rendered units, the tmpfiles snippets, the credential and
+# the plugin runtime directories, and publish or delete immutable version
+# trees, so the root filesystem is otherwise read-only. /etc cannot be narrowed
+# to /etc/systemd/system, /etc/tmpfiles.d, /etc/group and /etc/gshadow: the
+# shadow tools create a lock file and an atomic replacement next to
+# /etc/group, which needs the /etc directory itself to be writable (the
+# helper creates the per-plugin group qwq-p-<id>). That is acceptable only
+# because every write the helper makes below a qwq-reachable tree goes through
+# a trusted os.Root handle whose ancestry is root-owned (PRIV-01, ADR-0012);
+# nothing below /etc is reachable for qwq. The staging tree is only read by
+# publish; the controller discards it afterwards.
+ProtectSystem=strict
+# Narrow optional RW roots for DynamicUser StateDirectory consumer certificate
+# materialization and PurgePluginData; the leading "-" tolerates hosts where
+# systemd has not yet created /var/lib/private/qwq-plugin-data.
+ReadWritePaths=/etc /run/qwq /var/lib/qwq-plugins /var/lib/qwq-privileged -/var/lib/qwq-plugin-data -/var/lib/private/qwq-plugin-data
+ReadOnlyPaths=-/var/lib/qwq/staging
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+# ---- host 目录的受控 setgid --------------------------------------------------
+# host.sock 必须从 fd 钉住的 2750 目录继承插件组。RestrictSUIDSGID 会连目录
+# fchmod(..., 2750) 也拒绝；普通安装文件的模式仍由 helper 固定为 0444/0555。
+RestrictSUIDSGID=no
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# The shadow tools (groupadd/groupdel for qwq-p-<id>) rewrite /etc/group and
+# /etc/gshadow through their backup copies and call fchown() on the temporary
+# files so that /etc/gshadow- keeps gid "shadow". fchown() belongs to @chown,
+# which @privileged includes, so a plain "~@privileged" denied it and made
+# every shadow write fail with "failure while writing changes to /etc/group"
+# (an in-sandbox strace shows fchown(...) = -1 EPERM). That broke the first
+# install as well, not just uninstall. @privileged is therefore spelled out
+# below without @chown: the capability set still limits ownership changes to
+# CAP_CHOWN, the allow list is unchanged, and @resources stays denied. See
+# cmd/qwq-privileged/REPORT-GROUP.md for the probe evidence.
+SystemCallFilter=@system-service
+SystemCallFilter=~@clock @module @raw-io @reboot @swap @resources
+SystemCallFilter=~_sysctl acct bpf capset chroot fanotify_init fanotify_mark nfsservctl open_by_handle_at pivot_root quotactl quotactl_fd setdomainname setfsuid setfsuid32 setgroups setgroups32 sethostname setresuid setresuid32 setreuid setreuid32 setuid setuid32 vhangup
+SystemCallErrorNumber=EPERM
+
+# Root without the capabilities the helper does not need. CAP_DAC_OVERRIDE is
+# needed to delete files inside the 0555 plugin version directories;
+# CAP_CHOWN is needed by the manual debug listener, which chowns the socket to
+# the qwq group.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+NoNewPrivileges=yes
+KeyringMode=private

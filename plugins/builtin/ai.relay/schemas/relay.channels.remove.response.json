@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "删除上游渠道响应",
+  "description": "确认指定上游渠道已删除并从路由快照中移除。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "removed"],
+  "properties": {
+    "id": { "type": "string", "description": "已删除的渠道 ID。" },
+    "removed": { "type": "boolean", "description": "是否实际移除了记录。" }
+  }
+}

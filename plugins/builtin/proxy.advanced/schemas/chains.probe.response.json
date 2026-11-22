@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "探测链式代理节点连通性响应",
+  "description": "返回 TCP 连通状态与 RTT 毫秒延迟。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "server",
+    "port",
+    "reachable",
+    "latency_ms",
+    "error"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "server": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer"
+    },
+    "reachable": {
+      "type": "boolean"
+    },
+    "latency_ms": {
+      "type": "integer"
+    },
+    "error": {
+      "type": "string"
+    }
+  }
+}

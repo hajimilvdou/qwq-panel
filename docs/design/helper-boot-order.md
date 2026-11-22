@@ -1,0 +1,7 @@
+# 防火墙恢复与能力 socket 启动顺序
+
+P1-RT-06，基线3abfb43。实读确认：防火墙恢复已有After/Requires=qwq-capability.socket和Before=controller，但未等待网络及标准SSH单元；controller只显式拉起privileged.socket；capability.socket原本已有2秒/20次TriggerLimit，privileged.socket缺同样限制。
+
+增加恢复对network.target及四种标准SSH服务/socket的After关系，让已加入启动事务的SSH单元先完成启动；不强制安装或启动本机不存在的SSH实现。controller显式Wants/After能力socket，不再依赖条件跳过的恢复服务间接拉起。仅给缺失的privileged.socket补同样2秒/20次限制，复用已有能力socket配置。
+
+这是单元关系与触发限制修复；真实监听仍由RuntimeSSHPorts核验，After不能代替业务健康证明。验证使用Linux systemd原生unit解析和依赖关系检查，不把完整真机重启/CAP-10终验据此勾完；其余权限/沙箱/原启动关系保持。所有旧失败与额度保留。

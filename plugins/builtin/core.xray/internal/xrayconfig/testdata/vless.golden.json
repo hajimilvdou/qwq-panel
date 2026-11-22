@@ -1,0 +1,92 @@
+{
+  "log": {
+    "access": "none",
+    "error": "none",
+    "loglevel": "none"
+  },
+  "api": {
+    "tag": "qwq-api",
+    "services": [
+      "StatsService"
+    ]
+  },
+  "stats": {},
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      }
+    },
+    "system": {
+      "statsInboundUplink": true,
+      "statsInboundDownlink": true
+    }
+  },
+  "inbounds": [
+    {
+      "tag": "qwq-in-main",
+      "listen": "127.0.0.1",
+      "port": 10443,
+      "protocol": "vless",
+      "settings": {
+        "decryption": "none",
+        "users": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "email": "qwq-user-alice",
+            "level": 0,
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000002",
+            "email": "qwq-user-bob",
+            "level": 0,
+            "flow": "xtls-rprx-vision"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "reality",
+        "realitySettings": {
+          "target": "127.0.0.1:11443",
+          "serverNames": [
+            "example.test"
+          ],
+          "privateKey": "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio",
+          "shortIds": [
+            "0123456789abcdef"
+          ]
+        }
+      }
+    },
+    {
+      "tag": "qwq-api-in",
+      "listen": "/tmp/qwq-test/api.sock,0600",
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "127.0.0.1",
+        "network": "tcp"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "qwq-direct",
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "qwq-api-in"
+        ],
+        "outboundTag": "qwq-api"
+      }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "签发邀请码或福利兑换码响应",
+  "description": "返回新生成的邀请码或福利兑换码列表。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "codes", "amount_micros", "expires_at"],
+  "properties": {
+    "kind": { "type": "string", "enum": ["cdk_single", "cdk_shared", "invite"], "description": "签发类型。" },
+    "codes": {
+      "type": "array",
+      "description": "生成的完整代码列表。",
+      "items": { "type": "string" }
+    },
+    "amount_micros": { "type": "integer", "minimum": 0, "description": "单次附赠或面额微点。" },
+    "expires_at": { "type": "integer", "minimum": 0, "description": "过期时间戳（Unix 毫秒，0 表示永不过期）。" }
+  }
+}

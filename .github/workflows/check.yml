@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# 与 scripts/check.sh 相同的门禁（IMPLEMENTATION-PLAN.md P0-T6）。工具链由 scripts/tools.lock 与 tools/ 锁定，
+# 和构建机上一致；第三方 action 按提交哈希固定。
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QWQ_DEV_HOME: ${{ github.workspace }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # buf breaking 需要基线提交
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .tools
+            .cache/gomod
+            .cache/gobuild
+          key: qwq-${{ runner.os }}-${{ hashFiles('scripts/tools.lock', '**/go.sum') }}
+          restore-keys: qwq-${{ runner.os }}-
+      - name: bootstrap
+        run: source scripts/dev-env.sh && bash scripts/bootstrap-tools.sh
+      - name: check
+        run: |
+          source scripts/dev-env.sh
+          if [[ $GITHUB_EVENT_NAME == pull_request ]]; then
+            export QWQ_BREAKING_AGAINST=".git#ref=refs/remotes/origin/$GITHUB_BASE_REF,subdir=api"
+          elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            export QWQ_BREAKING_AGAINST=".git#ref=HEAD~1,subdir=api"
+          else
+            export QWQ_BREAKING_AGAINST=".git#ref=HEAD,subdir=api"
+          fi
+          bash scripts/check.sh
+
+  race:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .tools
+            .cache/gomod
+            .cache/gobuild
+          key: qwq-race-${{ runner.os }}-${{ hashFiles('scripts/tools.lock', '**/go.sum') }}
+          restore-keys: qwq-race-${{ runner.os }}-
+      - name: bootstrap
+        run: source scripts/dev-env.sh && bash scripts/bootstrap-tools.sh
+      - name: race
+        run: source scripts/dev-env.sh && bash scripts/check.sh race
+
+  # 真实 systemd 端到端：GitHub 托管 Ubuntu runner 是带 systemd 的 VM，可 sudo。
+  # 每次都以 install.sh 安装、uninstall.sh --purge 复原（tests/e2e/main_test.go）。
+  # TestPluginStartStop100 与 Debian 12 / Rocky 9 矩阵放到测试机或自托管 runner 每晚跑。
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: build fixtures
+        run: source scripts/dev-env.sh && bash scripts/bootstrap-tools.sh && bash tests/e2e/build.sh "$RUNNER_TEMP/e2e"
+      - name: e2e
+        run: |
+          cd "$RUNNER_TEMP/e2e"
+          arch=$(dpkg --print-architecture)
+          sudo -E env QWQ_E2E_RELEASE_TAR="$PWD/release/qwq-e2e-linux-$arch.tar.gz" \
+            QWQ_E2E_PKG_V1="$PWD/packages/noop-0.1.1.qwq" QWQ_E2E_PKG_V2="$PWD/packages/noop-0.1.2.qwq" \
+            QWQ_E2E_PKG_BAD="$PWD/packages/noop-0.1.3.qwq" QWQ_E2E_TRUST_PUB="$PWD/key.pub" \
+            ./e2e.test -test.v -test.run 'TestPluginEndToEnd|TestControllerEndToEnd|TestInstallScriptIdempotent|TestUninstallKeepsData'

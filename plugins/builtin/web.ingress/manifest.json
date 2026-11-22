@@ -1,0 +1,356 @@
+{
+  "schema_version": "1.3",
+  "id": "web.ingress",
+  "version": "0.1.0",
+  "name": "轻量反向代理与站点托管",
+  "summary": "零依赖内置 Go 反代与 Caddy/Nginx 确定性渲染、WebSocket、限流、BasicAuth 与快照回滚",
+  "description": "面向 1C1G 低内存 VPS 的轻量反向代理与站点托管插件：内置无锁热重载纯 Go 反向代理引擎（支持 WebSocket、bcrypt BasicAuth、单 IP 令牌桶有界限流、自定义安全头与强制 HTTPS），并可同步生成防注入的 Caddyfile 与 Nginx 配置块；可选关联 domain.dns 与 tls.certificates 自动衔接域名与证书，提供最近 20 个配置快照一键回滚与 <2KiB 原生 AI 诊断摘要。",
+  "license": "AGPL-3.0-only",
+  "publisher": {
+    "id": "qwq-builtin",
+    "key_id": "ed25519:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "abi": {
+    "major": 1,
+    "minimum_minor": 0
+  },
+  "engine_constraint": ">=0.1.0 <1.0.0",
+  "target": "linux/amd64",
+  "entrypoint": "bin/plugin",
+  "files": {
+    "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "attestations/sbom.spdx.json": "sha256:aa94fcbc643101bdeab31233077031406c2c828732a143fccacd71af8a5ce5c9",
+    "schemas/checks.response.json": "sha256:ddafab2ab01b1da2df7e66256923fd59c988ed77c39b619f188131dc05fda94a",
+    "schemas/config.schema.json": "sha256:eb74716fdbc9db1adba548ba568eb62becde618aea56094c43d8cf733b934961",
+    "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
+    "schemas/ingress.ai.digest.response.json": "sha256:be84e8a37b1d3a95d24b9e7082be1f9107029708308c13dbc8c36d534aee3ed3",
+    "schemas/ingress.apply.response.json": "sha256:11bee6ba0691dfe9fdacfa04374436781f748926bae62c05f5e18596fb5bf4b8",
+    "schemas/ingress.delete.response.json": "sha256:d6b9084de92a9a5640506e09e8395dbfafcee62232d781e1856b112b65f17d75",
+    "schemas/ingress.id.request.json": "sha256:94b6382be7e0bb471952ea5e274d039c44640acecec4fcfd8dd7c05421e476f8",
+    "schemas/ingress.overview.response.json": "sha256:d1ad1b7a9b4f6fe3673c0683db84e3371a8ac058c1b81aaef6338bb87b5652ff",
+    "schemas/ingress.preview.response.json": "sha256:f247034a24b87f9962104530bc2df26cf3926cbb0a6011e97ffec6d90548c5bb",
+    "schemas/ingress.probe.response.json": "sha256:bc95a60b106021a3c6b2fc147a5673e4fadeeb7d6d09260a7ad5064b16428d61",
+    "schemas/ingress.rollback.request.json": "sha256:80dcf9217bac3de74eab49ca5123de9a6e4d61c27f4a0534db72db9df651e751",
+    "schemas/ingress.rollback.response.json": "sha256:d9900ac8896c77504a37d9415da78438a09b53438a1102cf33c7718270862966",
+    "schemas/ingress.site.upsert.request.json": "sha256:2e4e22af300e8a5724899959c5f81562614e0dc859cd26c35af246be2a05a177",
+    "schemas/ingress.site.upsert.response.json": "sha256:f2c9aa101c91475109f593a3ca606c531c63d5d6c7a304ae45a602c41faa6738",
+    "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
+    "ui/index.html": "sha256:3a7a6c6848f57307c21165c42807f516d9457ee5e94f14b70515c8a2613f1396"
+  },
+  "provenance": {
+    "sbom": "attestations/sbom.spdx.json"
+  },
+  "placement": "node",
+  "lifecycle": {
+    "startup": "on_demand",
+    "background": false,
+    "update_strategy": "restart",
+    "overlap_safe": false
+  },
+  "operations": [
+    {
+      "name": "ingress.stat.sites",
+      "api_version": "v1",
+      "permission": "web.ingress:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "当前已启用反代站点数与活动引擎",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/stat.response.json"
+    },
+    {
+      "name": "ingress.checks.upstreams",
+      "api_version": "v1",
+      "permission": "web.ingress:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "summary": "检查所有已启用反代站点的上游可达性",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "network.egress",
+          "scope": "upstream"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/checks.response.json"
+    },
+    {
+      "name": "ingress.overview",
+      "api_version": "v1",
+      "permission": "web.ingress:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "ui_route": "/ingress",
+      "summary": "查看全部反代站点、活动引擎与可回滚快照列表",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/ingress.overview.response.json"
+    },
+    {
+      "name": "ingress.ai.digest",
+      "api_version": "v1",
+      "permission": "web.ingress:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "输出低于 2KiB 的反向代理状态与明文 HTTP 风险摘要供原生 AI 诊断",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/ingress.ai.digest.response.json"
+    },
+    {
+      "name": "ingress.site.upsert",
+      "api_version": "v1",
+      "permission": "web.ingress:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "plannable": true,
+      "timeout_ms": 5000,
+      "approval": "ai_confirm",
+      "approval_summary": "新增或修改反向代理站点",
+      "approval_description": "校验域名、上游地址与安全头防注入规则，写入站点配置并自动留存回滚快照。",
+      "summary": "新增或更新反向代理站点规则",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/ingress.site.upsert.request.json",
+      "response_schema": "schemas/ingress.site.upsert.response.json"
+    },
+    {
+      "name": "ingress.site.delete",
+      "api_version": "v1",
+      "permission": "web.ingress:delete",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "approval": "confirm",
+      "approval_summary": "删除反向代理站点",
+      "approval_description": "删除该域名反代规则（变更前自动保留历史快照，支持一键回滚）。",
+      "summary": "删除指定反向代理站点",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/ingress.id.request.json",
+      "response_schema": "schemas/ingress.delete.response.json"
+    },
+    {
+      "name": "ingress.config.preview",
+      "api_version": "v1",
+      "permission": "web.ingress:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "无副作用预览生成的 Caddyfile 与 Nginx 配置块",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/ingress.preview.response.json"
+    },
+    {
+      "name": "ingress.apply",
+      "api_version": "v1",
+      "permission": "web.ingress:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "approval": "confirm",
+      "approval_summary": "热重载反向代理路由并同步渲染配置",
+      "approval_description": "原子切换内置反代路由表并同步写入 Caddyfile / Nginx 渲染配置，不中断在途连接。",
+      "summary": "热重载反代路由表并原子落盘渲染配置",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.listen",
+          "scope": "ingress"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/ingress.apply.response.json"
+    },
+    {
+      "name": "ingress.rollback",
+      "api_version": "v1",
+      "permission": "web.ingress:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "approval": "confirm",
+      "approval_summary": "回滚反向代理站点至历史快照",
+      "approval_description": "恢复指定版本快照中的全部反代规则并立即热重载生效。",
+      "summary": "将反代站点配置回滚到指定历史快照并热重载",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/ingress.rollback.request.json",
+      "response_schema": "schemas/ingress.rollback.response.json"
+    },
+    {
+      "name": "ingress.upstream.probe",
+      "api_version": "v1",
+      "permission": "web.ingress:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "实时探测指定反代站点的上游响应状态与延迟",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "network.egress",
+          "scope": "upstream"
+        }
+      ],
+      "request_schema": "schemas/ingress.id.request.json",
+      "response_schema": "schemas/ingress.probe.response.json"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "network.listen",
+      "scope": "ingress",
+      "reason": "启动零依赖内置 Go 反向代理监听器并支持原子热重载"
+    },
+    {
+      "name": "network.egress",
+      "scope": "upstream",
+      "reason": "转发代理流量并探测本地或内网业务上游健康状态"
+    },
+    {
+      "name": "state.kv.read",
+      "scope": "self",
+      "reason": "读取反代站点规则、渲染预览与历史快照"
+    },
+    {
+      "name": "state.kv.write",
+      "scope": "self",
+      "reason": "保存反代站点、bcrypt BasicAuth 哈希与配置快照"
+    }
+  ],
+  "dependencies": [
+    {
+      "kind": "plugin",
+      "id": "domain.dns",
+      "constraint": ">=0.1.0 <1.0.0",
+      "required": false
+    },
+    {
+      "kind": "plugin",
+      "id": "tls.certificates",
+      "constraint": ">=0.1.0 <1.0.0",
+      "required": false
+    }
+  ],
+  "state": {
+    "schema_version": "1",
+    "minimum_rollback_version": "0.1.0",
+    "backup_paths": [
+      "ingress.db"
+    ]
+  },
+  "config": {
+    "schema": "schemas/config.schema.json",
+    "hot_apply": true
+  },
+  "resources": {
+    "memory_max_mb": 32,
+    "cpu_quota_percent": 15,
+    "pids_max": 24,
+    "fds_max": 512,
+    "disk_max_mb": 128,
+    "kv_max_kb": 256
+  },
+  "ui": {
+    "widgets": [
+      {
+        "id": "sites",
+        "title": "反向代理站点",
+        "kind": "stat",
+        "operation": "ingress.stat.sites",
+        "refresh_seconds": 10,
+        "size": "s",
+        "color": "indigo"
+      },
+      {
+        "id": "upstreams",
+        "title": "反代上游健康",
+        "kind": "checks",
+        "operation": "ingress.checks.upstreams",
+        "refresh_seconds": 15,
+        "size": "m",
+        "color": "green"
+      }
+    ],
+    "entry": "ui/index.html",
+    "sandbox": true,
+    "connect_sources": [],
+    "routes": [
+      {
+        "path": "/ingress",
+        "title": "反向代理",
+        "nav": true,
+        "permission": "web.ingress:read"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "修订号并发控制请求",
+  "description": "可选携带期望修订号进行乐观并发控制。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "可选期望修订号；未传时回退使用作业 preconditions 中的修订号。"
+    }
+  }
+}

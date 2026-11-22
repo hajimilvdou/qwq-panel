@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "对账指定 attempt_id 对应 DNS 记录变更的请求",
+  "required": [
+    "provider_id",
+    "zone_id",
+    "attempt_id"
+  ],
+  "properties": {
+    "provider_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "DNS 提供商资源 ID"
+    },
+    "zone_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "已授权托管域 ID"
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "需要查询并收尾对账的原变更 attempt_id"
+    }
+  }
+}

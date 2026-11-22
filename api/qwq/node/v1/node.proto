@@ -1,0 +1,217 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.node.v1;
+
+import "qwq/platform/v1/platform.proto";
+
+// Node protocol between Controller and Agent (ARCH §2.1, §3.2, §7; ADR-0005 Q8).
+// Node protocol status: draft
+// Internal to qwq: plugins never see it. Versioned on its own by node_protocol_version, not by the
+// Platform ABI; both sides advertise a supported range in the handshake (ARCH §12). It reuses
+// Platform ABI messages for anything that crosses into a plugin, so a plugin call looks the same
+// locally and remotely. Frozen together with P4 (multi-node); buf.yaml excludes it from breaking
+// checks until then.
+//
+// Transport: one long-lived bidirectional stream opened by the Agent.
+// - standalone: local UDS; peer checked with SO_PEERCRED, node_id is "local".
+// - multi-node (after the first release): mTLS on a dedicated port, TLS 1.3, client certificate
+//   required; node_id comes from the URI SAN qwq://node/<id>, never from message fields.
+// Delivery: commands and reliable events are at-least-once with per-direction sequences and
+// cumulative acks; receivers deduplicate by sequence (commands) and event_id (events).
+
+// ---------- Enrollment (multi-node only, separate port with server-only TLS) ----------
+
+service NodeEnrollmentService {
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+}
+
+message EnrollRequest {
+  string token = 1; // one-time, short-lived; invalid after first use
+  // PKCS#10 CSR, DER. The Controller ignores its subject and SANs and writes only the node_id it
+  // assigns (ARCH §3.2).
+  bytes csr_der = 2;
+  string agent_version = 3;
+  NodeFacts facts = 4;
+}
+message EnrollResponse {
+  string node_id = 1;
+  bytes certificate_der = 2;
+  repeated bytes ca_certificates_der = 3;
+  uint64 desired_state_revision = 4;
+}
+
+// ---------- Session ----------
+
+service NodeSessionService {
+  // The first Agent frame must be hello; the first Controller frame is welcome.
+  rpc Session(stream SessionRequest) returns (stream SessionResponse);
+  // Certificate rotation inside an authenticated session (default lifetime 30 days).
+  rpc RotateCertificate(RotateCertificateRequest) returns (RotateCertificateResponse);
+}
+
+// Agent -> Controller.
+message SessionRequest {
+  oneof frame {
+    Hello hello = 1;
+    CommandAck command_ack = 2;
+    CommandProgress command_progress = 3;
+    CommandResult command_result = 4;
+    EventBatch event_batch = 5;
+    StateReport state_report = 6;
+    Heartbeat heartbeat = 7;
+  }
+}
+
+// Controller -> Agent.
+message SessionResponse {
+  oneof frame {
+    Welcome welcome = 1;
+    Command command = 2;
+    EventAck event_ack = 3;
+    DesiredState desired_state = 4;
+    ResyncRequest resync_request = 5;
+    Heartbeat heartbeat = 6;
+  }
+}
+
+message Hello {
+  uint32 min_protocol_version = 1;
+  uint32 max_protocol_version = 2;
+  string agent_version = 3;
+  NodeFacts facts = 4;
+  // Resume: highest command sequence the Agent has executed or rejected, and the first event
+  // sequence it still holds in its spool.
+  uint64 last_command_sequence = 5;
+  uint64 first_spooled_event_sequence = 6;
+  uint64 applied_state_revision = 7;
+}
+
+message Welcome {
+  uint32 protocol_version = 1; // chosen from the Agent's range
+  string node_id = 2; // echoes the identity derived from the transport
+  // Highest event sequence the Controller has stored; the Agent resends everything after it.
+  uint64 last_event_sequence = 3;
+  uint64 desired_state_revision = 4;
+  uint32 heartbeat_interval_ms = 5;
+}
+
+message NodeFacts {
+  string hostname = 1; // untrusted text
+  string os = 2; // e.g. "debian 12"
+  string kernel = 3;
+  string arch = 4; // GOOS/GOARCH[/variant], e.g. linux/arm/v7
+  uint32 systemd_version = 5;
+  uint32 cgroup_version = 6; // 1 or 2
+  string virtualization = 7; // systemd-detect-virt output
+  uint64 memory_total_bytes = 8;
+  uint32 cpu_count = 9;
+}
+
+message Heartbeat {
+  int64 sent_at_unix_ms = 1;
+}
+
+// ---------- Commands ----------
+
+message Command {
+  uint64 sequence = 1; // per node, increasing; the Agent executes each sequence at most once
+  string command_id = 2;
+  int64 deadline_unix_ms = 3;
+  // Platform requests carry RequestContext (operation_id, actor, trace_id, instance_id). The Agent
+  // overwrites RequestContext.node_id with its own identity.
+  oneof body {
+    qwq.platform.v1.InvokeRequest invoke = 4;
+    qwq.platform.v1.RunJobRequest run_job = 5;
+    qwq.platform.v1.PlanOperationRequest plan_operation = 6;
+    qwq.platform.v1.ServePublicRouteRequest serve_public_route = 7;
+    CancelCommand cancel = 8;
+  }
+  string plugin_id = 9;
+}
+
+message CancelCommand {
+  string command_id = 1;
+}
+
+message CommandAck {
+  uint64 sequence = 1; // cumulative
+}
+
+message CommandProgress {
+  string command_id = 1;
+  qwq.platform.v1.JobProgress progress = 2;
+}
+
+message CommandResult {
+  string command_id = 1;
+  oneof result {
+    qwq.platform.v1.InvokeResponse invoke = 2;
+    qwq.platform.v1.JobProgress run_job = 3; // terminal progress message
+    qwq.platform.v1.PlanOperationResponse plan_operation = 4;
+    qwq.platform.v1.ServePublicRouteResponse serve_public_route = 5;
+    // The Agent could not dispatch the command, e.g. NODE_POLICY_DENIED or PLUGIN_NOT_READY.
+    qwq.platform.v1.ErrorDetail dispatch_error = 6;
+  }
+}
+
+// ---------- Desired state (ARCH §6.4, §7) ----------
+
+// Full desired state of the node; the Agent converges to it and reports applied_revision.
+message DesiredState {
+  uint64 revision = 1;
+  repeated PluginInstanceSpec instances = 2;
+}
+
+message PluginInstanceSpec {
+  string plugin_id = 1;
+  string instance_id = 2;
+  string version = 3;
+  string package_digest = 4; // sha256:<hex>; the Agent verifies the package with its own trust root
+  string config_revision = 5;
+  bool enabled = 6;
+}
+
+message StateReport {
+  uint64 applied_revision = 1;
+  repeated InstanceStatus instances = 2;
+}
+
+message InstanceStatus {
+  string plugin_id = 1;
+  string instance_id = 2;
+  string version = 3;
+  qwq.platform.v1.LifecycleState lifecycle_state = 4;
+  string applied_config_revision = 5;
+  qwq.platform.v1.ErrorDetail error = 6;
+}
+
+// ---------- Events (ARCH §4.2) ----------
+
+// Reliable events from the node journal, in sequence order. Lossy realtime samples travel in
+// their own batches and may be merged or dropped (counted in dropped_lossy).
+message EventBatch {
+  repeated qwq.platform.v1.Event events = 1;
+  uint64 dropped_lossy = 2;
+}
+
+message EventAck {
+  uint64 sequence = 1; // cumulative; the Agent may truncate its spool up to here
+}
+
+// Sent when the Agent's spool no longer covers the Controller's position: the Agent sends a
+// StateReport and the Controller rebuilds its view from it.
+message ResyncRequest {
+  string reason = 1;
+}
+
+// ---------- Certificates ----------
+
+message RotateCertificateRequest {
+  bytes csr_der = 1;
+}
+message RotateCertificateResponse {
+  bytes certificate_der = 1;
+  repeated bytes ca_certificates_der = 2;
+}

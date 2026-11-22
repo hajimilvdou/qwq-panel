@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "保存上游渠道响应",
+  "description": "返回已加密保存并刷新到内存路由器的上游渠道 ID 与脱敏元数据。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "kind", "enabled", "health_state", "updated_at"],
+  "properties": {
+    "id": { "type": "string", "description": "渠道唯一 ID。" },
+    "name": { "type": "string", "description": "渠道名称。" },
+    "kind": { "type": "string", "description": "渠道类型。" },
+    "enabled": { "type": "boolean", "description": "是否已启用。" },
+    "health_state": { "type": "string", "enum": ["healthy", "cooling", "tripped"], "description": "当前健康状态。" },
+    "updated_at": { "type": "integer", "minimum": 0, "description": "更新时间戳（Unix 毫秒）。" }
+  }
+}

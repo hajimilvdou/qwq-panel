@@ -1,0 +1,58 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "DNS 传播校验观测结果响应",
+  "required": [
+    "propagated",
+    "observations"
+  ],
+  "properties": {
+    "propagated": {
+      "type": "boolean",
+      "description": "目标记录是否已在受控观测源传播生效"
+    },
+    "retry_at": {
+      "type": "string",
+      "description": "建议下一次重试时间（RFC3339，可选）"
+    },
+    "observations": {
+      "type": "array",
+      "description": "各权威与公共解析器的观测采样结果",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "kind",
+          "values",
+          "collected_at"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "解析器或权威来源名称"
+          },
+          "kind": {
+            "type": "string",
+            "description": "观测类型"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "观测到的解析值集合"
+          },
+          "collected_at": {
+            "type": "string",
+            "description": "采样时间（RFC3339）"
+          },
+          "error_code": {
+            "type": "string",
+            "description": "采样错误码（无错为空）"
+          }
+        }
+      }
+    }
+  }
+}

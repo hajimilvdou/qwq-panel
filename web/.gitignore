@@ -1,0 +1,7 @@
+# 前端工作区内的依赖、缓存与产物（全部留在 web/ 内，不写用户目录）
+node_modules/
+.cache/
+dist/
+test-results/
+playwright-report/
+*.log

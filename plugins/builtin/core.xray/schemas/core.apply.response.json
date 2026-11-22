@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qwq:plugin:core.xray:core.apply:response:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "desired_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 19,
+      "pattern": "^[1-9][0-9]{0,18}$"
+    },
+    "running_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 19,
+      "pattern": "^[1-9][0-9]{0,18}$"
+    },
+    "previous_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 19,
+      "pattern": "^[1-9][0-9]{0,18}$"
+    },
+    "config_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "core_version": {
+      "const": "26.11.9"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "process_state": {
+      "type": "string",
+      "enum": [
+        "RUNNING",
+        "STOPPED",
+        "STARTING",
+        "STOPPING",
+        "UNKNOWN"
+      ]
+    },
+    "api_state": {
+      "type": "string",
+      "enum": [
+        "READY",
+        "UNAVAILABLE",
+        "UNKNOWN"
+      ]
+    },
+    "reset_epoch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "restart_required": {
+      "type": "boolean"
+    },
+    "restarted": {
+      "type": "boolean"
+    },
+    "started": {
+      "type": "boolean"
+    },
+    "rollback_performed": {
+      "const": false
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[A-Z][A-Z0-9_]*$"
+      }
+    }
+  },
+  "required": [
+    "desired_revision",
+    "running_revision",
+    "config_digest",
+    "core_version",
+    "enabled",
+    "process_state",
+    "api_state",
+    "restart_required",
+    "restarted",
+    "started",
+    "rollback_performed",
+    "warnings"
+  ],
+  "description": "成功应用后的实际配置、进程、API、重启和统计代次；失败由 ErrorDetail 返回补偿详情。"
+}

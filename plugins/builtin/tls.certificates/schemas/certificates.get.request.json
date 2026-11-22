@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "按证书资源 ID 查询详情请求（对齐 hostauth.CertificateTargetArgs）",
+  "required": [
+    "certificate_id"
+  ],
+  "properties": {
+    "certificate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "目标证书资源 ID"
+    }
+  }
+}

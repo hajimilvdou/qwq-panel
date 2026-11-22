@@ -1,0 +1,24 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "qwq-plugin-containers.docker-0.1.0",
+  "documentNamespace": "https://qwq.panel/spdx/plugins/containers.docker-0.1.0",
+  "creationInfo": {
+    "created": "2026-11-22T00:00:00Z",
+    "creators": [
+      "Tool: qwqctl-pack-0.1.0"
+    ]
+  },
+  "packages": [
+    {
+      "name": "containers.docker",
+      "SPDXID": "SPDXRef-Package-containers.docker",
+      "versionInfo": "0.1.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "AGPL-3.0-only",
+      "licenseDeclared": "AGPL-3.0-only"
+    }
+  ]
+}

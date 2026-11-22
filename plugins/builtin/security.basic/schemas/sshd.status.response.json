@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SSHD 状态响应",
+  "description": "当前 sshd -T 生效配置、00-qwq.conf 状态及未完成的双端口切换事务信息。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["revision", "listening_ports", "settings", "drop_in"],
+  "properties": {
+    "revision": {
+      "type": "string",
+      "description": "sshd/config 当前修订号。"
+    },
+    "listening_ports": {
+      "type": "array",
+      "description": "从生效配置提取的当前 SSH 监听端口列表。",
+      "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+    },
+    "settings": {
+      "type": "array",
+      "description": "sshd -T 生效配置项及来源文件。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "value", "source_file", "overridden_by"],
+        "properties": {
+          "key": { "type": "string", "description": "配置键名。" },
+          "value": { "type": "string", "description": "生效配置值。" },
+          "source_file": { "type": "string", "description": "来源配置文件路径。" },
+          "overridden_by": { "type": "string", "description": "若存在覆盖，记录覆盖来源。" }
+        }
+      }
+    },
+    "drop_in": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exists", "revision", "content", "transaction_pending"],
+      "properties": {
+        "exists": { "type": "boolean", "description": "00-qwq.conf 是否存在。" },
+        "revision": { "type": "string", "description": "drop-in 修订号。" },
+        "content": { "type": "string", "description": "00-qwq.conf 当前文本内容。" },
+        "transaction_pending": { "type": "boolean", "description": "宿主是否标记存在未完结的端口切换事务。" },
+        "transaction_ref": { "type": "string", "description": "宿主记录的事务引用标识。" },
+        "transaction_stage": { "type": "string", "description": "宿主记录的事务阶段。" },
+        "transaction_port": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "宿主记录的事务目标端口。" },
+        "transaction_kind": { "type": "string", "description": "宿主记录的事务类型。" }
+      }
+    },
+    "port_saga": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "description": "插件 KV 跟踪的双端口切换事务状态；无事务时为 null。",
+      "required": ["transaction_ref", "old_port", "new_port", "deadline_unix", "firewall_managed"],
+      "properties": {
+        "transaction_ref": { "type": "string", "description": "双端口切换事务唯一引用。" },
+        "old_port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "切换前保留监听的旧 SSH 端口。" },
+        "new_port": { "type": "integer", "minimum": 1024, "maximum": 65535, "description": "待验证并切换的新 SSH 端口。" },
+        "deadline_unix": { "type": "integer", "minimum": 0, "description": "超时自动回滚截止时间戳（Unix 秒）。" },
+        "firewall_managed": { "type": "boolean", "description": "本次事务是否同步托管了 inet qwq 防火墙规则。" }
+      }
+    }
+  }
+}

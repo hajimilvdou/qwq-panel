@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询宿主机网络调优画像响应",
+  "description": "返回宿主机画像、Brutal 环境与历史快照列表。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profile",
+    "brutal_env",
+    "snapshots"
+  ],
+  "properties": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "kernel_version",
+        "cpus",
+        "total_ram_mb",
+        "swap_total_mb",
+        "swap_free_mb",
+        "iperf3_available",
+        "sysctl_available",
+        "current_sysctl"
+      ],
+      "properties": {
+        "os": {
+          "type": "string"
+        },
+        "kernel_version": {
+          "type": "string"
+        },
+        "cpus": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "total_ram_mb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "swap_total_mb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "swap_free_mb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "iperf3_available": {
+          "type": "boolean"
+        },
+        "sysctl_available": {
+          "type": "boolean"
+        },
+        "current_sysctl": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "brutal_env": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kernel_version",
+        "current_cc",
+        "brutal_available",
+        "ebpf_pinned",
+        "install_hint"
+      ],
+      "properties": {
+        "kernel_version": {
+          "type": "string"
+        },
+        "available_cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "current_cc": {
+          "type": "string"
+        },
+        "brutal_available": {
+          "type": "boolean"
+        },
+        "ebpf_pinned": {
+          "type": "boolean"
+        },
+        "brutalctl_path": {
+          "type": "string"
+        },
+        "install_hint": {
+          "type": "string"
+        },
+        "degraded_guidance": {
+          "type": "string"
+        }
+      }
+    },
+    "snapshots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "revision",
+          "reason",
+          "role",
+          "bandwidth_mbps",
+          "rtt_ms",
+          "applied",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "bandwidth_mbps": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rtt_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "applied": {
+            "type": "boolean"
+          },
+          "sysctl_map": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

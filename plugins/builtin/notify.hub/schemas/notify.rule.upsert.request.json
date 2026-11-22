@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "channel_ids"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "source_pattern": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "min_severity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warn",
+        "critical"
+      ]
+    },
+    "channel_ids": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "maxLength": 64
+      }
+    },
+    "cooldown_sec": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400
+    },
+    "quiet_start": {
+      "type": "string",
+      "maxLength": 5
+    },
+    "quiet_end": {
+      "type": "string",
+      "maxLength": 5
+    },
+    "quiet_tz": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "allow_critical_bypass": {
+      "type": "boolean"
+    }
+  }
+}

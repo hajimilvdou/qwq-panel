@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:qwq:plugin:noop:echo.response:v1",
+  "title": "noop.echo response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["message", "instance_id", "attempt"],
+  "properties": {
+    "message": { "type": "string" },
+    "instance_id": { "type": "string" },
+    "attempt": { "type": "integer", "minimum": 0 }
+  }
+}

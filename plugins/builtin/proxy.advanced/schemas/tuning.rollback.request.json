@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "回滚 tcpfit 内核调优快照请求",
+  "description": "按 snapshot_id 或 revision 将宿主机 sysctl 回滚至指定历史快照。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "snapshot_id": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "dry_run": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

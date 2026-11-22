@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "管理员创建分发用户响应",
+  "description": "返回新建成员的安全视图及初始个人邀请码。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "username",
+    "group_name",
+    "status",
+    "signup_source",
+    "balance_micros",
+    "auto_refill_cap_micros",
+    "auto_refill_cycle",
+    "personal_invite_code",
+    "created_at"
+  ],
+  "properties": {
+    "id": { "type": "string", "description": "新分发用户唯一 ID。" },
+    "username": { "type": "string", "description": "用户名。" },
+    "group_name": { "type": "string", "description": "分配分组。" },
+    "status": { "type": "string", "enum": ["active", "disabled"], "description": "账号状态。" },
+    "signup_source": { "type": "string", "description": "注册来源（admin）。" },
+    "balance_micros": { "type": "integer", "minimum": 0, "description": "初始统计微点余额。" },
+    "auto_refill_cap_micros": { "type": "integer", "minimum": 0, "description": "自动回血上限。" },
+    "auto_refill_cycle": { "type": "string", "description": "自动回血周期。" },
+    "personal_invite_code": { "type": "string", "description": "专属个人邀请码。" },
+    "created_at": { "type": "integer", "minimum": 0, "description": "创建时间戳（Unix 毫秒）。" }
+  }
+}

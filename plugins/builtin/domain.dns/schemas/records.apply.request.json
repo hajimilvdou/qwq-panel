@@ -1,0 +1,113 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "在已授权托管域下应用单次 DNS 记录变更的请求（严格对齐 hostauth.DNSArgs）",
+  "required": [
+    "provider_id",
+    "zone_id",
+    "attempt_id",
+    "change"
+  ],
+  "properties": {
+    "provider_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "DNS 提供商资源 ID"
+    },
+    "zone_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "已授权托管域 ID"
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "本次变更幂等尝试 ID（失败后对账必须复用同一 ID）"
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "待应用的记录变更定义",
+      "required": [
+        "action",
+        "record"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "create",
+            "update",
+            "delete"
+          ],
+          "description": "变更动作：新建、更新或删除"
+        },
+        "expected_record_revision": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "更新或删除时目标记录的期望版本指纹"
+        },
+        "record": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "目标解析记录内容",
+          "required": [
+            "type",
+            "name",
+            "value"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "更新或删除时必填的提供商记录 ID"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "A",
+                "AAAA",
+                "CNAME",
+                "TXT"
+              ],
+              "description": "受支持的记录类型"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "description": "解析记录完整域名"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "description": "记录目标值"
+            },
+            "ttl": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86400,
+              "description": "记录 TTL（秒），0 表示使用提供商默认值"
+            },
+            "proxied": {
+              "type": "boolean",
+              "description": "是否开启 Cloudflare 代理"
+            },
+            "revision": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "记录版本指纹（可选）"
+            }
+          }
+        }
+      }
+    }
+  }
+}

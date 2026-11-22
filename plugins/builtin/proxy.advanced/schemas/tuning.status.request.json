@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询宿主机网络调优画像请求",
+  "description": "采集当前宿主机内存/Swap/sysctl/Brutal 支持状态与历史快照。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

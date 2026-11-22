@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "site_title": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "site_subtitle": {
+      "type": "string",
+      "maxLength": 140
+    },
+    "default_view": {
+      "type": "string",
+      "enum": [
+        "orb-cards",
+        "compact-list",
+        "tty-terminal"
+      ]
+    },
+    "default_palette": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "mask_node_ip": {
+      "type": "boolean"
+    },
+    "expose_billing_cost": {
+      "type": "boolean"
+    },
+    "expose_isp_carrier": {
+      "type": "boolean"
+    }
+  }
+}

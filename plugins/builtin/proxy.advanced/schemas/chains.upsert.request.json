@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "创建或更新链式代理节点请求",
+  "description": "新增或更新服务端转发/客户端订阅链式代理落地节点，凭据以 AES-256-GCM 加密落盘。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "protocol",
+    "server",
+    "port"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9._-]{0,31}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "server_forward",
+        "client_dialer",
+        "both"
+      ],
+      "default": "both"
+    },
+    "protocol": {
+      "type": "string",
+      "enum": [
+        "socks5",
+        "http",
+        "vless",
+        "trojan",
+        "shadowsocks"
+      ]
+    },
+    "server": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "username": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "password": {
+          "type": "string",
+          "maxLength": 256,
+          "writeOnly": true
+        },
+        "uuid": {
+          "type": "string",
+          "maxLength": 64,
+          "writeOnly": true
+        },
+        "method": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "sni": {
+          "type": "string",
+          "maxLength": 253
+        },
+        "flow": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "tls": {
+          "type": "boolean"
+        },
+        "skip_verify": {
+          "type": "boolean"
+        }
+      }
+    },
+    "next_hop_id": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "apply_default": {
+      "type": "boolean",
+      "default": false
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 64
+    }
+  }
+}

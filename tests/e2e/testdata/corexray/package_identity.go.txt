@@ -1,0 +1,48 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"testing"
+
+	"google.golang.org/grpc"
+
+	"github.com/qwq-panel/qwq/sdk/manifest"
+	"github.com/qwq-panel/qwq/sdk/pluginsdk"
+)
+
+// TestXrayPackageIdentity 在打包 overlay 下验证实际嵌入描述符。
+func TestXrayPackageIdentity(t *testing.T) {
+	expected := os.Getenv("QWQ_XRAY_BUILD_EXPECT_VERSION")
+	if expected == "" {
+		t.Fatal("打包版本缺失")
+	}
+	document, err := manifest.Parse(Manifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Version != expected {
+		t.Fatalf("嵌入版本 %s，期望 %s", document.Version, expected)
+	}
+	registrar := grpc.NewServer()
+	defer registrar.Stop()
+	server, err := pluginsdk.Serve(t.Context(), pluginsdk.Options{Plugin: New(), Manifest: Manifest(), Registrar: registrar})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	if got := server.Descriptor().GetPluginVersion(); got != expected {
+		t.Fatalf("RPC 描述符版本 %s，期望 %s", got, expected)
+	}
+	readServer, _ := fakeReadServer(t, &fakeRuntimeSource{}, nil)
+	response := readInvoke(t, readServer, "core.capabilities", "{}")
+	if response.GetError() != nil {
+		t.Fatal("能力接口身份读取失败")
+	}
+	var capabilities capabilitiesResult
+	if json.Unmarshal(response.GetPayloadJson(), &capabilities) != nil || capabilities.DriverVersion != expected {
+		t.Fatal("能力接口版本与实际包身份不一致")
+	}
+}

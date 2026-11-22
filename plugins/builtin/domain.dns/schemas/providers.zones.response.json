@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "指定 DNS 提供商下已发现托管域列表响应",
+  "required": [
+    "zones"
+  ],
+  "properties": {
+    "zones": {
+      "type": "array",
+      "description": "托管域公开视图列表",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider_id",
+          "zone_id",
+          "name",
+          "revision",
+          "authorized"
+        ],
+        "properties": {
+          "provider_id": {
+            "type": "string",
+            "description": "所属提供商 ID"
+          },
+          "zone_id": {
+            "type": "string",
+            "description": "托管域 ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "域名"
+          },
+          "revision": {
+            "type": "string",
+            "description": "域授权版本"
+          },
+          "authorized": {
+            "type": "boolean",
+            "description": "是否已授权给宿主管理"
+          }
+        }
+      }
+    }
+  }
+}

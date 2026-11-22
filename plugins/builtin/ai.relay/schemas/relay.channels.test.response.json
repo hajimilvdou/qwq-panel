@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "上游渠道探活测速响应",
+  "description": "返回渠道探活结果、HTTP 状态码、首字延迟与更新后的健康状态。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "ok", "http_status", "ttft_ms", "health_state", "error"],
+  "properties": {
+    "id": { "type": "string", "description": "渠道 ID。" },
+    "ok": { "type": "boolean", "description": "探活是否成功。" },
+    "http_status": { "type": "integer", "minimum": 0, "description": "上游返回的 HTTP 状态码。" },
+    "ttft_ms": { "type": "integer", "minimum": 0, "description": "本次测速首字耗时（毫秒）。" },
+    "health_state": { "type": "string", "enum": ["healthy", "cooling", "tripped"], "description": "更新后的渠道健康状态。" },
+    "error": { "type": "string", "description": "失败时的脱敏错误摘要。" }
+  }
+}

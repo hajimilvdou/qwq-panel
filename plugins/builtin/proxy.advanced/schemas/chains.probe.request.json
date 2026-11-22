@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "探测链式代理节点连通性请求",
+  "description": "向指定链式代理落地节点的 TCP 端口发起快速连通性与延迟测试。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    }
+  }
+}

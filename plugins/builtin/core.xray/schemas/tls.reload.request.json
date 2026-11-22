@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "binding_ref",
+    "profile_id",
+    "generation",
+    "policy_revision",
+    "fullchain_sha256",
+    "private_key_sha256",
+    "sni"
+  ],
+  "properties": {
+    "binding_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "宿主颁发的稳定证书绑定引用 ID"
+    },
+    "profile_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "description": "消费该证书绑定的入站 profile ID"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "待重载的证书代际编号"
+    },
+    "policy_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "宿主授权策略版本"
+    },
+    "fullchain_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "期望已落盘 fullchain.pem 的 SHA-256 十六进制摘要"
+    },
+    "private_key_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "期望已落盘 privkey.pem 的 SHA-256 十六进制摘要"
+    },
+    "sni": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "description": "期望覆盖的 TLS ServerName"
+    }
+  }
+}
