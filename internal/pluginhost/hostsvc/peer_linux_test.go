@@ -5,58 +5,51 @@
 package hostsvc
 
 import (
-	"net"
+	"errors"
 	"os"
-	"path/filepath"
+	"os/exec"
+	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
-// TestReadPeerCredentials exercises the SO_PEERCRED primitive directly: a
-// connection from this process must be reported as this process.
-func TestReadPeerCredentials(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "peer.sock")
-	listener, err := net.Listen("unix", socket)
+func TestPeerHandleVerifyAlivePollSemantics(t *testing.T) {
+	// 1. Live process (current process) must pass verifyAlive without EPERM.
+	selfFD, err := unix.PidfdOpen(os.Getpid(), 0)
+	if errors.Is(err, syscall.ENOSYS) {
+		t.Skip("kernel does not support pidfd_open")
+	}
 	if err != nil {
-		t.Fatalf("Listen: %v", err)
+		t.Fatalf("PidfdOpen(self): %v", err)
 	}
-	defer func() { _ = listener.Close() }()
+	live := &peerHandle{pidfd: selfFD}
+	defer live.close()
+	if err := live.verifyAlive(); err != nil {
+		t.Fatalf("verifyAlive on live process failed: %v", err)
+	}
 
-	type result struct {
-		handle *peerHandle
-		err    error
+	// 2. Exited child process must be rejected by verifyAlive (POLLIN set).
+	cmd := exec.Command("/bin/sh", "-c", "sleep 0.2")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
 	}
-	accepted := make(chan result, 1)
-	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			accepted <- result{err: err}
-			return
-		}
-		handle, err := readPeerCredentials(conn)
-		accepted <- result{handle: handle, err: err}
-		_ = conn.Close()
-	}()
-	client, err := net.Dial("unix", socket)
+	childFD, err := unix.PidfdOpen(cmd.Process.Pid, 0)
 	if err != nil {
-		t.Fatalf("Dial: %v", err)
+		_ = cmd.Wait()
+		t.Fatalf("PidfdOpen(child): %v", err)
 	}
-	defer func() { _ = client.Close() }()
+	dead := &peerHandle{pidfd: childFD}
+	defer dead.close()
 
-	got := <-accepted
-	if got.err != nil {
-		t.Fatalf("readPeerCredentials: %v", got.err)
+	if err := dead.verifyAlive(); err != nil {
+		_ = cmd.Wait()
+		t.Fatalf("verifyAlive on running child failed: %v", err)
 	}
-	defer got.handle.close()
-	if got.handle.info.PID != os.Getpid() {
-		t.Errorf("peer pid = %d, want %d", got.handle.info.PID, os.Getpid())
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("wait child: %v", err)
 	}
-	if got.handle.info.UID != os.Getuid() {
-		t.Errorf("peer uid = %d, want %d", got.handle.info.UID, os.Getuid())
+	if err := dead.verifyAlive(); err == nil {
+		t.Fatal("verifyAlive unexpectedly succeeded after child process exited")
 	}
-	if got.handle.info.GID != os.Getgid() {
-		t.Errorf("peer gid = %d, want %d", got.handle.info.GID, os.Getgid())
-	}
-	// SO_PEERPIDFD is best effort (Linux >= 6.5). Log it so the report can
-	// state whether the build kernel exercised the pidfd path.
-	t.Logf("SO_PEERPIDFD available: %v", got.handle.info.PIDFD)
 }

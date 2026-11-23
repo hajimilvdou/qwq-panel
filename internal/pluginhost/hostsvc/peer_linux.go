@@ -34,17 +34,29 @@ func (h *peerHandle) close() {
 	}
 }
 
-// verifyAlive sends signal 0 via pidfd_send_signal as a post-verification
+// verifyAlive performs a non-blocking poll on the pidfd as a post-verification
 // liveness fence, ensuring the peer process did not exit (and have its PID
-// recycled) before or during cgroup verification.
+// recycled) before or during cgroup verification. Unlike pidfd_send_signal(0),
+// polling a pidfd works across distinct unprivileged UIDs (e.g. qwq controller
+// verifying a DynamicUser plugin) without returning EPERM.
 func (h *peerHandle) verifyAlive() error {
 	if h.pidfd < 0 {
 		return nil
 	}
-	if err := unix.PidfdSendSignal(h.pidfd, 0, nil, 0); err != nil {
-		return fmt.Errorf("pidfd liveness check: %w", err)
+	pfd := []unix.PollFd{{Fd: int32(h.pidfd), Events: unix.POLLIN}}
+	for {
+		n, err := unix.Poll(pfd, 0)
+		if errors.Is(err, syscall.EINTR) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("pidfd liveness poll: %w", err)
+		}
+		if n > 0 && pfd[0].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR|unix.POLLNVAL) != 0 {
+			return errors.New("pidfd liveness poll: peer process exited")
+		}
+		return nil
 	}
-	return nil
 }
 
 // readPeerCredentials reads SO_PEERCRED and, when the kernel supports it,

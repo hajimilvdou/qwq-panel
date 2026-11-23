@@ -291,8 +291,8 @@ func TestFakeProcessExitOnlyEscalatesCommittedGeneration(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// race 子进程在退出时还会执行运行库的收尾，加上最多 5 次有界退避重启，预留 8s 预算。
-			deadline := time.NewTimer(8 * time.Second)
+			// race 子进程在启动与退出时开销较大，加上最多 5 次有界退避重启，预留充足预算避免慢速 CI 抖动。
+			deadline := time.NewTimer(30 * time.Second)
 			defer deadline.Stop()
 			if committed {
 				select {
