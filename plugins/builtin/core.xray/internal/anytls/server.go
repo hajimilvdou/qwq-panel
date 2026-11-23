@@ -1,6 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package anytls 实现纯 Go AnyTLS v1/v2 服务端与多实例生命周期管理器。
+// Package anytls 实现加固版纯 Go AnyTLS v1/v2 服务端与热更新多实例监管器。
+//
+// 核心修复与顶尖优化（对应 R2-BUG-02 / R2-BUG-03 / R2-BUG-11 / R2-BUG-25）：
+//  1. 默认安全出站拨号器（SafeOutboundDialer）：DNS 解析后逐 IP 拦截 Loopback、RFC1918 私网、
+//     Link-Local（云元数据 169.254.169.254 / fe80::）、CGNAT（100.64.0.0/10 含阿里云元数据）、
+//     IPv6 ULA（fc00::/7）、NAT64 嵌私网后缀（64:ff9b::/96 后 32 位）及未指定/多播地址，彻底阻断 SSRF 与回环逃逸；
+//  2. 瞬时 Accept 错误（如 EMFILE）指数退避自愈，绝不静默退出监听协程；新增 atomic.Bool 真实存活探针；
+//  3. 鉴权前并发信号量（默认 256）+ 小尺寸握手读 + sync.Pool 32KiB 会话读缓冲 & 16KiB 转发缓冲池化，
+//     在 1C1G 机器上彻底杜绝未鉴权连接洪泛 OOM 与 GC 抖动；
+//  4. 上游目标连接启用 TCP KeepAlive 与双向空闲读超时（streamIdleTimeout），根治半开僵尸流泄漏；
+//  5. Supervisor.StartAll 支持同监听地址无感热更新（Users / PaddingScheme / TLS 证书零断连刷新），
+//     并跨配置变更单调继承入站与逐用户流量计数器，防止 ResetEpoch 未变时配额回退；
+//  6. 支持 SagerNet UDP-over-TCP (UoT v1/v2) 复用流，且未知 SNI 在 TLS 握手层直接拒止。
 package anytls
 
 import (
@@ -16,10 +28,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	corev2 "github.com/qwq-panel/qwq/sdk/coreapi/v2"
@@ -41,23 +55,107 @@ const (
 	maxFramePayload          = 16384
 	maxStreamsPerSession     = 256
 	maxPendingBytesPerStream = 256 * 1024
+	maxPreAuthConns          = 256
+	maxActiveConns           = 2048
+	maxAuthPadBytes          = 16384
 	dialTimeout              = 10 * time.Second
+	handshakeTimeout         = 12 * time.Second
 	targetWriteTimeout       = 30 * time.Second
+	streamIdleTimeout        = 3 * time.Minute
 	idleReadTimeout          = 5 * time.Minute
+	tcpKeepAlivePeriod       = 45 * time.Second
 )
+
+var (
+	nat64WellKnownPrefix = netip.MustParsePrefix("64:ff9b::/96")
+	cgnatPrefix          = netip.MustParsePrefix("100.64.0.0/10")
+	benchmarkPrefix      = netip.MustParsePrefix("198.18.0.0/15")
+	docV6Prefix          = netip.MustParsePrefix("2001:db8::/32")
+
+	sessionReaderPool = sync.Pool{
+		New: func() any {
+			return bufio.NewReaderSize(strings.NewReader(""), 32*1024)
+		},
+	}
+	relayBufPool = sync.Pool{
+		New: func() any {
+			b := make([]byte, maxFramePayload)
+			return &b
+		},
+	}
+)
+
+// ErrBlockedDestination 表示目标地址命中服务端安全出站黑名单（回环/私网/链路本地/元数据地址）。
+var ErrBlockedDestination = errors.New("anytls: target address is blocked by outbound security policy")
+
+// IsPublicOutboundAddr 严格校验代理出站目标 IP 是否为合法公网单播地址。
+func IsPublicOutboundAddr(ip netip.Addr) bool {
+	if !ip.IsValid() {
+		return false
+	}
+	ip = ip.Unmap()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	if ip.Is4() {
+		v4 := ip.As4()
+		// 0.0.0.0/8、100.64.0.0/10 (CGNAT & 阿里云 IMDS 100.100.100.200)、198.18.0.0/15、240.0.0.0/4
+		if v4[0] == 0 || v4[0] >= 240 || cgnatPrefix.Contains(ip) || benchmarkPrefix.Contains(ip) {
+			return false
+		}
+		return true
+	}
+	if docV6Prefix.Contains(ip) {
+		return false
+	}
+	// NAT64 (64:ff9b::/96)：允许访问内嵌公网 IPv4，但严禁通过 NAT64 绕过访问内嵌回环/私网/IMDS
+	if nat64WellKnownPrefix.Contains(ip) {
+		raw16 := ip.As16()
+		embeddedV4 := netip.AddrFrom4([4]byte{raw16[12], raw16[13], raw16[14], raw16[15]})
+		return IsPublicOutboundAddr(embeddedV4)
+	}
+	return ip.IsGlobalUnicast()
+}
+
+// NewSafeOutboundDialer 构造在 socket connect 系统调用前基于内核目标 IP 强校验的安全拨号函数，
+// 从根源免疫 DNS Rebinding、回环探测与云元数据窃取。
+func NewSafeOutboundDialer(timeout time.Duration) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	d := &net.Dialer{
+		Timeout:   timeout,
+		KeepAlive: tcpKeepAlivePeriod,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, portStr, err := net.SplitHostPort(address)
+			if err != nil {
+				return ErrBlockedDestination
+			}
+			port, err := strconv.Atoi(portStr)
+			if err != nil || port < 1 || port > 65535 {
+				return ErrBlockedDestination
+			}
+			ip, err := netip.ParseAddr(host)
+			if err != nil || !IsPublicOutboundAddr(ip) {
+				return ErrBlockedDestination
+			}
+			return nil
+		},
+	}
+	return d.DialContext
+}
 
 // ProfileSpec 描述单个运行中 AnyTLS 入站的监听地址、TLS 证书、填充方案与用户凭据。
 type ProfileSpec struct {
-	ProfileID     string
-	BindingRef    string
-	ServerName    string
-	Listen        string
-	Port          int
-	CertPEM       []byte
-	KeyPEM        []byte
-	PaddingScheme []string
-	Users         map[string][]byte   // userID -> raw password
-	UserDigests   map[string][32]byte // userID -> sha256(password)（重启恢复时避免落盘明文密码）
+	ProfileID          string
+	BindingRef         string
+	ServerName         string
+	Listen             string
+	Port               int
+	CertPEM            []byte
+	KeyPEM             []byte
+	PaddingScheme      []string
+	Users              map[string][]byte   // userID -> raw password
+	UserDigests        map[string][32]byte // userID -> sha256(password)
+	AllowPrivateTarget bool                // 仅限单测显式置 true；生产环境恒为 false
 }
 
 type userEntry struct {
@@ -67,19 +165,28 @@ type userEntry struct {
 	down   *atomic.Int64
 }
 
-// Server 承载单个 AnyTLS v1/v2 TLS 监听实例并统计入站/逐用户流量。
-type Server struct {
-	profileID   string
+type serverAuthSnapshot struct {
 	bindingRef  string
 	serverName  string
-	listenAddr  string
 	paddingText string
 	paddingMD5  string
 	users       []userEntry
-	inboundUp   atomic.Int64
-	inboundDown atomic.Int64
-	cert        atomic.Pointer[tls.Certificate]
-	dialTarget  func(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+// Server 承载单个 AnyTLS v1/v2 TLS 监听实例并统计入站/逐用户流量。
+type Server struct {
+	profileID          string
+	listenAddr         string
+	allowPrivateTarget bool
+	inboundUp          atomic.Int64
+	inboundDown        atomic.Int64
+	cert               atomic.Pointer[tls.Certificate]
+	state              atomic.Pointer[serverAuthSnapshot]
+	dialTarget         func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	preAuthSem  chan struct{}
+	activeSem   chan struct{}
+	acceptAlive atomic.Bool
 
 	ln          net.Listener
 	ctx         context.Context
@@ -91,17 +198,9 @@ type Server struct {
 	stopOnce    sync.Once
 }
 
-// NewServer 校验并构造 AnyTLS 服务端实例（尚未开始监听）。
-func NewServer(spec ProfileSpec) (*Server, error) {
-	if spec.ProfileID == "" || spec.Listen == "" || spec.Port < 1 || spec.Port > 65535 {
-		return nil, errors.New("anytls: invalid profile listen specification")
-	}
+func buildAuthSnapshot(spec ProfileSpec, prev *serverAuthSnapshot) (*serverAuthSnapshot, error) {
 	if len(spec.Users) == 0 && len(spec.UserDigests) == 0 {
 		return nil, errors.New("anytls: at least one user is required")
-	}
-	cert, err := tls.X509KeyPair(spec.CertPEM, spec.KeyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("anytls: load x509 keypair: %w", err)
 	}
 	scheme := spec.PaddingScheme
 	if len(scheme) == 0 {
@@ -110,63 +209,142 @@ func NewServer(spec ProfileSpec) (*Server, error) {
 	paddingText := strings.Join(scheme, "\n")
 	sum := md5.Sum([]byte(paddingText))
 
+	prevCounters := make(map[string][2]*atomic.Int64)
+	if prev != nil {
+		for _, u := range prev.users {
+			prevCounters[u.id] = [2]*atomic.Int64{u.up, u.down}
+		}
+	}
+
 	entries := make([]userEntry, 0, len(spec.Users)+len(spec.UserDigests))
 	seen := make(map[string]struct{}, len(spec.Users)+len(spec.UserDigests))
+	allocCounters := func(uid string) (*atomic.Int64, *atomic.Int64) {
+		if pair, ok := prevCounters[uid]; ok && pair[0] != nil && pair[1] != nil {
+			return pair[0], pair[1]
+		}
+		return &atomic.Int64{}, &atomic.Int64{}
+	}
 	for uid, pwd := range spec.Users {
 		seen[uid] = struct{}{}
+		up, down := allocCounters(uid)
 		entries = append(entries, userEntry{
 			id:     uid,
 			digest: sha256.Sum256(pwd),
-			up:     &atomic.Int64{},
-			down:   &atomic.Int64{},
+			up:     up,
+			down:   down,
 		})
 	}
 	for uid, digest := range spec.UserDigests {
 		if _, ok := seen[uid]; ok {
 			continue
 		}
+		up, down := allocCounters(uid)
 		entries = append(entries, userEntry{
 			id:     uid,
 			digest: digest,
-			up:     &atomic.Int64{},
-			down:   &atomic.Int64{},
+			up:     up,
+			down:   down,
 		})
 	}
-	s := &Server{
-		profileID:   spec.ProfileID,
+	return &serverAuthSnapshot{
 		bindingRef:  spec.BindingRef,
 		serverName:  spec.ServerName,
-		listenAddr:  net.JoinHostPort(spec.Listen, strconv.Itoa(spec.Port)),
 		paddingText: paddingText,
 		paddingMD5:  hex.EncodeToString(sum[:]),
 		users:       entries,
-		dialTarget:  (&net.Dialer{Timeout: dialTimeout}).DialContext,
-		activeConns: make(map[net.Conn]struct{}),
+	}, nil
+}
+
+// NewServer 校验并构造 AnyTLS 服务端实例（尚未开始监听）。
+func NewServer(spec ProfileSpec) (*Server, error) {
+	if spec.ProfileID == "" || spec.Listen == "" || spec.Port < 1 || spec.Port > 65535 {
+		return nil, errors.New("anytls: invalid profile listen specification")
+	}
+	cert, err := tls.X509KeyPair(spec.CertPEM, spec.KeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("anytls: load x509 keypair: %w", err)
+	}
+	snap, err := buildAuthSnapshot(spec, nil)
+	if err != nil {
+		return nil, err
+	}
+	dialFn := NewSafeOutboundDialer(dialTimeout)
+	if spec.AllowPrivateTarget {
+		dialFn = (&net.Dialer{Timeout: dialTimeout, KeepAlive: tcpKeepAlivePeriod}).DialContext
+	}
+	s := &Server{
+		profileID:          spec.ProfileID,
+		listenAddr:         net.JoinHostPort(spec.Listen, strconv.Itoa(spec.Port)),
+		allowPrivateTarget: spec.AllowPrivateTarget,
+		dialTarget:         dialFn,
+		preAuthSem:         make(chan struct{}, maxPreAuthConns),
+		activeSem:          make(chan struct{}, maxActiveConns),
+		activeConns:        make(map[net.Conn]struct{}),
 	}
 	s.cert.Store(&cert)
+	s.state.Store(snap)
 	return s, nil
 }
 
-// Start 绑定 TLS 监听并启动异步接收循环。
+func (s *Server) bindingRefValue() string {
+	if snap := s.state.Load(); snap != nil {
+		return snap.bindingRef
+	}
+	return ""
+}
+
+func (s *Server) serverNameValue() string {
+	if snap := s.state.Load(); snap != nil {
+		return snap.serverName
+	}
+	return ""
+}
+
+// HotUpdate 在监听地址不变时无中断热更新 TLS 证书、用户列表与填充方案，并完整保留流量计数。
+func (s *Server) HotUpdate(spec ProfileSpec) error {
+	cert, err := tls.X509KeyPair(spec.CertPEM, spec.KeyPEM)
+	if err != nil {
+		return fmt.Errorf("anytls: reload x509 keypair: %w", err)
+	}
+	snap, err := buildAuthSnapshot(spec, s.state.Load())
+	if err != nil {
+		return err
+	}
+	s.cert.Store(&cert)
+	s.state.Store(snap)
+	return nil
+}
+
+// Start 绑定 TLS 监听并启动具备瞬时错误自愈能力的接收循环。
 func (s *Server) Start(parent context.Context) error {
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if sn := s.serverNameValue(); sn != "" && !strings.EqualFold(strings.TrimSuffix(hello.ServerName, "."), sn) {
+				return nil, errors.New("anytls: unrecognized server name")
+			}
 			return s.cert.Load(), nil
 		},
 	}
-	rawLn, err := net.Listen("tcp", s.listenAddr)
+	lc := net.ListenConfig{KeepAlive: tcpKeepAlivePeriod}
+	rawLn, err := lc.Listen(parent, "tcp", s.listenAddr)
 	if err != nil {
 		return fmt.Errorf("anytls: listen %s: %w", s.listenAddr, err)
 	}
 	s.ln = tls.NewListener(rawLn, tlsCfg)
 	s.ctx, s.cancel = context.WithCancel(parent)
+	s.acceptAlive.Store(true)
 	s.wg.Add(1)
 	go s.acceptLoop()
 	return nil
 }
 
-// Addr 返回实际监听地址（测试使用 :0 端口时尤为有用）。
+// IsAlive 返回监听协程是否真实存活运行。
+func (s *Server) IsAlive() bool {
+	return s != nil && s.acceptAlive.Load()
+}
+
+// Addr 返回实际监听地址。
 func (s *Server) Addr() net.Addr {
 	if s.ln == nil {
 		return nil
@@ -187,6 +365,7 @@ func (s *Server) UpdateCertificate(certPEM, keyPEM []byte) error {
 // Stop 关闭监听与全部活跃客户端连接，并在有界时间内等待会话退出。
 func (s *Server) Stop(timeout time.Duration) {
 	s.stopOnce.Do(func() {
+		s.acceptAlive.Store(false)
 		if s.cancel != nil {
 			s.cancel()
 		}
@@ -223,7 +402,11 @@ func (s *Server) Stop(timeout time.Duration) {
 func (s *Server) AddCounters(out map[string]int64) {
 	out["inbound>>>qwq-in-"+s.profileID+">>>traffic>>>uplink"] += s.inboundUp.Load()
 	out["inbound>>>qwq-in-"+s.profileID+">>>traffic>>>downlink"] += s.inboundDown.Load()
-	for _, u := range s.users {
+	snap := s.state.Load()
+	if snap == nil {
+		return
+	}
+	for _, u := range snap.users {
 		up := u.up.Load()
 		down := u.down.Load()
 		if up > 0 || down > 0 {
@@ -233,32 +416,98 @@ func (s *Server) AddCounters(out map[string]int64) {
 	}
 }
 
+// InheritCountersFrom 在监听端口变更重建 Server 时平滑迁移既有流量计数器，避免配额统计回退。
+func (s *Server) InheritCountersFrom(prev *Server) {
+	if prev == nil || s == nil {
+		return
+	}
+	s.inboundUp.Store(prev.inboundUp.Load())
+	s.inboundDown.Store(prev.inboundDown.Load())
+	prevSnap := prev.state.Load()
+	curSnap := s.state.Load()
+	if prevSnap == nil || curSnap == nil {
+		return
+	}
+	byID := make(map[string][2]int64, len(prevSnap.users))
+	for _, u := range prevSnap.users {
+		byID[u.id] = [2]int64{u.up.Load(), u.down.Load()}
+	}
+	for _, u := range curSnap.users {
+		if pair, ok := byID[u.id]; ok {
+			u.up.Store(pair[0])
+			u.down.Store(pair[1])
+		}
+	}
+}
+
 func (s *Server) acceptLoop() {
-	defer s.wg.Done()
+	defer func() {
+		s.acceptAlive.Store(false)
+		s.wg.Done()
+	}()
+	var tempDelay time.Duration
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
-			return
+			if s.ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			// 对 EMFILE / ENFILE / 瞬时网络错误做指数退避恢复，绝不让端口永久假死
+			if tempDelay == 0 {
+				tempDelay = 5 * time.Millisecond
+			} else {
+				tempDelay *= 2
+				if tempDelay > time.Second {
+					tempDelay = time.Second
+				}
+			}
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-time.After(tempDelay):
+				continue
+			}
 		}
+		tempDelay = 0
+
+		// 总活跃连接与未鉴权并发双重门控：满载时立即丢弃新连接，保护 1C1G 宿主内存
+		select {
+		case s.activeSem <- struct{}{}:
+		default:
+			_ = conn.Close()
+			continue
+		}
+		select {
+		case s.preAuthSem <- struct{}{}:
+		default:
+			<-s.activeSem
+			_ = conn.Close()
+			continue
+		}
+
 		s.wg.Add(1)
 		go func(c net.Conn) {
-			defer s.wg.Done()
+			defer func() {
+				<-s.activeSem
+				s.wg.Done()
+			}()
 			s.handleConn(c)
 		}(conn)
 	}
 }
 
-func (s *Server) matchUser(digest []byte) *userEntry {
-	if len(digest) != 32 {
-		return nil
+func (s *Server) matchUser(digest []byte) (*userEntry, *serverAuthSnapshot) {
+	snap := s.state.Load()
+	if snap == nil || len(digest) != 32 {
+		return nil, snap
 	}
 	var matched *userEntry
-	for idx := range s.users {
-		if subtle.ConstantTimeCompare(s.users[idx].digest[:], digest) == 1 {
-			matched = &s.users[idx]
+	for idx := range snap.users {
+		if subtle.ConstantTimeCompare(snap.users[idx].digest[:], digest) == 1 {
+			matched = &snap.users[idx]
 		}
 	}
-	return matched
+	return matched, snap
 }
 
 func (s *Server) registerConn(conn net.Conn) bool {
@@ -278,6 +527,15 @@ func (s *Server) unregisterConn(conn net.Conn) {
 }
 
 func (s *Server) handleConn(conn net.Conn) {
+	preAuthReleased := false
+	releasePreAuth := func() {
+		if !preAuthReleased {
+			preAuthReleased = true
+			<-s.preAuthSem
+		}
+	}
+	defer releasePreAuth()
+
 	if !s.registerConn(conn) {
 		_ = conn.Close()
 		return
@@ -286,26 +544,38 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.unregisterConn(conn)
 		_ = conn.Close()
 	}()
+
 	if tlsConn, ok := conn.(*tls.Conn); ok {
-		_ = tlsConn.SetDeadline(time.Now().Add(15 * time.Second))
+		_ = tlsConn.SetDeadline(time.Now().Add(handshakeTimeout))
 		if err := tlsConn.HandshakeContext(s.ctx); err != nil {
 			return
 		}
 	}
 
-	br := bufio.NewReaderSize(conn, 32*1024)
-	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-
-	// AnyTLS 认证头：32 字节 sha256(password) + 2 字节 BE padLen + pad0
+	_ = conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
+	// 鉴权完成前直接在 conn 上读取固定 34 字节认证头，零分配 32KiB Reader，彻底防御慢速连接内存放大
 	var authHeader [34]byte
-	if _, err := io.ReadFull(br, authHeader[:]); err != nil {
+	if _, err := io.ReadFull(conn, authHeader[:]); err != nil {
 		return
 	}
-	user := s.matchUser(authHeader[:32])
-	if user == nil {
+	user, snap := s.matchUser(authHeader[:32])
+	if user == nil || snap == nil {
 		return
 	}
 	padLen := int(binary.BigEndian.Uint16(authHeader[32:34]))
+	if padLen > maxAuthPadBytes {
+		return
+	}
+
+	// 鉴权通过！释放预鉴权名额并从 sync.Pool 借用 32KiB 会话缓冲
+	releasePreAuth()
+	br := sessionReaderPool.Get().(*bufio.Reader)
+	br.Reset(conn)
+	defer func() {
+		br.Reset(strings.NewReader(""))
+		sessionReaderPool.Put(br)
+	}()
+
 	if padLen > 0 {
 		if _, err := io.CopyN(io.Discard, br, int64(padLen)); err != nil {
 			return
@@ -316,6 +586,8 @@ func (s *Server) handleConn(conn net.Conn) {
 	sess := &anytlsSession{
 		server:        s,
 		user:          user,
+		paddingText:   snap.paddingText,
+		paddingMD5:    snap.paddingMD5,
 		conn:          conn,
 		br:            br,
 		clientVersion: 1,
@@ -327,6 +599,8 @@ func (s *Server) handleConn(conn net.Conn) {
 type anytlsSession struct {
 	server        *Server
 	user          *userEntry
+	paddingText   string
+	paddingMD5    string
 	conn          net.Conn
 	br            *bufio.Reader
 	writeMu       sync.Mutex
@@ -349,6 +623,7 @@ type anytlsStream struct {
 	pending      [][]byte
 	pendingBytes int
 	targetConn   net.Conn
+	uotWriter    *io.PipeWriter
 }
 
 func (sess *anytlsSession) writeFrame(cmd byte, streamID uint32, payload []byte) error {
@@ -485,13 +760,21 @@ func (sess *anytlsSession) handleSettings(data []byte) error {
 	sess.clientVersion = ver
 	sess.mu.Unlock()
 
+	// 优先读取最新热更快照的填充策略
+	padMD5 := sess.paddingMD5
+	padText := sess.paddingText
+	if snap := sess.server.state.Load(); snap != nil {
+		padMD5 = snap.paddingMD5
+		padText = snap.paddingText
+	}
+
 	if ver >= 2 {
 		if err := sess.writeFrame(cmdServerSettings, 0, []byte("v=2\n")); err != nil {
 			return err
 		}
 	}
-	if clientMD5 != sess.server.paddingMD5 {
-		if err := sess.writeFrame(cmdUpdatePaddingScheme, 0, []byte(sess.server.paddingText)); err != nil {
+	if clientMD5 != padMD5 {
+		if err := sess.writeFrame(cmdUpdatePaddingScheme, 0, []byte(padText)); err != nil {
 			return err
 		}
 	}
@@ -501,6 +784,9 @@ func (sess *anytlsSession) handleSettings(data []byte) error {
 func (sess *anytlsSession) getOrCreateStream(streamID uint32) (*anytlsStream, bool) {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	if sess.closed {
+		return nil, false
+	}
 	if st, ok := sess.streams[streamID]; ok {
 		return st, true
 	}
@@ -538,11 +824,16 @@ func (st *anytlsStream) closeLocal() {
 	st.closed = true
 	conn := st.targetConn
 	st.targetConn = nil
+	pw := st.uotWriter
+	st.uotWriter = nil
 	st.pending = nil
 	st.pendingBytes = 0
 	st.mu.Unlock()
 	if conn != nil {
 		_ = conn.Close()
+	}
+	if pw != nil {
+		_ = pw.Close()
 	}
 }
 
@@ -554,10 +845,27 @@ func (st *anytlsStream) writeToTarget(conn net.Conn, data []byte) bool {
 	_ = conn.SetWriteDeadline(time.Now().Add(targetWriteTimeout))
 	n, err := conn.Write(data)
 	st.writeMu.Unlock()
+	// 双向活跃刷新上游读超时，防止单向上传大文件时误触发读空闲断开
+	_ = conn.SetReadDeadline(time.Now().Add(streamIdleTimeout))
 	if n > 0 {
 		st.sess.server.inboundUp.Add(int64(n))
 		st.sess.user.up.Add(int64(n))
 	}
+	if err != nil {
+		st.sess.removeStream(st.id, true)
+		_ = st.sess.writeFrame(cmdFIN, st.id, nil)
+		return false
+	}
+	return true
+}
+
+func (st *anytlsStream) writeToUoTPipe(pw *io.PipeWriter, data []byte) bool {
+	if len(data) == 0 {
+		return true
+	}
+	st.writeMu.Lock()
+	_, err := pw.Write(data)
+	st.writeMu.Unlock()
 	if err != nil {
 		st.sess.removeStream(st.id, true)
 		_ = st.sess.writeFrame(cmdFIN, st.id, nil)
@@ -572,11 +880,19 @@ func (st *anytlsStream) onClientData(data []byte) {
 		st.mu.Unlock()
 		return
 	}
-	if st.ready && st.targetConn != nil {
-		conn := st.targetConn
-		st.mu.Unlock()
-		st.writeToTarget(conn, data)
-		return
+	if st.ready {
+		if st.targetConn != nil {
+			conn := st.targetConn
+			st.mu.Unlock()
+			st.writeToTarget(conn, data)
+			return
+		}
+		if st.uotWriter != nil {
+			pw := st.uotWriter
+			st.mu.Unlock()
+			st.writeToUoTPipe(pw, data)
+			return
+		}
 	}
 	if st.dialing {
 		if len(data) > 0 {
@@ -641,6 +957,54 @@ func (st *anytlsStream) failDial(err error) {
 }
 
 func (st *anytlsStream) dialAndRelay(targetAddr string) {
+	if uotVer, ok := IsUoTMagicTarget(targetAddr); ok {
+		pr, pw := io.Pipe()
+		st.mu.Lock()
+		if st.closed {
+			st.mu.Unlock()
+			_ = pr.Close()
+			_ = pw.Close()
+			return
+		}
+		st.uotWriter = pw
+		st.mu.Unlock()
+
+		uotDone := make(chan struct{})
+		go func() {
+			defer close(uotDone)
+			st.relayUoTStream(uotVer, pr)
+		}()
+
+		for {
+			st.mu.Lock()
+			if st.closed {
+				st.mu.Unlock()
+				_ = pw.Close()
+				<-uotDone
+				return
+			}
+			if len(st.pending) == 0 {
+				st.dialing = false
+				st.ready = true
+				st.mu.Unlock()
+				break
+			}
+			pending := st.pending
+			st.pending = nil
+			st.pendingBytes = 0
+			st.mu.Unlock()
+
+			for _, chunk := range pending {
+				if !st.writeToUoTPipe(pw, chunk) {
+					<-uotDone
+					return
+				}
+			}
+		}
+		<-uotDone
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(st.sess.server.ctx, dialTimeout)
 	conn, err := st.sess.server.dialTarget(ctx, "tcp", targetAddr)
 	cancel()
@@ -668,8 +1032,6 @@ func (st *anytlsStream) dialAndRelay(targetAddr string) {
 		}
 	}
 
-	// 严格保序排空全部 0-RTT / 建连期间积压帧后，再在锁内将 st.ready 置为 true，
-	// 确保后续 cmdPSH 永不会抢跑插队到 pending 之前。
 	for {
 		st.mu.Lock()
 		if st.closed {
@@ -694,8 +1056,12 @@ func (st *anytlsStream) dialAndRelay(targetAddr string) {
 		}
 	}
 
-	buf := make([]byte, maxFramePayload)
+	bufPtr := relayBufPool.Get().(*[]byte)
+	buf := *bufPtr
+	defer relayBufPool.Put(bufPtr)
+
 	for {
+		_ = conn.SetReadDeadline(time.Now().Add(streamIdleTimeout))
 		n, rerr := conn.Read(buf)
 		if n > 0 {
 			if werr := st.sess.writeFrame(cmdPSH, st.id, buf[:n]); werr != nil {
@@ -713,7 +1079,7 @@ func (st *anytlsStream) dialAndRelay(targetAddr string) {
 	}
 }
 
-// parseSocks5Addr 解析 SOCKS5 目标地址格式（ATYP + ADDR + PORT BE），支持分片缓冲。
+// parseSocks5Addr 解析 SOCKS5 目标地址格式（ATYP + ADDR + PORT BE），并严格拒绝端口 0。
 func parseSocks5Addr(buf []byte) (addr string, consumed int, complete bool, err error) {
 	if len(buf) < 1 {
 		return "", 0, false, nil
@@ -721,12 +1087,15 @@ func parseSocks5Addr(buf []byte) (addr string, consumed int, complete bool, err 
 	atyp := buf[0]
 	switch atyp {
 	case 1: // IPv4
-		need := 1 + 4 + 2
+		const need = 1 + 4 + 2
 		if len(buf) < need {
 			return "", 0, false, nil
 		}
-		ip := net.IP(buf[1:5]).String()
 		port := binary.BigEndian.Uint16(buf[5:7])
+		if port == 0 {
+			return "", 0, false, errors.New("anytls: invalid port 0")
+		}
+		ip := net.IP(buf[1:5]).String()
 		return net.JoinHostPort(ip, strconv.Itoa(int(port))), need, true, nil
 	case 3: // Domain
 		if len(buf) < 2 {
@@ -740,16 +1109,25 @@ func parseSocks5Addr(buf []byte) (addr string, consumed int, complete bool, err 
 		if len(buf) < need {
 			return "", 0, false, nil
 		}
-		host := string(buf[2 : 2+dlen])
 		port := binary.BigEndian.Uint16(buf[2+dlen : 2+dlen+2])
+		if port == 0 {
+			return "", 0, false, errors.New("anytls: invalid port 0")
+		}
+		host := strings.TrimSpace(string(buf[2 : 2+dlen]))
+		if host == "" || strings.ContainsAny(host, " \t\r\n\x00/\\") {
+			return "", 0, false, errors.New("anytls: malformed domain")
+		}
 		return net.JoinHostPort(host, strconv.Itoa(int(port))), need, true, nil
 	case 4: // IPv6
-		need := 1 + 16 + 2
+		const need = 1 + 16 + 2
 		if len(buf) < need {
 			return "", 0, false, nil
 		}
-		ip := net.IP(buf[1:17]).String()
 		port := binary.BigEndian.Uint16(buf[17:19])
+		if port == 0 {
+			return "", 0, false, errors.New("anytls: invalid port 0")
+		}
+		ip := net.IP(buf[1:17]).String()
 		return net.JoinHostPort(ip, strconv.Itoa(int(port))), need, true, nil
 	default:
 		return "", 0, false, fmt.Errorf("anytls: unsupported address type %d", atyp)

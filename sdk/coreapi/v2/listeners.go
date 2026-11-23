@@ -39,8 +39,13 @@ func profileListeners(profile *Profile) []Listener {
 	}
 	var networks []string
 	switch profile.Protocol {
-	case ProtocolVLESS, ProtocolVMess, ProtocolTrojan, ProtocolAnyTLS, ProtocolSOCKS5, ProtocolHTTP:
+	case ProtocolVLESS, ProtocolVMess, ProtocolTrojan, ProtocolAnyTLS, ProtocolHTTP:
 		networks = []string{"tcp"}
+	case ProtocolSOCKS5:
+		networks = []string{"tcp"}
+		if profile.SOCKS5 != nil && profile.SOCKS5.UDP {
+			networks = append(networks, "udp")
+		}
 	case ProtocolHysteria2:
 		networks = []string{"udp"}
 	case ProtocolShadowsocks:

@@ -92,11 +92,21 @@ func reorderFlags(args []string, valueFlags map[string]bool) []string {
 			break
 		}
 		if strings.HasPrefix(a, "-") && a != "-" {
-			flagsPart = append(flagsPart, a)
 			trimmed := strings.TrimLeft(a, "-")
 			if !strings.Contains(trimmed, "=") && valueFlags[trimmed] && i+1 < len(args) {
+				flagsPart = append(flagsPart, a)
 				i++
 				flagsPart = append(flagsPart, args[i])
+			} else if !strings.Contains(trimmed, "=") && !valueFlags[trimmed] && i+1 < len(args) {
+				nextLower := strings.ToLower(strings.TrimSpace(args[i+1]))
+				if nextLower == "true" || nextLower == "false" {
+					flagsPart = append(flagsPart, a+"="+nextLower)
+					i++
+				} else {
+					flagsPart = append(flagsPart, a)
+				}
+			} else {
+				flagsPart = append(flagsPart, a)
 			}
 			continue
 		}
@@ -173,8 +183,8 @@ func runPluginInit(args []string, stdout, stderr io.Writer) int {
 	}
 	id := strings.TrimSpace(*pluginID)
 	name := strings.TrimSpace(*title)
-	if !devPluginIDPattern.MatchString(id) || len(id) > 128 {
-		fmt.Fprintf(stderr, "qwq plugin init: invalid plugin id %q (must match ^[a-z][a-z0-9]*([.-][a-z0-9]+)*$)\n", id)
+	if !devPluginIDPattern.MatchString(id) || len(id) > 26 {
+		fmt.Fprintf(stderr, "qwq plugin init: invalid plugin id %q (must match ^[a-z][a-z0-9]*([.-][a-z0-9]+)*$ and length <= 26 for Linux qwq-p-<id> user)\n", id)
 		return 2
 	}
 	if id == "host" || strings.HasPrefix(id, "host.") || id == "qwq" || strings.HasPrefix(id, "qwq.") {
@@ -908,6 +918,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -925,6 +936,7 @@ type helloPlugin struct{}
 
 type helloInstance struct {
 	*pluginsdk.InstanceBase
+	mu     sync.RWMutex
 	prefix string
 }
 
@@ -944,6 +956,22 @@ func (p *helloPlugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo
 	return inst, nil
 }
 
+func (i *helloInstance) ApplyConfig(_ context.Context, raw []byte) error {
+	cfg := pluginConfig{GreetingPrefix: "Hello"}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(cfg.GreetingPrefix) == "" {
+		cfg.GreetingPrefix = "Hello"
+	}
+	i.mu.Lock()
+	i.prefix = cfg.GreetingPrefix
+	i.mu.Unlock()
+	return nil
+}
+
 func (i *helloInstance) handleHello(_ context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
 	var in struct {
 		Name string `+"`json:\"name\"`"+`
@@ -957,8 +985,11 @@ func (i *helloInstance) handleHello(_ context.Context, req pluginsdk.Request) (p
 	if who == "" {
 		who = "qwq"
 	}
+	i.mu.RLock()
+	prefix := i.prefix
+	i.mu.RUnlock()
 	body, err := json.Marshal(map[string]string{
-		"message":   fmt.Sprintf("%%s, %%s!", i.prefix, who),
+		"message":   fmt.Sprintf("%%s, %%s!", prefix, who),
 		"plugin_id": %q,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})

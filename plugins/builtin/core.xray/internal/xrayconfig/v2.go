@@ -119,11 +119,10 @@ func RenderV2(intent *corev2.Intent, materials V2Materials, options V2Options) (
 	enabledTagsByProfile := make(map[string]string, len(profiles))
 	allEnabledTags := make([]string, 0, len(profiles))
 	needSniff := intent.WARP != nil && intent.WARP.Enabled && intent.WARP.RoutingMode == corev2.WARPRoutingDomains
-	type markedUser struct {
-		mark  uint32
-		email string
+	var markedUsers []struct {
+		Mark  uint32
+		Email string
 	}
-	var markedUsers []markedUser
 	for _, profile := range profiles {
 		material, found := materials.Profiles[profile.ID]
 		if !found {
@@ -179,7 +178,10 @@ func RenderV2(intent *corev2.Intent, materials V2Materials, options V2Options) (
 					if eerr != nil {
 						return nil, eerr
 					}
-					markedUsers = append(markedUsers, markedUser{mark: u.TrafficMark, email: email})
+					markedUsers = append(markedUsers, struct {
+						Mark  uint32
+						Email string
+					}{Mark: u.TrafficMark, Email: email})
 				}
 			}
 		}
@@ -223,26 +225,8 @@ func RenderV2(intent *corev2.Intent, materials V2Materials, options V2Options) (
 	if intent.WARP != nil && intent.WARP.Enabled && materials.WARP != nil {
 		appendWARPOutboundAndRules(&cfg, intent.WARP, materials.WARP.PrivateKey, enabledTagsByProfile, allEnabledTags)
 	}
-	if len(markedUsers) > 0 {
-		slices.SortFunc(markedUsers, func(a, b markedUser) int {
-			if a.mark < b.mark {
-				return -1
-			}
-			if a.mark > b.mark {
-				return 1
-			}
-			return strings.Compare(a.email, b.email)
-		})
-		for _, mu := range markedUsers {
-			tag := fmt.Sprintf("direct-mark-%d", mu.mark)
-			cfg.Outbounds = append(cfg.Outbounds, makeFreedomOutbound(tag, defaultStrategy, primarySendThrough, mu.mark))
-			cfg.Routing.Rules = append(cfg.Routing.Rules, nativeRule{
-				Type:        "field",
-				User:        []string{mu.email},
-				OutboundTag: tag,
-			})
-		}
-	}
+	BuildDeduplicatedMarkedOutbounds(&cfg, markedUsers, defaultStrategy, primarySendThrough)
+	EnsurePrivateBlackholeProtection(&cfg)
 	return encodeNativeConfig(cfg)
 }
 
@@ -309,14 +293,8 @@ func appendWARPOutboundAndRules(
 		},
 	})
 	if cfg.Routing.DomainStrategy == "" {
-		cfg.Routing.DomainStrategy = "AsIs"
+		cfg.Routing.DomainStrategy = "IPIfNonMatch"
 	}
-	// 内网与回环地址始终直连，防止管理访问或本机回环流量误入 WARP。
-	cfg.Routing.Rules = append(cfg.Routing.Rules, nativeRule{
-		Type:        "field",
-		IP:          []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7"},
-		OutboundTag: "qwq-direct",
-	})
 
 	boundTags := make([]string, 0, len(warp.BoundProfileIDs))
 	for _, pid := range warp.BoundProfileIDs {

@@ -16,13 +16,14 @@ import (
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayapi/wire"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayconfig"
 	"github.com/qwq-panel/qwq/sdk/coreapi"
+	corev2 "github.com/qwq-panel/qwq/sdk/coreapi/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
 	MaxResponse = 128 << 10
-	MaxCounters = 2 * (coreapi.MaxUsers + 8)
+	MaxCounters = 2 * (corev2.MaxUsers + corev2.MaxProfiles + 8)
 	RPCTimeout  = 2 * time.Second
 )
 

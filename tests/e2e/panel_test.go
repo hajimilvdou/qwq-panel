@@ -650,7 +650,7 @@ func (p *panel) verifyAccessStealthAndRebind(t *testing.T) {
 		}
 	}
 
-	// 5. Configure a reverse-proxy domain -> secret entry path & disguise auto-disable.
+	// 5. Configure a reverse-proxy domain -> domain Host bypasses secret entry path while bare-IP probes remain disguised.
 	cur = putAccess(map[string]any{
 		"panel_domain":           "panel.example.com",
 		"auto_disable_on_domain": true,
@@ -659,18 +659,32 @@ func (p *panel) verifyAccessStealthAndRebind(t *testing.T) {
 	if cur.EntryGateActive || cur.BypassReason != "panel_domain" || cur.EffectiveEntryPath != "" {
 		t.Fatalf("panel_domain did not auto-disable entry gate: %+v", cur)
 	}
-	// Secret entry path is now auto-disabled; direct API calls use root path.
-	p.entryPath = ""
-	resp, err = probeClient.Get(p.origin + "/readyz")
+	// Bare-IP probe without entry_path must still trigger disguise (no origin-IP bypass).
+	bareResp, err := probeClient.Get(p.origin + "/")
 	if err != nil {
-		t.Fatalf("readyz after domain auto-disable failed: %v", err)
+		t.Fatalf("bare-IP probe after domain bind failed: %v", err)
+	}
+	_ = bareResp.Body.Close()
+	if bareResp.StatusCode != http.StatusNotFound || bareResp.Header.Get("Server") != "nginx" {
+		t.Fatalf("bare-IP probe after domain bind leaked panel: status=%d server=%q", bareResp.StatusCode, bareResp.Header.Get("Server"))
+	}
+	// Request carrying the trusted panel_domain Host bypasses secret entry path cleanly.
+	domReq, err := http.NewRequest(http.MethodGet, p.origin+"/readyz", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domReq.Host = "panel.example.com"
+	resp, err = probeClient.Do(domReq)
+	if err != nil {
+		t.Fatalf("readyz with panel_domain Host failed: %v", err)
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("readyz without entry_path after domain auto-disable = %d, want 200", resp.StatusCode)
+		t.Fatalf("readyz with panel_domain Host = %d, want 200", resp.StatusCode)
 	}
 
 	// 6. Clear domain, restore drop disguise, rotate secret path, and live hot-rebind to a new port.
+	// Note: p.request hits 127.0.0.1 directly, so keep p.entryPath intact until the new gate is bound.
 	newPort := pickFreeTestPort(t, p.port)
 	newEntry := "newgate99x"
 	cur = putAccess(map[string]any{

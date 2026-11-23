@@ -188,8 +188,8 @@ const (
 	DefaultMaxSubscriptions       = 32
 	DefaultMaxSubscriptionCursors = 1024
 	DefaultAuditQueue             = 256
-	DefaultAuditPerMinute         = 120
-	DefaultSecretReveals          = 30
+	DefaultAuditPerMinute         = 1200
+	DefaultSecretReveals          = 1200
 	DefaultCapabilityWrites       = 60
 	DefaultBanScans               = 6
 	DefaultMetricsReads           = 120

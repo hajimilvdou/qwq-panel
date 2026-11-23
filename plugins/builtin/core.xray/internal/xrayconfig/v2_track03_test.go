@@ -170,7 +170,9 @@ func TestRenderV2WARPOutboundAndPortBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var foundWARP, foundPrivateDirect, foundDomainRule, foundSniff bool
+	var foundWARP, foundPrivateBlackhole, foundBadPrivateDirect, foundDomainRule, foundSniff bool
+	blackholeIdx := -1
+	warpRuleIdx := -1
 	for _, in := range doc.Inbounds {
 		if in.Sniffing != nil && in.Sniffing.Enabled {
 			foundSniff = true
@@ -184,16 +186,67 @@ func TestRenderV2WARPOutboundAndPortBinding(t *testing.T) {
 		}
 	}
 	wantTag, _ := corev1.InboundTag(targetProfileID)
-	for _, r := range doc.Routing.Rules {
-		if r.OutboundTag == "qwq-direct" && len(r.IP) >= 4 {
-			foundPrivateDirect = true
+	for idx, r := range doc.Routing.Rules {
+		if r.OutboundTag == "qwq-direct" && len(r.IP) > 0 {
+			foundBadPrivateDirect = true
+		}
+		if r.OutboundTag == "blocked-private" && len(r.IP) >= 10 {
+			foundPrivateBlackhole = true
+			blackholeIdx = idx
 		}
 		if r.OutboundTag == "qwq-warp" && len(r.Domain) == 2 && len(r.InboundTag) == 1 && r.InboundTag[0] == wantTag {
 			foundDomainRule = true
+			warpRuleIdx = idx
 		}
 	}
-	if !foundWARP || !foundPrivateDirect || !foundDomainRule || !foundSniff {
-		t.Fatalf("missing WARP artifacts: warp=%v privDirect=%v domainRule=%v sniff=%v",
-			foundWARP, foundPrivateDirect, foundDomainRule, foundSniff)
+	if !foundWARP || !foundPrivateBlackhole || foundBadPrivateDirect || !foundDomainRule || !foundSniff || blackholeIdx < 0 || warpRuleIdx < 0 || blackholeIdx >= warpRuleIdx {
+		t.Fatalf("missing or misordered WARP/blackhole artifacts: warp=%v privBlackhole=%v badPrivDirect=%v domainRule=%v sniff=%v bhIdx=%d warpIdx=%d",
+			foundWARP, foundPrivateBlackhole, foundBadPrivateDirect, foundDomainRule, foundSniff, blackholeIdx, warpRuleIdx)
+	}
+}
+
+func TestRenderV2DeduplicatesMarkedOutboundsAcrossProfiles(t *testing.T) {
+	intent, materials, options := v2Fixture(t)
+	defer materials.Clear()
+	// 共享用户跨两个 profile 使用相同 TrafficMark，不能生成重复 direct-mark Tag
+	sharedUserID := intent.Profiles[0].Users[0].ID
+	intent.Profiles[0].Users[0].TrafficMark = 0x5105
+	intent.Profiles[1].Users[0].ID = sharedUserID
+	intent.Profiles[1].Users[0].TrafficMark = 0x5105
+	materials.Profiles["h2"].Hysteria2.Auth[sharedUserID] = materials.Profiles["h2"].Hysteria2.Auth["h-bob"]
+	delete(materials.Profiles["h2"].Hysteria2.Auth, "h-bob")
+
+	raw, err := RenderV2(intent, materials, options)
+	if err != nil {
+		t.Fatalf("RenderV2 failed: %v", err)
+	}
+	var doc struct {
+		Outbounds []struct {
+			Tag string `json:"tag"`
+		} `json:"outbounds"`
+		Routing struct {
+			Rules []struct {
+				User        []string `json:"user"`
+				OutboundTag string   `json:"outboundTag"`
+			} `json:"rules"`
+		} `json:"routing"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	markObCount := 0
+	for _, ob := range doc.Outbounds {
+		if ob.Tag == "direct-mark-20741" {
+			markObCount++
+		}
+	}
+	markRuleCount := 0
+	for _, r := range doc.Routing.Rules {
+		if r.OutboundTag == "direct-mark-20741" {
+			markRuleCount++
+		}
+	}
+	if markObCount != 1 || markRuleCount != 1 {
+		t.Fatalf("跨 profile 共享 TrafficMark 未去重: obCount=%d ruleCount=%d", markObCount, markRuleCount)
 	}
 }

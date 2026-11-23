@@ -33,10 +33,12 @@ const (
 	BuiltinThemeClassic     = "builtin:classic"
 	BuiltinThemeLiquidGlass = "builtin:liquid-glass"
 
-	MaxThemeZipBytes        = 16 << 20 // 16 MiB 压缩包 / 解压总大小硬上限
-	MaxThemeSingleFileBytes = 4 << 20  // 4 MiB 单文件硬上限
-	MaxThemeFileCount       = 256      // 最多 256 个静态文件
-	MaxBackgroundBytes      = 2 << 20  // 2 MiB 本地壁纸上限
+	MaxThemeZipBytes        = SafeMaxThemeZipArchiveBytes // 3 MiB 压缩包硬上限（对齐 4 MiB ABI 帧）
+	MaxThemeExtractedBytes  = SafeMaxThemeExtractedBytes  // 8 MiB 解压总大小硬上限
+	MaxThemeSingleFileBytes = SafeMaxThemeSingleFileBytes // 2 MiB 单文件硬上限
+	MaxCustomThemes         = SafeMaxCustomThemeCount     // 最多 16 套自定义主题
+	MaxThemeFileCount       = 256                         // 最多 256 个静态文件
+	MaxBackgroundBytes      = 2 << 20                     // 2 MiB 本地壁纸上限
 )
 
 var (
@@ -319,8 +321,13 @@ func (tm *ThemeManager) InstallZip(zipBytes []byte) (ThemeManifest, error) {
 		return ThemeManifest{}, fmt.Errorf("%w: too many files (max %d)", ErrThemeSizeExceeded, MaxThemeFileCount)
 	}
 
-	extracted := make(map[string][]byte, len(candidates))
-	var totalBytes int64
+	type extractTarget struct {
+		rel  string
+		file *zip.File
+	}
+	targets := make([]extractTarget, 0, len(candidates))
+	fileSet := make(map[string]struct{}, len(candidates))
+	var manifestFile *zip.File
 	for _, c := range candidates {
 		rel := strings.TrimPrefix(c.cleanPath, stripPrefix)
 		if !isSafeArchiveRelPath(rel) {
@@ -331,41 +338,38 @@ func (tm *ThemeManager) InstallZip(zipBytes []byte) (ThemeManifest, error) {
 			return ThemeManifest{}, fmt.Errorf("%w: %s (%s)", ErrThemeDisallowedExt, ext, rel)
 		}
 		if c.file.UncompressedSize64 > MaxThemeSingleFileBytes {
-			return ThemeManifest{}, fmt.Errorf("%w: %s exceeds 4 MiB", ErrThemeSizeExceeded, rel)
+			return ThemeManifest{}, fmt.Errorf("%w: %s exceeds %d bytes", ErrThemeSizeExceeded, rel, MaxThemeSingleFileBytes)
 		}
-		rc, err := c.file.Open()
-		if err != nil {
-			return ThemeManifest{}, fmt.Errorf("%w: cannot read %s", ErrInvalidThemeArchive, rel)
+		if rel == "theme.json" {
+			manifestFile = c.file
 		}
-		data, err := io.ReadAll(io.LimitReader(rc, MaxThemeSingleFileBytes+1))
-		_ = rc.Close()
-		if err != nil {
-			return ThemeManifest{}, fmt.Errorf("%w: read error on %s", ErrInvalidThemeArchive, rel)
-		}
-		if int64(len(data)) > MaxThemeSingleFileBytes {
-			return ThemeManifest{}, fmt.Errorf("%w: %s exceeds 4 MiB uncompressed", ErrThemeSizeExceeded, rel)
-		}
-		totalBytes += int64(len(data))
-		if totalBytes > MaxThemeZipBytes {
-			return ThemeManifest{}, fmt.Errorf("%w: total uncompressed size exceeds 16 MiB", ErrThemeSizeExceeded)
-		}
-		extracted[rel] = data
+		fileSet[rel] = struct{}{}
+		targets = append(targets, extractTarget{rel: rel, file: c.file})
 	}
 
-	manifestRaw, ok := extracted["theme.json"]
-	if !ok {
+	if manifestFile == nil {
 		return ThemeManifest{}, fmt.Errorf("%w: missing theme.json", ErrInvalidThemeManifest)
 	}
+	mrc, err := manifestFile.Open()
+	if err != nil {
+		return ThemeManifest{}, fmt.Errorf("%w: cannot read theme.json", ErrInvalidThemeArchive)
+	}
+	manifestRaw, err := io.ReadAll(io.LimitReader(mrc, 64<<10+1))
+	_ = mrc.Close()
+	if err != nil {
+		return ThemeManifest{}, fmt.Errorf("%w: read error on theme.json", ErrInvalidThemeArchive)
+	}
+	if len(manifestRaw) > 64<<10 {
+		return ThemeManifest{}, fmt.Errorf("%w: theme.json exceeds 64 KiB", ErrThemeSizeExceeded)
+	}
+
 	var manifest ThemeManifest
 	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
 		return ThemeManifest{}, fmt.Errorf("%w: invalid theme.json: %v", ErrInvalidThemeManifest, err)
 	}
-	if err := validateThemeManifest(&manifest, extracted); err != nil {
+	if err := validateThemeManifest(&manifest, fileSet); err != nil {
 		return ThemeManifest{}, err
 	}
-	manifest.Builtin = false
-	manifest.InstalledAt = time.Now().Unix()
-	manifest.SizeBytes = totalBytes
 
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -373,6 +377,21 @@ func (tm *ThemeManager) InstallZip(zipBytes []byte) (ThemeManifest, error) {
 	if err := os.MkdirAll(tm.themesRoot(), 0o750); err != nil {
 		return ThemeManifest{}, err
 	}
+	finalDir := filepath.Join(tm.themesRoot(), manifest.ID)
+	if _, statErr := os.Stat(finalDir); os.IsNotExist(statErr) {
+		if entries, readErr := os.ReadDir(tm.themesRoot()); readErr == nil {
+			customCount := 0
+			for _, ent := range entries {
+				if ent.IsDir() && isValidThemeID(ent.Name()) {
+					customCount++
+				}
+			}
+			if customCount >= MaxCustomThemes {
+				return ThemeManifest{}, fmt.Errorf("%w: maximum %d custom themes installed", ErrThemeSizeExceeded, MaxCustomThemes)
+			}
+		}
+	}
+
 	rnd := make([]byte, 6)
 	_, _ = rand.Read(rnd)
 	stageDir := filepath.Join(tm.themesRoot(), ".stage-"+manifest.ID+"-"+hex.EncodeToString(rnd))
@@ -386,17 +405,50 @@ func (tm *ThemeManager) InstallZip(zipBytes []byte) (ThemeManifest, error) {
 		}
 	}()
 
-	for rel, data := range extracted {
-		dst := filepath.Join(stageDir, filepath.FromSlash(rel))
+	// 流式直写临时目录（单块 32 KiB 复用缓冲，严控 32 MiB 内存沙箱峰值）
+	copyBuf := make([]byte, 32*1024)
+	var totalBytes int64
+	streamOne := func(t extractTarget) error {
+		dst := filepath.Join(stageDir, filepath.FromSlash(t.rel))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
-			return ThemeManifest{}, err
+			return err
 		}
-		if err := os.WriteFile(dst, data, 0o640); err != nil {
+		rc, err := t.file.Open()
+		if err != nil {
+			return fmt.Errorf("%w: cannot read %s", ErrInvalidThemeArchive, t.rel)
+		}
+		defer rc.Close()
+		outFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+		if err != nil {
+			return err
+		}
+		written, copyErr := io.CopyBuffer(outFile, io.LimitReader(rc, MaxThemeSingleFileBytes+1), copyBuf)
+		closeErr := outFile.Close()
+		if copyErr != nil {
+			return fmt.Errorf("%w: read error on %s", ErrInvalidThemeArchive, t.rel)
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if written > MaxThemeSingleFileBytes {
+			return fmt.Errorf("%w: %s exceeds %d bytes uncompressed", ErrThemeSizeExceeded, t.rel, MaxThemeSingleFileBytes)
+		}
+		totalBytes += written
+		if totalBytes > MaxThemeExtractedBytes {
+			return fmt.Errorf("%w: total uncompressed size exceeds %d bytes", ErrThemeSizeExceeded, MaxThemeExtractedBytes)
+		}
+		return nil
+	}
+	for _, t := range targets {
+		if err := streamOne(t); err != nil {
 			return ThemeManifest{}, err
 		}
 	}
 
-	finalDir := filepath.Join(tm.themesRoot(), manifest.ID)
+	manifest.Builtin = false
+	manifest.InstalledAt = time.Now().Unix()
+	manifest.SizeBytes = totalBytes
+
 	_ = os.RemoveAll(finalDir)
 	if err := os.Rename(stageDir, finalDir); err != nil {
 		return ThemeManifest{}, err
@@ -438,7 +490,7 @@ func (tm *ThemeManager) InstallFromURL(ctx context.Context, rawURL string) (Them
 		return ThemeManifest{}, fmt.Errorf("THEME_FETCH_READ_FAILED: %v", err)
 	}
 	if len(data) > MaxThemeZipBytes {
-		return ThemeManifest{}, fmt.Errorf("%w: remote zip exceeds 16 MiB", ErrThemeSizeExceeded)
+		return ThemeManifest{}, fmt.Errorf("%w: remote zip exceeds 3 MiB", ErrThemeSizeExceeded)
 	}
 	return tm.InstallZip(data)
 }
@@ -866,7 +918,7 @@ body {
 	return buf.Bytes(), nil
 }
 
-func validateThemeManifest(m *ThemeManifest, files map[string][]byte) error {
+func validateThemeManifest(m *ThemeManifest, files map[string]struct{}) error {
 	m.ID = strings.TrimSpace(m.ID)
 	if !isValidThemeID(m.ID) {
 		return fmt.Errorf("%w: invalid theme id %q (must match ^[a-z0-9][a-z0-9._-]{1,47}$)", ErrInvalidThemeManifest, m.ID)

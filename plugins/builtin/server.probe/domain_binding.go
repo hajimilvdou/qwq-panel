@@ -336,8 +336,18 @@ server {
     # ssl_certificate     /www/server/panel/vhost/cert/%s/fullchain.pem;
     # ssl_certificate_key /www/server/panel/vhost/cert/%s/privkey.pem;
 
+    location = /api/probe/v1/report {
+        proxy_pass http://%s/p/server.probe/agent/v1/report;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+
     location / {
-        proxy_pass http://%s;
+        proxy_pass http://%s/p/server.probe/portal/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -348,17 +358,26 @@ server {
         proxy_cache off;
         proxy_read_timeout 3600s;
     }
-}`, dom, dom, dom, loopbackListen)
+}`, dom, dom, dom, loopbackListen, loopbackListen)
 
 	caddy := fmt.Sprintf(`%s {
     encode zstd gzip
-    reverse_proxy %s {
-        flush_interval -1
-        header_up X-Forwarded-Host {host}
+    handle /api/probe/v1/report {
+        rewrite * /p/server.probe/agent/v1/report
+        reverse_proxy %s {
+            header_up X-Forwarded-Host {host}
+        }
     }
-}`, dom, loopbackListen)
+    handle {
+        rewrite * /p/server.probe/portal{uri}
+        reverse_proxy %s {
+            flush_interval -1
+            header_up X-Forwarded-Host {host}
+        }
+    }
+}`, dom, loopbackListen, loopbackListen)
 
-	cfTunnel := fmt.Sprintf(`cloudflared tunnel route dns <tunnel-name> %s && cloudflared tunnel run --url http://%s <tunnel-name>`, dom, loopbackListen)
+	cfTunnel := fmt.Sprintf(`cloudflared tunnel route dns <tunnel-name> %s && cloudflared tunnel run --url http://%s/p/server.probe/portal/ <tunnel-name>`, dom, loopbackListen)
 
 	return ReverseProxySnippets{
 		Domain:          dom,

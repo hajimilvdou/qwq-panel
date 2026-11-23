@@ -1215,7 +1215,7 @@ type CoreInfo struct {
 const coreReasonUnavailable = "外部核心尚未接入"
 
 // coreOrder is the fixed order of the core list.
-var coreOrder = []CoreName{CoreNative, CoreClaudeCode, CoreCodex, CoreOpencode}
+var coreOrder = []CoreName{CoreNative, CoreClaudeCode, CoreCodex, CoreOpencode, CoreDSH, CoreACP}
 
 // Cores lists every selectable core of ADR-0010 with its live availability.
 func (s *Service) Cores() []CoreInfo {

@@ -44,8 +44,8 @@
   },
   "placement": "node",
   "lifecycle": {
-    "startup": "on_demand",
-    "background": false,
+    "startup": "eager",
+    "background": true,
     "update_strategy": "restart",
     "overlap_safe": false
   },

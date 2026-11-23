@@ -58,7 +58,7 @@ func (v *validator) protocol(profile *Profile, path string) {
 		}
 	case ProtocolShadowsocks2022:
 		if profile.Shadowsocks2022 != nil {
-			v.shadowsocks2022(profile.Shadowsocks2022, path+"/shadowsocks2022")
+			v.shadowsocks2022(profile.Shadowsocks2022, profile.Users, path+"/shadowsocks2022")
 		}
 	case ProtocolHysteria2:
 		if profile.Hysteria2 != nil {
@@ -212,9 +212,12 @@ func (v *validator) anytls(config *AnyTLS, path string) {
 	}
 }
 
-func (v *validator) shadowsocks2022(config *Shadowsocks2022, path string) {
+func (v *validator) shadowsocks2022(config *Shadowsocks2022, users []User, path string) {
 	v.require(config.Method == MethodAES128 || config.Method == MethodAES256 || config.Method == MethodChaCha20,
 		path+"/method", "ENUM", "SS2022 仅支持 2022-blake3-aes-128-gcm、2022-blake3-aes-256-gcm 或 2022-blake3-chacha20-poly1305")
+	if config.Method == MethodChaCha20 {
+		v.require(len(users) <= 1, path+"/method", "SINGLE_USER", "2022-blake3-chacha20-poly1305 仅支持单用户模式")
+	}
 	v.secret(&config.ServerKey, path+"/server_key")
 	if config.Obfs == nil {
 		v.require(false, path+"/obfs", "REQUIRED", "必须显式选择混淆模式")

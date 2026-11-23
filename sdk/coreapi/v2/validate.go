@@ -30,7 +30,7 @@ func Validate(intent *Intent) error {
 	}
 	seenProfiles := make(map[string]bool, min(len(intent.Profiles), MaxProfiles))
 	seenMarks := make(map[uint32]string)
-	totalUsers := 0
+	uniqueUsers := make(map[string]struct{})
 	for index := range min(len(intent.Profiles), MaxProfiles) {
 		profile := &intent.Profiles[index]
 		path := strictjson.Pointer("/profiles", strconv.Itoa(index))
@@ -43,7 +43,6 @@ func Validate(intent *Intent) error {
 		v.require(profile.Port >= 1 && profile.Port <= 65535, path+"/port", "RANGE", "入站端口必须在 1 至 65535 之间")
 		v.protocol(profile, path)
 		v.require(len(profile.Users) >= 1 && len(profile.Users) <= MaxUsers, path+"/users", "SIZE", "每个 profile 必须有 1 至 256 个用户")
-		totalUsers += len(profile.Users)
 		seenUsers := make(map[string]bool, min(len(profile.Users), MaxUsers))
 		for userIndex := range min(len(profile.Users), MaxUsers) {
 			user := &profile.Users[userIndex]
@@ -51,6 +50,7 @@ func Validate(intent *Intent) error {
 			v.require(v1.ValidID(user.ID), userPath+"/id", "ID", "用户 ID 必须是小写稳定标识")
 			v.require(!seenUsers[user.ID], userPath+"/id", "DUPLICATE", "用户 ID 在同一 profile 内不能重复")
 			seenUsers[user.ID] = true
+			uniqueUsers[user.ID] = struct{}{}
 			if user.TrafficMark != 0 {
 				v.require(user.TrafficMark >= MinTrafficMark && user.TrafficMark <= MaxTrafficMark, userPath+"/traffic_mark", "RANGE", "traffic_mark 必须为 0 或位于 0x5100..0x51FF 保留段内")
 				if prevUser, dup := seenMarks[user.TrafficMark]; dup && prevUser != user.ID {
@@ -63,7 +63,7 @@ func Validate(intent *Intent) error {
 		}
 		v.claim(profile, path)
 	}
-	v.require(totalUsers <= MaxUsers, "/profiles", "SIZE", "节点总用户数不得超过 256")
+	v.require(len(uniqueUsers) <= MaxUsers, "/profiles", "SIZE", "节点全局唯一用户数不得超过 256")
 	if intent.WARP != nil {
 		v.warp(intent.WARP, seenProfiles)
 	}
@@ -82,7 +82,7 @@ func (v *validator) warp(w *WARPOutbound, seenProfiles map[string]bool) {
 		v.require(validWARPAddrV6(w.AddressV6), "/warp/address_v6", "IP", "WARP IPv6 内网地址格式无效")
 	}
 	if len(w.Reserved) > 0 {
-		v.require(len(w.Reserved) == 3 || len(w.Reserved) == 4, "/warp/reserved", "SIZE", "WARP reserved 必须为 3 或 4 个字节整数")
+		v.require(len(w.Reserved) == 3, "/warp/reserved", "SIZE", "WARP reserved 必须为 3 个字节整数")
 		for idx, b := range w.Reserved {
 			v.require(b >= 0 && b <= 255, strictjson.Pointer("/warp/reserved", strconv.Itoa(idx)), "RANGE", "reserved 字节值必须在 0..255 之间")
 		}

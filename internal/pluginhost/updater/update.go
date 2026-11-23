@@ -212,17 +212,26 @@ func checkSchemaVersion(m *manifest.Manifest) error {
 	})
 }
 
-// checkPublisher refuses an update signed by another publisher unless the
-// caller accepted the change: the new publisher takes over the plugin's data,
-// KV and granted capabilities (ADR-0015).
+// checkPublisher refuses an update signed by another publisher or signing key
+// unless the caller accepted the change: the new publisher takes over the
+// plugin's data, KV and granted capabilities (ADR-0015).
 func checkPublisher(next, current *manifest.Manifest, accepted bool) error {
-	if next == nil || current == nil || accepted || next.Publisher.ID == current.Publisher.ID {
+	if next == nil || current == nil || accepted {
 		return nil
 	}
-	return problem.Validation(problem.Violation{
-		Pointer: "/accept_publisher_change", Code: "PUBLISHER_CHANGED",
-		Message: fmt.Sprintf("The package is published by %q, the active version by %q.", next.Publisher.ID, current.Publisher.ID),
-	})
+	if next.Publisher.ID != current.Publisher.ID {
+		return problem.Validation(problem.Violation{
+			Pointer: "/accept_publisher_change", Code: "PUBLISHER_CHANGED",
+			Message: fmt.Sprintf("The package is published by %q, the active version by %q.", next.Publisher.ID, current.Publisher.ID),
+		})
+	}
+	if current.Publisher.KeyID != "" && next.Publisher.KeyID != "" && next.Publisher.KeyID != current.Publisher.KeyID {
+		return problem.Validation(problem.Violation{
+			Pointer: "/accept_publisher_change", Code: "PUBLISHER_CHANGED",
+			Message: fmt.Sprintf("The package is signed by key %q, the active version by %q.", next.Publisher.KeyID, current.Publisher.KeyID),
+		})
+	}
+	return nil
 }
 
 // Rollback switches the plugin back to its most recently activated retained
@@ -251,6 +260,13 @@ func (u *Updater) Rollback(ctx context.Context, pluginID string) (*UpdateResult,
 	}
 	if err != nil {
 		return nil, problem.Wrap(err)
+	}
+	if u.trust != nil && target.Manifest != nil && target.Manifest.Publisher.KeyID != "" {
+		if _, kerr := u.trust.LookupKey(target.Manifest.Publisher.KeyID); kerr != nil {
+			return nil, problem.New(problem.PermissionDenied,
+				"Cannot roll back plugin %s to version %s: its publisher signing key %s is no longer trusted.",
+				pluginID, target.Version, target.Manifest.Publisher.KeyID)
+		}
 	}
 	mem, err := u.planMemory(ctx, pluginID, target.Manifest, "", true)
 	if err != nil {

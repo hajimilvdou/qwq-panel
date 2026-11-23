@@ -284,6 +284,10 @@ func capabilityFloor(name string) string {
 		// (a proxy data plane does not cut the management channel), so
 		// ReachabilityCapabilityPrefixes is deliberately unchanged.
 		return RiskHigh
+	case name == "network.listen", strings.HasPrefix(name, "network.listen."):
+		return RiskHigh
+	case name == "tls.consume", strings.HasPrefix(name, "tls.consume."):
+		return RiskHigh
 	case strings.HasPrefix(name, "system."):
 		return RiskHigh
 	case strings.HasPrefix(name, "state."):

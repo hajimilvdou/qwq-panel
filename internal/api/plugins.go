@@ -545,7 +545,7 @@ func (a *api) installPlugin(w http.ResponseWriter, r *http.Request) {
 	} else if done {
 		return
 	}
-	path, ok := a.d.PluginUploads.filePath(uploadID)
+	path, ok := a.d.PluginUploads.filePathForPrincipal(uploadID, principalScope(act))
 	if !ok {
 		a.fail(w, r, uploadNotFound())
 		return
@@ -606,7 +606,7 @@ func (a *api) updatePlugin(w http.ResponseWriter, r *http.Request) {
 	} else if done {
 		return
 	}
-	path, ok := a.d.PluginUploads.filePath(uploadID)
+	path, ok := a.d.PluginUploads.filePathForPrincipal(uploadID, principalScope(act))
 	if !ok {
 		a.fail(w, r, uploadNotFound())
 		return

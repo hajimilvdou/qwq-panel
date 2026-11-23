@@ -32,7 +32,7 @@
       "enum": [
         "both",
         "max",
-        "outbound"
+        "out_only"
       ]
     },
     "reset_day": {

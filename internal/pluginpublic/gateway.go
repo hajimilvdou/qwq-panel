@@ -21,16 +21,40 @@ import (
 
 const (
 	DefaultMaxResponseBytes = 4 << 20  // 4 MiB（与 ADR-0024 / ABI 对齐）
-	MaxThemeUploadBodyBytes = 16 << 20 // 16 MiB（server.probe 主题包上传上限）
+	MaxThemeUploadBodyBytes = 3 << 20  // 3 MiB（server.probe 主题包上传上限，兼容 4 MiB gRPC 帧）
 	MaxStreamingBodyBytes   = 32 << 20 // 32 MiB（多模态流式 AI 中转请求体上限）
 	DefaultBufferedTimeout  = 15 * time.Second
 	DefaultStreamTimeout    = 600 * time.Second
 
 	themeSandboxHeader = "X-QWQ-Theme-Sandbox"
-	themeSandboxCSP    = "sandbox allow-scripts; default-src 'none'; script-src https: http: 'unsafe-inline'; style-src 'unsafe-inline' https: http:; img-src data: blob: https: http:; font-src data: https: http:; connect-src 'none'; frame-ancestors 'self'"
 	probePortalCSP     = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; font-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 	defaultPortalCSP   = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 )
+
+func (g *Gateway) buildThemeSandboxCSP(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	} else {
+		remote := extractRemoteIP(r.RemoteAddr)
+		if addr, err := netip.ParseAddr(remote); err == nil && g.isTrustedProxyIP(addr) {
+			if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+				scheme = "https"
+			}
+		}
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" || strings.ContainsAny(host, " \t\r\n;\"'<>\\") {
+		return "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob: https: http:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+	}
+	origin := scheme + "://" + host
+	return "sandbox allow-scripts; default-src 'none'; " +
+		"script-src " + origin + "; " +
+		"style-src 'unsafe-inline' " + origin + "; " +
+		"img-src data: blob: https: http:; " +
+		"font-src data: " + origin + "; " +
+		"connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+}
 
 type ctxFromCustomDomainKey struct{}
 
@@ -403,9 +427,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sandboxedTheme := isThemeSandboxPath(subpath)
+	if sandboxedTheme && strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Dest")), "document") {
+		target := "/"
+		if !isCustomDomainRequest(r) {
+			target = "/p/" + pluginID + "/" + route + "/"
+		}
+		http.Redirect(w, r, target, http.StatusFound)
+		return
+	}
 	if sandboxedTheme {
 		h.Set("X-Frame-Options", "SAMEORIGIN")
-		h.Set("Content-Security-Policy", themeSandboxCSP)
+		h.Set("Content-Security-Policy", g.buildThemeSandboxCSP(r))
 	} else if spec.PortalSPA {
 		if pluginID == "server.probe" {
 			h.Set("Content-Security-Policy", probePortalCSP)
@@ -432,7 +464,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clientIP := g.extractClientIP(r)
-	if !g.allowClientIP(rateLimitIPKey(clientIP)+"|"+pluginID+"|"+route, spec.RateLimitPerMin) {
+	bucketScope := route
+	if subpath == "admin" || strings.HasPrefix(subpath, "admin/") ||
+		subpath == "api/admin" || strings.HasPrefix(subpath, "api/admin/") {
+		bucketScope = route + ":admin"
+	}
+	if !g.allowClientIP(rateLimitIPKey(clientIP)+"|"+pluginID+"|"+bucketScope, spec.RateLimitPerMin) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		return
 	}
@@ -465,7 +502,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	maxReqBytes := spec.MaxReqBytes
-	if pluginID == "server.probe" && subpath == "api/admin/themes/upload" && maxReqBytes < MaxThemeUploadBodyBytes {
+	if pluginID == "server.probe" && subpath == "api/admin/themes/upload" {
 		maxReqBytes = MaxThemeUploadBodyBytes
 	}
 
@@ -524,7 +561,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if !sandboxedTheme && hasThemeSandboxHeader(resp.Headers) {
 		h.Set("X-Frame-Options", "SAMEORIGIN")
-		h.Set("Content-Security-Policy", themeSandboxCSP)
+		h.Set("Content-Security-Policy", g.buildThemeSandboxCSP(r))
 	}
 	for k, v := range resp.Headers {
 		canon := http.CanonicalHeaderKey(k)

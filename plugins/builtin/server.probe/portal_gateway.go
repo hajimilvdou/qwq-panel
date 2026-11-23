@@ -33,39 +33,16 @@ var embeddedPortalFS embed.FS
 // - 独立探针后台使用专属令牌头 X-Probe-Admin-Token: prb_adm_*（永不读写宿主 Cookie，永不共享宿主会话）；
 // - 登录校验具备 2 槽并发限制（保护 1C1G CPU）与按 IP 失败渐进冷却。
 type PortalGateway struct {
-	store            *ProbeStore
-	domains          *DomainBindingCoordinator
-	ai               *AINativeController
-	themes           *ThemeManager
-	adminSalt        [16]byte
-	adminSecretKey   [32]byte
-	hasAdminPassword bool
-	signingSecret    [32]byte
-	hashSlots        chan struct{}
-	mu               sync.Mutex
-	adminSessions    map[string]int64 // tokenSHA -> expiresUnix (硬上限 256)
-	failedLoginsByIP map[string]loginAttempt
-	now              func() time.Time
-}
-
-type loginAttempt struct {
-	fails      int
-	lockedTill int64
-}
-
-// stretchAdminPassword 使用 64,000 轮带独立随机盐的 HMAC-SHA256 密钥拉伸（零外部依赖，配合 2 槽信号量兼顾抗爆破与 1C1G CPU 预算）。
-func stretchAdminPassword(salt [16]byte, password string) [32]byte {
-	mac := hmac.New(sha256.New, salt[:])
-	_, _ = mac.Write([]byte("qwq-probe-adm-kdf-v1:" + password))
-	cur := mac.Sum(nil)
-	for i := 0; i < 64000; i++ {
-		mac.Reset()
-		_, _ = mac.Write(cur)
-		cur = mac.Sum(cur[:0])
-	}
-	var out [32]byte
-	copy(out[:], cur)
-	return out
+	store         *ProbeStore
+	domains       *DomainBindingCoordinator
+	ai            *AINativeController
+	themes        *ThemeManager
+	authGuard     *BoundedAuthGuard
+	signingSecret [32]byte
+	hashSlots     chan struct{}
+	mu            sync.Mutex
+	adminVerifier string
+	now           func() time.Time
 }
 
 func NewPortalGateway(store *ProbeStore, domains *DomainBindingCoordinator, ai *AINativeController, initialAdminPassword string, now func() time.Time) *PortalGateway {
@@ -75,36 +52,42 @@ func NewPortalGateway(store *ProbeStore, domains *DomainBindingCoordinator, ai *
 	if ai == nil {
 		ai = NewAINativeController(store, domains)
 	}
-	var (
-		secret [32]byte
-		salt   [16]byte
-		key    [32]byte
-	)
+	var secret [32]byte
 	_, _ = rand.Read(secret[:])
-	_, _ = rand.Read(salt[:])
 
-	hasPW := initialAdminPassword != ""
-	if hasPW {
-		key = stretchAdminPassword(salt, initialAdminPassword)
-	}
 	dataDir := ""
+	verifier := ""
 	if store != nil {
 		dataDir = store.dataDir
+		store.mu.RLock()
+		verifier = strings.TrimSpace(store.settings.StandaloneAdminVerifier)
+		store.mu.RUnlock()
+	}
+	if initialAdminPassword != "" {
+		if v, err := encodeAdminVerifierRaw(initialAdminPassword); err == nil {
+			verifier = v
+		}
 	}
 	return &PortalGateway{
-		store:            store,
-		domains:          domains,
-		ai:               ai,
-		themes:           NewThemeManager(dataDir),
-		adminSalt:        salt,
-		adminSecretKey:   key,
-		hasAdminPassword: hasPW,
-		signingSecret:    secret,
-		hashSlots:        make(chan struct{}, 2), // 1C1G 保护：最多 2 个并发拉伸校验
-		adminSessions:    make(map[string]int64),
-		failedLoginsByIP: make(map[string]loginAttempt),
-		now:              now,
+		store:         store,
+		domains:       domains,
+		ai:            ai,
+		themes:        NewThemeManager(dataDir),
+		authGuard:     NewBoundedAuthGuard(),
+		signingSecret: secret,
+		hashSlots:     make(chan struct{}, 2), // 1C1G 保护：最多 2 个并发拉伸校验
+		adminVerifier: verifier,
+		now:           now,
 	}
+}
+
+func (g *PortalGateway) SetAdminVerifier(verifier string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.adminVerifier = strings.TrimSpace(verifier)
+	g.mu.Unlock()
 }
 
 func (g *PortalGateway) Close() error {
@@ -209,8 +192,15 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 		}, data
 	}
 
-	// 通道 3：私有探针访客口令解锁
+	// 通道 3：私有探针访客口令解锁（受 BoundedAuthGuard 防暴破保护）
 	if cleanSub == "/api/public/unlock" && method == http.MethodPost {
+		nowUnix := now.Unix()
+		if g.authGuard.CheckLocked("unlock", clientIP, nowUnix) {
+			return jsonResp(http.StatusTooManyRequests, map[string]any{
+				"error":               "TOO_MANY_ATTEMPTS",
+				"retry_after_seconds": g.authGuard.RetryAfterSeconds("unlock", clientIP, nowUnix),
+			})
+		}
 		var req struct {
 			Password string `json:"password"`
 		}
@@ -221,15 +211,21 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 		visHash := g.store.settings.VisitorPasswordSHA256
 		g.store.mu.RUnlock()
 		sum := sha256.Sum256([]byte("qwq-probe-vis-v1:" + req.Password))
-		if visHash == "" || subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(visHash)) != 1 {
+		matched := visHash != "" && subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(visHash)) == 1
+		g.authGuard.RecordResult("unlock", clientIP, matched, nowUnix)
+		if !matched {
 			return jsonResp(http.StatusUnauthorized, map[string]any{"error": "VISITOR_PASSWORD_INCORRECT"})
 		}
 		return jsonResp(http.StatusOK, map[string]any{"visitor_token": g.mintVisitorToken(now)})
 	}
 
-	// 通道 4：独立探针页管理员原地登录（签发独立 prb_adm_* 会话，供「只安装探针」直接切换前后台！）
+	// 通道 4：独立探针页管理员原地登录与登出（签发/吊销独立 prb_adm_* 会话，供「只安装探针」直接切换前后台！）
 	if cleanSub == "/api/admin/login" && method == http.MethodPost {
 		return g.handleStandaloneAdminLogin(now, clientIP, body)
+	}
+	if cleanSub == "/api/admin/logout" && method == http.MethodPost {
+		g.authGuard.RevokeSession(strings.TrimSpace(extractHeaderCI(headers, "X-Probe-Admin-Token")))
+		return jsonResp(http.StatusOK, map[string]any{"logged_out": true})
 	}
 
 	// 通道 4.5：独立探针模式下的 ADR-0004 原生 AI 操控面（接受真人 prb_adm_* 或受限委托令牌 prb_dlg_*）
@@ -252,7 +248,7 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 
 	// 通道 5.8：第三方自定义主题不透明源沙箱路由 /theme-frame/*（始终附带 X-QWQ-Theme-Sandbox: 1）
 	if cleanSub == "/theme-frame" || strings.HasPrefix(cleanSub, "/theme-frame/") {
-		return g.serveSandboxedThemeFrame(method, cleanSub)
+		return g.serveSandboxedThemeFrame(method, cleanSub, headers)
 	}
 
 	// 通道 6：前台展示静态资源（自定义主题由官方 theme-sandbox.html 沙箱宿主挂载，缺失/损坏时无缝回退内置门户）
@@ -269,16 +265,12 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 
 func (g *PortalGateway) handleStandaloneAdminLogin(now time.Time, clientIP string, body []byte) (int, map[string]string, []byte) {
 	nowUnix := now.Unix()
-	g.mu.Lock()
-	att := g.failedLoginsByIP[clientIP]
-	if att.lockedTill > nowUnix {
-		g.mu.Unlock()
+	if g.authGuard.CheckLocked("admin", clientIP, nowUnix) {
 		return jsonResp(http.StatusTooManyRequests, map[string]any{
 			"error":               "TOO_MANY_ATTEMPTS",
-			"retry_after_seconds": att.lockedTill - nowUnix,
+			"retry_after_seconds": g.authGuard.RetryAfterSeconds("admin", clientIP, nowUnix),
 		})
 	}
-	g.mu.Unlock()
 
 	select {
 	case g.hashSlots <- struct{}{}:
@@ -290,44 +282,24 @@ func (g *PortalGateway) handleStandaloneAdminLogin(now time.Time, clientIP strin
 	var req struct {
 		Password string `json:"password"`
 	}
-	if err := json.Unmarshal(body, &req); err != nil || !g.hasAdminPassword || len(req.Password) > 256 {
-		return jsonResp(http.StatusUnauthorized, map[string]any{"error": "INVALID_CREDENTIALS"})
-	}
-	cand := stretchAdminPassword(g.adminSalt, req.Password)
-	ok := subtle.ConstantTimeCompare(cand[:], g.adminSecretKey[:]) == 1
-
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	// 硬上限防伪造源 IP 撑爆内存（512M/1C1G 保护）
-	if len(g.failedLoginsByIP) >= 2048 {
-		clear(g.failedLoginsByIP)
-	}
-	if !ok {
-		att.fails++
-		if att.fails >= 5 {
-			att.lockedTill = nowUnix + int64(min(900, 30*(1<<min(4, att.fails-5))))
-		}
-		g.failedLoginsByIP[clientIP] = att
+	verifier := g.adminVerifier
+	g.mu.Unlock()
+	if err := json.Unmarshal(body, &req); err != nil || verifier == "" || len(req.Password) > 256 {
+		g.authGuard.RecordResult("admin", clientIP, false, nowUnix)
 		return jsonResp(http.StatusUnauthorized, map[string]any{"error": "INVALID_CREDENTIALS"})
 	}
-	delete(g.failedLoginsByIP, clientIP)
-
-	if len(g.adminSessions) >= 256 {
-		for k, exp := range g.adminSessions {
-			if exp <= nowUnix {
-				delete(g.adminSessions, k)
-			}
-		}
-		if len(g.adminSessions) >= 256 {
-			clear(g.adminSessions)
-		}
+	ok := VerifyAdminVerifier(verifier, req.Password)
+	g.authGuard.RecordResult("admin", clientIP, ok, nowUnix)
+	if !ok {
+		return jsonResp(http.StatusUnauthorized, map[string]any{"error": "INVALID_CREDENTIALS"})
 	}
-	raw := make([]byte, 24)
-	_, _ = rand.Read(raw)
-	plain := "prb_adm_" + base64.RawURLEncoding.EncodeToString(raw)
-	tokenSum := sha256.Sum256([]byte(plain))
-	exp := nowUnix + int64((8 * time.Hour).Seconds())
-	g.adminSessions[hex.EncodeToString(tokenSum[:])] = exp
+
+	plain, err := g.authGuard.MintSession(8*time.Hour, now)
+	if err != nil {
+		return jsonResp(http.StatusInternalServerError, map[string]any{"error": "SESSION_MINT_FAILED"})
+	}
+	exp := now.Add(8 * time.Hour).Unix()
 
 	return jsonResp(http.StatusOK, map[string]any{
 		"admin_token": plain,
@@ -394,6 +366,7 @@ func (g *PortalGateway) handleStandaloneAINative(now time.Time, method, path str
 			code := http.StatusConflict
 			return jsonResp(code, map[string]any{"error": err.Error()})
 		}
+		_ = g.store.PersistSettings(context.Background(), updated)
 		return jsonResp(http.StatusOK, updated)
 	}
 	return jsonResp(http.StatusNotFound, map[string]any{"error": "UNKNOWN_AI_ENDPOINT"})
@@ -869,17 +842,19 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 
 	case path == "/api/admin/domain/bind" && method == http.MethodPost:
 		var req struct {
-			CustomDomain       string `json:"custom_domain"`
-			BindingTrack       string `json:"binding_track"`
-			PanelCertRef       string `json:"panel_cert_binding_ref"`
-			ACMEEmail          string `json:"acme_email"`
-			CertPEM            string `json:"cert_pem"`
-			KeyPEM             string `json:"key_pem"`
-			TrustCloudflareIPs bool   `json:"trust_cloudflare_ips"`
+			CustomDomain       string             `json:"custom_domain"`
+			BindingTrack       string             `json:"binding_track"`
+			PanelCertRef       string             `json:"panel_cert_binding_ref"`
+			ACMEEmail          string             `json:"acme_email"`
+			CertPEM            string             `json:"cert_pem"`
+			KeyPEM             SecretOrPlainField `json:"key_pem"`
+			TrustCloudflareIPs bool               `json:"trust_cloudflare_ips"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			return jsonResp(http.StatusBadRequest, map[string]any{"error": "INVALID_JSON"})
 		}
+		keyBytes := []byte(req.KeyPEM.Plain)
+		defer clear(keyBytes)
 		g.store.mu.Lock()
 		candidate := g.store.settings
 		candidate.DomainEnabled = true
@@ -888,7 +863,7 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 		candidate.PanelCertBindingRef = req.PanelCertRef
 		candidate.BuiltinACMEEmail = req.ACMEEmail
 		candidate.TrustCloudflareIPs = req.TrustCloudflareIPs
-		summary, err := g.domains.ValidateAndApply(now, &candidate, []byte(req.CertPEM), []byte(req.KeyPEM))
+		summary, err := g.domains.ValidateAndApply(now, &candidate, []byte(req.CertPEM), keyBytes)
 		if err != nil {
 			g.store.mu.Unlock()
 			return jsonResp(http.StatusUnprocessableEntity, map[string]any{"error": err.Error()})
@@ -932,24 +907,10 @@ func isValidNodeID(id string) bool {
 }
 
 func (g *PortalGateway) verifyAdminToken(raw string, now time.Time) bool {
-	tok := strings.TrimSpace(raw)
-	if !strings.HasPrefix(tok, "prb_adm_") {
+	if g == nil || g.authGuard == nil {
 		return false
 	}
-	sum := sha256.Sum256([]byte(tok))
-	key := hex.EncodeToString(sum[:])
-
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	exp, ok := g.adminSessions[key]
-	if !ok {
-		return false
-	}
-	if exp <= now.Unix() {
-		delete(g.adminSessions, key)
-		return false
-	}
-	return true
+	return g.authGuard.VerifySession(strings.TrimSpace(raw), now.Unix())
 }
 
 func (g *PortalGateway) mintVisitorToken(now time.Time) string {
@@ -984,10 +945,18 @@ func (g *PortalGateway) verifyVisitorToken(tok string, now time.Time) bool {
 	return err == nil && now.Before(t)
 }
 
-func (g *PortalGateway) serveSandboxedThemeFrame(method, cleanSub string) (int, map[string]string, []byte) {
+func (g *PortalGateway) serveSandboxedThemeFrame(method, cleanSub string, headers map[string]string) (int, map[string]string, []byte) {
 	inner := strings.TrimPrefix(cleanSub, "/theme-frame")
 	if inner == "" {
 		inner = "/"
+	}
+	// 阻断顶层地址栏直接导航至 /theme-frame/*（防自定义主题伪造同域名钓鱼页）
+	if IsTopLevelThemeFrameNavigation(headers) {
+		depth := 1 + strings.Count(strings.TrimPrefix(inner, "/"), "/")
+		return http.StatusFound, map[string]string{
+			"Location":      strings.Repeat("../", depth),
+			"Cache-Control": "no-store",
+		}, nil
 	}
 	if inner == "/__qwq_bridge.js" {
 		data, err := fs.ReadFile(embeddedPortalFS, "portal_ui/theme-bridge.js")

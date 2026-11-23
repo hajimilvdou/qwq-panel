@@ -129,6 +129,49 @@ func (s *CompositeTrustStore) LookupKey(keyID string) (manifest.TrustedKey, erro
 	return manifest.TrustedKey{}, manifest.ErrKeyNotFound
 }
 
+// KeySource reports whether keyID belongs to the official system trust root
+// (SourceOfficial) or the administrator-managed custom trust root (SourceCustom).
+func (s *CompositeTrustStore) KeySource(keyID string) (string, bool) {
+	if !keyIDPattern.MatchString(keyID) {
+		return "", false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if sysKeys, err := s.loadSystemKeysLocked(); err == nil {
+		if _, ok := sysKeys[keyID]; ok {
+			return SourceOfficial, true
+		}
+	}
+	if custKeys, err := s.loadCustomKeysLocked(); err == nil {
+		if _, ok := custKeys[keyID]; ok {
+			return SourceCustom, true
+		}
+	}
+	return "", false
+}
+
+// ValidateKeyID checks the canonical ed25519:<64hex> key_id syntax without
+// mutating trust store state.
+func ValidateKeyID(keyID string) error {
+	if !keyIDPattern.MatchString(keyID) {
+		return ErrInvalidKeyID
+	}
+	return nil
+}
+
+// ValidateAddInput validates label and Ed25519 public key PEM syntax before
+// performing sensitive operations such as consuming an MFA recovery code.
+func ValidateAddInput(label, pubPEM string) error {
+	if _, err := validateLabel(label); err != nil {
+		return err
+	}
+	if _, err := pkgfile.ParsePublicKeyPEM([]byte(strings.TrimSpace(pubPEM))); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidKey, err)
+	}
+	return nil
+}
+
 // List returns all currently trusted official and custom publisher keys.
 func (s *CompositeTrustStore) List() ([]TrustKeyInfo, error) {
 	s.mu.RLock()

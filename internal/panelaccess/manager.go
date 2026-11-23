@@ -602,31 +602,70 @@ func loadOrSeed(ctx context.Context, db *storage.DB, seed Snapshot) (Snapshot, e
 	}
 	if !found {
 		seed.GateSecret = sec
+		var persisted Snapshot
 		err = db.Update(ctx, func(tx *storage.Tx) error {
 			autoInt := 0
 			if seed.AutoDisableOnDomain {
 				autoInt = 1
 			}
-			_, ierr := tx.ExecContext(ctx, `
+			if _, ierr := tx.ExecContext(ctx, `
 				INSERT OR IGNORE INTO panel_access_settings
 				(id, listen_port, entry_path, disguise, disguise_html, panel_domain,
 				 auto_disable_on_domain, gate_secret, revision, updated_at)
 				VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				seed.Port, seed.EntryPath, seed.Disguise, seed.DisguiseHTML, seed.PanelDomain,
 				autoInt, seed.GateSecret, seed.Revision, storage.FormatTime(seed.UpdatedAt),
+			); ierr != nil {
+				return ierr
+			}
+			var (
+				port        int
+				ep          string
+				disguise    string
+				html        string
+				dom         string
+				autoDisable int
+				secret      string
+				rev         int64
+				updatedAt   string
 			)
-			return ierr
+			if serr := tx.QueryRowContext(ctx, `
+				SELECT listen_port, entry_path, disguise, disguise_html, panel_domain,
+				       auto_disable_on_domain, gate_secret, revision, updated_at
+				FROM panel_access_settings WHERE id = 1`,
+			).Scan(&port, &ep, &disguise, &html, &dom, &autoDisable, &secret, &rev, &updatedAt); serr != nil {
+				return serr
+			}
+			persisted = seed
+			if port > 0 {
+				persisted.Port = port
+			}
+			persisted.EntryPath = config.NormalizeEntryPath(ep)
+			if d, derr := config.NormalizeDisguise(disguise); derr == nil {
+				persisted.Disguise = d
+			}
+			persisted.DisguiseHTML = html
+			persisted.PanelDomain = dom
+			persisted.AutoDisableOnDomain = autoDisable != 0
+			persisted.GateSecret = secret
+			persisted.Revision = rev
+			if ts, terr := time.Parse(time.RFC3339Nano, updatedAt); terr == nil {
+				persisted.UpdatedAt = ts
+			}
+			return nil
 		})
 		if err != nil {
 			return Snapshot{}, err
 		}
-		return seed, nil
+		return persisted, nil
 	}
 	out.GateSecret = sec
-	_ = db.Update(ctx, func(tx *storage.Tx) error {
+	if err := db.Update(ctx, func(tx *storage.Tx) error {
 		_, uerr := tx.ExecContext(ctx, `UPDATE panel_access_settings SET gate_secret = ? WHERE id = 1`, sec)
 		return uerr
-	})
+	}); err != nil {
+		return Snapshot{}, err
+	}
 	return out, nil
 }
 

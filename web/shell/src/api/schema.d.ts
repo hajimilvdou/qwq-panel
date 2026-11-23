@@ -2962,11 +2962,11 @@ export type components = {
         AgentSessionStatus: "idle" | "running" | "waiting_approval" | "cancelled" | "failed" | "attention";
         /**
          * @description The replaceable core of a session. `native` is the host's built-in OpenAI-compatible core;
-         *     the CLI cores are the A3 contract and answer `503 UNAVAILABLE` on send until the host wires
-         *     them (ADR-0010 §6).
+         *     the external CLI/ACP cores (`claude-code`, `codex`, `opencode`, `dsh`, `acp`) answer
+         *     `503 UNAVAILABLE` on send when their backing CLI binary is unavailable on the host (ADR-0010 §6).
          * @enum {string}
          */
-        AgentCore: "native" | "claude-code" | "codex" | "opencode";
+        AgentCore: "native" | "claude-code" | "codex" | "opencode" | "dsh" | "acp";
         /**
          * @description State of one tool call an agent proposed.
          * @enum {string}

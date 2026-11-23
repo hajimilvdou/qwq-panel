@@ -37,12 +37,31 @@ type Plugin struct{}
 func New() *Plugin { return &Plugin{} }
 
 type probeConfig struct {
-	CollectLocalHost        bool   `json:"collect_local_host"`
-	LocalNodeName           string `json:"local_node_name"`
-	LocalRegionCode         string `json:"local_region_code"`
-	RollupRetentionDays     int    `json:"rollup_retention_days"`
-	SLARetentionDays        int    `json:"sla_retention_days"`
-	StandaloneAdminPassword string `json:"standalone_admin_password"`
+	CollectLocalHost        bool               `json:"collect_local_host"`
+	LocalNodeName           string             `json:"local_node_name"`
+	LocalRegionCode         string             `json:"local_region_code"`
+	RollupRetentionDays     int                `json:"rollup_retention_days"`
+	SLARetentionDays        int                `json:"sla_retention_days"`
+	StandaloneAdminPassword SecretOrPlainField `json:"standalone_admin_password"`
+}
+
+func resolveProbeSecretOrPlain(ctx context.Context, host *pluginsdk.Host, field SecretOrPlainField, purpose string) (string, error) {
+	if field.SecretRef != "" {
+		if host == nil {
+			return "", pluginsdk.Errorf("HOST_UNAVAILABLE", "宿主凭据服务不可用")
+		}
+		raw, err := host.RevealSecret(ctx, field.SecretRef, purpose)
+		if err != nil {
+			return "", err
+		}
+		defer clear(raw)
+		var decoded string
+		if json.Unmarshal(raw, &decoded) == nil {
+			return decoded, nil
+		}
+		return string(raw), nil
+	}
+	return field.Plain, nil
 }
 
 type instance struct {
@@ -104,8 +123,23 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 			CertificatesPluginReady: false,
 		}
 	})
+	store.mu.RLock()
+	loadedSettings := store.settings
+	store.mu.RUnlock()
+	_ = domains.ReloadSealedBundle(time.Now(), loadedSettings)
+
 	aiCtrl := NewAINativeController(store, domains)
-	portal := NewPortalGateway(store, domains, aiCtrl, cfg.StandaloneAdminPassword, time.Now)
+	portal := NewPortalGateway(store, domains, aiCtrl, cfg.StandaloneAdminPassword.Plain, time.Now)
+	if cfg.StandaloneAdminPassword.Plain != "" && loadedSettings.StandaloneAdminVerifier == "" {
+		if verifier, vErr := EncodeAdminVerifier(cfg.StandaloneAdminPassword.Plain); vErr == nil {
+			store.mu.Lock()
+			store.settings.StandaloneAdminVerifier = verifier
+			saved := store.settings
+			store.mu.Unlock()
+			portal.SetAdminVerifier(verifier)
+			_ = store.PersistSettings(context.Background(), saved)
+		}
+	}
 
 	inst := &instance{
 		InstanceBase: base,
@@ -146,7 +180,7 @@ func (i *instance) ValidateConfig(_ context.Context, cand pluginsdk.Config) (plu
 	return pluginsdk.ConfigValidation{}, nil
 }
 
-func (i *instance) ApplyConfig(_ context.Context, cand pluginsdk.Config) error {
+func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error {
 	var next probeConfig
 	if len(cand.JSON) > 0 {
 		if err := json.Unmarshal(cand.JSON, &next); err != nil {
@@ -155,6 +189,18 @@ func (i *instance) ApplyConfig(_ context.Context, cand pluginsdk.Config) error {
 		i.cfgMu.Lock()
 		i.cfg = next
 		i.cfgMu.Unlock()
+		if next.StandaloneAdminPassword.Plain != "" {
+			verifier, err := EncodeAdminVerifier(next.StandaloneAdminPassword.Plain)
+			if err != nil {
+				return pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
+			}
+			i.store.mu.Lock()
+			i.store.settings.StandaloneAdminVerifier = verifier
+			saved := i.store.settings
+			i.store.mu.Unlock()
+			i.portal.SetAdminVerifier(verifier)
+			_ = i.store.PersistSettings(ctx, saved)
+		}
 	}
 	return nil
 }
@@ -612,6 +658,7 @@ func (i *instance) registerOperations() {
 		i.store.mu.Lock()
 		delete(i.store.nodes, p.ID)
 		delete(i.store.live, p.ID)
+		delete(i.store.sla90d, p.ID)
 		i.store.mu.Unlock()
 		_ = i.store.DeleteNode(context.Background(), p.ID)
 		b, _ := json.Marshal(map[string]any{"removed": p.ID})
@@ -621,10 +668,22 @@ func (i *instance) registerOperations() {
 		}, nil
 	})
 
-	i.HandleJob("probe.settings.update", func(_ context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
+	i.HandleJob("probe.settings.update", func(ctx context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
 		var patch PortalSettingsPatch
 		if err := json.Unmarshal(req.Payload, &patch); err != nil {
 			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "设置参数 JSON 无效")
+		}
+		var newAdminVerifier string
+		if patch.StandaloneAdminPassword.Plain != "" || patch.StandaloneAdminPassword.SecretRef != "" {
+			pwd, err := resolveProbeSecretOrPlain(ctx, i.Host(), patch.StandaloneAdminPassword, "standalone_admin_password")
+			if err != nil {
+				return pluginsdk.Result{}, pluginsdk.Errorf("SECRET_REVEAL_FAILED", "读取独立管理口令失败: %v", err)
+			}
+			verifier, err := EncodeAdminVerifier(pwd)
+			if err != nil {
+				return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
+			}
+			newAdminVerifier = verifier
 		}
 		// 严格遵守全局锁序：永远先获取 ai.mu 再获取 store.mu，彻底杜绝与 RollbackLastSettings 的 AB-BA 死锁
 		i.ai.mu.Lock()
@@ -640,11 +699,17 @@ func (i *instance) registerOperations() {
 		i.ai.previousSettings = &prevCopy
 
 		applySettingsPatch(&i.store.settings, patch)
+		if newAdminVerifier != "" {
+			i.store.settings.StandaloneAdminVerifier = newAdminVerifier
+		}
 		i.store.settings.Revision = nextRevision(i.store.settings.Revision)
 		out := i.store.settings
 		i.store.mu.Unlock()
 		i.ai.mu.Unlock()
-		_ = i.store.PersistSettings(context.Background(), out)
+		if newAdminVerifier != "" {
+			i.portal.SetAdminVerifier(newAdminVerifier)
+		}
+		_ = i.store.PersistSettings(ctx, out)
 
 		b, _ := json.Marshal(out)
 		return pluginsdk.Result{
@@ -666,17 +731,51 @@ func (i *instance) registerOperations() {
 		}, nil
 	})
 
-	i.HandleJob("probe.domain.bind", func(_ context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
-		code, _, body := i.portal.handleStandaloneAdminAction(time.Now(), "POST", "/api/admin/domain/bind", nil, req.Payload)
-		if code >= 400 {
-			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", string(body))
+	i.HandleJob("probe.domain.bind", func(ctx context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
+		var in struct {
+			CustomDomain       string             `json:"custom_domain"`
+			BindingTrack       string             `json:"binding_track"`
+			PanelCertRef       string             `json:"panel_cert_binding_ref"`
+			ACMEEmail          string             `json:"acme_email"`
+			CertPEM            string             `json:"cert_pem"`
+			KeyPEM             SecretOrPlainField `json:"key_pem"`
+			TrustCloudflareIPs bool               `json:"trust_cloudflare_ips"`
 		}
-		i.store.mu.RLock()
-		rev := i.store.settings.Revision
-		i.store.mu.RUnlock()
+		if err := json.Unmarshal(req.Payload, &in); err != nil {
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "域名绑定参数 JSON 无效")
+		}
+		resolvedKey, err := resolveProbeSecretOrPlain(ctx, i.Host(), in.KeyPEM, "domain_tls_key_pem")
+		if err != nil {
+			return pluginsdk.Result{}, pluginsdk.Errorf("SECRET_REVEAL_FAILED", "读取证书私钥失败: %v", err)
+		}
+		keyBytes := []byte(resolvedKey)
+		defer clear(keyBytes)
+
+		i.store.mu.Lock()
+		candidate := i.store.settings
+		candidate.DomainEnabled = true
+		candidate.CustomDomain = in.CustomDomain
+		candidate.BindingTrack = in.BindingTrack
+		candidate.PanelCertBindingRef = in.PanelCertRef
+		candidate.BuiltinACMEEmail = in.ACMEEmail
+		candidate.TrustCloudflareIPs = in.TrustCloudflareIPs
+		summary, err := i.domains.ValidateAndApply(time.Now(), &candidate, []byte(in.CertPEM), keyBytes)
+		if err != nil {
+			i.store.mu.Unlock()
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
+		}
+		candidate.Revision = nextRevision(candidate.Revision)
+		i.store.settings = candidate
+		i.store.mu.Unlock()
+		_ = i.store.PersistSettings(ctx, candidate)
+
+		body, _ := json.Marshal(map[string]any{
+			"bound":          summary,
+			"proxy_snippets": BuildReverseProxySnippets(candidate.CustomDomain, candidate.BuiltinListenAddr),
+		})
 		return pluginsdk.Result{
 			Payload: body,
-			Changes: []pluginsdk.ResourceChange{{Subject: "domain", Revision: rev}},
+			Changes: []pluginsdk.ResourceChange{{Subject: "domain", Revision: candidate.Revision}},
 		}, nil
 	})
 }

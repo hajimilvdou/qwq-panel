@@ -3,12 +3,24 @@
 package proxy
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// NormalizeUpstreamBaseURL strips trailing slashes and a trailing /v1 or /v1beta
+// segment so appending /v1/... never produces /v1/v1/... 404 URLs.
+func NormalizeUpstreamBaseURL(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	base = strings.TrimSuffix(base, "/v1")
+	base = strings.TrimSuffix(base, "/v1beta")
+	return strings.TrimRight(base, "/")
+}
 
 const maxNonStreamResponseBytes = 16 << 20 // 16 MiB bounded read to prevent OOM
 
@@ -110,4 +122,157 @@ func ExtractUsageFromJSONPayload(raw []byte, estimatedInputTokens int) StreamUsa
 		u.OutputTokens = max(1, len(raw)/6)
 	}
 	return u
+}
+
+// AggregateCanonicalNonStreamResponse consumes a cross-protocol upstream SSE
+// stream (upProto) and emits a standard non-streaming application/json payload
+// in downProto format when the downstream client requested stream:false.
+func AggregateCanonicalNonStreamResponse(
+	startedAt time.Time,
+	upBody io.Reader,
+	upProto, downProto ProtocolKind,
+	reqModel string,
+	estimatedInputTokens int,
+	w http.ResponseWriter,
+) (StreamUsage, error) {
+	bufPtr := sseLineBufPool.Get().(*[]byte)
+	defer sseLineBufPool.Put(bufPtr)
+
+	sc := bufio.NewScanner(io.LimitReader(upBody, maxNonStreamResponseBytes))
+	sc.Buffer(*bufPtr, 2<<20)
+
+	var (
+		usage     StreamUsage
+		textBuf   strings.Builder
+		reasonBuf strings.Builder
+	)
+	for sc.Scan() {
+		line := sc.Bytes()
+		after, ok := bytes.CutPrefix(line, []byte("data:"))
+		if !ok {
+			continue
+		}
+		payload := bytes.TrimSpace(after)
+		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+			continue
+		}
+		textD, reasonD := parseUpstreamDeltaAndUsage(payload, upProto, &usage)
+		if (textD != "" || reasonD != "") && usage.TTFTMs == 0 {
+			usage.TTFTMs = time.Since(startedAt).Milliseconds()
+		}
+		if textD != "" && textBuf.Len() < maxNonStreamResponseBytes {
+			textBuf.WriteString(textD)
+		}
+		if reasonD != "" && reasonBuf.Len() < maxNonStreamResponseBytes {
+			reasonBuf.WriteString(reasonD)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return usage, err
+	}
+	if usage.TTFTMs == 0 {
+		usage.TTFTMs = time.Since(startedAt).Milliseconds()
+	}
+	if usage.InputTokens <= 0 && estimatedInputTokens > 0 {
+		usage.InputTokens = estimatedInputTokens
+	}
+	if usage.OutputTokens <= 0 && (textBuf.Len()+reasonBuf.Len()) > 0 {
+		usage.OutputTokens = max(1, (textBuf.Len()+reasonBuf.Len())/4)
+	}
+
+	text := textBuf.String()
+	reasoning := reasonBuf.String()
+
+	var doc any
+	switch downProto {
+	case ProtoAnthropicMessages:
+		blocks := make([]map[string]any, 0, 2)
+		if reasoning != "" {
+			blocks = append(blocks, map[string]any{"type": "thinking", "thinking": reasoning})
+		}
+		blocks = append(blocks, map[string]any{"type": "text", "text": text})
+		doc = map[string]any{
+			"id":          "msg_qwq",
+			"type":        "message",
+			"role":        "assistant",
+			"model":       reqModel,
+			"content":     blocks,
+			"stop_reason": "end_turn",
+			"usage": map[string]any{
+				"input_tokens":  usage.InputTokens,
+				"output_tokens": usage.OutputTokens,
+			},
+		}
+	case ProtoOpenAIResponses:
+		doc = map[string]any{
+			"id":          "resp_qwq",
+			"object":      "response",
+			"status":      "completed",
+			"model":       reqModel,
+			"output_text": text,
+			"output": []map[string]any{{
+				"type": "message",
+				"role": "assistant",
+				"content": []map[string]any{{
+					"type": "output_text",
+					"text": text,
+				}},
+			}},
+			"usage": map[string]any{
+				"input_tokens":  usage.InputTokens,
+				"output_tokens": usage.OutputTokens,
+				"total_tokens":  usage.InputTokens + usage.OutputTokens,
+			},
+		}
+	case ProtoGeminiNative:
+		parts := make([]map[string]any, 0, 2)
+		if reasoning != "" {
+			parts = append(parts, map[string]any{"text": reasoning, "thought": true})
+		}
+		parts = append(parts, map[string]any{"text": text})
+		doc = map[string]any{
+			"candidates": []map[string]any{{
+				"content":      map[string]any{"role": "model", "parts": parts},
+				"finishReason": "STOP",
+			}},
+			"usageMetadata": map[string]any{
+				"promptTokenCount":     usage.InputTokens,
+				"candidatesTokenCount": usage.OutputTokens,
+				"totalTokenCount":      usage.InputTokens + usage.OutputTokens,
+			},
+		}
+	default: // ProtoOpenAIChat
+		msg := map[string]any{
+			"role":    "assistant",
+			"content": text,
+		}
+		if reasoning != "" {
+			msg["reasoning_content"] = reasoning
+		}
+		doc = map[string]any{
+			"id":      "chatcmpl-qwq",
+			"object":  "chat.completion",
+			"created": time.Now().Unix(),
+			"model":   reqModel,
+			"choices": []map[string]any{{
+				"index":         0,
+				"message":       msg,
+				"finish_reason": "stop",
+			}},
+			"usage": map[string]any{
+				"prompt_tokens":     usage.InputTokens,
+				"completion_tokens": usage.OutputTokens,
+				"total_tokens":      usage.InputTokens + usage.OutputTokens,
+			},
+		}
+	}
+
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return usage, err
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, writeErr := w.Write(raw)
+	return usage, writeErr
 }

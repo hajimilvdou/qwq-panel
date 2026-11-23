@@ -154,10 +154,33 @@
 
   async function loadInitialData() {
     try {
-      const [chData, uData] = await Promise.all([
+      const [chData, uData, sData] = await Promise.all([
         invoke('relay.channels.list', { limit: 100 }),
         invoke('relay.users.list', { limit: 100 }),
+        invoke('relay.settings.get', {}),
       ]);
+      if (sData && typeof sData === 'object') {
+        const setVal = (id, val) => {
+          const el = document.getElementById(id);
+          if (el && val !== undefined && val !== null) el.value = String(val);
+        };
+        setVal('st-title', sData.site_title ?? '');
+        setVal('st-invite', sData.allow_invite_signup ? '1' : '0');
+        setVal('st-email', sData.allow_email_signup ? '1' : '0');
+        setVal('st-email-domains', Array.isArray(sData.email_domain_allowlist) ? sData.email_domain_allowlist.join(', ') : '');
+        setVal('st-linuxdo', sData.allow_linuxdo_signup ? '1' : '0');
+        setVal('st-ld-id', sData.linuxdo_client_id ?? '');
+        setVal('st-ld-mintl', sData.linuxdo_min_trust_level ?? 1);
+        setVal('st-init-usd', Number(sData.default_signup_micros ?? 5000000) / 1e6);
+        setVal('st-drip-usd', Number(sData.checkin_drip_below_micros ?? 10000000) / 1e6);
+        const ldSec = document.getElementById('st-ld-secret');
+        if (ldSec) {
+          ldSec.value = '';
+          if (sData.linuxdo_client_secret_configured) {
+            ldSec.placeholder = '已加密保存，留空表示不修改';
+          }
+        }
+      }
       const tbody = document.getElementById('channels-tbody');
       tbody.replaceChildren();
       for (const c of chData.channels || []) {

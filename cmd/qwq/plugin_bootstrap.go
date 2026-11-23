@@ -103,12 +103,12 @@ func defaultBootstrapSessionFactory(ctx context.Context, cfgPath string, stderr 
 		closeDB()
 	}
 
-	listenAddr, effectiveEntryPath, _, _, _ := panelaccess.ReadEffectiveFromDB(ctx, local.DB, cfg.HTTP)
+	listenAddr, effectiveEntryPath, _, panelDomain, _ := panelaccess.ReadEffectiveFromDB(ctx, local.DB, cfg.HTTP)
 	effectiveCfg := cfg
 	effectiveCfg.HTTP.Listen = listenAddr
 	effectiveCfg.HTTP.EntryPath = effectiveEntryPath
 
-	client, baseURL, hostHeader, err := buildLocalControllerClient(effectiveCfg)
+	client, baseURL, hostHeader, err := buildLocalControllerClient(effectiveCfg, panelDomain)
 	if err != nil {
 		cleanup()
 		return nil, err
@@ -122,11 +122,14 @@ func defaultBootstrapSessionFactory(ctx context.Context, cfgPath string, stderr 
 	}, nil
 }
 
-func buildLocalControllerClient(cfg config.Config) (*http.Client, string, string, error) {
+func buildLocalControllerClient(cfg config.Config, panelDomain string) (*http.Client, string, string, error) {
 	dialAddr := loopbackAddr(cfg.HTTP.Listen)
 	hostHeader := ""
 	serverName := "localhost"
-	if len(cfg.HTTP.PublicOrigins) > 0 {
+	if pd := strings.TrimSpace(panelDomain); pd != "" {
+		hostHeader = pd
+		serverName = pd
+	} else if len(cfg.HTTP.PublicOrigins) > 0 {
 		if u, err := url.Parse(cfg.HTTP.PublicOrigins[0]); err == nil && u.Host != "" {
 			hostHeader = u.Host
 			if h, _, splitErr := net.SplitHostPort(u.Host); splitErr == nil && h != "" {

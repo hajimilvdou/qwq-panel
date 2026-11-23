@@ -106,9 +106,9 @@ func TestValidateFullNineProtocolMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listeners 失败: %v", err)
 	}
-	// 10 profiles: p-ss-aead (tcp+udp), p-ss2022-chacha (tcp+udp), p-hy2-obfs (udp), 其余 7 个各 1 tcp => 共 12 条监听
-	if len(listeners) != 12 {
-		t.Fatalf("期望 12 条监听声明，实际 %d: %+v", len(listeners), listeners)
+	// 10 profiles: p-ss-aead (tcp+udp), p-ss2022-chacha (tcp+udp), p-socks5 (tcp+udp), p-hy2-obfs (udp), 其余 6 个各 1 tcp => 共 13 条监听
+	if len(listeners) != 13 {
+		t.Fatalf("期望 13 条监听声明，实际 %d: %+v", len(listeners), listeners)
 	}
 
 	// Vision 禁止在 ws/grpc/xhttp 或 none 安全下启用

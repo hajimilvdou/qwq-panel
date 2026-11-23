@@ -28,6 +28,22 @@
   iframe.src = resolvePortalPath(`theme-frame/${safeEntry}`);
 
   const ALLOWED_PUBLIC_PATH = /^api\/public\/(snapshot|unlock|bg)(\?[a-zA-Z0-9._~:/?#[\]@!$&'()*+,;=%-]*)?$/;
+  const MAX_INFLIGHT = 4;
+  const WINDOW_MS = 5000;
+  const MAX_PER_WINDOW = 20;
+  let inflightCount = 0;
+  const recentTimestamps = [];
+
+  function allowBridgeFetch() {
+    if (inflightCount >= MAX_INFLIGHT) return false;
+    const now = Date.now();
+    while (recentTimestamps.length > 0 && now - recentTimestamps[0] > WINDOW_MS) {
+      recentTimestamps.shift();
+    }
+    if (recentTimestamps.length >= MAX_PER_WINDOW) return false;
+    recentTimestamps.push(now);
+    return true;
+  }
 
   window.addEventListener('message', async (event) => {
     if (event.source !== iframe.contentWindow) return;
@@ -57,6 +73,18 @@
         status: 403,
         contentType: 'application/json; charset=utf-8',
         bodyText: JSON.stringify({ error: 'SANDBOX_ROUTE_FORBIDDEN' })
+      }, '*');
+      return;
+    }
+
+    if (!allowBridgeFetch()) {
+      iframe.contentWindow.postMessage({
+        type: 'qwq-probe:fetch-result',
+        id,
+        ok: false,
+        status: 429,
+        contentType: 'application/json; charset=utf-8',
+        bodyText: JSON.stringify({ error: 'SANDBOX_RATE_LIMITED' })
       }, '*');
       return;
     }
@@ -97,6 +125,7 @@
       fetchOpts.body = msg.body;
     }
 
+    inflightCount++;
     try {
       const resp = await fetch(resolvePortalPath(rawPath), fetchOpts);
       const contentType = resp.headers.get('Content-Type') || 'application/octet-stream';
@@ -130,6 +159,8 @@
         contentType: 'application/json; charset=utf-8',
         bodyText: JSON.stringify({ error: 'BRIDGE_FETCH_FAILED' })
       }, '*');
+    } finally {
+      inflightCount = Math.max(0, inflightCount - 1);
     }
   });
 })();

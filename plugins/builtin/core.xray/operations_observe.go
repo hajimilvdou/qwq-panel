@@ -101,7 +101,7 @@ func (d *driverRuntime) observe(parent context.Context, filter metrics.Filter) (
 		return metrics.Result{}, unavailable
 	}
 	after := d.controller.Observe()
-	if after.Busy || before.Serial != after.Serial || !after.Active || snapshot.Digest != metadata.Current.Digest || snapshot.Epoch != metadata.ResetEpoch {
+	if after.Busy || before.Serial != after.Serial || !after.Active || snapshot.Digest != metadata.Current.Digest || snapshot.Epoch == "" {
 		return metrics.Result{}, unavailable
 	}
 	var result metrics.Result

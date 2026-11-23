@@ -167,17 +167,39 @@ export interface BridgeConnectOptions {
   timeoutMs?: number;
 }
 
-/** 将宿主下发的主题、动效、密度与 CSS 变量白名单同步到沙箱文档根节点 */
+let sharedTokenSheet: CSSStyleSheet | null = null;
+
+function applyTokenStylesheet(tokens: Record<string, string>): boolean {
+  if (typeof document === 'undefined' || typeof CSSStyleSheet === 'undefined' || !('adoptedStyleSheets' in document)) {
+    return false;
+  }
+  try {
+    if (!sharedTokenSheet) {
+      sharedTokenSheet = new CSSStyleSheet();
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sharedTokenSheet];
+    }
+    const decls: string[] = [];
+    for (const [k, v] of Object.entries(tokens)) {
+      if (typeof v === 'string' && /^--[a-zA-Z0-9_-]+$/.test(k) && !/[{};\\]/.test(v)) {
+        decls.push(`${k}: ${v};`);
+      }
+    }
+    sharedTokenSheet.replaceSync(decls.length > 0 ? `:root { ${decls.join(' ')} }` : '');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 将宿主下发的主题、动效、密度与 CSS 变量白名单同步到沙箱文档根节点（优先使用 CSP 安全的 adoptedStyleSheets） */
 export function applyHostSettings(s: KitHostSettings, root?: HTMLElement | null): void {
   const el = root ?? (typeof document !== 'undefined' ? document.documentElement : null);
   if (!el) return;
   el.dataset.theme = s.theme;
   el.dataset.motion = s.motion;
   el.dataset.density = s.density;
-  if (s.tokens) {
-    for (const [k, v] of Object.entries(s.tokens)) {
-      if (k.startsWith('--') && typeof v === 'string') el.style.setProperty(k, v);
-    }
+  if (s.tokens && Object.keys(s.tokens).length > 0) {
+    applyTokenStylesheet(s.tokens);
   }
 }
 

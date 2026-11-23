@@ -28,6 +28,7 @@
   let actionErr = $state('');
   let actionOk = $state('');
   let deletingId = $state('');
+  let confirmRemoveId = $state('');
 
   type PendingMfa =
     | { kind: 'add'; label: string; public_key_pem: string }
@@ -56,6 +57,7 @@
     } else {
       pendingMfa = null;
       mfaCode = '';
+      confirmRemoveId = '';
     }
   });
 
@@ -88,6 +90,8 @@
         pendingMfa = { kind: 'add', label: cleanLabel, public_key_pem: cleanPem };
         actionErr = '此操作需要二步验证，请在下方输入 TOTP 验证码或恢复码后继续。';
       } else {
+        mfaCode = '';
+        pendingMfa = null;
         actionErr = v.message;
       }
     } finally {
@@ -97,6 +101,7 @@
 
   async function submitRemove(keyId: string, code?: string) {
     deletingId = keyId;
+    confirmRemoveId = '';
     actionErr = '';
     actionOk = '';
     try {
@@ -112,6 +117,8 @@
         pendingMfa = { kind: 'remove', keyId };
         actionErr = '移除信任公钥需要二步验证，请在下方输入 TOTP 验证码或恢复码后继续。';
       } else {
+        mfaCode = '';
+        pendingMfa = null;
         actionErr = v.message;
       }
     } finally {
@@ -226,15 +233,29 @@
                   {/if}
                 </span>
                 {#if k.source === 'custom'}
-                  <Button
-                    variant="plain"
-                    size="sm"
-                    icon="trash"
-                    loading={deletingId === k.key_id}
-                    onclick={() => void submitRemove(k.key_id)}
-                  >
-                    移除
-                  </Button>
+                  {#if confirmRemoveId === k.key_id}
+                    <div class="confirm-inline">
+                      <Button variant="plain" size="sm" onclick={() => (confirmRemoveId = '')}>取消</Button>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        loading={deletingId === k.key_id}
+                        onclick={() => void submitRemove(k.key_id)}
+                      >
+                        确认移除
+                      </Button>
+                    </div>
+                  {:else}
+                    <Button
+                      variant="plain"
+                      size="sm"
+                      icon="trash"
+                      loading={deletingId === k.key_id}
+                      onclick={() => (confirmRemoveId = k.key_id)}
+                    >
+                      移除
+                    </Button>
+                  {/if}
                 {/if}
               </div>
             </li>
@@ -275,7 +296,8 @@
     font-weight: var(--fw-semibold);
   }
   .form-actions,
-  .mfa-actions {
+  .mfa-actions,
+  .confirm-inline {
     display: flex;
     justify-content: flex-end;
     gap: 8px;

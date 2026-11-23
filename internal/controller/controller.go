@@ -411,12 +411,17 @@ func (c *Controller) HostDeps() HostDeps {
 		Secrets:        c.sec,
 		PrivateExports: c.exports,
 		Config:         c.pluginConfigSource,
-		Catalog:        c.cat,
-		Lossy:          c.lossy,
-		IDs:            c.ids,
-		Clock:          c.clk,
-		Logger:         c.log,
-		NodeID:         "local",
+		SyncActiveConfig: func(pluginID string, rev int64, raw []byte) {
+			if u := c.Updater(); u != nil {
+				u.SyncActiveConfig(pluginID, rev, raw)
+			}
+		},
+		Catalog: c.cat,
+		Lossy:   c.lossy,
+		IDs:     c.ids,
+		Clock:   c.clk,
+		Logger:  c.log,
+		NodeID:  "local",
 	}
 }
 

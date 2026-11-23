@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/qwq-panel/qwq/internal/actor"
 	"github.com/qwq-panel/qwq/internal/operations"
@@ -20,7 +19,6 @@ import (
 	"github.com/qwq-panel/qwq/internal/pluginpublic"
 	"github.com/qwq-panel/qwq/internal/sandbox"
 	"github.com/qwq-panel/qwq/internal/secrets"
-	"github.com/qwq-panel/qwq/internal/storage"
 	platformv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
 	"github.com/qwq-panel/qwq/sdk/manifest"
 )
@@ -233,41 +231,34 @@ func (b *runtimePluginConfigBackend) PutPluginConfig(ctx context.Context, target
 		}
 	}
 
-	nowStr := b.rt.opts.Clock.Now().UTC().Format(time.RFC3339Nano)
-	var newRev int64
-	err := deps.DB.Update(ctx, func(tx *storage.Tx) error {
-		var curRev int64
-		err := tx.QueryRowContext(ctx,
-			`SELECT COALESCE(MAX(revision), 0) FROM plugin_configs WHERE plugin_id = ?`,
-			targetPluginID,
-		).Scan(&curRev)
-		if err != nil {
-			return err
+	shouldApply := false
+	if triggerApply && deps.Ops != nil && deps.Catalog != nil {
+		if _, ok := deps.Catalog.Get(targetPluginID + "/core.apply"); ok {
+			shouldApply = true
 		}
-		if expectedRevision != "" && strconv.FormatInt(curRev, 10) != expectedRevision {
-			return problem.New(problem.RevisionConflict, "target plugin configuration revision mismatch")
-		}
-		newRev = curRev + 1
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE plugin_configs SET active = 0 WHERE plugin_id = ? AND active = 1`,
-			targetPluginID,
-		); err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx,
-			`INSERT INTO plugin_configs (plugin_id, revision, config_json, active, created_at, applied_at) VALUES (?, ?, ?, 1, ?, ?)`,
-			targetPluginID, newRev, string(toStore), nowStr, nowStr,
-		)
-		return err
-	})
+	}
+
+	// Commit DB revision (retaining last 5 revisions for secret GC) and sync
+	// Updater's in-memory ActiveConfig cache immediately.
+	revStr, _, err := CommitAndSyncPluginConfig(
+		ctx,
+		deps.DB,
+		nil,
+		deps.SyncActiveConfig,
+		targetPluginID,
+		toStore,
+		expectedRevision,
+		b.rt.opts.Clock.Now().UTC(),
+		nodeID,
+		false,
+		nil,
+	)
 	if err != nil {
 		if len(extracted) > 0 && deps.Secrets != nil {
 			_ = deps.Secrets.DiscardExtracted(ctx, extracted)
 		}
 		return "", "", err
 	}
-
-	revStr := strconv.FormatInt(newRev, 10)
 
 	// 尽力通知正在运行的 live 目标插件更新内存 desired 快照（ApplyConfig）。
 	type configApplier interface {
@@ -283,29 +274,35 @@ func (b *runtimePluginConfigBackend) PutPluginConfig(ctx context.Context, target
 		}
 	}
 
-	// 可选触发目标插件的受控重应用（例如 core.xray/core.apply），完整走 operations.Run 审计链。
+	// 可选触发目标插件的受控重应用（例如 core.xray/core.apply），完整走 operations.Run 审计链并校验状态。
 	var applyOpID string
-	if triggerApply && deps.Ops != nil {
+	if shouldApply {
 		actionID := targetPluginID + "/core.apply"
-		if deps.Catalog != nil {
-			if _, ok := deps.Catalog.Get(actionID); ok {
-				payload, _ := json.Marshal(map[string]string{"config_revision": revStr})
-				opCtx := operations.WithPermissionMode(ctx, operations.PermissionFull)
-				resp, rerr := deps.Ops.Run(opCtx, operations.RunRequest{
-					Actor:  actor.SystemActor("pluginconfig"),
-					Action: actionID,
-					NodeID: nodeID,
-					Target: operations.Target{NodeID: nodeID, PluginID: targetPluginID, InstanceID: DefaultInstanceID},
-					Args:   payload,
-					Idempotency: operations.Idempotency{
-						Key:    "pluginconfig-apply:" + targetPluginID + ":" + revStr,
-						Method: "POST",
-						Route:  "/internal/pluginconfig/apply",
-					},
-				})
-				if rerr == nil && resp != nil && resp.Operation != nil {
-					applyOpID = strings.TrimSpace(resp.Operation.ID)
+		payload, _ := json.Marshal(map[string]string{"config_revision": revStr})
+		opCtx := operations.WithPermissionMode(ctx, operations.PermissionFull)
+		resp, rerr := deps.Ops.Run(opCtx, operations.RunRequest{
+			Actor:  actor.SystemActor("pluginconfig"),
+			Action: actionID,
+			NodeID: nodeID,
+			Target: operations.Target{NodeID: nodeID, PluginID: targetPluginID, InstanceID: DefaultInstanceID},
+			Args:   payload,
+			Idempotency: operations.Idempotency{
+				Key:    "pluginconfig-apply:" + targetPluginID + ":" + revStr,
+				Method: "POST",
+				Route:  "/internal/pluginconfig/apply",
+			},
+		})
+		if rerr != nil {
+			return revStr, "", problem.From(rerr)
+		}
+		if resp != nil && resp.Operation != nil {
+			applyOpID = strings.TrimSpace(resp.Operation.ID)
+			if resp.Operation.Status == operations.Failed || resp.Operation.Status == operations.Rejected {
+				msg := "core.apply failed"
+				if resp.Operation.Error != nil && resp.Operation.Error.Detail != "" {
+					msg = resp.Operation.Error.Detail
 				}
+				return revStr, applyOpID, problem.New(problem.PluginUnavailable, "%s", msg)
 			}
 		}
 	}

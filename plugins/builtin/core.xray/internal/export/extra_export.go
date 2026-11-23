@@ -99,7 +99,7 @@ func BuildVLESS(ep ExportEndpoint, profileID, userID, uuid string, opts VLESSOpt
 	}
 
 	shareURI := fmt.Sprintf("vless://%s@%s?%s#%s",
-		url.PathEscape(uuid),
+		url.User(uuid).String(),
 		hostPort,
 		encodeQueryParams(params),
 		url.PathEscape(label),
@@ -115,6 +115,9 @@ func BuildVLESS(ep ExportEndpoint, profileID, userID, uuid string, opts VLESSOpt
 		"network": clashNet,
 		"tls":     secMode == "reality" || secMode == "tls",
 		"udp":     true,
+	}
+	if encryption != "" && encryption != "none" {
+		clashNode["encryption"] = encryption
 	}
 	if opts.Flow != "" {
 		clashNode["flow"] = opts.Flow
@@ -135,35 +138,39 @@ func BuildVLESS(ep ExportEndpoint, profileID, userID, uuid string, opts VLESSOpt
 	}
 	applyClashTransport(clashNode, transport, opts.Path, opts.Host, opts.ServiceName, opts.XHTTPMode)
 
-	singboxOutbound := map[string]any{
-		"type":        "vless",
-		"tag":         label,
-		"server":      cleanHost,
-		"server_port": int(ep.Port),
-		"uuid":        uuid,
-	}
-	if opts.Flow != "" {
-		singboxOutbound["flow"] = opts.Flow
-	}
-	if secMode == "reality" {
-		sbReality := map[string]any{"enabled": true, "public_key": opts.PublicKey}
-		if sid := strings.TrimSpace(opts.ShortID); sid != "" {
-			sbReality["short_id"] = sid
+	var singboxOutbound map[string]any
+	// sing-box 原生不支持 Xray xhttp 或 VLESS Encryption，避免输出不可用伪造结构
+	if transport != "xhttp" && (encryption == "" || encryption == "none") {
+		singboxOutbound = map[string]any{
+			"type":        "vless",
+			"tag":         label,
+			"server":      cleanHost,
+			"server_port": int(ep.Port),
+			"uuid":        uuid,
 		}
-		singboxOutbound["tls"] = map[string]any{
-			"enabled":     true,
-			"server_name": opts.ServerName,
-			"utls":        map[string]any{"enabled": true, "fingerprint": "chrome"},
-			"reality":     sbReality,
+		if opts.Flow != "" {
+			singboxOutbound["flow"] = opts.Flow
 		}
-	} else if secMode == "tls" {
-		singboxOutbound["tls"] = map[string]any{
-			"enabled":     true,
-			"server_name": opts.ServerName,
-			"insecure":    !opts.PublicTrusted,
+		if secMode == "reality" {
+			sbReality := map[string]any{"enabled": true, "public_key": opts.PublicKey}
+			if sid := strings.TrimSpace(opts.ShortID); sid != "" {
+				sbReality["short_id"] = sid
+			}
+			singboxOutbound["tls"] = map[string]any{
+				"enabled":     true,
+				"server_name": opts.ServerName,
+				"utls":        map[string]any{"enabled": true, "fingerprint": "chrome"},
+				"reality":     sbReality,
+			}
+		} else if secMode == "tls" {
+			singboxOutbound["tls"] = map[string]any{
+				"enabled":     true,
+				"server_name": opts.ServerName,
+				"insecure":    !opts.PublicTrusted,
+			}
 		}
+		applySingboxTransport(singboxOutbound, transport, opts.Path, opts.Host, opts.ServiceName)
 	}
-	applySingboxTransport(singboxOutbound, transport, opts.Path, opts.Host, opts.ServiceName)
 
 	protoTag := "vless"
 	if secMode == "reality" {
@@ -335,7 +342,7 @@ func BuildTrojan(ep ExportEndpoint, profileID, userID, password string, opts Tro
 	}
 
 	shareURI := fmt.Sprintf("trojan://%s@%s?%s#%s",
-		url.PathEscape(password),
+		url.User(password).String(),
 		hostPort,
 		encodeQueryParams(params),
 		url.PathEscape(label),
@@ -446,10 +453,19 @@ func BuildHysteria2WithOptions(ep ExportEndpoint, profileID, userID, authPasswor
 	if ports != "" {
 		params = append(params, queryParam{key: "mport", val: ports})
 		bundle.ClashNode["ports"] = ports
-		bundle.SingboxOutbound["server_ports"] = []string{strings.ReplaceAll(ports, "-", ":")}
+		var sbPorts []string
+		for _, seg := range strings.Split(ports, ",") {
+			seg = strings.TrimSpace(seg)
+			if seg != "" {
+				sbPorts = append(sbPorts, strings.ReplaceAll(seg, "-", ":"))
+			}
+		}
+		if len(sbPorts) > 0 {
+			bundle.SingboxOutbound["server_ports"] = sbPorts
+		}
 	}
 	bundle.ShareURI = fmt.Sprintf("hysteria2://%s@%s?%s#%s",
-		url.PathEscape(authPassword),
+		url.User(authPassword).String(),
 		hostPort,
 		encodeQueryParams(params),
 		url.PathEscape(label),
@@ -473,7 +489,7 @@ func BuildAnyTLS(ep ExportEndpoint, profileID, userID, password, serverName stri
 		{key: "insecure", val: insecureStr},
 	}
 	shareURI := fmt.Sprintf("anytls://%s@%s?%s#%s",
-		url.PathEscape(password),
+		url.User(password).String(),
 		hostPort,
 		encodeQueryParams(params),
 		url.PathEscape(label),
@@ -486,7 +502,7 @@ func BuildAnyTLS(ep ExportEndpoint, profileID, userID, password, serverName stri
 		"password":         password,
 		"sni":              serverName,
 		"skip-cert-verify": skipVerify,
-		"udp":              false,
+		"udp":              true,
 	}
 	singboxOutbound := map[string]any{
 		"type":        "anytls",
@@ -519,9 +535,8 @@ func BuildSOCKS5(ep ExportEndpoint, profileID, userID, username, password string
 	if username == "" {
 		username = userID
 	}
-	shareURI := fmt.Sprintf("socks5://%s:%s@%s#%s",
-		url.PathEscape(username),
-		url.PathEscape(password),
+	shareURI := fmt.Sprintf("socks5://%s@%s#%s",
+		url.UserPassword(username, password).String(),
 		hostPort,
 		url.PathEscape(label),
 	)
@@ -562,9 +577,8 @@ func BuildHTTP(ep ExportEndpoint, profileID, userID, username, password string) 
 	if username == "" {
 		username = userID
 	}
-	shareURI := fmt.Sprintf("http://%s:%s@%s#%s",
-		url.PathEscape(username),
-		url.PathEscape(password),
+	shareURI := fmt.Sprintf("http://%s@%s#%s",
+		url.UserPassword(username, password).String(),
 		hostPort,
 		url.PathEscape(label),
 	)

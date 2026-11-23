@@ -100,6 +100,15 @@ func SummarizeV2(intent *corev2.Intent) (*V2IntentSummary, error) {
 			ps.ServerName = t.ServerName
 			_, _ = io.WriteString(refsHash, t.BindingRef+"\x00"+t.ServerName+"\x00")
 		}
+		hashOptBool := func(b *bool) {
+			if b == nil {
+				_, _ = io.WriteString(refsHash, "nil\x00")
+			} else if *b {
+				_, _ = io.WriteString(refsHash, "true\x00")
+			} else {
+				_, _ = io.WriteString(refsHash, "false\x00")
+			}
+		}
 
 		switch p.Protocol {
 		case corev2.ProtocolVLESS:
@@ -111,6 +120,7 @@ func SummarizeV2(intent *corev2.Intent) (*V2IntentSummary, error) {
 				if p.VLESS.Decryption != nil {
 					_, _ = io.WriteString(refsHash, p.VLESS.Decryption.ID+"\x00")
 				}
+				hashOptBool(p.VLESS.Sniffing)
 				hashReality(p.VLESS.Security)
 				hashTLS(p.VLESS.TLS)
 			}
@@ -127,6 +137,7 @@ func SummarizeV2(intent *corev2.Intent) (*V2IntentSummary, error) {
 				ps.SecurityMode = p.VMess.SecurityMode
 				_, _ = io.WriteString(refsHash, ps.Transport+"\x00"+ps.SecurityMode+"\x00"+
 					p.VMess.Path+"\x00"+p.VMess.Host+"\x00"+p.VMess.ServiceName+"\x00")
+				hashOptBool(p.VMess.Sniffing)
 				hashTLS(p.VMess.TLS)
 			}
 			for _, u := range users {
@@ -142,6 +153,7 @@ func SummarizeV2(intent *corev2.Intent) (*V2IntentSummary, error) {
 				ps.SecurityMode = p.Trojan.SecurityMode
 				_, _ = io.WriteString(refsHash, ps.Transport+"\x00"+ps.SecurityMode+"\x00"+
 					p.Trojan.Path+"\x00"+p.Trojan.Host+"\x00"+p.Trojan.ServiceName+"\x00")
+				hashOptBool(p.Trojan.Sniffing)
 				hashTLS(p.Trojan.TLS)
 				hashReality(p.Trojan.Reality)
 			}
@@ -157,6 +169,7 @@ func SummarizeV2(intent *corev2.Intent) (*V2IntentSummary, error) {
 				ps.Method = p.Shadowsocks.Method
 				ps.UDP = p.Shadowsocks.UDP
 				_, _ = io.WriteString(refsHash, p.Shadowsocks.Method+"\x00"+strconv.FormatBool(p.Shadowsocks.UDP)+"\x00")
+				hashOptBool(p.Shadowsocks.Sniffing)
 			}
 			for _, u := range users {
 				userIDs = append(userIDs, u.ID)
@@ -172,6 +185,7 @@ func SummarizeV2(intent *corev2.Intent) (*V2IntentSummary, error) {
 					_, _ = io.WriteString(refsHash, p.Hysteria2.ObfsPassword.ID+"\x00")
 				}
 				_, _ = io.WriteString(refsHash, p.Hysteria2.PortHopping+"\x00")
+				hashOptBool(p.Hysteria2.Sniffing)
 			}
 			for _, u := range users {
 				userIDs = append(userIDs, u.ID)
@@ -184,7 +198,8 @@ func SummarizeV2(intent *corev2.Intent) (*V2IntentSummary, error) {
 			if p.Shadowsocks2022 != nil {
 				ps.Method = p.Shadowsocks2022.Method
 				ps.UDP = p.Shadowsocks2022.UDP
-				_, _ = io.WriteString(refsHash, p.Shadowsocks2022.Method+"\x00"+p.Shadowsocks2022.ServerKey.ID+"\x00")
+				_, _ = io.WriteString(refsHash, p.Shadowsocks2022.Method+"\x00"+p.Shadowsocks2022.ServerKey.ID+"\x00"+strconv.FormatBool(p.Shadowsocks2022.UDP)+"\x00")
+				hashOptBool(p.Shadowsocks2022.Sniffing)
 				if p.Shadowsocks2022.Obfs != nil {
 					ps.ObfsMode = p.Shadowsocks2022.Obfs.Mode
 					ps.ObfsHost = p.Shadowsocks2022.Obfs.Host
@@ -220,6 +235,7 @@ func SummarizeV2(intent *corev2.Intent) (*V2IntentSummary, error) {
 			if p.SOCKS5 != nil {
 				ps.UDP = p.SOCKS5.UDP
 				_, _ = io.WriteString(refsHash, strconv.FormatBool(p.SOCKS5.UDP)+"\x00")
+				hashOptBool(p.SOCKS5.Sniffing)
 			}
 			for _, u := range users {
 				userIDs = append(userIDs, u.ID)
@@ -229,6 +245,9 @@ func SummarizeV2(intent *corev2.Intent) (*V2IntentSummary, error) {
 				}
 			}
 		case corev2.ProtocolHTTP:
+			if p.HTTP != nil {
+				hashOptBool(p.HTTP.Sniffing)
+			}
 			for _, u := range users {
 				userIDs = append(userIDs, u.ID)
 				_, _ = io.WriteString(refsHash, u.ID+"\x00"+u.Username+"\x00"+strconv.FormatUint(uint64(u.TrafficMark), 10)+"\x00")
@@ -239,6 +258,26 @@ func SummarizeV2(intent *corev2.Intent) (*V2IntentSummary, error) {
 		}
 		ps.UserIDs = userIDs
 		out = append(out, ps)
+	}
+	if intent.WARP != nil {
+		w := intent.WARP
+		_, _ = io.WriteString(refsHash, "warp\x00"+strconv.FormatBool(w.Enabled)+"\x00"+w.PrivateKey.ID+"\x00"+
+			w.PeerPublicKey+"\x00"+w.Endpoint+"\x00"+w.AddressV4+"\x00"+w.AddressV6+"\x00"+
+			strconv.Itoa(w.MTU)+"\x00"+w.RoutingMode+"\x00")
+		for _, b := range w.Reserved {
+			_, _ = io.WriteString(refsHash, strconv.Itoa(b)+",")
+		}
+		_, _ = io.WriteString(refsHash, "\x00")
+		bound := slices.Clone(w.BoundProfileIDs)
+		slices.Sort(bound)
+		for _, pid := range bound {
+			_, _ = io.WriteString(refsHash, pid+"\x00")
+		}
+		doms := slices.Clone(w.Domains)
+		slices.Sort(doms)
+		for _, d := range doms {
+			_, _ = io.WriteString(refsHash, d+"\x00")
+		}
 	}
 
 	return &V2IntentSummary{

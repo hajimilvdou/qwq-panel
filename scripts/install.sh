@@ -353,7 +353,7 @@ if [[ -f $R/share/polkit/qwq-plugin.rules ]]; then
 fi
 install -d -m0750 -o root -g qwq "$ETC"
 install -d -m0755 -o root -g root "$ETC/trust"
-for k in "$R"/share/trust/*.pem; do
+for k in "$R"/share/trust/*.pem "$R"/share/trust/*.policy.json; do
   if [[ -f $k && ! -e $ETC/trust/${k##*/} ]]; then
     install -m0644 "$k" "$ETC/trust/"
     changed=1

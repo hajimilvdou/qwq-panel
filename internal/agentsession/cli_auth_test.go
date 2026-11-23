@@ -343,7 +343,16 @@ func TestModelEffortCatalogAndCustomEffort(t *testing.T) {
 	if b := anthropicThinkingBudget("claude-opus-4-6", "off"); b != 0 {
 		t.Fatalf("off budget = %d, want 0", b)
 	}
-	if b := anthropicThinkingBudget("unknown-claude-relay", ""); b != 24576 {
-		t.Fatalf("fallback high budget = %d, want 24576", b)
+	if b := anthropicThinkingBudget("unknown-claude-relay", ""); b != 0 {
+		t.Fatalf("unknown model implicit budget = %d, want 0 (never blindly inject thinking)", b)
+	}
+	if b := anthropicThinkingBudget("claude-3-5-sonnet-20241022", ""); b != 0 {
+		t.Fatalf("claude-3-5-sonnet implicit budget = %d, want 0", b)
+	}
+	if b := anthropicThinkingBudget("unknown-claude-relay", "high"); b != 24576 {
+		t.Fatalf("explicit high budget = %d, want 24576", b)
+	}
+	if b := anthropicThinkingBudget("claude-sonnet-4-6", ""); b != 24576 {
+		t.Fatalf("claude-sonnet-4-6 default budget = %d, want 24576", b)
 	}
 }

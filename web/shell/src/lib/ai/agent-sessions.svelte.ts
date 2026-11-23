@@ -38,15 +38,12 @@ export const CORE_LABEL: Record<AgentCore, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
-};
-
-const EXTRA_CORE_LABELS: Record<string, string> = {
   dsh: 'DSH (DeepSeek)',
   acp: 'ACP 通用代理',
 };
 
 export const coreLabel = (core: string): string =>
-  (CORE_LABEL as Record<string, string>)[core] ?? EXTRA_CORE_LABELS[core] ?? core;
+  (CORE_LABEL as Record<string, string>)[core] ?? core;
 
 export const SLASH_COMMANDS = [
   { cmd: '/status', label: '会话状态', desc: '查看当前核心、模型、思考深度与历史消息统计', instant: true },

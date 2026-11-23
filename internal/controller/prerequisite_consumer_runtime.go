@@ -212,10 +212,8 @@ func (r *PluginConsumerRuntime) InUse(ctx context.Context, binding certificates.
 			if decErr != nil {
 				return true, fault.New("CONSUMER_RUNTIME_INVALID", "已提交的消费者配置无法解析")
 			}
-			for _, profile := range intent.Profiles {
-				if profile.Hysteria2 != nil && profile.Hysteria2.TLS != nil && profile.Hysteria2.TLS.BindingRef == binding.ID {
-					return true, nil
-				}
+			if ProfileUsesBindingRef(intent, binding.ID) {
+				return true, nil
 			}
 		}
 	} else if problem.HasCode(err, problem.PermissionDenied) {

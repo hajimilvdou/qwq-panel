@@ -255,7 +255,7 @@ func TestAgentCoresRoute(t *testing.T) {
 		} `json:"items"`
 	}
 	e.do(a.sign(http.MethodGet, "/api/v1/agent-cores", "")).expect(t, http.StatusOK).decode(t, &out)
-	if len(out.Items) != 4 || out.Items[0].Core != "native" || !out.Items[0].Available || out.Items[0].Reason != "" {
+	if len(out.Items) != 6 || out.Items[0].Core != "native" || !out.Items[0].Available || out.Items[0].Reason != "" {
 		t.Fatalf("cores = %+v", out.Items)
 	}
 	for _, c := range out.Items[1:] {

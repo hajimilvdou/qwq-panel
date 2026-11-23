@@ -325,6 +325,11 @@ type UnitSpec struct {
 	// into a controlled StateDirectory= that systemd assigns to the dynamic UID.
 	// The host computes it; a plugin cannot choose a system path.
 	DataDir string `json:"data_dir,omitempty"`
+	// Startup and Background mirror manifest.lifecycle so on-demand foreground
+	// plugins receive QWQ_PLUGIN_IDLE_TTL=180s in their resource drop-in for
+	// scale-to-zero hibernation.
+	Startup    string `json:"startup,omitempty"`
+	Background bool   `json:"background,omitempty"`
 }
 
 // prepared is a validated UnitSpec with defaults applied and derived values
@@ -345,6 +350,8 @@ type prepared struct {
 	networkProxyDirect bool
 	relaxations        SandboxRelaxations
 	stateDirectory     string
+	startup            string
+	background         bool
 }
 
 func (s UnitSpec) prepare() (prepared, error) {
@@ -458,6 +465,8 @@ func (s UnitSpec) prepare() (prepared, error) {
 		}
 		p.stateDirectory = rel
 	}
+	p.startup = strings.TrimSpace(s.Startup)
+	p.background = s.Background
 	return p, nil
 }
 
@@ -487,6 +496,9 @@ func RenderUnit(spec UnitSpec) (map[string][]byte, error) {
 	dropin, err := RenderResources(p.limits)
 	if err != nil {
 		return nil, err
+	}
+	if p.startup == "on_demand" && !p.background {
+		dropin = append(dropin, []byte("Environment=QWQ_PLUGIN_IDLE_TTL=180s\n")...)
 	}
 	files := map[string][]byte{
 		p.service:                      service,

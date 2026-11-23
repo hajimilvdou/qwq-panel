@@ -229,39 +229,70 @@ func TestGatewayTrailingSlashRedirectThemeSandboxAndUploadLimit(t *testing.T) {
 		t.Fatal("X-QWQ-Theme-Sandbox header must be stripped before reaching client")
 	}
 	themeCSP := recTheme.Header().Get("Content-Security-Policy")
-	for _, want := range []string{"sandbox allow-scripts;", "connect-src 'none';"} {
+	for _, want := range []string{"sandbox allow-scripts;", "script-src http://example.com;", "connect-src 'none';", "frame-ancestors 'self'"} {
 		if !strings.Contains(themeCSP, want) {
 			t.Fatalf("theme sandbox CSP %q missing %q", themeCSP, want)
 		}
 	}
+	if strings.Contains(themeCSP, "script-src https:") || strings.Contains(themeCSP, "script-src 'unsafe-inline'") {
+		t.Fatalf("theme sandbox CSP must not allow wildcard or inline scripts: %q", themeCSP)
+	}
 
-	// 4. /theme-frame/ subpath always enforces opaque sandbox CSP even without response header.
+	// 4. /theme-frame/ subpath enforces same-origin sandbox CSP for iframes,
+	// and redirects top-level document navigation (Sec-Fetch-Dest: document) back to portal root.
 	disp.resp = PublicResponse{
 		StatusCode: http.StatusOK,
 		Headers:    map[string]string{"Content-Type": "text/html; charset=utf-8"},
 		Body:       []byte("<html>frame</html>"),
 	}
 	reqFrame := httptest.NewRequest(http.MethodGet, "/p/server.probe/portal/theme-frame/custom/index.html", nil)
+	reqFrame.Header.Set("Sec-Fetch-Dest", "iframe")
 	recFrame := httptest.NewRecorder()
 	gw.ServeHTTP(recFrame, reqFrame)
-	if recFrame.Code != http.StatusOK || !strings.Contains(recFrame.Header().Get("Content-Security-Policy"), "sandbox allow-scripts;") {
+	if recFrame.Code != http.StatusOK || !strings.Contains(recFrame.Header().Get("Content-Security-Policy"), "script-src http://example.com;") {
 		t.Fatalf("theme-frame CSP = %d %q", recFrame.Code, recFrame.Header().Get("Content-Security-Policy"))
 	}
 
-	// 5. server.probe /api/admin/themes/upload accepts >4 MiB (up to 16 MiB), while other paths stay capped at 4 MiB.
-	bigBody := make([]byte, (5 << 20))
-	reqUpload := httptest.NewRequest(http.MethodPost, "/p/server.probe/portal/api/admin/themes/upload", strings.NewReader(string(bigBody)))
-	recUpload := httptest.NewRecorder()
-	gw.ServeHTTP(recUpload, reqUpload)
-	if recUpload.Code != http.StatusOK || len(disp.lastReq.Body) != len(bigBody) {
-		t.Fatalf("theme upload 5 MiB = %d (len=%d), want 200", recUpload.Code, len(disp.lastReq.Body))
+	reqPhish := httptest.NewRequest(http.MethodGet, "/p/server.probe/portal/theme-frame/custom/admin.html", nil)
+	reqPhish.Header.Set("Sec-Fetch-Dest", "document")
+	recPhish := httptest.NewRecorder()
+	gw.ServeHTTP(recPhish, reqPhish)
+	if recPhish.Code != http.StatusFound || recPhish.Header().Get("Location") != "/p/server.probe/portal/" {
+		t.Fatalf("top-level theme-frame doc = %d %q, want 302 /p/server.probe/portal/", recPhish.Code, recPhish.Header().Get("Location"))
 	}
 
-	reqOtherBig := httptest.NewRequest(http.MethodPost, "/p/server.probe/portal/api/admin/settings", strings.NewReader(string(bigBody)))
-	recOtherBig := httptest.NewRecorder()
-	gw.ServeHTTP(recOtherBig, reqOtherBig)
-	if recOtherBig.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("non-upload 5 MiB = %d, want 413", recOtherBig.Code)
+	// 5. server.probe /api/admin/themes/upload caps body at 3 MiB (compatible with 4 MiB ABI limit).
+	okThemeBody := make([]byte, (2<<20)+(512<<10))
+	reqUpload := httptest.NewRequest(http.MethodPost, "/p/server.probe/portal/api/admin/themes/upload", strings.NewReader(string(okThemeBody)))
+	recUpload := httptest.NewRecorder()
+	gw.ServeHTTP(recUpload, reqUpload)
+	if recUpload.Code != http.StatusOK || len(disp.lastReq.Body) != len(okThemeBody) {
+		t.Fatalf("theme upload 2.5 MiB = %d (len=%d), want 200", recUpload.Code, len(disp.lastReq.Body))
+	}
+
+	tooBigTheme := make([]byte, (3<<20)+1024)
+	reqTooBigTheme := httptest.NewRequest(http.MethodPost, "/p/server.probe/portal/api/admin/themes/upload", strings.NewReader(string(tooBigTheme)))
+	recTooBigTheme := httptest.NewRecorder()
+	gw.ServeHTTP(recTooBigTheme, reqTooBigTheme)
+	if recTooBigTheme.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("theme upload >3 MiB = %d, want 413", recTooBigTheme.Code)
+	}
+
+	// 5b. Admin paths use an isolated rate-limit bucket so public portal traffic cannot lock out /admin.
+	gwLow := NewGateway(disp, func() time.Time { return now })
+	gwLow.ReplaceRoutes([]RouteSpec{{PluginID: "server.probe", Route: "portal", PortalSPA: true, RateLimitPerMin: 20}})
+	for i := 0; i < 15; i++ {
+		r := httptest.NewRequest(http.MethodGet, "/p/server.probe/portal/", nil)
+		r.RemoteAddr = "198.51.100.7:12345"
+		w := httptest.NewRecorder()
+		gwLow.ServeHTTP(w, r)
+	}
+	adminReq := httptest.NewRequest(http.MethodGet, "/p/server.probe/portal/admin", nil)
+	adminReq.RemoteAddr = "198.51.100.7:12346"
+	adminRec := httptest.NewRecorder()
+	gwLow.ServeHTTP(adminRec, adminReq)
+	if adminRec.Code != http.StatusOK {
+		t.Fatalf("admin path should use isolated rate-limit bucket, got %d", adminRec.Code)
 	}
 
 	// 6. CustomDomainRouter root rewrite does NOT trigger 308 redirect to /p/server.probe/portal/.

@@ -85,7 +85,7 @@
     "schemas/users.set_status.response.json": "sha256:f5a2e51c6ad4c2cb37fae618a44d68a918169ea648e5c21b61bee75add3bac53",
     "schemas/users.usage_history.request.json": "sha256:8a0cbc374b51078f467077118950a16d5c288737eb26bd2326bb35563c6748a2",
     "schemas/users.usage_history.response.json": "sha256:3961e5626b1934737ba9488427c7c03e633703b8bc07580d57c98cf68ae9c7be",
-    "schemas/warp.configure.request.json": "sha256:3549e12ff2315492b8ed097f7861cb5839983032d740bcd1a26cc4ba09e6e232",
+    "schemas/warp.configure.request.json": "sha256:1e663e84bbf939baeb6364f15c0d2db60bd293a39307ac28284cbf49959e33bd",
     "schemas/warp.configure.response.json": "sha256:355cec5678f4e035132459cdb9e1ca8bb8ee4a434d7aa044b76d14fd262926bd",
     "schemas/warp.delete.request.json": "sha256:ff9ddcd21ecd261e070e8b372ef17282356f8ae0d980dd006bc21d97dc8ae676",
     "schemas/warp.delete.response.json": "sha256:dbe06708a803e22abd2d3acb57086b096ed914a79c9eb3f28e3db7e73bd95f90",
@@ -97,7 +97,7 @@
     "schemas/warp.status.response.json": "sha256:ca1da9258a97ab1f47ea5f48657025b16fc3582cf49699b713b36115aa78857b",
     "ui/index.html": "sha256:a2abd582728b44236cf81e99daec4ab3083ac43805724ba7bf4f0f5b383c5243",
     "ui/proxy.css": "sha256:86927c2142f3976264c407ffb9a735e5e3046a32ff140bc2feee409c76d91fca",
-    "ui/proxy.js": "sha256:6d66b708a2750ded739efd68e5a829741b6a8f110d3b7ee9da96808d3c770706"
+    "ui/proxy.js": "sha256:8196daad39148426c5aa6e4a971bd076dbd80d79b76c2b29cfd1228d253f9943"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -114,7 +114,8 @@
     "schema_version": "1",
     "minimum_rollback_version": "0.1.0",
     "backup_paths": [
-      "proxy.db"
+      "proxy.db",
+      "proxy.key"
     ]
   },
   "config": {
@@ -199,6 +200,11 @@
       "name": "system.sysctl.tune",
       "scope": "self",
       "reason": "读取宿主机网络栈参数并执行带快照回滚的 tcpfit 动态调优"
+    },
+    {
+      "name": "secret.reveal",
+      "scope": "operation",
+      "reason": "读取一次性提交的许可证与节点密钥"
     }
   ],
   "operations": [
@@ -481,6 +487,10 @@
         {
           "name": "state.kv.write",
           "scope": "self"
+        },
+        {
+          "name": "secret.reveal",
+          "scope": "operation"
         }
       ],
       "request_schema": "schemas/chains.upsert.request.json",
@@ -825,6 +835,10 @@
         {
           "name": "plugin.invoke",
           "scope": "core.xray/core.apply"
+        },
+        {
+          "name": "secret.reveal",
+          "scope": "operation"
         }
       ],
       "request_schema": "schemas/warp.register.request.json",
@@ -859,6 +873,10 @@
         {
           "name": "plugin.invoke",
           "scope": "core.xray/core.apply"
+        },
+        {
+          "name": "secret.reveal",
+          "scope": "operation"
         }
       ],
       "request_schema": "schemas/warp.configure.request.json",

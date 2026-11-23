@@ -188,11 +188,15 @@ func (i *instance) syncCoreXrayLockedWithWARP(ctx context.Context, host *plugins
 	if err != nil {
 		return "", err
 	}
+	managedNodes, err := i.store.ListNodes(ctx, "managed", "", "", "", false)
+	if err != nil {
+		return "", err
+	}
 	warpCfg, err := i.store.GetWARP(ctx)
 	if err != nil {
 		return "", err
 	}
-	mergedJSON, err := mergeCoreXrayConfigWithWARP(getResp.GetRedactedConfigJson(), activeUsers, warpCfg, writeNewWARPSecret)
+	mergedJSON, err := mergeCoreXrayConfigWithWARPAndNodes(getResp.GetRedactedConfigJson(), activeUsers, managedNodes, warpCfg, writeNewWARPSecret)
 	if err != nil {
 		return "", err
 	}
@@ -306,6 +310,10 @@ func (i *instance) syncTrafficShapingLocked(ctx context.Context, host *pluginsdk
 // ======================== core.xray 脱敏配置合并（$secret_present -> $keep_secret） ========================
 
 func mergeCoreXrayConfigWithWARP(redactedRaw []byte, activeUsers []userRecord, warpCfg *warpWithSecrets, writeNewWARPSecret bool) ([]byte, error) {
+	return mergeCoreXrayConfigWithWARPAndNodes(redactedRaw, activeUsers, nil, warpCfg, writeNewWARPSecret)
+}
+
+func mergeCoreXrayConfigWithWARPAndNodes(redactedRaw []byte, activeUsers []userRecord, managedNodes []proxyNodeRecord, warpCfg *warpWithSecrets, writeNewWARPSecret bool) ([]byte, error) {
 	trimmed := bytes.TrimSpace(redactedRaw)
 	if len(trimmed) == 0 {
 		return nil, pluginsdk.Errorf("PRECONDITION_FAILED", "目标插件 core.xray 尚未初始化配置")
@@ -317,6 +325,11 @@ func mergeCoreXrayConfigWithWARP(redactedRaw []byte, activeUsers []userRecord, w
 	// 先将所有既有脱敏槽位 {"$secret_present":true} 转换为 {"$keep_secret":true}。
 	replaceSecretPresentWithKeep(doc)
 
+	managedByID := make(map[string]proxyNodeRecord, len(managedNodes))
+	for _, n := range managedNodes {
+		managedByID[n.ID] = n
+	}
+
 	// 支持 Core Intent v2（profiles 数组）与 v1（单 inbound.users）两种形态。
 	if profiles, ok := doc["profiles"].([]any); ok {
 		existingProfileIDs := make(map[string]bool, len(profiles))
@@ -327,18 +340,31 @@ func mergeCoreXrayConfigWithWARP(redactedRaw []byte, activeUsers []userRecord, w
 				}
 			}
 		}
-		if len(activeUsers) == 0 {
-			doc["enabled"] = false
-		} else {
-			doc["enabled"] = true
+		desiredEnabled := ComputeDesiredCoreEnabled(activeUsers, managedNodes)
+		doc["enabled"] = desiredEnabled
+		if desiredEnabled {
 			for _, item := range profiles {
 				prof, ok := item.(map[string]any)
 				if !ok {
 					continue
 				}
+				pid, _ := prof["id"].(string)
 				protocol, _ := prof["protocol"].(string)
 				existingUsers := indexExistingSecretSlots(prof["users"])
-				prof["users"] = buildProfileUsers(protocol, activeUsers, existingUsers)
+				var nextUsers []any
+				if nodeRec, isManaged := managedByID[pid]; isManaged {
+					nextUsers = BuildUnifiedProfileUsers(&nodeRec, protocol, activeUsers, existingUsers)
+				} else if len(activeUsers) > 0 {
+					nextUsers = buildProfileUsers(protocol, activeUsers, existingUsers)
+				}
+				if len(nextUsers) > 0 {
+					if protocol == "shadowsocks2022" {
+						if ss22, ok := prof["shadowsocks2022"].(map[string]any); ok && ss22["method"] == "2022-blake3-chacha20-poly1305" && len(nextUsers) > 1 {
+							nextUsers = nextUsers[:1]
+						}
+					}
+					prof["users"] = nextUsers
+				}
 			}
 		}
 		// 同步可选 Cloudflare WARP 服务端 WireGuard 出口与端口绑定。

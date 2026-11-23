@@ -273,15 +273,16 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 	}
 
 	provider := &streamingOpenAIProvider{
-		core:         c.base,
-		cfg:          cfg,
-		providerKind: providerKind,
-		apiKey:       apiKey,
-		emit:         emit,
-		telemetry:    &telemetry,
-		sysText:      sys,
-		toolDefs:     toolDefs,
-		maxCtx:       compOpts.MaxContextTokens,
+		core:           c.base,
+		cfg:            cfg,
+		providerKind:   providerKind,
+		apiKey:         apiKey,
+		emit:           emit,
+		telemetry:      &telemetry,
+		sysText:        sys,
+		toolDefs:       toolDefs,
+		maxCtx:         compOpts.MaxContextTokens,
+		thinkingKeeper: NewAnthropicThinkingKeeper(),
 	}
 
 	maxSteps := cfg.steps(c.base.steps)
@@ -367,16 +368,17 @@ func (t *enhancedTools) Execute(ctx context.Context, call ModelToolCall) (ToolOu
 // streamingOpenAIProvider executes OpenAI-compatible SSE streaming requests,
 // capturing TTFT, TPS, cached tokens, reasoning_content, and tool_call deltas.
 type streamingOpenAIProvider struct {
-	core          *NativeCore
-	cfg           *enhancedNativeConfig
-	providerKind  string
-	apiKey        []byte
-	emit          Emit
-	telemetry     *TelemetrySnapshot
-	sysText       string
-	toolDefs      []ToolDef
-	maxCtx        int64
-	streamedDelta bool
+	core           *NativeCore
+	cfg            *enhancedNativeConfig
+	providerKind   string
+	apiKey         []byte
+	emit           Emit
+	telemetry      *TelemetrySnapshot
+	sysText        string
+	toolDefs       []ToolDef
+	maxCtx         int64
+	streamedDelta  bool
+	thinkingKeeper *AnthropicThinkingKeeper
 }
 
 func (p *streamingOpenAIProvider) consumeStreamedDelta() bool {
@@ -419,15 +421,12 @@ func (p *streamingOpenAIProvider) Complete(ctx context.Context, req ProviderRequ
 		return p.completeAnthropic(ctx, req, stepStart)
 	}
 
-	effort, _, _ := ResolveReasoningEffort(p.cfg.Model, p.cfg.ReasoningEffort)
-	if IsReasoningEffortDisabled(effort) {
-		effort = ""
-	}
+	effort, temp := ResolveOpenAIChatEffort(p.cfg.Model, p.cfg.ReasoningEffort, p.cfg.Temperature)
 	body := streamChatRequest{
 		Model:           p.cfg.Model,
 		Messages:        toChatMessages(req.Messages),
 		Tools:           chatToolsFromDefs(req.Tools),
-		Temperature:     p.cfg.Temperature,
+		Temperature:     temp,
 		ReasoningEffort: effort,
 		Stream:          p.cfg.wantStream(),
 	}
@@ -665,7 +664,10 @@ func anthropicMessagesURL(baseURL string) string {
 }
 
 func anthropicThinkingBudget(model, configured string) int {
-	effort, _, _ := ResolveReasoningEffort(model, configured)
+	effort, matched, _ := ResolveReasoningEffort(model, configured)
+	if strings.TrimSpace(configured) == "" && !matched {
+		return 0
+	}
 	lower := strings.ToLower(strings.TrimSpace(effort))
 	if IsReasoningEffortDisabled(lower) || lower == "none" {
 		return 0
@@ -698,6 +700,7 @@ func anthropicThinkingBudget(model, configured string) int {
 func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req ProviderRequest, stepStart time.Time) (ProviderResponse, error) {
 	var sysParts []string
 	var msgs []map[string]any
+	allToolTurnsHaveThinking := true
 	for _, m := range req.Messages {
 		switch m.Role {
 		case LoopRoleSystem:
@@ -712,21 +715,9 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 					msgs = append(msgs, map[string]any{"role": "assistant", "content": m.Content})
 				}
 			} else {
-				var blocks []map[string]any
-				if m.Content != "" {
-					blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
-				}
-				for _, tc := range m.ToolCalls {
-					var inp any = map[string]any{}
-					if len(tc.Arguments) > 0 {
-						_ = json.Unmarshal(tc.Arguments, &inp)
-					}
-					blocks = append(blocks, map[string]any{
-						"type":  "tool_use",
-						"id":    tc.CallID,
-						"name":  tc.Name,
-						"input": inp,
-					})
+				blocks, hasThinking := p.thinkingKeeper.BuildAssistantMessageBlocks(m)
+				if !hasThinking {
+					allToolTurnsHaveThinking = false
 				}
 				msgs = append(msgs, map[string]any{"role": "assistant", "content": blocks})
 			}
@@ -774,7 +765,7 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 	if len(tools) > 0 {
 		payload["tools"] = tools
 	}
-	if budget := anthropicThinkingBudget(p.cfg.Model, p.cfg.ReasoningEffort); budget > 0 {
+	if budget := anthropicThinkingBudget(p.cfg.Model, p.cfg.ReasoningEffort); budget > 0 && allToolTurnsHaveThinking {
 		if maxTokens <= budget {
 			payload["max_tokens"] = budget + 4096
 		}
@@ -828,15 +819,8 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 	}
 
 	var out struct {
-		Content []struct {
-			Type     string          `json:"type"`
-			Text     string          `json:"text"`
-			Thinking string          `json:"thinking"`
-			ID       string          `json:"id"`
-			Name     string          `json:"name"`
-			Input    json.RawMessage `json:"input"`
-		} `json:"content"`
-		Usage *struct {
+		Content []AnthropicResponseContentBlock `json:"content"`
+		Usage   *struct {
 			InputTokens              int64 `json:"input_tokens"`
 			OutputTokens             int64 `json:"output_tokens"`
 			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
@@ -846,6 +830,7 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 	if err := json.Unmarshal(data, &out); err != nil {
 		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint returned an invalid response.")
 	}
+	p.thinkingKeeper.RecordAssistantTurn(out.Content)
 
 	var textBuf strings.Builder
 	var toolCalls []ModelToolCall

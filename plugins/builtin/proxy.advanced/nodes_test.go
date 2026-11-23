@@ -217,7 +217,7 @@ func TestNodesProbeSNIImportURIAndLatencyTest(t *testing.T) {
 		t.Fatalf("nodes.import_uri 导入数不符: count=%d errors=%+v", impOut.ImportedCount, impOut.Errors)
 	}
 
-	// 4. 对刚导入的本地 socks5 节点执行真实延迟测试
+	// 4. 对刚导入的外部 127.0.0.1 socks5 节点执行延迟测试：必须被公网探测策略拦截防 SSRF！
 	var socksID string
 	for _, n := range impOut.Imported {
 		if n.Protocol == "socks5" {
@@ -230,12 +230,39 @@ func TestNodesProbeSNIImportURIAndLatencyTest(t *testing.T) {
 		t.Fatalf("nodes.test 失败: %+v", testResp.GetError())
 	}
 	var testOut struct {
+		OK        bool   `json:"ok"`
+		LatencyMS int64  `json:"latency_ms"`
+		Error     string `json:"error"`
+	}
+	_ = json.Unmarshal(testResp.GetPayloadJson(), &testOut)
+	if testOut.OK || testOut.Error == "" {
+		t.Fatalf("外部节点探测 127.0.0.1 必须被 SSRF 策略拦截，实际: %+v", testOut)
+	}
+
+	// 4b. 本机已登记托管节点允许对本机监听端口执行连通性测试
+	mResp := invokeProxy(t, h.srv, "nodes.upsert", map[string]any{
+		"id":        "managed-socks-loop",
+		"mode":      "expert",
+		"protocol":  "socks5",
+		"name":      "managed-loop",
+		"listen":    "127.0.0.1",
+		"port":      tcpPort,
+		"sync_core": false,
+	})
+	if mResp.GetError() != nil {
+		t.Fatalf("managed socks5 upsert 失败: %+v", mResp.GetError())
+	}
+	mTestResp := invokeProxy(t, h.srv, "nodes.test", map[string]any{"id": "managed-socks-loop"})
+	if mTestResp.GetError() != nil {
+		t.Fatalf("managed nodes.test 失败: %+v", mTestResp.GetError())
+	}
+	var mTestOut struct {
 		OK        bool  `json:"ok"`
 		LatencyMS int64 `json:"latency_ms"`
 	}
-	_ = json.Unmarshal(testResp.GetPayloadJson(), &testOut)
-	if !testOut.OK || testOut.LatencyMS < 1 {
-		t.Fatalf("nodes.test 期望成功且延迟 >= 1ms，实际: %+v", testOut)
+	_ = json.Unmarshal(mTestResp.GetPayloadJson(), &mTestOut)
+	if !mTestOut.OK || mTestOut.LatencyMS < 1 {
+		t.Fatalf("托管节点本地探测期望成功且延迟 >= 1ms，实际: %+v", mTestOut)
 	}
 
 	// 5. 创建套餐和用户，验证多协议订阅（raw / clash / singbox）包含 AnyTLS、TUIC、WireGuard、VMess、Trojan 等所有节点
@@ -341,18 +368,43 @@ func TestNodesEncryptionRedactionMultiProfileSyncAndBrutalPPV2(t *testing.T) {
 	}
 	_ = json.Unmarshal(sResp.GetPayloadJson(), &sOut)
 
-	// 2. 验证 SQLite config_json 已加密落盘（不含明文私钥）
+	// 2. 验证 nodes.upsert 响应已脱敏服务端独占私钥，且 SQLite config_json 加密落盘不含明文私钥
+	if vOut.Node.Config.PrivateKey != "" {
+		t.Fatalf("nodes.upsert 响应不应返回服务端独占 PrivateKey: %+v", vOut.Node.Config)
+	}
 	st, err := openStore(h.dataDir, nil)
 	if err != nil {
 		t.Fatalf("openStore(%s) 失败: %v", h.dataDir, err)
 	}
 	defer st.Close()
+	storedBefore, err := st.GetNode(t.Context(), vOut.Node.ID)
+	if err != nil || storedBefore == nil || storedBefore.Config.PrivateKey == "" {
+		t.Fatalf("GetNode 应能解密服务端私钥: rec=%+v err=%v", storedBefore, err)
+	}
+	origPriv := storedBefore.Config.PrivateKey
 	var rawCfgJSON string
 	if err := st.readDB().QueryRow(`SELECT config_json FROM proxy_nodes WHERE id = ?`, vOut.Node.ID).Scan(&rawCfgJSON); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(rawCfgJSON, `"$enc":"enc:`) || strings.Contains(rawCfgJSON, vOut.Node.Config.PrivateKey) {
+	if !strings.Contains(rawCfgJSON, `"$enc":"enc:`) || strings.Contains(rawCfgJSON, origPriv) {
 		t.Fatalf("proxy_nodes.config_json 未加密落盘或包含明文私钥: %s", rawCfgJSON)
+	}
+
+	// 2b. 验证 nodes.preview_json 传已有 id 时复用真实公钥/UUID 且脱敏 privateKey
+	pvResp := invokeProxy(t, h.srv, "nodes.preview_json", map[string]any{
+		"id":       vOut.Node.ID,
+		"protocol": "vless",
+	})
+	if pvResp.GetError() != nil {
+		t.Fatalf("nodes.preview_json(existing) 失败: %+v", pvResp.GetError())
+	}
+	var pvOut struct {
+		NativeJSON string `json:"native_json"`
+		ShareURI   string `json:"share_uri"`
+	}
+	_ = json.Unmarshal(pvResp.GetPayloadJson(), &pvOut)
+	if strings.Contains(pvOut.NativeJSON, origPriv) || !strings.Contains(pvOut.NativeJSON, "<REDACTED>") || !strings.Contains(pvOut.ShareURI, storedBefore.Config.PublicKey) {
+		t.Fatalf("nodes.preview_json 未复用真实公钥或泄露私钥: json=%s uri=%s", pvOut.NativeJSON, pvOut.ShareURI)
 	}
 
 	// 3. 验证 nodes.list 脱敏私钥/服务端密钥，同时保留公钥与 UUID
@@ -371,7 +423,6 @@ func TestNodesEncryptionRedactionMultiProfileSyncAndBrutalPPV2(t *testing.T) {
 	}
 
 	// 4. 验证专家模式编辑时可关闭 Flow 与 Insecure，同时保留未提交的加密私钥
-	origPriv := vOut.Node.Config.PrivateKey
 	editResp := invokeProxy(t, h.srv, "nodes.upsert", map[string]any{
 		"id":            vOut.Node.ID,
 		"mode":          "expert",

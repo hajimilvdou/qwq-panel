@@ -16,6 +16,7 @@ import (
 	"github.com/qwq-panel/qwq/internal/platform/clock"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 	"github.com/qwq-panel/qwq/internal/storage"
+	"github.com/qwq-panel/qwq/sdk/manifest"
 )
 
 // Defaults of Options.
@@ -71,6 +72,9 @@ type Options struct {
 	// guarantee covers update and rollback alike, including a rollback the
 	// caller did not annotate with a strategy.
 	RestartOnly bool
+	// TrustStore, when non-nil, is consulted during Rollback so versions signed
+	// by a revoked/removed publisher key cannot be re-activated.
+	TrustStore manifest.TrustStore
 }
 
 func (o Options) withDefaults() Options {
@@ -106,6 +110,7 @@ type Updater struct {
 	rt      Runtime
 	install Installer
 	mem     MemorySource
+	trust   manifest.TrustStore
 	clock   clock.Clock
 	log     *slog.Logger
 	opts    Options
@@ -150,6 +155,7 @@ func New(o Options) (*Updater, error) {
 		rt:      o.Runtime,
 		install: o.Installer,
 		mem:     o.Memory,
+		trust:   o.TrustStore,
 		clock:   o.Clock,
 		log:     o.Logger,
 		opts:    o,
@@ -213,6 +219,27 @@ func (u *Updater) ActiveConfig(pluginID string) (ConfigRevision, bool) {
 	defer u.configMu.RUnlock()
 	c, ok := u.configs[pluginID]
 	return c, ok
+}
+
+// SyncActiveConfig updates the in-memory active configuration snapshot after an
+// out-of-band cross-plugin PutPluginConfig commit so subsequent hostConfigSource
+// reads, prerequisite consumer checks, and core.apply calls never observe a stale
+// or incomplete revision.
+func (u *Updater) SyncActiveConfig(pluginID string, rev int64, raw []byte) {
+	now := time.Now().UTC()
+	if u.clock != nil {
+		now = u.clock.Now().UTC()
+	}
+	u.configMu.Lock()
+	u.configs[pluginID] = ConfigRevision{
+		PluginID:  pluginID,
+		Revision:  rev,
+		Config:    append([]byte(nil), raw...),
+		Active:    true,
+		CreatedAt: now,
+		AppliedAt: now,
+	}
+	u.configMu.Unlock()
 }
 
 // Routes returns the currently published route table. The pointer and the

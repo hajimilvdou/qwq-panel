@@ -410,8 +410,8 @@
 
   async function uploadThemeZipFile(file) {
     if (!file) return;
-    if (file.size > 16 * 1024 * 1024) {
-      showToast('主题压缩包不能超过 16 MiB', true);
+    if (file.size > 3 * 1024 * 1024) {
+      showToast('主题压缩包不能超过 3 MiB', true);
       return;
     }
     const res = await apiFetch('/api/admin/themes/upload', {
@@ -433,6 +433,13 @@
   });
 
   $('logout-btn').addEventListener('click', () => {
+    const tok = adminToken;
+    if (tok) {
+      void fetch(apiUrl('/api/admin/logout'), {
+        method: 'POST',
+        headers: { 'X-Probe-Admin-Token': tok }
+      }).catch(() => {});
+    }
     adminToken = '';
     sessionStorage.removeItem(TOKEN_KEY);
     renderAuthView();

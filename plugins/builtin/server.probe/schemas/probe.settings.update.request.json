@@ -31,6 +31,13 @@
     },
     "expose_isp_carrier": {
       "type": "boolean"
+    },
+    "standalone_admin_password": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "writeOnly": true,
+      "x-secret": true
     }
   }
 }

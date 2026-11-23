@@ -14,9 +14,10 @@
     "binding_track": {
       "type": "string",
       "enum": [
+        "auto",
         "panel_dnc",
         "builtin_acme",
-        "custom_pem",
+        "builtin_pem",
         "reverse_proxy"
       ]
     },

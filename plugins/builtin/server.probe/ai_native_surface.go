@@ -285,13 +285,14 @@ func (ai *AINativeController) VerifyDelegation(now time.Time, bearer string) (de
 // PortalSettingsPatch 使用布尔指针区分「调用方显式传 false」与「JSON 未传该字段」，
 // 彻底防止部分字段更新（如仅切换默认视图）意外把 MaskNodeIP 覆盖为 false 导致真实 IP 泄露！
 type PortalSettingsPatch struct {
-	SiteTitle         string `json:"site_title,omitempty"`
-	SiteSubtitle      string `json:"site_subtitle,omitempty"`
-	DefaultView       string `json:"default_view,omitempty"`
-	DefaultPalette    string `json:"default_palette,omitempty"`
-	MaskNodeIP        *bool  `json:"mask_node_ip,omitempty"`
-	ExposeBillingCost *bool  `json:"expose_billing_cost,omitempty"`
-	ExposeISPCarrier  *bool  `json:"expose_isp_carrier,omitempty"`
+	SiteTitle               string             `json:"site_title,omitempty"`
+	SiteSubtitle            string             `json:"site_subtitle,omitempty"`
+	DefaultView             string             `json:"default_view,omitempty"`
+	DefaultPalette          string             `json:"default_palette,omitempty"`
+	MaskNodeIP              *bool              `json:"mask_node_ip,omitempty"`
+	ExposeBillingCost       *bool              `json:"expose_billing_cost,omitempty"`
+	ExposeISPCarrier        *bool              `json:"expose_isp_carrier,omitempty"`
+	StandaloneAdminPassword SecretOrPlainField `json:"standalone_admin_password,omitempty"`
 }
 
 func applySettingsPatch(dst *PortalSettings, p PortalSettingsPatch) {
@@ -414,16 +415,24 @@ func (ai *AINativeController) ApproveAndExecuteSettingsPlan(now time.Time, calle
 }
 
 // RollbackLastSettings 执行 ADR-0004 D10 撤销操作（probe.settings.rollback）。
+// 仅精准还原 7 个基础外观与隐私脱敏字段，绝不覆盖域名绑定、管理员口令校验串或主题配置。
 func (ai *AINativeController) RollbackLastSettings() (PortalSettings, error) {
 	ai.mu.Lock()
 	defer ai.mu.Unlock()
 	if ai.previousSettings == nil {
 		return PortalSettings{}, errors.New("NO_ROLLBACK_SNAPSHOT")
 	}
+	prev := *ai.previousSettings
 	ai.store.mu.Lock()
-	restored := *ai.previousSettings
-	restored.Revision = nextRevision(ai.store.settings.Revision)
-	ai.store.settings = restored
+	ai.store.settings.SiteTitle = prev.SiteTitle
+	ai.store.settings.SiteSubtitle = prev.SiteSubtitle
+	ai.store.settings.DefaultView = prev.DefaultView
+	ai.store.settings.DefaultPalette = prev.DefaultPalette
+	ai.store.settings.MaskNodeIP = prev.MaskNodeIP
+	ai.store.settings.ExposeBillingCost = prev.ExposeBillingCost
+	ai.store.settings.ExposeISPCarrier = prev.ExposeISPCarrier
+	ai.store.settings.Revision = nextRevision(ai.store.settings.Revision)
+	restored := ai.store.settings
 	ai.previousSettings = nil
 	ai.store.mu.Unlock()
 	return restored, nil

@@ -359,6 +359,8 @@ type HostDeps struct {
 	PrivateExports *privateexport.Service
 	// Config 为受保护的插件通道绑定只读配置源；nil 时 GetConfig 不可用。
 	Config func(pluginID string) hostsvc.ConfigSource
+	// SyncActiveConfig 同步跨插件 PutPluginConfig 写入后的内存配置快照。
+	SyncActiveConfig func(pluginID string, rev int64, raw []byte)
 	// Catalog supplies the verified manifest grants a plugin-to-plugin call is
 	// checked against; nil refuses every such call.
 	Catalog *catalog.Catalog
@@ -760,6 +762,9 @@ func (rt *PluginRuntime) attach(ctx context.Context, pluginID string) (PluginCli
 		if err := rt.runRestore(ctx, pluginID); err != nil {
 			return nil, problem.From(err)
 		}
+		// 若此前因瞬时故障处于 degraded 冷却期，而本次 runRestore 已确认将单元恢复在线，
+		// 立即清除陈旧冷却锁，避免 Ensure 在读取新 PID 前被旧 retryAt 拦截。
+		rt.sup.ResetDegraded(pluginID)
 	}
 	if _, err := rt.sup.Ensure(ctx, pluginID); err != nil {
 		return nil, problem.From(err)
@@ -901,8 +906,13 @@ type attachOnlyUnits struct {
 }
 
 func (u attachOnlyUnits) Start(ctx context.Context, pluginID string) error {
-	if u.rt.restore.Load() != nil {
-		return problem.New(problem.PluginUnavailable, "The plugin is not running; the host is restoring it.")
+	if u.rt != nil && u.rt.restore.Load() != nil {
+		// 空闲休眠（QWQ_PLUGIN_IDLE_TTL）或单元停止后的按需唤醒：
+		// 直接驱动宿主幂等恢复流程（在插件锁内启动 systemd 单元并执行 ABI Initialize/Start/Activate）。
+		if err := u.rt.runRestore(ctx, pluginID); err != nil {
+			return problem.From(err)
+		}
+		return nil
 	}
 	return u.UnitManager.Start(ctx, pluginID)
 }

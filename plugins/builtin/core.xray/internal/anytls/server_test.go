@@ -109,14 +109,15 @@ func TestAnyTLSV2EndToEndEchoAndCounters(t *testing.T) {
 	certPEM, keyPEM := generateTestCertPEM(t)
 	password := "anytls-super-secret-password-2026"
 	srv, err := NewServer(ProfileSpec{
-		ProfileID:  "anytls-main",
-		BindingRef: "bind-anytls-1",
-		ServerName: "anytls.local",
-		Listen:     "127.0.0.1",
-		Port:       1, // 测试中用自由端口覆盖 listenAddr
-		CertPEM:    certPEM,
-		KeyPEM:     keyPEM,
-		Users:      map[string][]byte{"alice": []byte(password)},
+		ProfileID:          "anytls-main",
+		BindingRef:         "bind-anytls-1",
+		ServerName:         "anytls.local",
+		Listen:             "127.0.0.1",
+		Port:               1, // 测试中用自由端口覆盖 listenAddr
+		CertPEM:            certPEM,
+		KeyPEM:             keyPEM,
+		Users:              map[string][]byte{"alice": []byte(password)},
+		AllowPrivateTarget: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -341,4 +342,171 @@ func TestAnyTLSPipelined0RTTOrderingAndPromptStop(t *testing.T) {
 	if elapsed := time.Since(stopStart); elapsed > 800*time.Millisecond {
 		t.Fatalf("存在空闲活跃客户端时 Stop() 未立即回收连接，耗时 %v", elapsed)
 	}
+}
+
+func TestAnyTLSRejectsSSRFAndUnknownSNI(t *testing.T) {
+	echoLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echoLn.Close()
+	echoAddr := echoLn.Addr().(*net.TCPAddr)
+
+	certPEM, keyPEM := generateTestCertPEM(t)
+	password := "anytls-ssrf-guard-secret"
+	srv, err := NewServer(ProfileSpec{
+		ProfileID:  "anytls-guard",
+		BindingRef: "bind-guard",
+		ServerName: "anytls.local",
+		Listen:     "127.0.0.1",
+		Port:       1,
+		CertPEM:    certPEM,
+		KeyPEM:     keyPEM,
+		Users:      map[string][]byte{"alice": []byte(password)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.listenAddr = "127.0.0.1:0"
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := srv.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop(2 * time.Second)
+
+	// 1. 未知 SNI 必须在 TLS 握手层直接拒止
+	if badConn, err := tls.Dial("tcp", srv.Addr().String(), &tls.Config{
+		ServerName:         "evil.example.test",
+		InsecureSkipVerify: true,
+	}); err == nil {
+		_ = badConn.Close()
+		t.Fatal("未知 SNI 未在 TLS 握手层被拒绝")
+	}
+
+	// 2. 合法 SNI 鉴权后，请求回环地址 127.0.0.1 必须被 SafeOutboundDialer 阻断
+	conn, err := tls.Dial("tcp", srv.Addr().String(), &tls.Config{
+		ServerName:         "anytls.local",
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	pwHash := sha256.Sum256([]byte(password))
+	var authBuf bytes.Buffer
+	authBuf.Write(pwHash[:])
+	_ = binary.Write(&authBuf, binary.BigEndian, uint16(0))
+	if _, err := conn.Write(authBuf.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFrame(t, conn, cmdSettings, 0, []byte("v=2\n"))
+	_, _, _ = readTestFrame(t, conn)
+	_, _, _ = readTestFrame(t, conn)
+
+	var socksAddr bytes.Buffer
+	socksAddr.WriteByte(1)
+	socksAddr.Write(echoAddr.IP.To4())
+	_ = binary.Write(&socksAddr, binary.BigEndian, uint16(echoAddr.Port))
+	writeTestFrame(t, conn, cmdSYN, 3, socksAddr.Bytes())
+
+	ackCmd, ackSID, ackData := readTestFrame(t, conn)
+	if ackCmd != cmdSYNACK || ackSID != 3 || len(ackData) == 0 {
+		t.Fatalf("期望 SSRF 拦截返回带错误的 cmdSYNACK，实际 cmd=%d sid=%d data=%q", ackCmd, ackSID, string(ackData))
+	}
+}
+
+func TestAnyTLSV2UoTUDPEcho(t *testing.T) {
+	udpSrv, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udpSrv.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, addr, rerr := udpSrv.ReadFrom(buf)
+			if rerr != nil {
+				return
+			}
+			_, _ = udpSrv.WriteTo(buf[:n], addr)
+		}
+	}()
+	udpAddr := udpSrv.LocalAddr().(*net.UDPAddr)
+
+	certPEM, keyPEM := generateTestCertPEM(t)
+	password := "anytls-uot-v2-secret"
+	srv, err := NewServer(ProfileSpec{
+		ProfileID:          "anytls-uot",
+		BindingRef:         "bind-uot",
+		ServerName:         "anytls.local",
+		Listen:             "127.0.0.1",
+		Port:               1,
+		CertPEM:            certPEM,
+		KeyPEM:             keyPEM,
+		Users:              map[string][]byte{"alice": []byte(password)},
+		AllowPrivateTarget: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.listenAddr = "127.0.0.1:0"
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := srv.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop(2 * time.Second)
+
+	conn, err := tls.Dial("tcp", srv.Addr().String(), &tls.Config{
+		ServerName:         "anytls.local",
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	pwHash := sha256.Sum256([]byte(password))
+	var authBuf bytes.Buffer
+	authBuf.Write(pwHash[:])
+	_ = binary.Write(&authBuf, binary.BigEndian, uint16(0))
+	if _, err := conn.Write(authBuf.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFrame(t, conn, cmdSettings, 0, []byte("v=2\n"))
+	_, _, _ = readTestFrame(t, conn)
+	_, _, _ = readTestFrame(t, conn)
+
+	// 发送 UoT v2 魔法域名 sp.v2.udp-over-tcp.arpa:53 + connect flag(1) + target UDP addr + 2B len + payload
+	var uotInit bytes.Buffer
+	uotInit.WriteByte(3)
+	uotInit.WriteByte(byte(len(uotMagicHostV2)))
+	uotInit.WriteString(uotMagicHostV2)
+	_ = binary.Write(&uotInit, binary.BigEndian, uint16(53))
+	uotInit.WriteByte(1) // isConnect=1
+	uotInit.WriteByte(1) // IPv4
+	uotInit.Write(udpAddr.IP.To4())
+	_ = binary.Write(&uotInit, binary.BigEndian, uint16(udpAddr.Port))
+	payload := []byte("hello-anytls-uot-v2-udp")
+	_ = binary.Write(&uotInit, binary.BigEndian, uint16(len(payload)))
+	uotInit.Write(payload)
+
+	writeTestFrame(t, conn, cmdSYN, 9, uotInit.Bytes())
+	ackCmd, ackSID, ackData := readTestFrame(t, conn)
+	if ackCmd != cmdSYNACK || ackSID != 9 || len(ackData) != 0 {
+		t.Fatalf("期望 UoT cmdSYNACK 成功，实际 cmd=%d sid=%d data=%q", ackCmd, ackSID, string(ackData))
+	}
+	cmd, sid, respFrame := readTestFrame(t, conn)
+	if cmd != cmdPSH || sid != 9 || len(respFrame) < 2 {
+		t.Fatalf("期望 UoT 回包 cmdPSH sid=9，实际 cmd=%d sid=%d len=%d", cmd, sid, len(respFrame))
+	}
+	gotLen := int(binary.BigEndian.Uint16(respFrame[0:2]))
+	if gotLen != len(payload) || !bytes.Equal(respFrame[2:2+gotLen], payload) {
+		t.Fatalf("UoT UDP 回包不匹配: got %q want %q", string(respFrame[2:]), string(payload))
+	}
+	writeTestFrame(t, conn, cmdFIN, 9, nil)
 }

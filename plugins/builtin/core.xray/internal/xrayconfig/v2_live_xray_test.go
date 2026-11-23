@@ -327,24 +327,24 @@ func TestLiveXrayV26AllProtocolsAndForwarding(t *testing.T) {
 	}
 	t.Logf("All 10 TCP Xray inbounds are actively listening!")
 
-	// 2a. 实测 HTTP 代理鉴权转发
+	// 2a. 实测 HTTP 代理鉴权 + 私网/回环黑洞拦截（R2-BUG-04 SSRF 防护在真实 Xray 内核生效）
 	proxyURL, _ := url.Parse(fmt.Sprintf("http://huser:http-live-pass@127.0.0.1:%d", pHTTP))
 	httpClient := &http.Client{
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 		Timeout:   5 * time.Second,
 	}
-	resp, err := httpClient.Get(echoSrv.URL + "/via-http")
-	if err != nil {
-		t.Fatalf("HTTP proxy forward failed: %v", err)
+	if resp, err := httpClient.Get(echoSrv.URL + "/via-http"); err == nil {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode == 200 || strings.Contains(string(body), "qwq-live-proxy-ok") {
+			t.Fatalf("HTTP proxy unexpectedly bypassed private blackhole: status=%d body=%q", resp.StatusCode, string(body))
+		}
+		t.Logf("LIVE HTTP Proxy private-IP blackhole PASSED: loopback blocked with status=%d", resp.StatusCode)
+	} else {
+		t.Logf("LIVE HTTP Proxy private-IP blackhole PASSED: loopback blocked with err=%v", err)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != 200 || string(body) != "qwq-live-proxy-ok:/via-http" {
-		t.Fatalf("HTTP proxy unexpected response: status=%d body=%q", resp.StatusCode, string(body))
-	}
-	t.Logf("LIVE HTTP Proxy forwarding PASSED: %q", string(body))
 
-	// 2b. 实测 SOCKS5 用户名/密码鉴权转发
+	// 2b. 实测 SOCKS5 用户名/密码鉴权 + 私网/回环黑洞拦截
 	echoURL, _ := url.Parse(echoSrv.URL)
 	echoHost, echoPortStr, _ := net.SplitHostPort(echoURL.Host)
 	var echoPort int
@@ -371,26 +371,61 @@ func TestLiveXrayV26AllProtocolsAndForwarding(t *testing.T) {
 	if _, err := io.ReadFull(sConn, authResp); err != nil || authResp[1] != 0x00 {
 		t.Fatalf("socks5 auth failed: %v %x", err, authResp)
 	}
-	// CONNECT 127.0.0.1:echoPort
+	// CONNECT 127.0.0.1:echoPort -> 应被 qwq-block 阻断
 	ip4 := net.ParseIP(echoHost).To4()
 	reqPkt := []byte{0x05, 0x01, 0x00, 0x01, ip4[0], ip4[1], ip4[2], ip4[3], 0, 0}
 	binary.BigEndian.PutUint16(reqPkt[8:10], uint16(echoPort))
 	_, _ = sConn.Write(reqPkt)
 	connResp := make([]byte, 10)
-	if _, err := io.ReadFull(sConn, connResp); err != nil || connResp[1] != 0x00 {
-		t.Fatalf("socks5 connect failed: %v %x", err, connResp)
+	if _, err := io.ReadFull(sConn, connResp); err == nil && connResp[1] == 0x00 {
+		_, _ = fmt.Fprintf(sConn, "GET /via-socks5 HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", echoURL.Host)
+		if httpResp, rErr := http.ReadResponse(bufio.NewReader(sConn), nil); rErr == nil {
+			sBody, _ := io.ReadAll(httpResp.Body)
+			_ = httpResp.Body.Close()
+			if httpResp.StatusCode == 200 || strings.Contains(string(sBody), "qwq-live-proxy-ok") {
+				t.Fatalf("SOCKS5 proxy unexpectedly bypassed private blackhole: status=%d body=%q", httpResp.StatusCode, string(sBody))
+			}
+		}
 	}
-	_, _ = fmt.Fprintf(sConn, "GET /via-socks5 HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", echoURL.Host)
-	httpResp, err := http.ReadResponse(bufio.NewReader(sConn), nil)
+	t.Logf("LIVE SOCKS5 Proxy auth + private-IP blackhole PASSED")
+
+	// 2c. 实测公网流量正常通过 HTTP / SOCKS5 代理转发（验证私网黑洞不误伤正常出站）
+	pubResp, err := httpClient.Head("https://www.microsoft.com/")
 	if err != nil {
-		t.Fatalf("socks5 http read failed: %v", err)
+		t.Fatalf("HTTP proxy public forward failed: %v", err)
 	}
-	sBody, _ := io.ReadAll(httpResp.Body)
-	_ = httpResp.Body.Close()
-	if httpResp.StatusCode != 200 || string(sBody) != "qwq-live-proxy-ok:/via-socks5" {
-		t.Fatalf("SOCKS5 proxy unexpected response: status=%d body=%q", httpResp.StatusCode, string(sBody))
+	_ = pubResp.Body.Close()
+	if pubResp.StatusCode < 200 || pubResp.StatusCode >= 500 {
+		t.Fatalf("HTTP proxy public unexpected status: %d", pubResp.StatusCode)
 	}
-	t.Logf("LIVE SOCKS5 Proxy forwarding PASSED: %q", string(sBody))
+	t.Logf("LIVE HTTP Proxy public forwarding PASSED: status=%d", pubResp.StatusCode)
+
+	sPub, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", pSocks5), 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial socks5 (public) failed: %v", err)
+	}
+	defer func() { _ = sPub.Close() }()
+	_ = sPub.SetDeadline(time.Now().Add(8 * time.Second))
+	_, _ = sPub.Write([]byte{0x05, 0x01, 0x02})
+	if _, err := io.ReadFull(sPub, greetResp); err != nil || greetResp[1] != 0x02 {
+		t.Fatalf("socks5 public greeting failed: %v", err)
+	}
+	_, _ = sPub.Write(authPkt)
+	if _, err := io.ReadFull(sPub, authResp); err != nil || authResp[1] != 0x00 {
+		t.Fatalf("socks5 public auth failed: %v", err)
+	}
+	pubDomain := "www.microsoft.com"
+	pubReq := append([]byte{0x05, 0x01, 0x00, 0x03, byte(len(pubDomain))}, []byte(pubDomain)...)
+	pubReq = append(pubReq, 0x01, 0xbb) // port 443
+	_, _ = sPub.Write(pubReq)
+	if _, err := io.ReadFull(sPub, connResp); err != nil || connResp[1] != 0x00 {
+		t.Fatalf("socks5 public connect failed: %v %x", err, connResp)
+	}
+	tlsConn := tls.Client(sPub, &tls.Config{ServerName: pubDomain, MinVersion: tls.VersionTLS12})
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatalf("socks5 public TLS handshake failed: %v", err)
+	}
+	t.Logf("LIVE SOCKS5 Proxy public TLS forwarding PASSED: version=0x%x", tlsConn.ConnectionState().Version)
 
 	// 3. 实测外网 Reality SNI TLS 1.3 延迟探测
 	for _, domain := range []string{"www.microsoft.com", "www.apple.com", "dl.google.com"} {

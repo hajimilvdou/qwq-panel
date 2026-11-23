@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -393,4 +394,103 @@ func mustGenerateTestCert(t *testing.T, dnsName string, now time.Time) ([]byte, 
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
 		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+}
+
+func TestSecurityHardeningAuthGuardRollbackAndPersistence(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenProbeStore(dir)
+	if err != nil {
+		t.Fatalf("OpenProbeStore: %v", err)
+	}
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+
+	// 1. Persisted PBKDF-HMAC admin verifier survives SQLite reopen + logout revokes session
+	verifier, err := EncodeAdminVerifier("StrongAdminPass123!")
+	if err != nil {
+		t.Fatalf("EncodeAdminVerifier: %v", err)
+	}
+	store.mu.Lock()
+	store.settings.StandaloneAdminVerifier = verifier
+	store.settings.CustomDomain = "status.example.com"
+	saved := store.settings
+	store.mu.Unlock()
+	if err := store.PersistSettings(context.Background(), saved); err != nil {
+		t.Fatalf("PersistSettings: %v", err)
+	}
+	_ = store.Close()
+
+	reopened, err := OpenProbeStore(dir)
+	if err != nil {
+		t.Fatalf("reopen OpenProbeStore: %v", err)
+	}
+	defer reopened.Close()
+
+	gw := NewPortalGateway(reopened, NewDomainBindingCoordinator(dir, []byte("seed"), nil, nil), nil, "", func() time.Time { return now })
+	defer gw.Close()
+
+	// IPv6 /64 brute-force lockout across different host suffixes
+	for i := 0; i < 5; i++ {
+		ip := "2001:db8:abcd:1::" + string(rune('1'+i))
+		code, _, _ := gw.ServePortalHTTP("portal", http.MethodPost, "/api/admin/login", ip, nil, []byte(`{"password":"wrong"}`))
+		if code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d expected 401, got %d", i, code)
+		}
+	}
+	code, _, _ := gw.ServePortalHTTP("portal", http.MethodPost, "/api/admin/login", "2001:db8:abcd:1::999", nil, []byte(`{"password":"StrongAdminPass123!"}`))
+	if code != http.StatusTooManyRequests {
+		t.Fatalf("expected IPv6 /64 lockout 429, got %d", code)
+	}
+
+	// Clean client logs in with persisted verifier, then logs out to revoke session
+	code, _, resp := gw.ServePortalHTTP("portal", http.MethodPost, "/api/admin/login", "198.51.100.5", nil, []byte(`{"password":"StrongAdminPass123!"}`))
+	if code != http.StatusOK {
+		t.Fatalf("login with persisted verifier failed: code=%d body=%s", code, string(resp))
+	}
+	var loginOut struct {
+		AdminToken string `json:"admin_token"`
+	}
+	_ = json.Unmarshal(resp, &loginOut)
+	if loginOut.AdminToken == "" {
+		t.Fatalf("missing admin_token")
+	}
+	hdr := map[string]string{"X-Probe-Admin-Token": loginOut.AdminToken}
+	code, _, _ = gw.ServePortalHTTP("portal", http.MethodPost, "/api/admin/logout", "198.51.100.5", hdr, nil)
+	if code != http.StatusOK {
+		t.Fatalf("logout failed: %d", code)
+	}
+	code, _, _ = gw.ServePortalHTTP("portal", http.MethodGet, "/api/admin/state", "198.51.100.5", hdr, nil)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("revoked token must return 401, got %d", code)
+	}
+
+	// 2. Top-level /theme-frame navigation redirects back to portal root
+	code, hdrs, _ := gw.ServePortalHTTP("portal", http.MethodGet, "/theme-frame/index.html", "198.51.100.5", map[string]string{"Sec-Fetch-Dest": "document"}, nil)
+	if code != http.StatusFound || hdrs["Location"] != "../" {
+		t.Fatalf("expected 302 redirect to ../ on top-level theme-frame navigation, got code=%d hdrs=%+v", code, hdrs)
+	}
+
+	// 3. RollbackLastSettings only restores the 7 appearance/privacy fields, preserving CustomDomain & verifier
+	plan, err := gw.ai.CreateSettingsPlan(now, "ai", PortalSettingsPatch{DefaultView: "tty-terminal"})
+	if err != nil {
+		t.Fatalf("CreateSettingsPlan: %v", err)
+	}
+	if _, err := gw.ai.ApproveAndExecuteSettingsPlan(now, "prb_adm_human", plan.PlanID); err != nil {
+		t.Fatalf("ApproveAndExecuteSettingsPlan: %v", err)
+	}
+	reopened.mu.Lock()
+	reopened.settings.CustomDomain = "new-status.example.com"
+	reopened.mu.Unlock()
+	rolled, err := gw.ai.RollbackLastSettings()
+	if err != nil {
+		t.Fatalf("RollbackLastSettings: %v", err)
+	}
+	if rolled.DefaultView != "orb-cards" || rolled.CustomDomain != "new-status.example.com" || rolled.StandaloneAdminVerifier != verifier {
+		t.Fatalf("scoped rollback failed: %+v", rolled)
+	}
+
+	// 4. Reverse proxy snippets target /p/server.probe/portal/
+	snips := BuildReverseProxySnippets("status.example.com", "127.0.0.1:8443")
+	if !strings.Contains(snips.NginxBaotaConf, "/p/server.probe/portal/") || !strings.Contains(snips.CaddyfileConf, "/p/server.probe/portal") {
+		t.Fatalf("reverse proxy snippets must target /p/server.probe/portal/: %+v", snips)
+	}
 }

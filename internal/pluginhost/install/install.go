@@ -38,6 +38,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qwq-panel/qwq/internal/pluginhost/trust"
 	"github.com/qwq-panel/qwq/sdk/manifest"
 	"github.com/qwq-panel/qwq/sdk/pkgfile"
 )
@@ -102,8 +103,8 @@ type Staged struct {
 // stagingRoot must be on the same filesystem as the plugin root, because
 // Commit publishes with a rename. Extract creates it with mode 0700 when it
 // does not exist.
-func Extract(ctx context.Context, pkgPath string, trust manifest.TrustStore, stagingRoot string) (*Staged, error) {
-	if trust == nil {
+func Extract(ctx context.Context, pkgPath string, trustStore manifest.TrustStore, stagingRoot string) (*Staged, error) {
+	if trustStore == nil {
 		return nil, errors.New("install: a trust store is required to install a package")
 	}
 	if stagingRoot == "" {
@@ -130,11 +131,29 @@ func Extract(ctx context.Context, pkgPath string, trust manifest.TrustStore, sta
 		return nil, err
 	}
 	ex := &extractor{ctx: ctx, root: root}
-	pkg, rerr := pkgfile.Read(f, trust, pkgfile.ReadOptions{Sink: ex})
+	pkg, rerr := pkgfile.Read(f, trustStore, pkgfile.ReadOptions{Sink: ex})
 	if rerr != nil {
 		_ = root.Close()
 		_ = removeTree(dir)
 		return nil, rerr
+	}
+	// Supply-chain trust-tier gate: when the trust store distinguishes official
+	// system keys from administrator-added custom keys, enforce namespace and
+	// privileged-capability boundaries immediately after signature verification.
+	if tiered, ok := trustStore.(interface {
+		KeySource(keyID string) (string, bool)
+	}); ok && pkg.Manifest != nil {
+		if src, found := tiered.KeySource(pkg.Manifest.Publisher.KeyID); found {
+			if terr := trust.VerifyManifestTrustTier(pkg.Manifest, src, nil, false); terr != nil {
+				_ = root.Close()
+				_ = removeTree(dir)
+				return nil, &PolicyError{
+					Path:    "publisher",
+					Code:    "TRUST_TIER_VIOLATION",
+					Message: terr.Error(),
+				}
+			}
+		}
 	}
 	// manifest 是签名覆盖的包头，pkgfile 不把它送入内容 Sink。
 	// 保存已验证的原始字节，供包内驱动核对二进制摘要，避免重编码破坏签名语义。

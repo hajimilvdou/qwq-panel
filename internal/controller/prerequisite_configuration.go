@@ -101,12 +101,12 @@ func (c *Controller) ValidatePluginConfiguration(ctx context.Context, input Plug
 			return invalidCoreConfiguration()
 		}
 		for _, profile := range intent.Profiles {
-			if profile.Protocol != corev2.ProtocolHysteria2 {
+			binding, purpose, ok := ExtractProfileTLSBinding(profile)
+			if !ok {
 				continue
 			}
-			binding := profile.Hysteria2.TLS
 			consumer, err := certificates.CanonicalConsumer(certificates.Consumer{NodeID: c.ops.NodeID(), PluginID: input.PluginID,
-				ProfileID: profile.ID, SNI: binding.ServerName, Purpose: "proxy.hysteria2"})
+				ProfileID: profile.ID, SNI: binding.ServerName, Purpose: purpose})
 			if err != nil {
 				return invalidCoreConfiguration()
 			}

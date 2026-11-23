@@ -77,7 +77,12 @@
   const tel = $derived(stream.transcript.telemetry);
 
   const sessionCfg = $derived((s?.config ?? {}) as Record<string, unknown>);
+  const selectedProvider = $derived.by(() => {
+    const pid = typeof sessionCfg.provider_id === 'string' ? sessionCfg.provider_id : '';
+    return cfgProviders.find((x) => x.provider_id === pid) ?? cfgProviders.find((x) => x.is_default);
+  });
   const activeModelName = $derived(typeof sessionCfg.model === 'string' ? sessionCfg.model : '');
+  const effectiveModelName = $derived(activeModelName.trim() || selectedProvider?.model || '');
   const activeEffort = $derived(
     typeof sessionCfg.reasoning_effort === 'string' ? (sessionCfg.reasoning_effort as ReasoningEffort) : '',
   );
@@ -87,8 +92,7 @@
   const activePlan = $derived(Boolean(sessionCfg.plan_mode));
 
   const cfgModelOptions = $derived.by<Option[]>(() => {
-    const pid = typeof sessionCfg.provider_id === 'string' ? sessionCfg.provider_id : '';
-    const p = cfgProviders.find((x) => x.provider_id === pid) ?? cfgProviders.find((x) => x.is_default);
+    const p = selectedProvider;
     const set = new Set<string>();
     if (p?.model) set.add(p.model);
     for (const m of p?.models ?? []) set.add(m);
@@ -503,7 +507,7 @@
     />
     <EffortField
       label="思考挡位（Effort，可自由填写）"
-      model={cfgModel.trim() || activeModelName}
+      model={cfgModel.trim() || effectiveModelName}
       bind:value={cfgEffort}
     />
     <Select label="上下文窗口大小" options={CONTEXT_OPTIONS} bind:value={cfgMaxCtx} />

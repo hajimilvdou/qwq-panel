@@ -110,16 +110,22 @@ func (a *api) addPluginTrustKey(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	if err := a.requireTrustKeyMFA(r, act, "Adding a trusted publisher key requires a second factor."); err != nil {
-		a.fail(w, r, err)
-		return
-	}
 	if a.d.PluginTrust == nil {
 		a.fail(w, r, pluginUnavailable())
 		return
 	}
+	// Decode and pre-validate request syntax before MFA so malformed input
+	// never consumes a single-use recovery code.
 	var req pluginTrustKeyCreateRequest
 	if err := a.decodeJSON(r, &req); err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	if err := trust.ValidateAddInput(req.Label, req.PublicKeyPEM); err != nil {
+		a.fail(w, r, mapTrustStoreError(err))
+		return
+	}
+	if err := a.requireTrustKeyMFA(r, act, "Adding a trusted publisher key requires a second factor."); err != nil {
 		a.fail(w, r, err)
 		return
 	}
@@ -149,15 +155,25 @@ func (a *api) deletePluginTrustKey(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	if err := a.requireTrustKeyMFA(r, act, "Removing a trusted publisher key requires a second factor."); err != nil {
-		a.fail(w, r, err)
-		return
-	}
 	if a.d.PluginTrust == nil {
 		a.fail(w, r, pluginUnavailable())
 		return
 	}
+	// Validate key_id format and reject immutable official keys before MFA so
+	// invalid requests never burn a single-use recovery code.
 	keyID := r.PathValue("key_id")
+	if err := trust.ValidateKeyID(keyID); err != nil {
+		a.fail(w, r, mapTrustStoreError(err))
+		return
+	}
+	if src, ok := a.d.PluginTrust.KeySource(keyID); ok && src == trust.SourceOfficial {
+		a.fail(w, r, mapTrustStoreError(trust.ErrOfficialKey))
+		return
+	}
+	if err := a.requireTrustKeyMFA(r, act, "Removing a trusted publisher key requires a second factor."); err != nil {
+		a.fail(w, r, err)
+		return
+	}
 	if err := a.d.PluginTrust.Remove(keyID); err != nil {
 		a.fail(w, r, mapTrustStoreError(err))
 		return
@@ -293,12 +309,20 @@ func (a *api) fetchPluginPackage(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
+		a.auditPackageFetch(r, act, targetURL.Host, operations.AuditFailure, map[string]any{
+			"url":   targetURL.String(),
+			"error": err.Error(),
+		})
 		a.fail(w, r, mapFetchError(err))
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		a.auditPackageFetch(r, act, targetURL.Host, operations.AuditFailure, map[string]any{
+			"url":         targetURL.String(),
+			"http_status": resp.StatusCode,
+		})
 		if resp.StatusCode >= 500 {
 			a.fail(w, r, problem.New(problem.Unavailable,
 				"Remote host returned HTTP %d while downloading the plugin package.", resp.StatusCode))
@@ -318,10 +342,42 @@ func (a *api) fetchPluginPackage(w http.ResponseWriter, r *http.Request) {
 
 	upload, err := a.d.PluginUploads.Stage(ctx, resp.Body, principalScope(act), expectedSHA)
 	if err != nil {
+		a.auditPackageFetch(r, act, targetURL.Host, operations.AuditFailure, map[string]any{
+			"url":   targetURL.String(),
+			"error": err.Error(),
+		})
 		a.fail(w, r, err)
 		return
 	}
+	a.auditPackageFetch(r, act, targetURL.Host, operations.AuditSuccess, map[string]any{
+		"url":       targetURL.String(),
+		"upload_id": upload.ID,
+		"sha256":    upload.SHA256,
+		"size":      upload.Size,
+	})
 	a.writeResource(w, r, http.StatusCreated, newPluginPackageUploadDTO(upload), nil)
+}
+
+func (a *api) auditPackageFetch(r *http.Request, act actor.Actor, host, outcome string, details map[string]any) {
+	if a.d.DB == nil {
+		return
+	}
+	rawDetails, _ := json.Marshal(details)
+	rec := operations.AuditRecord{
+		Actor:     act,
+		Action:    "plugin.package.fetch",
+		Subject:   "plugin-packages/" + host,
+		Outcome:   outcome,
+		Details:   rawDetails,
+		NodeID:    a.d.NodeID,
+		TraceID:   gateway.TraceID(r.Context()),
+		RequestID: requestID(r),
+	}
+	if err := a.d.DB.Update(r.Context(), func(tx *storage.Tx) error {
+		return operations.Audit(r.Context(), tx, rec)
+	}); err != nil {
+		a.d.Logger.WarnContext(r.Context(), "api: audit plugin package fetch", "host", host, "error", err)
+	}
 }
 
 func (a *api) packageFetchClient() *http.Client {
@@ -446,59 +502,12 @@ func mapFetchError(err error) error {
 	return problem.New(problem.Unavailable, "The remote plugin package could not be downloaded.")
 }
 
-var blockedFetchPrefixes = func() []netip.Prefix {
-	cidrs := []string{
-		"0.0.0.0/8",       // "this" network / unspecified
-		"10.0.0.0/8",      // RFC 1918
-		"100.64.0.0/10",   // CGNAT (RFC 6598)
-		"127.0.0.0/8",     // Loopback
-		"169.254.0.0/16",  // Link-local / cloud metadata
-		"172.16.0.0/12",   // RFC 1918
-		"192.0.0.0/24",    // IETF protocol assignments
-		"192.0.2.0/24",    // TEST-NET-1
-		"192.168.0.0/16",  // RFC 1918
-		"198.18.0.0/15",   // Benchmarking
-		"198.51.100.0/24", // TEST-NET-2
-		"203.0.113.0/24",  // TEST-NET-3
-		"224.0.0.0/4",     // Multicast
-		"240.0.0.0/4",     // Reserved / broadcast
-		"::/128",          // Unspecified IPv6
-		"::1/128",         // Loopback IPv6
-		"fc00::/7",        // Unique local IPv6 (RFC 4193)
-		"fe80::/10",       // Link-local IPv6
-		"ff00::/8",        // Multicast IPv6
-		"2001:db8::/32",   // Documentation IPv6
-		"2001::/32",       // Teredo tunneling (RFC 4380)
-		"2002::/16",       // 6to4 tunneling (RFC 3056)
-		"64:ff9b::/96",    // NAT64 well-known prefix
-		"64:ff9b:1::/48",  // NAT64 local-use prefix (RFC 8215)
-		"100::/64",        // Discard-only prefix
-	}
-	out := make([]netip.Prefix, 0, len(cidrs))
-	for _, c := range cidrs {
-		out = append(out, netip.MustParsePrefix(c))
-	}
-	return out
-}()
-
 // isBlockedFetchAddr reports whether addr is non-public (loopback, RFC1918,
-// RFC4193, link-local, CGNAT, multicast, unspecified, zoned, or reserved).
+// RFC4193, link-local, CGNAT, multicast, unspecified, zoned, or reserved),
+// while unwrapping public NAT64 addresses (64:ff9b::/96 and 64:ff9b:1::/48)
+// and recursively blocking private/loopback/metadata IPv4 suffixes.
 func isBlockedFetchAddr(addr netip.Addr) bool {
-	if !addr.IsValid() || addr.Zone() != "" {
-		return true
-	}
-	addr = addr.Unmap()
-	if addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() ||
-		addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() ||
-		addr.IsInterfaceLocalMulticast() {
-		return true
-	}
-	for _, pfx := range blockedFetchPrefixes {
-		if pfx.Contains(addr) {
-			return true
-		}
-	}
-	return false
+	return trust.IsBlockedRemoteFetchAddr(addr)
 }
 
 var (
@@ -561,10 +570,13 @@ func safeFetchDialContext(ctx context.Context, network, address string) (net.Con
 			}
 		}
 	}
-	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	const perIPDialTimeout = 8 * time.Second
+	dialer := &net.Dialer{Timeout: perIPDialTimeout, KeepAlive: 30 * time.Second}
 	var lastErr error
 	for _, a := range addrs {
-		conn, derr := dialer.DialContext(ctx, network, net.JoinHostPort(a.Unmap().String(), port))
+		ipCtx, ipCancel := context.WithTimeout(ctx, perIPDialTimeout)
+		conn, derr := dialer.DialContext(ipCtx, network, net.JoinHostPort(a.Unmap().String(), port))
+		ipCancel()
 		if derr == nil {
 			return conn, nil
 		}

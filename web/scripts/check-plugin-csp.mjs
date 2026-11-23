@@ -51,23 +51,49 @@ export function scanHtmlForCspViolations(html) {
   return violations;
 }
 
-function collectPluginHtmlFiles() {
+/**
+ * 扫描单个 JS 源码，禁止通过 .setAttribute('style', ...) 注入内联样式（违反严格 style-src 'self' CSP）。
+ */
+export function scanJsForCspViolations(js) {
+  const violations = [];
+  const lineAt = (idx) => js.slice(0, idx).split('\n').length;
+  const re = /\.setAttribute\s*\(\s*(['"`])style\1/gi;
+  let m;
+  while ((m = re.exec(js)) !== null) {
+    violations.push({
+      line: lineAt(m.index),
+      kind: 'js-inline-style-attr',
+      detail: `JS 调用 .setAttribute('style', ...)（改用 CSS class 或 adoptedStyleSheets）`,
+    });
+  }
+  return violations;
+}
+
+function collectPluginFilesByExt(ext) {
   const files = [];
   if (!existsSync(builtinDir)) return files;
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      const st = statSync(full);
+      if (st.isDirectory()) {
+        walk(full);
+      } else if (entry.toLowerCase().endsWith(ext)) {
+        files.push(full);
+      }
+    }
+  };
   for (const pluginName of readdirSync(builtinDir)) {
     const uiDir = join(builtinDir, pluginName, 'ui');
     if (!existsSync(uiDir) || !statSync(uiDir).isDirectory()) continue;
-    for (const entry of readdirSync(uiDir)) {
-      if (entry.toLowerCase().endsWith('.html')) {
-        files.push(join(uiDir, entry));
-      }
-    }
+    walk(uiDir);
   }
   return files.sort();
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const htmlFiles = collectPluginHtmlFiles();
+  const htmlFiles = collectPluginFilesByExt('.html');
+  const jsFiles = collectPluginFilesByExt('.js');
   let totalViolations = 0;
   for (const file of htmlFiles) {
     const content = readFileSync(file, 'utf8');
@@ -80,9 +106,22 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       }
     }
   }
+  for (const file of jsFiles) {
+    const content = readFileSync(file, 'utf8');
+    const found = scanJsForCspViolations(content);
+    if (found.length > 0) {
+      const relPath = relative(repoRoot, file).replace(/\\/g, '/');
+      for (const v of found) {
+        console.error(`${relPath}:${v.line}: [${v.kind}] ${v.detail}`);
+        totalViolations++;
+      }
+    }
+  }
   if (totalViolations > 0) {
-    console.error(`\nCSP 扫描失败：发现 ${totalViolations} 处内联脚本/样式违规（扫描 ${htmlFiles.length} 个插件 HTML 文件）`);
+    console.error(
+      `\nCSP 扫描失败：发现 ${totalViolations} 处内联脚本/样式违规（扫描 ${htmlFiles.length} 个 HTML 与 ${jsFiles.length} 个 JS 文件）`,
+    );
     process.exit(1);
   }
-  console.log(`CSP 扫描通过：${htmlFiles.length} 个内置插件 HTML 文件零内联脚本/样式违规`);
+  console.log(`CSP 扫描通过：${htmlFiles.length} 个 HTML 与 ${jsFiles.length} 个 JS 内置插件文件零内联脚本/样式违规`);
 }

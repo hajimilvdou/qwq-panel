@@ -80,14 +80,20 @@ func (m *Manager) probe(parent context.Context, slot *processSlot) error {
 	if err != nil {
 		return ErrUnhealthy
 	}
-	tag, err := coreapi.InboundTag(slot.spec.InboundID)
-	if err != nil {
-		return ErrUnhealthy
-	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
-	if _, err := client.Get(ctx, "inbound>>>"+tag+">>>traffic>>>uplink"); err != nil {
-		return ErrUnhealthy
+	if slot.spec.InboundID == "api-only" {
+		if _, err := client.Counters(ctx); err != nil {
+			return ErrUnhealthy
+		}
+	} else {
+		tag, err := coreapi.InboundTag(slot.spec.InboundID)
+		if err != nil {
+			return ErrUnhealthy
+		}
+		if _, err := client.Get(ctx, "inbound>>>"+tag+">>>traffic>>>uplink"); err != nil {
+			return ErrUnhealthy
+		}
 	}
 	m.mu.Lock()
 	alive := m.current == slot && slot.state == "RUNNING" && slot.context.Err() == nil && !slotDone(slot)

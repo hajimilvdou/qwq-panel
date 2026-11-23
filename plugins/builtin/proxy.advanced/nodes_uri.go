@@ -208,7 +208,7 @@ func parseTrojanURI(line string) (proxyNodeRecord, error) {
 	if err != nil {
 		return proxyNodeRecord{}, err
 	}
-	password := strings.TrimSpace(u.User.Username())
+	password := ExtractFullURLUserPassword(u)
 	host := strings.TrimSpace(u.Hostname())
 	port, err := parsePortStrict(u.Port(), 443)
 	if err != nil || password == "" || host == "" {
@@ -361,10 +361,7 @@ func parseHysteria2URI(line string) (proxyNodeRecord, error) {
 	if err != nil {
 		return proxyNodeRecord{}, err
 	}
-	password := strings.TrimSpace(u.User.Username())
-	if p, ok := u.User.Password(); ok && p != "" {
-		password = password + ":" + p
-	}
+	password := ExtractFullURLUserPassword(u)
 	host := strings.TrimSpace(u.Hostname())
 	port, err := parsePortStrict(u.Port(), 443)
 	if err != nil || password == "" || host == "" {
@@ -402,7 +399,7 @@ func parseAnyTLSURI(line string) (proxyNodeRecord, error) {
 	if err != nil {
 		return proxyNodeRecord{}, err
 	}
-	password := strings.TrimSpace(u.User.Username())
+	password := ExtractFullURLUserPassword(u)
 	host := strings.TrimSpace(u.Hostname())
 	port, err := parsePortStrict(u.Port(), 443)
 	if err != nil || password == "" || host == "" {
@@ -678,7 +675,7 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		if transport == "grpc" && rec.Config.ServiceName != "" {
 			q.Set("serviceName", rec.Config.ServiceName)
 		}
-		uri := fmt.Sprintf("vless://%s@%s?%s#%s", url.PathEscape(uuidVal), hostPort, q.Encode(), url.PathEscape(name))
+		uri := fmt.Sprintf("vless://%s@%s?%s#%s", url.User(uuidVal).String(), hostPort, q.Encode(), url.PathEscape(name))
 
 		cn := map[string]any{
 			"name":    name,
@@ -791,7 +788,7 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		if transport == "grpc" && rec.Config.ServiceName != "" {
 			q.Set("serviceName", rec.Config.ServiceName)
 		}
-		uri := fmt.Sprintf("trojan://%s@%s?%s#%s", url.PathEscape(passVal), hostPort, q.Encode(), url.PathEscape(name))
+		uri := fmt.Sprintf("trojan://%s@%s?%s#%s", url.User(passVal).String(), hostPort, q.Encode(), url.PathEscape(name))
 
 		cn := map[string]any{
 			"name": name, "type": "trojan", "server": server, "port": rec.Port,
@@ -880,7 +877,7 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		if rec.Config.PortHopping != "" {
 			q.Set("mport", rec.Config.PortHopping)
 		}
-		uri := fmt.Sprintf("hysteria2://%s@%s?%s#%s", url.PathEscape(passVal), hostPort, q.Encode(), url.PathEscape(name))
+		uri := fmt.Sprintf("hysteria2://%s@%s?%s#%s", url.User(passVal).String(), hostPort, q.Encode(), url.PathEscape(name))
 		cn := map[string]any{
 			"name": name, "type": "hysteria2", "server": server, "port": rec.Port,
 			"password": passVal, "sni": sni, "skip-cert-verify": rec.Config.isInsecure(),
@@ -897,7 +894,16 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		}
 		if rec.Config.PortHopping != "" {
 			cn["ports"] = rec.Config.PortHopping
-			sb["server_ports"] = []string{strings.ReplaceAll(rec.Config.PortHopping, "-", ":")}
+			var sbPorts []string
+			for _, seg := range strings.Split(rec.Config.PortHopping, ",") {
+				seg = strings.TrimSpace(seg)
+				if seg != "" {
+					sbPorts = append(sbPorts, strings.ReplaceAll(seg, "-", ":"))
+				}
+			}
+			if len(sbPorts) > 0 {
+				sb["server_ports"] = sbPorts
+			}
 		}
 		return subNode{Name: name, ShareURI: uri, ClashNode: cn, SingboxOutbound: sb}, true
 
@@ -910,10 +916,10 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		} else {
 			q.Set("insecure", "0")
 		}
-		uri := fmt.Sprintf("anytls://%s@%s?%s#%s", url.PathEscape(passVal), hostPort, q.Encode(), url.PathEscape(name))
+		uri := fmt.Sprintf("anytls://%s@%s?%s#%s", url.User(passVal).String(), hostPort, q.Encode(), url.PathEscape(name))
 		cn := map[string]any{
 			"name": name, "type": "anytls", "server": server, "port": rec.Port,
-			"password": passVal, "sni": sni, "skip-cert-verify": rec.Config.isInsecure(), "udp": false,
+			"password": passVal, "sni": sni, "skip-cert-verify": rec.Config.isInsecure(), "udp": true,
 		}
 		sb := map[string]any{
 			"type": "anytls", "tag": name, "server": server, "server_port": rec.Port,
@@ -927,7 +933,7 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		if user != nil && rec.Source == "managed" {
 			uname = user.ID
 		}
-		uri := fmt.Sprintf("socks5://%s:%s@%s#%s", url.PathEscape(uname), url.PathEscape(passVal), hostPort, url.PathEscape(name))
+		uri := fmt.Sprintf("socks5://%s@%s#%s", url.UserPassword(uname, passVal).String(), hostPort, url.PathEscape(name))
 		cn := map[string]any{
 			"name": name, "type": "socks5", "server": server, "port": rec.Port,
 			"username": uname, "password": passVal, "udp": udpEnabled,
@@ -943,7 +949,7 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		if user != nil && rec.Source == "managed" {
 			uname = user.ID
 		}
-		uri := fmt.Sprintf("http://%s:%s@%s#%s", url.PathEscape(uname), url.PathEscape(passVal), hostPort, url.PathEscape(name))
+		uri := fmt.Sprintf("http://%s@%s#%s", url.UserPassword(uname, passVal).String(), hostPort, url.PathEscape(name))
 		cn := map[string]any{
 			"name": name, "type": "http", "server": server, "port": rec.Port,
 			"username": uname, "password": passVal,
@@ -963,7 +969,7 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 			if rec.Config.isInsecure() {
 				q.Set("allow_insecure", "1")
 			}
-			uri = fmt.Sprintf("tuic://%s:%s@%s?%s#%s", url.PathEscape(uuidVal), url.PathEscape(passVal), hostPort, q.Encode(), url.PathEscape(name))
+			uri = fmt.Sprintf("tuic://%s@%s?%s#%s", url.UserPassword(uuidVal, passVal).String(), hostPort, q.Encode(), url.PathEscape(name))
 		}
 		cn := map[string]any{
 			"name": name, "type": "tuic", "server": server, "port": rec.Port,

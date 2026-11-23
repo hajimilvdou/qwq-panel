@@ -147,7 +147,7 @@ func BuildHysteria2(ep ExportEndpoint, profileID, userID, authPassword, serverNa
 	}
 
 	shareURI := fmt.Sprintf("hysteria2://%s@%s?%s#%s",
-		url.PathEscape(authPassword),
+		url.User(authPassword).String(),
 		hostPort,
 		encodeQueryParams(params),
 		url.PathEscape(label),

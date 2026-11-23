@@ -47,7 +47,7 @@
     "schemas/relay.users.list.response.json": "sha256:8c02e068c4bd7ba3c171e24257d2ee4336194ac3490037b8ff89e57aa8665a18",
     "ui/index.html": "sha256:ea422a04848efda869c1153ce7191421cf251e1bbf5d0530502926892a9b58ea",
     "ui/plugin.css": "sha256:eebd1ae56c68ee32c3cace900e42ef3e8914afe99f897f9f85f272a912ef1302",
-    "ui/plugin.js": "sha256:7eac56c90b5e78dd17fc88e5cd72a7c8ee8e2a374d3a2c1c9c42d27cf7491fee"
+    "ui/plugin.js": "sha256:e4e7eab1ac7dcd5abe5e8f086124e849399f5066ff395fb738a49ad7848798e5"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -356,7 +356,7 @@
       "risk": "low",
       "idempotent": false,
       "timeout_ms": 15000,
-      "approval": "confirm",
+      "approval": "ai_confirm",
       "approval_summary": "批量生成门户注册邀请码或统计额度福利兑换码（CDK / 群口令码）",
       "summary": "批量签发邀请码或额度兑换码",
       "capabilities": [

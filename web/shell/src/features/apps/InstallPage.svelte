@@ -45,6 +45,14 @@
   type SourceMode = 'file' | 'url';
   let sourceMode = $state<SourceMode>('file');
   let trustOpen = $state(false);
+  let lastSourceMode: SourceMode = 'file';
+
+  $effect(() => {
+    if (sourceMode !== lastSourceMode) {
+      lastSourceMode = sourceMode;
+      ctrl?.abort();
+    }
+  });
 
   const sourceOptions = [
     { value: 'file' as const, label: '拖拽 / 上传 .qwqpkg' },
@@ -64,23 +72,32 @@
     if (!f || uploading) return;
     uploadErr = fileProblem(f) ?? '';
     if (uploadErr) return;
+    ctrl?.abort();
+    const myCtrl = new AbortController();
+    ctrl = myCtrl;
     file = f;
     uploading = true;
     progress = 0;
-    ctrl = new AbortController();
     try {
-      const up = await plugins.upload(f, (l, t) => (progress = t ? l / t : 0), ctrl.signal);
+      const up = await plugins.upload(f, (l, t) => (progress = t ? l / t : 0), myCtrl.signal);
+      if (myCtrl.signal.aborted) return;
       progress = 1;
-      ins = await plugins.inspect(up.upload_id);
+      const inspected = await plugins.inspect(up.upload_id);
+      if (myCtrl.signal.aborted) return;
+      ins = inspected;
       accepted = defaultAccepted(ins.manifest?.capabilities ?? []);
       step = 'check';
     } catch (err) {
-      const v = describeError(err);
-      if (v.code !== 'ABORTED') uploadErr = v.code === 'PAYLOAD_TOO_LARGE' ? '安装包不能超过 64 MiB' : v.message;
+      if (!myCtrl.signal.aborted) {
+        const v = describeError(err);
+        if (v.code !== 'ABORTED') uploadErr = v.code === 'PAYLOAD_TOO_LARGE' ? '安装包不能超过 64 MiB' : v.message;
+      }
       file = null;
     } finally {
-      uploading = false;
-      ctrl = null;
+      if (ctrl === myCtrl) {
+        uploading = false;
+        ctrl = null;
+      }
     }
   }
 
@@ -104,23 +121,32 @@
       fetchErr = '仅支持公开的 https:// 安装包地址';
       return;
     }
+    ctrl?.abort();
+    const myCtrl = new AbortController();
+    ctrl = myCtrl;
     fetching = true;
     fetchErr = '';
-    ctrl = new AbortController();
     try {
       const body = cleanSha ? { url: cleanUrl, expected_sha256: cleanSha } : { url: cleanUrl };
-      const up = await plugins.fetchFromUrl(body, ctrl.signal);
-      ins = await plugins.inspect(up.upload_id);
+      const up = await plugins.fetchFromUrl(body, myCtrl.signal);
+      if (myCtrl.signal.aborted) return;
+      const inspected = await plugins.inspect(up.upload_id);
+      if (myCtrl.signal.aborted) return;
+      ins = inspected;
       accepted = defaultAccepted(ins.manifest?.capabilities ?? []);
       step = 'check';
     } catch (err) {
-      const v = describeError(err);
-      if (v.code !== 'ABORTED') {
-        fetchErr = v.code === 'PAYLOAD_TOO_LARGE' ? '远程安装包不能超过 64 MiB' : v.message;
+      if (!myCtrl.signal.aborted) {
+        const v = describeError(err);
+        if (v.code !== 'ABORTED') {
+          fetchErr = v.code === 'PAYLOAD_TOO_LARGE' ? '远程安装包不能超过 64 MiB' : v.message;
+        }
       }
     } finally {
-      fetching = false;
-      ctrl = null;
+      if (ctrl === myCtrl) {
+        fetching = false;
+        ctrl = null;
+      }
     }
   }
 

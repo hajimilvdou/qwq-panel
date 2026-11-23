@@ -4,11 +4,14 @@ package agentsession
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"unicode"
 
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 )
+
+var externalSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 // MaxSessionConfigBytes bounds any session config payload.
 const MaxSessionConfigBytes = 32 << 10
@@ -18,22 +21,23 @@ const MaxSessionConfigBytes = 32 << 10
 // Host execution boundary fields (binary, args, command, work_dir, server_url,
 // env, mcp_config) and credentials are strictly forbidden in session JSON.
 var AllowedExternalSessionConfigKeys = map[string]bool{
-	"model":              true,
-	"reasoning_effort":   true,
-	"max_context_tokens": true,
-	"temperature":        true,
-	"max_tokens":         true,
-	"system_prompt":      true,
-	"plan_mode":          true,
-	"transport":          true,
-	"auth_mode":          true,
-	"provider_id":        true,
-	"active_skills":      true,
-	"max_turns":          true,
-	"resume_session_id":  true,
-	"external_thread_id": true,
-	"agent":              true,
-	"profile":            true,
+	"model":                 true,
+	"reasoning_effort":      true,
+	"max_context_tokens":    true,
+	"temperature":           true,
+	"max_tokens":            true,
+	"system_prompt":         true,
+	"plan_mode":             true,
+	"transport":             true,
+	"auth_mode":             true,
+	"provider_id":           true,
+	"active_skills":         true,
+	"max_turns":             true,
+	"resume_session_id":     true,
+	"external_thread_id":    true,
+	"agent":                 true,
+	"profile":               true,
+	"compaction_checkpoint": true,
 }
 
 // ValidateExternalSessionConfig rejects any per-session config key outside the
@@ -124,9 +128,25 @@ func ValidateExternalSessionConfig(raw json.RawMessage) (json.RawMessage, error)
 	for _, idField := range []string{"provider_id", "resume_session_id", "external_thread_id"} {
 		if rawID, ok := obj[idField]; ok {
 			var v string
-			if err := json.Unmarshal(rawID, &v); err != nil || strings.HasPrefix(strings.TrimSpace(v), "-") || len(v) > 128 {
+			if err := json.Unmarshal(rawID, &v); err != nil {
 				return nil, problem.Validation(problem.Violation{
 					Pointer: "/config/" + idField, Code: "INVALID", Message: "invalid identifier in session config.",
+				})
+			}
+			if v != "" && (!externalSessionIDPattern.MatchString(v) || strings.Contains(v, "..")) {
+				return nil, problem.Validation(problem.Violation{
+					Pointer: "/config/" + idField, Code: "INVALID", Message: "invalid identifier in session config.",
+				})
+			}
+		}
+	}
+	if rawCP, ok := obj["compaction_checkpoint"]; ok {
+		trimmedCP := strings.TrimSpace(string(rawCP))
+		if trimmedCP != "null" {
+			var cp map[string]any
+			if err := json.Unmarshal(rawCP, &cp); err != nil || cp == nil {
+				return nil, problem.Validation(problem.Violation{
+					Pointer: "/config/compaction_checkpoint", Code: "INVALID", Message: "compaction_checkpoint must be a JSON object.",
 				})
 			}
 		}

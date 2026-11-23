@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -264,7 +265,7 @@ func (c *OpenCodeCore) runServeHTTP(ctx context.Context, cfg OpenCodeConfig, tur
 	promptErrCh := make(chan error, 1)
 	go func() {
 		promptErrCh <- c.doJSON(ctx, http.MethodPost,
-			fmt.Sprintf("%s/session/%s/prompt_async", cfg.ServerURL, extSessionID),
+			fmt.Sprintf("%s/session/%s/prompt_async", cfg.ServerURL, url.PathEscape(extSessionID)),
 			map[string]any{
 				"agent": agentName,
 				"model": cfg.Model,
@@ -438,7 +439,7 @@ func (c *OpenCodeCore) consumeOpenCodeSSE(
 				reply = "once"
 			}
 			_ = c.doJSON(ctx, http.MethodPost,
-				fmt.Sprintf("%s/permission/%s/reply", baseURL, perm.ID),
+				fmt.Sprintf("%s/permission/%s/reply", baseURL, url.PathEscape(perm.ID)),
 				map[string]any{"reply": reply, "message": out.Comment}, nil)
 
 		case "session.idle":
@@ -458,6 +459,13 @@ func (c *OpenCodeCore) consumeOpenCodeSSE(
 func (c *OpenCodeCore) Compact(ctx context.Context, req CompactRequest) (CompactionResult, error) {
 	_, res, err := CompactTranscript(ctx, req.Messages, req.Options, nil)
 	return res, err
+}
+
+func (c *OpenCodeCore) effectiveLauncher() ProcessLauncher {
+	if c.launcher == nil {
+		return OSProcessLauncher{}
+	}
+	return c.launcher
 }
 
 // runCLIJSON runs `opencode run --format json` as a zero-daemon fallback.
@@ -493,7 +501,7 @@ func (c *OpenCodeCore) runCLIJSON(ctx context.Context, cfg OpenCodeConfig, turn 
 		extraEnv = append(extraEnv, "OPENCODE_REASONING_EFFORT="+eff)
 	}
 	args = AppendPosixPromptArg(args, latestUserMessage(turn.Messages))
-	proc, err := c.launcher.Start(ctx, cfg.Binary, args, extraEnv, "")
+	proc, err := c.effectiveLauncher().Start(ctx, cfg.Binary, args, extraEnv, "")
 	if err != nil {
 		return err
 	}

@@ -788,6 +788,12 @@ func (s *Supervisor) markDegraded(pluginID string, err error, attempts int, retr
 	d.err, d.attempts, d.retryAt = err, attempts, retryAt
 }
 
+// ResetDegraded clears any residual degraded cooldown state for pluginID after
+// an explicit restore has confirmed the unit is healthy again.
+func (s *Supervisor) ResetDegraded(pluginID string) {
+	s.clearDegraded(pluginID)
+}
+
 func (s *Supervisor) clearDegraded(pluginID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

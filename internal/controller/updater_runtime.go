@@ -538,6 +538,8 @@ func unitSpecFor(m *manifest.Manifest, versionDir, dataRoot string) (sandbox.Uni
 		NetworkProxyDirect: networkProxyDirect,
 		Relaxations:        relaxations,
 		DataDir:            dataDir,
+		Startup:            m.Lifecycle.Startup,
+		Background:         m.Lifecycle.Background,
 	}, nil
 }
 

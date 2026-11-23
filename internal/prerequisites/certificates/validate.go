@@ -62,8 +62,23 @@ func validateCaller(caller Caller, write bool) error {
 	return nil
 }
 
+func validConsumerPurpose(purpose string) bool {
+	switch purpose {
+	case "panel.https",
+		"proxy.hysteria2",
+		"proxy.anytls",
+		"proxy.vless",
+		"proxy.vmess",
+		"proxy.trojan",
+		"proxy.tls":
+		return true
+	default:
+		return false
+	}
+}
+
 func canonicalConsumer(consumer Consumer) (Consumer, error) {
-	if !names.ID(consumer.PluginID) || !names.ID(consumer.ProfileID) || !names.ID(consumer.NodeID) || (consumer.Purpose != "proxy.hysteria2" && consumer.Purpose != "panel.https") {
+	if !names.ID(consumer.PluginID) || !names.ID(consumer.ProfileID) || !names.ID(consumer.NodeID) || !validConsumerPurpose(consumer.Purpose) {
 		return Consumer{}, fault.New("CONSUMER_INVALID", "证书消费者身份或用途无效")
 	}
 	name, err := names.DNS(consumer.SNI, false)

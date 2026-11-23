@@ -29,6 +29,9 @@ func LoadV2(ctx context.Context, intent *corev2.Intent, revealer Revealer, tlsLo
 	if revealer == nil || corev2.Validate(intent) != nil {
 		return materials, ErrUnavailable
 	}
+	dedup := newCachedRevealer(revealer)
+	defer dedup.Clear()
+	revealer = dedup
 	materials.Profiles = make(map[string]xrayconfig.ProfileMaterials, len(intent.Profiles))
 	defer func() {
 		if err != nil {
@@ -336,4 +339,37 @@ func revealBounded(parent context.Context, revealer Revealer, reference string, 
 		return nil, ErrUnavailable
 	}
 	return []byte(value), nil
+}
+
+type cachedRevealer struct {
+	base  Revealer
+	cache map[string][]byte
+}
+
+func newCachedRevealer(base Revealer) *cachedRevealer {
+	return &cachedRevealer{base: base, cache: make(map[string][]byte)}
+}
+
+func (c *cachedRevealer) RevealSecret(ctx context.Context, ref, purpose string) ([]byte, error) {
+	key := purpose + "\x00" + ref
+	if cached, ok := c.cache[key]; ok {
+		cp := make([]byte, len(cached))
+		copy(cp, cached)
+		return cp, nil
+	}
+	raw, err := c.base.RevealSecret(ctx, ref, purpose)
+	if err != nil {
+		return nil, err
+	}
+	stored := make([]byte, len(raw))
+	copy(stored, raw)
+	c.cache[key] = stored
+	return raw, nil
+}
+
+func (c *cachedRevealer) Clear() {
+	for k, buf := range c.cache {
+		clear(buf)
+		delete(c.cache, k)
+	}
 }

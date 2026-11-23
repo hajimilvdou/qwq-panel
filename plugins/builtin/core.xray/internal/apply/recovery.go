@@ -10,6 +10,7 @@ import (
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/coreproc"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayconfig"
+	corev2 "github.com/qwq-panel/qwq/sdk/coreapi/v2"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
 
@@ -162,12 +163,17 @@ func generationInboundID(generation *state.Generation) string {
 	}
 	if generation.SummaryV2 != nil {
 		for _, p := range generation.SummaryV2.Profiles {
-			if p.Enabled {
+			if p.Enabled && p.Protocol != corev2.ProtocolAnyTLS {
+				return p.ID
+			}
+		}
+		for _, p := range generation.SummaryV2.Profiles {
+			if p.Protocol != corev2.ProtocolAnyTLS {
 				return p.ID
 			}
 		}
 		if len(generation.SummaryV2.Profiles) > 0 {
-			return generation.SummaryV2.Profiles[0].ID
+			return "api-only"
 		}
 	}
 	return ""

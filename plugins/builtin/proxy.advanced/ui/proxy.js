@@ -185,6 +185,9 @@
       return res;
     } catch (err) {
       if (err instanceof PendingStateError) {
+        if (err.kind === 'approval' && builder.open) {
+          closeNodeBuilder();
+        }
         showBanner(err.message, 'warn');
         setStatus(err.kind === 'approval' ? '等待审批确认' : '后台执行中');
         return null;
@@ -244,6 +247,13 @@
           req.reject(new PendingStateError('running', '操作正在后台执行中，请稍后刷新查看最新结果'));
           return;
         }
+        if (env.status === 'REJECTED' || env.status === 'CANCELED' || env.status === 'CANCELLED' || env.status === 'FAILED' || env.status === 'EXPIRED') {
+          const errMsg =
+            (env.error && typeof env.error === 'object' ? (env.error.message || env.error.code) : (typeof env.error === 'string' ? env.error : '')) ||
+            `操作未执行完成（状态：${env.status}）`;
+          req.reject(new Error(errMsg));
+          return;
+        }
         if (env.error) {
           const errMsg =
             typeof env.error === 'string'
@@ -296,6 +306,11 @@
 
     if (data.t === 'ui.route' && typeof data.path === 'string' && VALID_ROUTES.includes(data.path)) {
       switchRoute(data.path, false);
+      return;
+    }
+
+    if (data.t === 'api.event') {
+      void refreshActiveView();
     }
   }
 
@@ -1340,8 +1355,18 @@
       const flowVal = builder.mode === 'expert' ? $('nb-e-flow').value : (secOpt.flow || '');
       if (flowVal) cfg.flow = flowVal;
       if (isEnc) {
-        put('decryption', $('nb-e-decryption').value || 'none');
-        put('encryption', $('nb-e-encryption').value || 'none');
+        const decVal = $('nb-e-decryption').value.trim();
+        if (decVal) {
+          put('decryption', decVal);
+        } else if (!builder.editingId) {
+          put('decryption', 'none');
+        }
+        const encVal = $('nb-e-encryption').value.trim();
+        if (encVal) {
+          put('encryption', encVal);
+        } else if (!builder.editingId) {
+          put('encryption', 'none');
+        }
       }
     }
     if (proto === 'trojan' || proto === 'shadowsocks' || proto === 'hysteria2' || proto === 'anytls' || proto === 'socks5' || proto === 'http') {
@@ -2871,6 +2896,7 @@
     port = event.ports[0];
     port.onmessage = (msg) => handleMessage(msg.data);
     send({ t: 'ui.ready' });
+    send({ t: 'api.subscribe', id: 'sub-changes', subjects: ['*'] });
     void refreshActiveView();
   });
 

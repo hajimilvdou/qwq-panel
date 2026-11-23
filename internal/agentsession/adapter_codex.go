@@ -457,14 +457,17 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 		if IsReasoningEffortDisabled(eff) {
 			eff = ""
 		}
-		if err := rpc.Call(ctx, "thread/start", map[string]any{
+		startParams := map[string]any{
 			"model":           cfg.Model,
-			"reasoningEffort": eff,
 			"sandbox":         sandbox,
 			"approvalPolicy":  approvalPolicy,
 			"cwd":             cfg.WorkDir,
 			"developerPrompt": strings.TrimSpace(devPrompt),
-		}, &tResp); err != nil {
+		}
+		if eff != "" {
+			startParams["reasoningEffort"] = eff
+		}
+		if err := rpc.Call(ctx, "thread/start", startParams, &tResp); err != nil {
 			return err
 		}
 		threadID = tResp.Thread.ID
@@ -527,7 +530,7 @@ func (c *CodexCore) runExecJSONL(ctx context.Context, cfg CodexConfig, turn Turn
 		args = append(args, "--model", cfg.Model)
 	}
 	if eff, _, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort); !IsReasoningEffortDisabled(eff) {
-		args = append(args, "-c", "model_reasoning_effort="+eff)
+		args = append(args, "-c", FormatCodexEffortConfigOverride(eff))
 	}
 	args = AppendPosixPromptArg(args, latestUserMessage(turn.Messages))
 

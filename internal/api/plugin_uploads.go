@@ -363,11 +363,11 @@ func (s *PluginUploads) Resolve(id string) (PluginUpload, bool) {
 	return *u, true
 }
 
-// filePath returns the private file of an upload. It is unexported so the path
-// never crosses the package boundary.
-func (s *PluginUploads) filePath(id string) (string, bool) {
+// filePathForPrincipal returns the private file of an upload only when it was
+// staged by the same principal (matching inspectPluginPackage's isolation rule).
+func (s *PluginUploads) filePathForPrincipal(id, principal string) (string, bool) {
 	u, ok := s.Resolve(id)
-	if !ok {
+	if !ok || u.principal != principal {
 		return "", false
 	}
 	return u.path, true

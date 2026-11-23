@@ -264,9 +264,12 @@ func writeSysctlAtomic(dir, target string, data []byte) error {
 
 // RollbackManagedSysctl removes the managed drop-in and restores allowlisted baseline values.
 func (s *Service) RollbackManagedSysctl(ctx context.Context, baseline map[string]string) error {
-	_ = os.Remove(s.managedPath())
+	var errs []error
+	if err := os.Remove(s.managedPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		errs = append(errs, fmt.Errorf("sysctl: remove managed config: %w", err))
+	}
 	if len(baseline) == 0 {
-		return nil
+		return errors.Join(errs...)
 	}
 	keys := make([]string, 0, len(baseline))
 	for k := range baseline {
@@ -282,9 +285,11 @@ func (s *Service) RollbackManagedSysctl(ctx context.Context, baseline map[string
 		if strings.ContainsAny(cleanVal, "\r\n;#") || validator(cleanVal) != nil {
 			continue
 		}
-		_, _ = s.exec(ctx, []string{"-w", k + "=" + cleanVal})
+		if out, err := s.exec(ctx, []string{"-w", k + "=" + cleanVal}); err != nil {
+			errs = append(errs, fmt.Errorf("sysctl: rollback %s: %w (%s)", k, err, strings.TrimSpace(string(out))))
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // ApplyManagedSysctl applies validated network sysctl tuning using the default service.

@@ -9,6 +9,7 @@ import (
 	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -66,6 +67,7 @@ var warpCandidateEndpoints = []string{
 	"162.159.193.10:2408",
 	"162.159.195.1:2408",
 	"162.159.192.8:2408",
+	"[2606:4700:d0::a29f:c001]:2408",
 }
 
 // warpRecord 是面向管理端与前端的脱敏 Cloudflare WARP 视图（绝不回传私钥或访问令牌）。
@@ -110,14 +112,14 @@ type xrayInboundPortInfo struct {
 }
 
 type warpRegisterRequest struct {
-	LicenseKey      string   `json:"license_key"`
-	Endpoint        string   `json:"endpoint"`
-	MTU             int      `json:"mtu"`
-	Enabled         *bool    `json:"enabled"`
-	RoutingMode     string   `json:"routing_mode"`
-	BoundProfileIDs []string `json:"bound_profile_ids"`
-	Domains         []string `json:"domains"`
-	SyncCore        *bool    `json:"sync_core"`
+	LicenseKey      SecretOrPlainField `json:"license_key"`
+	Endpoint        string             `json:"endpoint"`
+	MTU             int                `json:"mtu"`
+	Enabled         *bool              `json:"enabled"`
+	RoutingMode     string             `json:"routing_mode"`
+	BoundProfileIDs []string           `json:"bound_profile_ids"`
+	Domains         []string           `json:"domains"`
+	SyncCore        *bool              `json:"sync_core"`
 }
 
 type warpConfigureRequest struct {
@@ -128,13 +130,13 @@ type warpConfigureRequest struct {
 	Endpoint        *string   `json:"endpoint"`
 	MTU             *int      `json:"mtu"`
 	// 可选手动导入 WireGuard / WARP / Zero Trust 凭据：
-	PrivateKey    string `json:"private_key"`
-	PeerPublicKey string `json:"peer_public_key"`
-	AddressV4     string `json:"address_v4"`
-	AddressV6     string `json:"address_v6"`
-	ClientID      string `json:"client_id"`
-	Reserved      []int  `json:"reserved"`
-	SyncCore      *bool  `json:"sync_core"`
+	PrivateKey    SecretOrPlainField `json:"private_key"`
+	PeerPublicKey string             `json:"peer_public_key"`
+	AddressV4     string             `json:"address_v4"`
+	AddressV6     string             `json:"address_v6"`
+	ClientID      string             `json:"client_id"`
+	Reserved      []int              `json:"reserved"`
+	SyncCore      *bool              `json:"sync_core"`
 }
 
 func (s *proxyStore) encryptSecretBytes(plain string) ([]byte, error) {
@@ -373,13 +375,11 @@ func decodeWARPClientIDReserved(clientID string) []int {
 			return nil
 		}
 	}
-	if len(raw) > 4 {
-		raw = raw[:4]
-	}
 	if len(raw) < 3 {
 		return nil
 	}
-	out := make([]int, len(raw))
+	raw = raw[:3]
+	out := make([]int, 3)
 	for i, b := range raw {
 		out[i] = int(b)
 	}
@@ -504,13 +504,18 @@ func registerCloudflareWARP(ctx context.Context, client *http.Client, licenseKey
 			ep = strings.TrimSpace(parsed.Config.Peers[0].Endpoint.V4)
 		}
 		if ep != "" {
-			if _, _, serr := net.SplitHostPort(ep); serr != nil {
-				ep = net.JoinHostPort(strings.TrimSuffix(ep, ":0"), "2408")
+			if h, p, serr := net.SplitHostPort(ep); serr == nil {
+				if p == "" || p == "0" {
+					ep = net.JoinHostPort(h, "2408")
+				}
+			} else {
+				ep = net.JoinHostPort(strings.Trim(ep, "[]"), "2408")
 			}
 			endpoint = ep
 		}
 	}
-	reserved := decodeWARPClientIDReserved(parsed.Config.ClientID)
+	clientID := strings.TrimSpace(parsed.Config.ClientID)
+	reserved := decodeWARPClientIDReserved(clientID)
 	acctType := "free"
 	licenseMasked := ""
 
@@ -521,6 +526,15 @@ func registerCloudflareWARP(ctx context.Context, client *http.Client, licenseKey
 		}
 		acctType = "plus"
 		licenseMasked = maskLicenseKey(licenseKey)
+		// 绑定 WARP+ License 后最佳努力刷新一次 /reg/{id} 以获取更新后的 client_id 与 reserved
+		if refreshed, ferr := fetchCloudflareWARP(ctx, client, parsed.ID, parsed.Token); ferr == nil && refreshed != nil {
+			if newCID := strings.TrimSpace(refreshed.Config.ClientID); newCID != "" {
+				clientID = newCID
+				if newRes := decodeWARPClientIDReserved(newCID); len(newRes) == 3 {
+					reserved = newRes
+				}
+			}
+		}
 	}
 
 	return warpWithSecrets{
@@ -533,7 +547,7 @@ func registerCloudflareWARP(ctx context.Context, client *http.Client, licenseKey
 			Endpoint:         endpoint,
 			AddressV4:        addrV4,
 			AddressV6:        addrV6,
-			ClientID:         strings.TrimSpace(parsed.Config.ClientID),
+			ClientID:         clientID,
 			Reserved:         reserved,
 			MTU:              defaultWARPMTU,
 			LicenseKeyMasked: licenseMasked,
@@ -566,6 +580,56 @@ func bindWARPLicense(ctx context.Context, client *http.Client, accountID, token,
 		return pluginsdk.Errorf("INVALID_ARGUMENT", "WARP+ 许可证绑定被拒绝（HTTP %d），请检查 License Key 是否有效或超出设备上限", resp.StatusCode)
 	}
 	return nil
+}
+
+func fetchCloudflareWARP(ctx context.Context, client *http.Client, accountID, token string) (*cfRegResponse, error) {
+	if client == nil {
+		client = &http.Client{Timeout: 8 * time.Second}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/reg/%s", warpAPIBase(), accountID), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("CF-Client-Version", "a-6.11-2223")
+	req.Header.Set("User-Agent", "okhttp/3.12.1")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("refresh warp reg status=%d", resp.StatusCode)
+	}
+	var out cfRegResponse
+	if err := json.Unmarshal(bodyBytes, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func deleteCloudflareWARPBestEffort(ctx context.Context, accountID, token string) {
+	if strings.TrimSpace(accountID) == "" || strings.TrimSpace(token) == "" {
+		return
+	}
+	delCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(delCtx, http.MethodDelete,
+		fmt.Sprintf("%s/reg/%s", warpAPIBase(), accountID), nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("CF-Client-Version", "a-6.11-2223")
+	req.Header.Set("User-Agent", "okhttp/3.12.1")
+	client := &http.Client{Timeout: 5 * time.Second}
+	if resp, err := client.Do(req); err == nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<10))
+		_ = resp.Body.Close()
+	}
 }
 
 func maskLicenseKey(k string) string {
@@ -867,7 +931,15 @@ func (i *instance) handleWARPStatus(ctx context.Context, _ pluginsdk.Request) (p
 			Reserved:        []int{},
 		}
 	}
-	inbounds := i.discoverCoreXrayInboundPorts(ctx, rec.BoundProfileIDs)
+	allInbounds := i.discoverCoreXrayInboundPorts(ctx, rec.BoundProfileIDs)
+	// AnyTLS 由独立纯 Go 监管器承载，不经过 Xray WireGuard 路由，不列入 WARP 端口绑定候选
+	inbounds := make([]xrayInboundPortInfo, 0, len(allInbounds))
+	for _, p := range allInbounds {
+		if strings.EqualFold(p.Protocol, "anytls") {
+			continue
+		}
+		inbounds = append(inbounds, p)
+	}
 	preview := renderWARPXrayPreview(&rec)
 	previewJSON, _ := json.MarshalIndent(preview, "", "  ")
 	return marshalResponse(map[string]any{
@@ -900,7 +972,11 @@ func (i *instance) handleWARPRegister(ctx context.Context, req pluginsdk.Request
 	if len(domains) == 0 {
 		domains = slices.Clone(warpUnlockPresets["ai"])
 	}
-	reg, err := registerCloudflareWARP(ctx, nil, in.LicenseKey)
+	licenseKey, err := resolveSecretOrPlain(ctx, req.Host(), in.LicenseKey, "operation")
+	if err != nil {
+		return pluginsdk.Response{}, err
+	}
+	reg, err := registerCloudflareWARP(ctx, nil, licenseKey)
 	if err != nil {
 		return pluginsdk.Response{}, err
 	}
@@ -957,12 +1033,18 @@ func (i *instance) handleWARPConfigure(ctx context.Context, req pluginsdk.Reques
 		return pluginsdk.Response{}, err
 	}
 
+	privKeyRaw, err := resolveSecretOrPlain(ctx, req.Host(), in.PrivateKey, "operation")
+	if err != nil {
+		return pluginsdk.Response{}, err
+	}
+	privKeyTrim := strings.TrimSpace(privKeyRaw)
+
 	writeNewSecret := false
 	var next warpWithSecrets
 	if cur != nil {
 		next = *cur
 	} else {
-		if strings.TrimSpace(in.PrivateKey) == "" {
+		if privKeyTrim == "" {
 			return pluginsdk.Response{}, pluginsdk.Errorf("PRECONDITION_FAILED", "尚未注册 Cloudflare WARP，请先点击「一键注册」或填写手动 WireGuard 私钥导入")
 		}
 		next = warpWithSecrets{
@@ -978,12 +1060,12 @@ func (i *instance) handleWARPConfigure(ctx context.Context, req pluginsdk.Reques
 		}
 	}
 
-	if strings.TrimSpace(in.PrivateKey) != "" {
-		pub, derr := deriveWGPublicKey(in.PrivateKey)
+	if privKeyTrim != "" {
+		pub, derr := deriveWGPublicKey(privKeyTrim)
 		if derr != nil {
 			return pluginsdk.Response{}, derr
 		}
-		next.PrivateKey = strings.TrimSpace(in.PrivateKey)
+		next.PrivateKey = privKeyTrim
 		next.PublicKey = pub
 		next.HasPrivateKey = true
 		if next.AccountID == "" {
@@ -1019,8 +1101,8 @@ func (i *instance) handleWARPConfigure(ctx context.Context, req pluginsdk.Reques
 		}
 	}
 	if len(in.Reserved) > 0 {
-		if len(in.Reserved) != 3 && len(in.Reserved) != 4 {
-			return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "reserved 必须为 3 或 4 个 0..255 整数")
+		if len(in.Reserved) != 3 {
+			return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "reserved 必须严格为 3 个 0..255 整数")
 		}
 		for _, b := range in.Reserved {
 			if b < 0 || b > 255 {
@@ -1106,25 +1188,35 @@ func (i *instance) handleWARPProbe(ctx context.Context, _ pluginsdk.Request) (pl
 	bestEndpoint := ""
 	bestLatency := int64(1<<62 - 1)
 	for _, ep := range candidates {
-		host, portStr, err := net.SplitHostPort(ep)
+		host, _, err := net.SplitHostPort(ep)
 		if err != nil {
 			continue
 		}
-		// 对 Cloudflare Anycast IP 做 TCP 443 建连测 RTT（Cloudflare 边缘同节点响应，UDP 2408 无握手响应）。
+		// 对 Cloudflare Anycast 节点执行真实公网 TLS 443 握手测 RTT（消除虚假本地 UDP dial 回退并防 SSRF）。
 		start := time.Now()
-		d := &net.Dialer{Timeout: 2500 * time.Millisecond}
-		conn, derr := d.DialContext(ctx, "tcp", net.JoinHostPort(host, "443"))
-		lat := time.Since(start).Milliseconds()
+		d := NewPublicProbeDialer(2500 * time.Millisecond)
+		rawConn, derr := d.DialContext(ctx, "tcp", net.JoinHostPort(host, "443"))
 		if derr != nil {
-			// 回退直接测原始端口
-			conn2, derr2 := d.DialContext(ctx, "udp", net.JoinHostPort(host, portStr))
-			if derr2 != nil {
-				results = append(results, endpointProbe{Endpoint: ep, Reachable: false, LatencyMS: lat, Error: derr.Error()})
-				continue
-			}
-			_ = conn2.Close()
-		} else {
-			_ = conn.Close()
+			lat := time.Since(start).Milliseconds()
+			results = append(results, endpointProbe{Endpoint: ep, Reachable: false, LatencyMS: lat, Error: derr.Error()})
+			continue
+		}
+		sni := host
+		if _, parseErr := netip.ParseAddr(host); parseErr == nil {
+			sni = "engage.cloudflareclient.com"
+		}
+		tlsConn := tls.Client(rawConn, &tls.Config{
+			ServerName:         sni,
+			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS12,
+		})
+		_ = tlsConn.SetDeadline(time.Now().Add(2500 * time.Millisecond))
+		herr := tlsConn.HandshakeContext(ctx)
+		lat := max(time.Since(start).Milliseconds(), 1)
+		_ = tlsConn.Close()
+		if herr != nil {
+			results = append(results, endpointProbe{Endpoint: ep, Reachable: false, LatencyMS: lat, Error: herr.Error()})
+			continue
 		}
 		results = append(results, endpointProbe{Endpoint: ep, Reachable: true, LatencyMS: lat})
 		if lat < bestLatency {
@@ -1158,6 +1250,9 @@ func (i *instance) handleWARPProbe(ctx context.Context, _ pluginsdk.Request) (pl
 }
 
 func (i *instance) handleWARPDelete(ctx context.Context, _ pluginsdk.Request) (pluginsdk.Response, error) {
+	if cur, gerr := i.store.GetWARP(ctx); gerr == nil && cur != nil {
+		deleteCloudflareWARPBestEffort(ctx, cur.AccountID, cur.AccessToken)
+	}
 	deleted, err := i.store.DeleteWARP(ctx)
 	if err != nil {
 		return pluginsdk.Response{}, err

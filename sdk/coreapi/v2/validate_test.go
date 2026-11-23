@@ -230,3 +230,64 @@ func TestValidateSharedUserAcrossProfiles(t *testing.T) {
 		t.Fatalf("跨多个 profile 共享同一用户 ID（含相同 traffic_mark）应被接受: %v", err)
 	}
 }
+
+func TestValidateUniqueUserDeduplicationAcrossProfiles(t *testing.T) {
+	base := validIntent(t).Profiles[0]
+	ref := *base.Users[0].UUID
+	intent := &Intent{SchemaVersion: "2", Enabled: boolValue(true), Outbound: &Outbound{Type: "direct"}}
+	// 10 个 profile 共享相同的 100 个用户：总槽位 1000 > 256，但全局唯一用户数 100 <= 256，必须通过校验
+	for pIdx := range 10 {
+		p := base
+		p.ID = fmt.Sprintf("p%d", pIdx)
+		p.Listen = "0.0.0.0"
+		p.Port = 21000 + pIdx
+		p.Users = make([]User, 100)
+		for uIdx := range 100 {
+			p.Users[uIdx] = User{ID: fmt.Sprintf("shared%d", uIdx), UUID: &ref}
+		}
+		intent.Profiles = append(intent.Profiles, p)
+	}
+	if err := Validate(intent); err != nil {
+		t.Fatalf("跨 profile 共享唯一用户数未超限时不应被拒绝: %v", err)
+	}
+}
+
+func TestValidateWARPReservedStrict3BytesAndChaCha20SingleUser(t *testing.T) {
+	intent := validIntent(t)
+	ref := *intent.Profiles[2].Users[0].PSK
+	intent.Profiles[2].Shadowsocks2022.Method = MethodChaCha20
+	intent.Profiles[2].Users = append(intent.Profiles[2].Users, User{ID: "u-extra", PSK: &ref})
+	requireViolation(t, Validate(intent), "/profiles/2/shadowsocks2022/method", "SINGLE_USER")
+
+	intent = validIntent(t)
+	intent.WARP = &WARPOutbound{
+		PrivateKey:    SecretRef{ID: "sec_00000000000000000000000099"},
+		PeerPublicKey: "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+		Endpoint:      "engage.cloudflareclient.com:2408",
+		AddressV4:     "172.16.0.2/32",
+		Reserved:      []int{1, 2, 3, 4},
+		RoutingMode:   WARPRoutingAll,
+	}
+	requireViolation(t, Validate(intent), "/warp/reserved", "SIZE")
+
+	intent.WARP.Reserved = []int{1, 2, 3}
+	if err := Validate(intent); err != nil {
+		t.Fatalf("合法 3 字节 WARP reserved 被拒绝: %v", err)
+	}
+}
+
+func TestValidateSOCKS5UDPPortConflict(t *testing.T) {
+	intent := validIntent(t)
+	hy2 := intent.Profiles[1]
+	socks := Profile{
+		ID:       "socks-udp",
+		Enabled:  boolValue(true),
+		Listen:   hy2.Listen,
+		Port:     hy2.Port,
+		Protocol: ProtocolSOCKS5,
+		SOCKS5:   &SOCKS5{UDP: true},
+		Users:    []User{{ID: "su1", Auth: hy2.Users[0].Auth}},
+	}
+	intent.Profiles = []Profile{hy2, socks}
+	requireViolation(t, Validate(intent), "/profiles/1/port", "PORT_CONFLICT")
+}

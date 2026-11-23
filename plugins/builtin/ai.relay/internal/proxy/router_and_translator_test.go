@@ -307,3 +307,64 @@ func TestFourProtocolBidirectionalSSETranslation(t *testing.T) {
 		}
 	})
 }
+
+func TestBaseURLNormalizationAndCrossProtocolNonStreamAggregation(t *testing.T) {
+	ch := &UpstreamChannel{
+		ID:      "norm-1",
+		Kind:    ChanOpenAICompat,
+		BaseURL: "https://api.openai.com/v1/",
+	}
+	ch.SetCredential("sk-test")
+	gotURL, _, _, err := EncodeUpstreamRequest(ch, ProtoOpenAIChat, nil, CanonicalRequest{
+		Model:    "gpt-4o-mini",
+		Messages: []CanonicalMessage{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("EncodeUpstreamRequest: %v", err)
+	}
+	if gotURL != "https://api.openai.com/v1/chat/completions" {
+		t.Fatalf("expected deduplicated /v1 URL, got %q", gotURL)
+	}
+
+	sse := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":120,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"plan"}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello non-stream"}}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","usage":{"output_tokens":18}}`,
+		``,
+	}, "\n")
+
+	rec := httptest.NewRecorder()
+	usage, err := AggregateCanonicalNonStreamResponse(time.Now(), strings.NewReader(sse), ProtoAnthropicMessages, ProtoOpenAIChat, "claude-sonnet-4-5", 10, rec)
+	if err != nil {
+		t.Fatalf("AggregateCanonicalNonStreamResponse: %v", err)
+	}
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("expected 200 application/json, got code=%d ct=%q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	var out struct {
+		Object  string `json:"object"`
+		Choices []struct {
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal non-stream JSON: %v body=%s", err, rec.Body.String())
+	}
+	if out.Object != "chat.completion" || len(out.Choices) != 1 || out.Choices[0].Message.Content != "hello non-stream" || out.Choices[0].Message.ReasoningContent != "plan" {
+		t.Fatalf("unexpected aggregated payload: %+v", out)
+	}
+	if usage.InputTokens != 120 || usage.OutputTokens != 18 {
+		t.Fatalf("unexpected usage: %+v", usage)
+	}
+}

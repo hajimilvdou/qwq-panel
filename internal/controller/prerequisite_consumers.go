@@ -70,12 +70,12 @@ func (s prerequisiteConsumerSource) CurrentConsumer(ctx context.Context, origin 
 		if profile.ID != want.ProfileID {
 			continue
 		}
-		if profile.Protocol != corev2.ProtocolHysteria2 || profile.Hysteria2 == nil || profile.Hysteria2.TLS == nil {
+		tls, _, ok := ExtractProfileTLSBinding(profile)
+		if !ok || !ProfileMatchesConsumerPurpose(profile, want.Purpose) {
 			return hostauth.ConsumerFacts{}, prerequisiteConsumerDenied()
 		}
-		tls := profile.Hysteria2.TLS
 		actual, err := certificates.CanonicalConsumer(certificates.Consumer{NodeID: want.NodeID, PluginID: snapshot.version.PluginID,
-			ProfileID: profile.ID, SNI: tls.ServerName, Purpose: "proxy.hysteria2"})
+			ProfileID: profile.ID, SNI: tls.ServerName, Purpose: want.Purpose})
 		if err != nil || actual != want || !names.ID(tls.BindingRef) {
 			return hostauth.ConsumerFacts{}, prerequisiteConsumerDenied()
 		}
@@ -91,7 +91,7 @@ func (s prerequisiteConsumerSource) CurrentConsumer(ctx context.Context, origin 
 func (c *Controller) prerequisiteConsumer(input certificates.Consumer) (certificates.Consumer, error) {
 	consumer, err := certificates.CanonicalConsumer(input)
 	if err != nil || c == nil || c.ops == nil || consumer.NodeID != c.ops.NodeID() || consumer.PluginID != "core.xray" ||
-		consumer.Purpose != "proxy.hysteria2" || !corev1.ValidID(consumer.ProfileID) {
+		consumer.Purpose == "panel.https" || !IsValidCertificateConsumerPurpose(consumer.Purpose) || !corev1.ValidID(consumer.ProfileID) {
 		return certificates.Consumer{}, prerequisiteConsumerDenied()
 	}
 	// Core Intent v2 没有测试信任字段；只能返回真实契约允许的生产事实。

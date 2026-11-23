@@ -267,12 +267,7 @@ func SanitizeBackgroundConfig(in BackgroundConfig) BackgroundConfig {
 			out.ExternalURL = ""
 		}
 	}
-	out.LQIPDataURL = strings.TrimSpace(out.LQIPDataURL)
-	if out.LQIPDataURL != "" {
-		if len(out.LQIPDataURL) > 16384 || !strings.HasPrefix(out.LQIPDataURL, "data:image/") {
-			out.LQIPDataURL = ""
-		}
-	}
+	out.LQIPDataURL = SanitizeRasterLQIP(out.LQIPDataURL)
 	if out.FocalX < 0 {
 		out.FocalX = 0
 	}
@@ -353,6 +348,7 @@ type PortalSettings struct {
 	ExposeBillingCost       bool   `json:"expose_billing_cost"`
 	ExposeISPCarrier        bool   `json:"expose_isp_carrier"`
 	VisitorPasswordSHA256   string `json:"-"`
+	StandaloneAdminVerifier string `json:"-"`
 	StatusBannerLevel       string `json:"status_banner_level"`
 	StatusBannerText        string `json:"status_banner_text"`
 
@@ -379,14 +375,15 @@ type PortalSettings struct {
 
 // ProbeStore 维护节点元数据、实时采样环、reset_epoch 安全流量账本与 90 天 SLA。
 type ProbeStore struct {
-	mu       sync.RWMutex
-	dataDir  string
-	db       *sqlitedb.DualPool
-	nodes    map[string]*NodeRecord
-	live     map[string]LiveSample
-	sla90d   map[string][]DailySLABucket
-	monitors map[string]*ServiceMonitor
-	settings PortalSettings
+	mu        sync.RWMutex
+	persistMu sync.Mutex
+	dataDir   string
+	db        *sqlitedb.DualPool
+	nodes     map[string]*NodeRecord
+	live      map[string]LiveSample
+	sla90d    map[string][]DailySLABucket
+	monitors  map[string]*ServiceMonitor
+	settings  PortalSettings
 }
 
 func NewProbeStore() *ProbeStore {
@@ -539,7 +536,7 @@ func (s *ProbeStore) LoadFromDB(ctx context.Context) error {
 	err = s.db.Reader.QueryRowContext(ctx, `
 		SELECT site_title, site_subtitle, default_view, default_palette,
 		       allow_visitor_theme_switch, mask_node_ip, expose_billing_cost, expose_isp_carrier,
-		       visitor_password_hash, status_banner_level, status_banner_text,
+		       visitor_password_hash, standalone_admin_argon2, status_banner_level, status_banner_text,
 		       domain_enabled, custom_domain, binding_track,
 		       panel_dns_provider_id, panel_dns_zone_id, panel_cert_binding_ref,
 		       builtin_listen_addr, builtin_acme_email, builtin_cert_fingerprint,
@@ -549,7 +546,7 @@ func (s *ProbeStore) LoadFromDB(ctx context.Context) error {
 		FROM probe_portal_settings WHERE id = 'default'`).Scan(
 		&cfg.SiteTitle, &cfg.SiteSubtitle, &cfg.DefaultView, &cfg.DefaultPalette,
 		&allowTheme, &maskIP, &expBill, &expISP,
-		&cfg.VisitorPasswordSHA256, &cfg.StatusBannerLevel, &cfg.StatusBannerText,
+		&cfg.VisitorPasswordSHA256, &cfg.StandaloneAdminVerifier, &cfg.StatusBannerLevel, &cfg.StatusBannerText,
 		&domEn, &cfg.CustomDomain, &cfg.BindingTrack,
 		&cfg.PanelDNSProviderID, &cfg.PanelDNSZoneID, &cfg.PanelCertBindingRef,
 		&cfg.BuiltinListenAddr, &cfg.BuiltinACMEEmail, &cfg.BuiltinCertFP,
@@ -782,24 +779,40 @@ func (s *ProbeStore) PersistNode(ctx context.Context, n *NodeRecord) error {
 	if s.db == nil || n == nil {
 		return nil
 	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	_, err := s.db.Writer.ExecContext(ctx, upsertNodeSQL, nodeExecArgs(n, time.Now().Unix())...)
 	return err
 }
 
-// DeleteNode 立即从 SQLite 删除节点记录（级联清理关联指标）。
+// DeleteNode 立即从 SQLite 删除节点记录及关联 SLA（串行化防 FlushPeriodic 僵尸复活）。
 func (s *ProbeStore) DeleteNode(ctx context.Context, id string) error {
 	if s.db == nil || id == "" {
 		return nil
 	}
-	_, err := s.db.Writer.ExecContext(ctx, `DELETE FROM probe_nodes WHERE id = ?`, id)
-	return err
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	tx, err := s.db.Writer.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM probe_nodes WHERE id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM probe_daily_sla WHERE target_kind = 'node' AND target_id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
-// PersistSettings 立即持久化探针公开页外观、隐私脱敏与双轨域名绑定配置。
+// PersistSettings 立即持久化探针公开页外观、隐私脱敏、独立管理口令校验串与双轨域名绑定配置。
 func (s *ProbeStore) PersistSettings(ctx context.Context, cfg PortalSettings) error {
 	if s.db == nil {
 		return nil
 	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	view := cfg.DefaultView
 	switch view {
 	case "orb-cards", "compact-list", "tty-terminal":
@@ -847,7 +860,7 @@ func (s *ProbeStore) PersistSettings(ctx context.Context, cfg PortalSettings) er
 		INSERT INTO probe_portal_settings (
 			id, site_title, site_subtitle, default_view, default_palette,
 			allow_visitor_theme_switch, mask_node_ip, expose_billing_cost, expose_isp_carrier,
-			visitor_password_hash, status_banner_level, status_banner_text,
+			visitor_password_hash, standalone_admin_argon2, status_banner_level, status_banner_text,
 			domain_enabled, custom_domain, binding_track,
 			panel_dns_provider_id, panel_dns_zone_id, panel_cert_binding_ref,
 			builtin_listen_addr, builtin_acme_email, builtin_cert_fingerprint,
@@ -857,7 +870,7 @@ func (s *ProbeStore) PersistSettings(ctx context.Context, cfg PortalSettings) er
 		) VALUES (
 			'default', ?, ?, ?, ?,
 			?, ?, ?, ?,
-			?, ?, ?,
+			?, ?, ?, ?,
 			?, ?, ?,
 			?, ?, ?,
 			?, ?, ?,
@@ -874,6 +887,7 @@ func (s *ProbeStore) PersistSettings(ctx context.Context, cfg PortalSettings) er
 			expose_billing_cost=excluded.expose_billing_cost,
 			expose_isp_carrier=excluded.expose_isp_carrier,
 			visitor_password_hash=excluded.visitor_password_hash,
+			standalone_admin_argon2=excluded.standalone_admin_argon2,
 			status_banner_level=excluded.status_banner_level,
 			status_banner_text=excluded.status_banner_text,
 			domain_enabled=excluded.domain_enabled,
@@ -896,7 +910,7 @@ func (s *ProbeStore) PersistSettings(ctx context.Context, cfg PortalSettings) er
 			updated_at=excluded.updated_at`,
 		cfg.SiteTitle, cfg.SiteSubtitle, view, cfg.DefaultPalette,
 		boolToInt(cfg.AllowVisitorThemeSwitch), boolToInt(cfg.MaskNodeIP), boolToInt(cfg.ExposeBillingCost), boolToInt(cfg.ExposeISPCarrier),
-		cfg.VisitorPasswordSHA256, banner, cfg.StatusBannerText,
+		cfg.VisitorPasswordSHA256, cfg.StandaloneAdminVerifier, banner, cfg.StatusBannerText,
 		boolToInt(cfg.DomainEnabled), cfg.CustomDomain, track,
 		cfg.PanelDNSProviderID, cfg.PanelDNSZoneID, cfg.PanelCertBindingRef,
 		cfg.BuiltinListenAddr, cfg.BuiltinACMEEmail, cfg.BuiltinCertFP,
@@ -912,6 +926,8 @@ func (s *ProbeStore) FlushPeriodic(ctx context.Context, now time.Time) error {
 	if s.db == nil {
 		return nil
 	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	s.mu.RLock()
 	nodes := make([]NodeRecord, 0, len(s.nodes))
 	for _, n := range s.nodes {
@@ -1004,9 +1020,11 @@ func (s *ProbeStore) FlushPeriodic(ctx context.Context, now time.Time) error {
 		}
 	}
 
-	// 裁剪超过 30 天的历史分钟级归档
+	// 裁剪超过 30 天的历史分钟级归档与超过 90 天的日度 SLA 归档
 	cutoff := nowUnix - 30*86400
 	_, _ = tx.ExecContext(ctx, `DELETE FROM probe_metric_rollups WHERE bucket_minute_unix < ?`, cutoff)
+	cutoffDay := now.UTC().AddDate(0, 0, -90).Format("2006-01-02")
+	_, _ = tx.ExecContext(ctx, `DELETE FROM probe_daily_sla WHERE day_utc < ?`, cutoffDay)
 
 	return tx.Commit()
 }

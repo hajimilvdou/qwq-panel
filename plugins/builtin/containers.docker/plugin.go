@@ -156,6 +156,13 @@ func (i *instance) currentDocker() *dockerClient {
 }
 
 func (i *instance) Deactivate(_ context.Context) error {
+	return nil
+}
+
+func (i *instance) Release(_ context.Context) error {
+	if i.stacks == nil {
+		return nil
+	}
 	return i.stacks.Close()
 }
 

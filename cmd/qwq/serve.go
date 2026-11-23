@@ -394,7 +394,20 @@ type activeRestorer interface {
 // (1C1G hosts), each within timeout; a failure is logged and the next plugin
 // follows, so one broken plugin cannot keep the panel down.
 func restoreActive(life context.Context, up activeRestorer, timeout time.Duration, logger *slog.Logger) {
+	type activeLookup interface {
+		Active(pluginID string) (updater.Version, bool)
+	}
+	lookup, _ := up.(activeLookup)
 	for _, route := range up.Routes().List() {
+		if lookup != nil {
+			if ver, ok := lookup.Active(route.PluginID); ok && ver.Manifest != nil {
+				if ver.Manifest.Lifecycle.Startup == "on_demand" && !ver.Manifest.Lifecycle.Background {
+					logger.Debug("deferring on_demand plugin startup until first request",
+						"plugin_id", route.PluginID, "version", route.Version)
+					continue
+				}
+			}
+		}
 		ctx, cancel := context.WithTimeout(life, timeout)
 		err := up.EnsureActive(ctx, route.PluginID)
 		cancel()
@@ -548,12 +561,13 @@ func newUpdater(c *controller.Controller, pluginsDir, trustDir, stagingDir strin
 		HostChannels: c.PluginRuntime(),
 	}
 	up, err := updater.New(updater.Options{
-		DB:        c.DB(),
-		Runtime:   runtime,
-		Installer: installer,
-		Memory:    &controller.HostMemory{},
-		Clock:     c.Clock(),
-		Logger:    logger,
+		DB:         c.DB(),
+		Runtime:    runtime,
+		Installer:  installer,
+		Memory:     &controller.HostMemory{},
+		TrustStore: trustStore,
+		Clock:      c.Clock(),
+		Logger:     logger,
 		// The systemd unit is per plugin, not per version: the updater must
 		// never choose the blue-green strategy, including on rollback.
 		RestartOnly: true,

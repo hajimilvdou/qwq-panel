@@ -540,7 +540,7 @@ func (i *instance) handleChannelsUpsert(ctx context.Context, req pluginsdk.Reque
 		ID:            strings.TrimSpace(in.ID),
 		Name:          strings.TrimSpace(in.Name),
 		Kind:          in.Kind,
-		BaseURL:       strings.TrimRight(strings.TrimSpace(in.BaseURL), "/"),
+		BaseURL:       proxy.NormalizeUpstreamBaseURL(in.BaseURL),
 		Credential:    in.Credential,
 		Groups:        in.Groups,
 		Models:        in.Models,
@@ -1091,6 +1091,15 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 			usage, relayErr = proxy.RelayJSONResponseBridge(startedAt, upResp.Body, upResp.StatusCode, upResp.Header.Get("Content-Type"), ir.EstimatedInputTokens, tw)
 			if relayErr != nil {
 				log.Printf("ai.relay: non-stream relay failed (channel=%s model=%s): %v", ch.ID, ir.Model, relayErr)
+				if !tw.wroteHeader {
+					writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_relay_failed", "message": relayErr.Error()})
+				}
+			}
+		} else if ch.NativeProtocol() != protoIn && !ir.Stream {
+			tw := &headerTrackingResponseWriter{ResponseWriter: w}
+			usage, relayErr = proxy.AggregateCanonicalNonStreamResponse(startedAt, upResp.Body, ch.NativeProtocol(), protoIn, ir.Model, ir.EstimatedInputTokens, tw)
+			if relayErr != nil {
+				log.Printf("ai.relay: cross-protocol non-stream aggregation failed (channel=%s model=%s): %v", ch.ID, ir.Model, relayErr)
 				if !tw.wroteHeader {
 					writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_relay_failed", "message": relayErr.Error()})
 				}

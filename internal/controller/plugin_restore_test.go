@@ -41,16 +41,29 @@ func newRestoreRuntime(t *testing.T, f *runtimeFixture) *PluginRuntime {
 	return rt
 }
 
-func TestAttachOnlyUnitsRefuseStart(t *testing.T) {
+func TestAttachOnlyUnitsDelegatesToRestore(t *testing.T) {
 	units := &fakeSupervisorUnits{}
 	rt := &PluginRuntime{}
 	wrapped := attachOnlyUnits{UnitManager: units, rt: rt}
 	if err := wrapped.Start(t.Context(), "alpha"); err != nil {
 		t.Fatalf("Start without a restorer = %v, want delegation", err)
 	}
-	rt.SetRestore(func(context.Context, string) error { return nil })
+	var restoredID string
+	rt.SetRestore(func(_ context.Context, id string) error {
+		restoredID = id
+		return nil
+	})
+	if err := wrapped.Start(t.Context(), "alpha"); err != nil {
+		t.Fatalf("Start with a healthy restorer = %v, want nil", err)
+	}
+	if restoredID != "alpha" {
+		t.Fatalf("restoredID = %q, want alpha", restoredID)
+	}
+	rt.SetRestore(func(context.Context, string) error {
+		return problem.New(problem.PluginUnavailable, "restore failed")
+	})
 	if err := wrapped.Start(t.Context(), "alpha"); !problem.HasCode(err, problem.PluginUnavailable) {
-		t.Fatalf("Start with a restorer = %v, want PLUGIN_UNAVAILABLE", err)
+		t.Fatalf("Start with a failing restorer = %v, want PLUGIN_UNAVAILABLE", err)
 	}
 }
 

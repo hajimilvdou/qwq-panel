@@ -5163,11 +5163,11 @@ components:
         the `status` list filter: it selects `waiting_approval` and `failed` for the floating window.
     AgentCore:
       type: string
-      enum: [native, claude-code, codex, opencode]
+      enum: [native, claude-code, codex, opencode, dsh, acp]
       description: |
         The replaceable core of a session. `native` is the host's built-in OpenAI-compatible core;
-        the CLI cores are the A3 contract and answer `503 UNAVAILABLE` on send until the host wires
-        them (ADR-0010 §6).
+        the external CLI/ACP cores (`claude-code`, `codex`, `opencode`, `dsh`, `acp`) answer
+        `503 UNAVAILABLE` on send when their backing CLI binary is unavailable on the host (ADR-0010 §6).
     AgentToolStatus:
       type: string
       enum: [proposed, running, awaiting_approval, succeeded, failed, rejected, cancelled]

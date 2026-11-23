@@ -73,15 +73,65 @@ type TLSBindingStatus struct {
 	Endpoint        string `json:"endpoint"`
 }
 
-// TLSBindingInfo 返回已提交运行中的指定 TLS 绑定信任与指纹摘要（只读）。
+// TLSBindingInfo 返回已提交运行中的指定 TLS 绑定信任与指纹摘要（只读）；
+// 若内存缓存未命中（如进程重启后），自动从私有 consumerfiles 落盘目录校验并回填，避免导出误加 allowInsecure=1。
 func (e *Engine) TLSBindingInfo(bindingRef string) (TLSBindingStatus, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.tlsBindings == nil {
+	if bindingRef == "" {
 		return TLSBindingStatus{}, false
 	}
-	st, ok := e.tlsBindings[bindingRef]
-	return st, ok
+	e.mu.Lock()
+	if e.tlsBindings != nil {
+		if st, ok := e.tlsBindings[bindingRef]; ok {
+			e.mu.Unlock()
+			return st, true
+		}
+	}
+	dataDir := e.options.DataDir
+	e.mu.Unlock()
+
+	if dataDir == "" {
+		return TLSBindingStatus{}, false
+	}
+	store, closeStore, err := openConsumerStore(dataDir)
+	if err != nil {
+		return TLSBindingStatus{}, false
+	}
+	defer closeStore()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	proof, err := store.Current(ctx, bindingRef)
+	if err != nil || proof == nil {
+		return TLSBindingStatus{}, false
+	}
+	mat, err := store.Load(ctx, *proof)
+	if err != nil {
+		return TLSBindingStatus{}, false
+	}
+	defer mat.Clear()
+
+	roots, _ := e.roots()
+	trust, _, meta, verr := validateConsumerMaterial(mat, proof.Binding.Consumer.SNI, e.now(), roots, e.options.PermitTestCertificates)
+	if verr != nil {
+		return TLSBindingStatus{}, false
+	}
+	st := TLSBindingStatus{
+		BindingRef:      bindingRef,
+		ProfileID:       proof.Binding.Consumer.ProfileID,
+		PublicTrusted:   trust == tlsmgr.PublicTrust,
+		Generation:      proof.Binding.Generation,
+		PolicyRevision:  proof.Binding.PolicyRevision,
+		FullchainSHA256: proof.FullchainSHA256,
+		LeafFingerprint: meta.Fingerprint,
+		SNI:             proof.Binding.Consumer.SNI,
+	}
+	e.mu.Lock()
+	if e.tlsBindings == nil {
+		e.tlsBindings = make(map[string]TLSBindingStatus)
+	}
+	e.tlsBindings[bindingRef] = st
+	e.mu.Unlock()
+	return st, true
 }
 
 func loadDesiredAny(ctx context.Context, request Request) (desiredIntent, error) {

@@ -592,7 +592,7 @@ func EncodeUpstreamRequest(ch *UpstreamChannel, protoIn ProtocolKind, rawOrigina
 	if tokPtr != nil {
 		cred = *tokPtr
 	}
-	base := strings.TrimRight(ch.BaseURL, "/")
+	base := NormalizeUpstreamBaseURL(ch.BaseURL)
 
 	if protoIn == upProto && len(rawOriginal) > 0 {
 		passthroughBody := rawOriginal

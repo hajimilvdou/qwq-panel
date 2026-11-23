@@ -485,7 +485,7 @@ func TestTestProviderEgressDenied(t *testing.T) {
 func TestCores(t *testing.T) {
 	h, _ := newNativeHost(t)
 	cores := h.svc.Cores()
-	if len(cores) != 4 {
+	if len(cores) != 6 {
 		t.Fatalf("cores = %+v", cores)
 	}
 	if cores[0].Core != CoreNative || !cores[0].Available || cores[0].Reason != "" {

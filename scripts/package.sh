@@ -79,6 +79,11 @@ if [[ -n ${QWQ_TRUST_PUBKEYS:-} ]]; then
     base=$(basename "$pub")
     [[ $base == *.pem ]] || base="${base%.pub}.pem"
     install -m0644 "$pub" "$D/share/trust/$base"
+    policy="${pub%.pem}.policy.json"
+    [[ -f $policy ]] || policy="${pub%.pub}.policy.json"
+    if [[ -f $policy ]]; then
+      install -m0644 "$policy" "$D/share/trust/${base%.pem}.policy.json"
+    fi
   done
 fi
 if [[ -n ${QWQ_BOOTSTRAP_PLUGIN:-} ]]; then

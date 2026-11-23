@@ -63,18 +63,18 @@ func tlsVersionName(v uint16) string {
 
 func probeSNIDomainReal(ctx context.Context, domain string, timeout time.Duration) sniProbeResult {
 	res := sniProbeResult{Domain: domain, LatencyMS: -1}
-	addr := domain
-	sniHost := domain
-	if h, _, err := net.SplitHostPort(domain); err == nil {
-		sniHost = h
-	} else {
-		addr = net.JoinHostPort(domain, "443")
+	cleanDomain, ok := ValidatePublicSNIDomain(domain)
+	if !ok {
+		res.Error = "仅允许探测合法公网域名（禁止端口、IP 字面量或内网主机名）"
+		return res
 	}
+	res.Domain = cleanDomain
+	addr := net.JoinHostPort(cleanDomain, "443")
 
 	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	start := time.Now()
-	dialer := &net.Dialer{Timeout: timeout}
+	dialer := NewPublicProbeDialer(timeout)
 	rawConn, err := dialer.DialContext(dialCtx, "tcp", addr)
 	if err != nil {
 		res.Error = err.Error()
@@ -83,7 +83,7 @@ func probeSNIDomainReal(ctx context.Context, domain string, timeout time.Duratio
 	defer rawConn.Close()
 
 	tlsConn := tls.Client(rawConn, &tls.Config{
-		ServerName: sniHost,
+		ServerName: cleanDomain,
 		NextProtos: []string{"h2", "http/1.1"},
 		MinVersion: tls.VersionTLS12,
 	})
@@ -611,6 +611,9 @@ func (i *instance) handleNodesList(ctx context.Context, req pluginsdk.Request) (
 		if sn, ok := buildSubNodeFromRecord(nodes[idx], cfg.PublicHost, nil); ok {
 			nodes[idx].ShareURI = sn.ShareURI
 		}
+		if nodes[idx].Source != "managed" {
+			nodes[idx].RawURI = ""
+		}
 		redactNodeConfig(&nodes[idx].Config)
 	}
 	return marshalResponse(map[string]any{
@@ -673,12 +676,14 @@ func (i *instance) handleNodesUpsert(ctx context.Context, req pluginsdk.Request)
 	}
 
 	_, previewDoc := buildNativeInboundPreview(saved)
+	redactNativePreviewSecrets(previewDoc)
 	previewBytes, _ := json.MarshalIndent(previewDoc, "", "  ")
 	shareURI := ""
 	if sn, ok := buildSubNodeFromRecord(saved, cfg.PublicHost, nil); ok {
 		shareURI = sn.ShareURI
 		saved.ShareURI = shareURI
 	}
+	RedactServerOnlySecrets(&saved.Config)
 
 	return marshalResponse(map[string]any{
 		"node":           saved,
@@ -814,18 +819,28 @@ func (i *instance) handleNodesProbeSNI(ctx context.Context, req pluginsdk.Reques
 	})
 }
 
-func (i *instance) handleNodesPreviewJSON(_ context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
+func (i *instance) handleNodesPreviewJSON(ctx context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
 	var in nodeUpsertRequest
 	if err := decodeStrictJSON(req.Payload, &in); err != nil {
 		return pluginsdk.Response{}, err
 	}
+	var existing *proxyNodeRecord
+	if id := strings.ToLower(strings.TrimSpace(in.ID)); id != "" {
+		existing, _ = i.store.GetNode(ctx, id)
+	}
 	cfg := i.configSnapshot()
-	rec, err := normalizeNodeDraft(in, nil, map[int]bool{}, cfg.PublicHost)
+	rec, err := normalizeNodeDraft(in, existing, map[int]bool{}, cfg.PublicHost)
 	if err != nil {
 		return pluginsdk.Response{}, err
 	}
 	engine, nativeDoc := buildNativeInboundPreview(rec)
-	prettyBytes, _ := json.MarshalIndent(nativeDoc, "", "  ")
+	redactNativePreviewSecrets(nativeDoc)
+	var prettyBuf bytes.Buffer
+	enc := json.NewEncoder(&prettyBuf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(nativeDoc)
+	prettyJSON := strings.TrimRight(prettyBuf.String(), "\n")
 	sn, _ := buildSubNodeFromRecord(rec, cfg.PublicHost, nil)
 	var clashBuf strings.Builder
 	if sn.ClashNode != nil {
@@ -838,7 +853,7 @@ func (i *instance) handleNodesPreviewJSON(_ context.Context, req pluginsdk.Reque
 		"security_mode":    rec.SecurityMode,
 		"port":             rec.Port,
 		"native_inbound":   nativeDoc,
-		"native_json":      string(prettyBytes),
+		"native_json":      prettyJSON,
 		"share_uri":        sn.ShareURI,
 		"clash_yaml":       clashBuf.String(),
 		"singbox_outbound": sn.SingboxOutbound,
@@ -958,9 +973,8 @@ func (i *instance) handleNodesTest(ctx context.Context, req pluginsdk.Request) (
 	var latencyMS int64 = -1
 
 	if node.Protocol == corev2.ProtocolHysteria2 || node.Protocol == "tuic" || node.Protocol == "wireguard" {
-		// UDP 协议执行可控 UDP socket 连通性与本地可达检查
-		d := &net.Dialer{Timeout: timeout}
-		conn, derr := d.DialContext(ctx, "udp", target)
+		// UDP 协议执行可控安全探测（外部节点严禁探测回环/私网/IMDS）
+		conn, derr := ProbeExternalOrManagedNode(ctx, *node, target, timeout)
 		if derr != nil {
 			errMsg = derr.Error()
 		} else {
@@ -975,8 +989,7 @@ func (i *instance) handleNodesTest(ctx context.Context, req pluginsdk.Request) (
 			}
 		}
 	} else {
-		d := &net.Dialer{Timeout: timeout}
-		conn, derr := d.DialContext(ctx, "tcp", target)
+		conn, derr := ProbeExternalOrManagedNode(ctx, *node, target, timeout)
 		if derr != nil {
 			errMsg = derr.Error()
 		} else {
@@ -1059,6 +1072,19 @@ func (i *instance) trySyncManagedNodesToCore(ctx context.Context, host *pluginsd
 	}
 	replaceSecretPresentWithKeep(doc)
 
+	var prevProfiles []any
+	prevUserSlotsByID := make(map[string]map[string]map[string]bool)
+	if rawPrev, ok := doc["profiles"].([]any); ok {
+		prevProfiles = rawPrev
+		for _, item := range rawPrev {
+			if pm, ok := item.(map[string]any); ok {
+				if pid, _ := pm["id"].(string); pid != "" {
+					prevUserSlotsByID[pid] = indexExistingSecretSlots(pm["users"])
+				}
+			}
+		}
+	}
+
 	removedSet := make(map[string]bool, len(removedIDs))
 	for _, rid := range removedIDs {
 		if rid != "" {
@@ -1071,7 +1097,7 @@ func (i *instance) trySyncManagedNodesToCore(ctx context.Context, host *pluginsd
 	skippedTLS := 0
 	for _, n := range managedNodes {
 		managedIDSet[n.ID] = true
-		prof, ok := buildCoreV2ProfileFromNode(n, activeUsers)
+		prof, ok := buildCoreV2ProfileFromNodeWithSlots(n, activeUsers, prevUserSlotsByID[n.ID])
 		if !ok {
 			skippedTLS++
 			continue
@@ -1081,10 +1107,6 @@ func (i *instance) trySyncManagedNodesToCore(ctx context.Context, host *pluginsd
 	}
 
 	// 保留 core.xray 中非 proxy_nodes 托管且未被删除的既有 profile。
-	var prevProfiles []any
-	if rawPrev, ok := doc["profiles"].([]any); ok {
-		prevProfiles = rawPrev
-	}
 	preservedNonManaged := make([]any, 0)
 	for _, item := range prevProfiles {
 		pm, ok := item.(map[string]any)
@@ -1100,7 +1122,7 @@ func (i *instance) trySyncManagedNodesToCore(ctx context.Context, host *pluginsd
 	}
 
 	finalProfiles := append(profiles, preservedNonManaged...)
-	topEnabled := true
+	topEnabled := ComputeDesiredCoreEnabled(activeUsers, managedNodes) || len(preservedNonManaged) > 0
 	if len(finalProfiles) == 0 {
 		if len(removedSet) > 0 && len(prevProfiles) > 0 {
 			// 删除最后一个托管节点且无其他非托管 profile：按 v2 契约保留至少 1 个已停用骨架并关闭顶层 enabled。
@@ -1162,33 +1184,22 @@ func (i *instance) trySyncManagedNodesToCore(ctx context.Context, host *pluginsd
 }
 
 func buildCoreV2ProfileFromNode(n proxyNodeRecord, activeUsers []userRecord) (map[string]any, bool) {
+	return buildCoreV2ProfileFromNodeWithSlots(n, activeUsers, nil)
+}
+
+func buildCoreV2ProfileFromNodeWithSlots(n proxyNodeRecord, activeUsers []userRecord, existingSlots map[string]map[string]bool) (map[string]any, bool) {
 	needTLS := (n.Protocol == corev2.ProtocolHysteria2 || n.Protocol == corev2.ProtocolAnyTLS) ||
 		((n.Protocol == corev2.ProtocolVLESS || n.Protocol == corev2.ProtocolVMess || n.Protocol == corev2.ProtocolTrojan) && n.SecurityMode == "tls")
 	if needTLS && strings.TrimSpace(n.Config.BindingRef) == "" {
 		return nil, false
 	}
 
-	var users []any
-	if len(activeUsers) > 0 {
-		users = buildProfileUsers(n.Protocol, activeUsers, map[string]map[string]bool{})
-	}
+	users := BuildUnifiedProfileUsers(&n, n.Protocol, activeUsers, existingSlots)
 	if len(users) == 0 {
-		defaultUser := map[string]any{"id": "u-" + n.ID}
-		if len(defaultUser["id"].(string)) > 32 {
-			defaultUser["id"] = defaultUser["id"].(string)[:32]
-		}
-		switch n.Protocol {
-		case corev2.ProtocolVLESS, corev2.ProtocolVMess:
-			defaultUser["uuid"] = n.Config.UUID
-		case corev2.ProtocolShadowsocks2022:
-			defaultUser["psk"] = n.Config.UserKey
-		case corev2.ProtocolSOCKS5, corev2.ProtocolHTTP:
-			defaultUser["username"] = firstNonEmpty(n.Config.Username, "user")
-			defaultUser["auth"] = n.Config.Password
-		default:
-			defaultUser["auth"] = n.Config.Password
-		}
-		users = []any{defaultUser}
+		return nil, false
+	}
+	if n.Protocol == corev2.ProtocolShadowsocks2022 && n.Config.Method == corev2.MethodChaCha20 && len(users) > 1 {
+		users = users[:1]
 	}
 
 	prof := map[string]any{

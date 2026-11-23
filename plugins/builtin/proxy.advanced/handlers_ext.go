@@ -116,11 +116,63 @@ func (i *instance) handleChainsList(ctx context.Context, _ pluginsdk.Request) (p
 }
 
 func (i *instance) handleChainsUpsert(ctx context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
-	var in chainUpsertRequest
-	if err := decodeStrictJSON(req.Payload, &in); err != nil {
+	var raw struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Enabled  *bool  `json:"enabled"`
+		Mode     string `json:"mode"`
+		Protocol string `json:"protocol"`
+		Server   string `json:"server"`
+		Port     int    `json:"port"`
+		Config   struct {
+			Username   string             `json:"username,omitempty"`
+			Password   SecretOrPlainField `json:"password,omitempty"`
+			UUID       SecretOrPlainField `json:"uuid,omitempty"`
+			Method     string             `json:"method,omitempty"`
+			SNI        string             `json:"sni,omitempty"`
+			Flow       string             `json:"flow,omitempty"`
+			TLS        bool               `json:"tls,omitempty"`
+			SkipVerify bool               `json:"skip_verify,omitempty"`
+		} `json:"config"`
+		NextHopID        string `json:"next_hop_id"`
+		ApplyDefault     bool   `json:"apply_default"`
+		Notes            string `json:"notes"`
+		ExpectedRevision string `json:"expected_revision"`
+	}
+	if err := decodeStrictJSON(req.Payload, &raw); err != nil {
 		return pluginsdk.Response{}, err
 	}
-	in.ExpectedRevision = resolveRevision(in.ExpectedRevision, req, "chains/"+in.ID)
+	pwd, err := resolveSecretOrPlain(ctx, req.Host(), raw.Config.Password, "operation")
+	if err != nil {
+		return pluginsdk.Response{}, err
+	}
+	uuidVal, err := resolveSecretOrPlain(ctx, req.Host(), raw.Config.UUID, "operation")
+	if err != nil {
+		return pluginsdk.Response{}, err
+	}
+	in := chainUpsertRequest{
+		ID:       raw.ID,
+		Name:     raw.Name,
+		Enabled:  raw.Enabled,
+		Mode:     raw.Mode,
+		Protocol: raw.Protocol,
+		Server:   raw.Server,
+		Port:     raw.Port,
+		Config: chainSecretConfig{
+			Username:   raw.Config.Username,
+			Password:   pwd,
+			UUID:       uuidVal,
+			Method:     raw.Config.Method,
+			SNI:        raw.Config.SNI,
+			Flow:       raw.Config.Flow,
+			TLS:        raw.Config.TLS,
+			SkipVerify: raw.Config.SkipVerify,
+		},
+		NextHopID:        raw.NextHopID,
+		ApplyDefault:     raw.ApplyDefault,
+		Notes:            raw.Notes,
+		ExpectedRevision: resolveRevision(raw.ExpectedRevision, req, "chains/"+raw.ID),
+	}
 	rec, created, err := i.store.UpsertChain(ctx, in)
 	if err != nil {
 		return pluginsdk.Response{}, err

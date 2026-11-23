@@ -66,7 +66,7 @@
     },
     "reserved": {
       "type": "array",
-      "maxItems": 4,
+      "maxItems": 3,
       "items": {
         "type": "integer",
         "minimum": 0,

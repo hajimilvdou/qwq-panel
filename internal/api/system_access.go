@@ -94,24 +94,16 @@ func (a *api) putSystemAccess(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	if a.d.Identity != nil {
-		u, uerr := a.d.Identity.User(r.Context(), act.ID)
-		if uerr != nil {
-			a.fail(w, r, uerr)
-			return
-		}
-		if u.MFAEnabled && !act.MFA {
-			a.fail(w, r, problem.New(problem.MFARequired,
-				"Updating panel access settings requires a fresh second factor."))
-			return
-		}
-	}
 	if a.d.Access == nil {
 		a.fail(w, r, problem.New(problem.Unavailable, "Panel access settings are not available."))
 		return
 	}
 	var req panelAccessUpdateRequest
 	if err := a.decodeJSON(r, &req); err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	if err := a.requireTrustKeyMFA(r, act, "Updating panel access settings requires a fresh second factor."); err != nil {
 		a.fail(w, r, err)
 		return
 	}
