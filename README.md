@@ -53,8 +53,15 @@
 
 > 要求：Linux（`amd64` / `arm64`）、`systemd >= 247`、`cgroup v2`、内存 `>= 1 GiB`。
 
+从 [GitHub Releases](https://github.com/hajimilvdou/qwq-panel/releases/latest) 拉取已内嵌 Ed25519 发布公钥的官方 `install.sh` 执行安装（将 `v0.1.10` 替换为目标 Release 版本号）：
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hajimilvdou/qwq-panel/main/scripts/install.sh | sudo bash
+# 1. 极简底座安装（仅装面板底座 + 必装安全插件 security.basic，与其他面板共存推荐）
+curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh -o /tmp/qwq-install.sh
+sudo bash /tmp/qwq-install.sh --version v0.1.10 --minimal
+
+# 2. 按需同时安装指定官方插件（多插件用逗号分隔，或传 all 安装全部）
+sudo bash /tmp/qwq-install.sh --version v0.1.10 --plugins monitor.basic,web.ingress,tls.certificates,containers.docker
 ```
 
 安装完成后终端会自动打印本次生成的**随机高位端口**、**安全密道路径**、本地 SSH 隧道转发命令与一次性初始化链接：
@@ -64,6 +71,58 @@ ssh -L <随机端口>:127.0.0.1:<随机端口> root@<你的服务器IP>
 ```
 
 建立隧道后在浏览器打开初始化链接即可创建管理员账号并配置 TOTP 二次验证；如需公网直连或绑定反向代理域名，可在登录后的「设置 → 系统 → 面板入口与安全伪装」中无感热切换。
+
+---
+
+## 升级与回滚
+
+`install.sh` 与 `/opt/qwq/releases/<version>` 发布树均设计为**幂等、不可变、可重复执行**：升级过程不会覆盖 `/etc/qwq/qwq.json`、`/var/lib/qwq` 数据库、端口与安全密道设置、已签发证书或插件数据。
+
+### 1. 在线升级面板底座与官方插件（推荐）
+
+```bash
+# （可选但推荐）升级前创建加密备份到 /var/lib/qwq/backups
+sudo qwq backup create
+
+# 拉取最新版官方 install.sh
+curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh -o /tmp/qwq-install.sh
+
+# 方式 A：仅升级面板底座 + 必装插件 security.basic
+sudo bash /tmp/qwq-install.sh --version v0.1.10 --minimal
+
+# 方式 B：同步升级面板底座 + 你已启用的可选官方插件（示例）
+sudo bash /tmp/qwq-install.sh --version v0.1.10 --plugins monitor.basic,server.probe,web.ingress,tls.certificates,containers.docker
+```
+
+升级完成后脚本会自动完成 SHA-256 与 Ed25519 验签、原子切换 `/opt/qwq/current`、重启 `qwq-controller` 并对插件执行原地无损升级。可执行 `sudo qwq doctor` 确认全绿。
+
+### 2. 在面板网页中单独升级插件
+
+你也可以在面板网页升级或补装单个插件，无需重新运行安装脚本：
+
+1. 进入左侧 **「应用中心 → 安装插件」**；
+2. 上传对应架构的 `.qwqpkg` 安装包，或直接粘贴 GitHub Release 中的 `.qwqpkg` 下载地址；
+3. 核对 Ed25519 签名与权限变更后点击 **「更新」**（更新失败会自动回滚到旧版本）。
+
+### 3. 离线包升级
+
+若目标服务器无法直连 GitHub，可先在本地下载 `qwq-vX.Y.Z-linux-<arch>.tar.gz` 及所需 `.qwqpkg` 到服务器同一目录后执行：
+
+```bash
+sudo bash /tmp/qwq-install.sh --offline ./qwq-v0.1.10-linux-amd64.tar.gz --minimal
+# 如需同时离线升级可选插件：
+sudo bash /tmp/qwq-install.sh --offline ./qwq-v0.1.10-linux-amd64.tar.gz --plugins web.ingress,containers.docker --plugin-dir ./
+```
+
+### 4. 版本回滚
+
+- **面板底座回滚**：旧版本发布树保留在 `/opt/qwq/releases/` 下，如需退回上一版本（例如 `v0.1.9`），直接对目标旧版本再次运行安装脚本即可：
+  ```bash
+  sudo bash /tmp/qwq-install.sh --version v0.1.9 --minimal
+  ```
+- **单个插件回滚**：在面板 **「应用中心 → 选择对应插件 → 回滚」** 中一键切回上一版本。
+
+---
 
 ### 常用维护命令
 
