@@ -208,15 +208,24 @@ func TestAnyTLSV2EndToEndEchoAndCounters(t *testing.T) {
 	// 发送 cmdFIN 优雅关闭流
 	writeTestFrame(t, conn, cmdFIN, 1, nil)
 
-	// 验证入站与用户流量计数器 > 0
-	counters := make(map[string]int64)
-	srv.AddCounters(counters)
-	inUp := counters["inbound>>>qwq-in-anytls-main>>>traffic>>>uplink"]
-	inDown := counters["inbound>>>qwq-in-anytls-main>>>traffic>>>downlink"]
-	uUp := counters["user>>>qwq-user-alice>>>traffic>>>uplink"]
-	uDown := counters["user>>>qwq-user-alice>>>traffic>>>downlink"]
-	if inUp < int64(len(payload)) || inDown < int64(len(payload)) || uUp < int64(len(payload)) || uDown < int64(len(payload)) {
-		t.Fatalf("流量计数器未正确累加: %+v", counters)
+	// 验证入站与用户流量计数器 > 0（服务端在 writeFrame 返回后原子累加下行计数，-race 下需短轮询等待调度收敛）
+	var counters map[string]int64
+	want := int64(len(payload))
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		counters = make(map[string]int64)
+		srv.AddCounters(counters)
+		inUp := counters["inbound>>>qwq-in-anytls-main>>>traffic>>>uplink"]
+		inDown := counters["inbound>>>qwq-in-anytls-main>>>traffic>>>downlink"]
+		uUp := counters["user>>>qwq-user-alice>>>traffic>>>uplink"]
+		uDown := counters["user>>>qwq-user-alice>>>traffic>>>downlink"]
+		if inUp >= want && inDown >= want && uUp >= want && uDown >= want {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("流量计数器未正确累加: %+v", counters)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	// 测试证书零中断热更新
