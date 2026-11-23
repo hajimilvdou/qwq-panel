@@ -160,6 +160,8 @@ type api struct {
 	// widgets holds the refresh floor and the in-flight reservation of every
 	// widget read (GAPS gap 7).
 	widgets *widgetReads
+	// catalogCache caches the official GitHub Release plugins-index.json for 5 minutes.
+	catalogCache cachedPluginCatalog
 	// startedAt stands in for the node's created_at: a standalone node is the
 	// host process (see nodes.go).
 	startedAt  time.Time
@@ -256,6 +258,7 @@ func (a *api) routes() []gateway.Route {
 		{Method: http.MethodPost, Pattern: "/api/v1/plugin-packages", Access: sessionOrService, Body: gateway.BodyPackage, Handler: http.HandlerFunc(a.uploadPluginPackage)},
 		{Method: http.MethodPost, Pattern: "/api/v1/plugin-packages/fetch", Access: sessionOrService, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.fetchPluginPackage)},
 		{Method: http.MethodGet, Pattern: "/api/v1/plugin-packages/{upload_id}", Access: sessionOrService, Handler: http.HandlerFunc(a.inspectPluginPackage)},
+		{Method: http.MethodGet, Pattern: "/api/v1/plugin-catalog", Access: sessionOrService, Handler: http.HandlerFunc(a.getPluginCatalog)},
 		{Method: http.MethodGet, Pattern: "/api/v1/plugin-trust-keys", Access: sessionOrService, Handler: http.HandlerFunc(a.listPluginTrustKeys)},
 		{Method: http.MethodPost, Pattern: "/api/v1/plugin-trust-keys", Access: gateway.AccessSession, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.addPluginTrustKey)},
 		{Method: http.MethodDelete, Pattern: "/api/v1/plugin-trust-keys/{key_id}", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.deletePluginTrustKey)},

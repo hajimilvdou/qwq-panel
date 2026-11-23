@@ -1434,6 +1434,36 @@ paths:
         '504': { $ref: '#/components/responses/Timeout' }
         '507': { $ref: '#/components/responses/InsufficientStorage' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/plugin-catalog:
+    get:
+      operationId: getPluginCatalog
+      tags: [plugins]
+      summary: List pre-built official plugins available for one-click install
+      description: |
+        Returns the official optional plugin catalog matched to this host's release version and
+        CPU architecture (`linux/amd64` or `linux/arm64`), annotated with local installation and
+        update availability status. Fetches and caches `plugins-index.json` from the official
+        release mirror for 5 minutes and degrades cleanly to embedded metadata when offline.
+      security:
+        - sessionCookie: []
+        - serviceAccountToken: []
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          description: Set to `1` or `true` to bypass the 5-minute catalog cache and fetch fresh metadata.
+          schema: { type: string, maxLength: 8, enum: ['0', '1', 'true', 'false'] }
+      responses:
+        '200':
+          description: The official plugin catalog matched to this host's architecture and installed state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PluginCatalogResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/plugin-trust-keys:
     get:
       operationId: listPluginTrustKeys
@@ -6093,6 +6123,46 @@ components:
           maxItems: 256
           description: Active trusted publisher keys, official keys first.
           items: { $ref: '#/components/schemas/PluginTrustKey' }
+    PluginCatalogItem:
+      type: object
+      additionalProperties: false
+      description: One pre-built official optional plugin available from the release catalog.
+      required: [plugin_id, name, summary, version, category, memory_max_mb, dependencies, download_url, size, installed, update_available]
+      properties:
+        plugin_id: { type: string, minLength: 1, maxLength: 64, description: Canonical plugin identifier. }
+        name: { type: string, minLength: 1, maxLength: 120, description: Display name of the plugin. }
+        summary: { type: string, maxLength: 512, description: Concise description of the plugin's capabilities. }
+        version: { type: string, maxLength: 64, description: Target release version available for download. }
+        category: { type: string, maxLength: 32, description: Display category used for store grouping and iconography. }
+        memory_max_mb: { type: integer, format: int32, minimum: 0, maximum: 65536, description: Declared cgroup memory cap in MiB. }
+        dependencies:
+          type: array
+          maxItems: 16
+          description: Other official plugin IDs that should be installed before this plugin.
+          items: { type: string, maxLength: 64 }
+        download_url: { type: string, maxLength: 2048, description: Direct HTTPS URL to the signed `.qwqpkg` package for this host's architecture. }
+        sha256: { type: string, maxLength: 71, description: Expected SHA-256 digest (`sha256:<hex>`) from `plugins-index.json` when fetched online. }
+        size: { type: integer, format: int64, minimum: 0, maximum: 67108864, description: Archive size in bytes when known. }
+        installed: { type: boolean, description: Whether this plugin is currently installed on the host. }
+        installed_version: { type: string, maxLength: 64, description: Currently active version on this host when installed. }
+        installed_revision: { type: string, maxLength: 64, description: Current host revision for optimistic concurrency during updates. }
+        update_available: { type: boolean, description: Whether the catalog version differs from the installed version. }
+    PluginCatalogResponse:
+      type: object
+      additionalProperties: false
+      description: Official pre-built plugin catalog for the running host's architecture.
+      required: [release, platform, source, online, fetched_at, items]
+      properties:
+        release: { type: string, maxLength: 64, description: Release tag resolved for the catalog (for example `v0.1.11`). }
+        platform: { type: string, maxLength: 32, description: Target OS and architecture (`linux/amd64` or `linux/arm64`). }
+        source: { type: string, maxLength: 32, enum: [github_release, builtin_fallback], description: Whether metadata came live from the release index or embedded fallback. }
+        online: { type: boolean, description: Whether the live release index was successfully reached. }
+        fetched_at: { $ref: '#/components/schemas/Timestamp' }
+        items:
+          type: array
+          maxItems: 64
+          description: Pre-built official plugins available for one-click install or update.
+          items: { $ref: '#/components/schemas/PluginCatalogItem' }
     PluginPackageInspection:
       type: object
       description: |

@@ -88,6 +88,8 @@ export type CategoryColor =
 
 export type PluginPackageInspection = S['PluginPackageInspection'];
 export type PluginPackageFetchRequest = S['PluginPackageFetchRequest'];
+export type PluginCatalogItem = S['PluginCatalogItem'];
+export type PluginCatalogResponse = S['PluginCatalogResponse'];
 export type PluginTrustKey = S['PluginTrustKey'];
 export type PluginTrustKeyList = S['PluginTrustKeyList'];
 export type PluginTrustKeyCreateRequest = S['PluginTrustKeyCreateRequest'];

@@ -13,6 +13,7 @@ import type {
   PluginVersion,
 } from './types';
 import type {
+  PluginCatalogResponse,
   PluginLogPage,
   PluginPackageFetchRequest,
   PluginPackageInspection,
@@ -35,6 +36,10 @@ export function isPluginActiveReady(plugin: Plugin | undefined): boolean {
 
 export const plugins = {
   list: listPlugins,
+  catalog: (refresh = false) =>
+    http
+      .get<PluginCatalogResponse>('/api/v1/plugin-catalog', refresh ? { query: { refresh: '1' } } : undefined)
+      .then((r) => r.data),
   get: (id: string) => http.get<Plugin>(`/api/v1/plugins/${enc(id)}`).then((r) => r.data),
   upload: (file: File, onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal) => {
     const form = new FormData();

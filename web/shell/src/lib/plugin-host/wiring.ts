@@ -10,6 +10,7 @@ import { ApiError, newIdempotencyKey, NetworkError, TERMINAL, type OpResult } fr
 import { operations as opsApi, plugins as pluginsApi } from '$api/endpoints';
 import { isPluginActiveReady } from '$api/endpoints-plugins';
 import type { Plugin } from '$api/types';
+import { installOfficialPlugin } from '../../features/apps/official-install';
 import { dock } from '../ai/dock.svelte';
 import { events } from '../events.svelte';
 import { prefs } from '../prefs.svelte';
@@ -387,7 +388,15 @@ type Hooks = Pick<
 export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
   const defaultEnsurePlugins = createEnsurePluginsHandler({
     listPlugins: pluginsApi.list,
-    installPlugin: pluginsApi.installBuiltin,
+    installPlugin: async (pluginId: string): Promise<OpResult> => {
+      try {
+        await installOfficialPlugin(pluginId);
+        return { operationId: '', status: 'SUCCEEDED' };
+      } catch (err) {
+        if (err instanceof ApiError || err instanceof EnsurePluginsError) throw err;
+        throw new EnsurePluginsError('FAILED_PRECONDITION', 422, err instanceof Error ? err.message : '官方插件安装失败');
+      }
+    },
     enablePlugin: pluginsApi.enable,
     waitForOp: waitForOperation,
     newKey: newIdempotencyKey,
@@ -395,6 +404,7 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
     onAwaitingApproval: (approvalId) => dock.open({ approvalId }),
     onChanged: () => {
       resources.invalidate('plugins');
+      resources.invalidate('plugin-catalog');
       toasts.success('官方联动组件已就绪');
     },
   });

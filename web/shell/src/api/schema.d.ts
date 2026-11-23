@@ -736,6 +736,29 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plugin-catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List pre-built official plugins available for one-click install
+         * @description Returns the official optional plugin catalog matched to this host's release version and
+         *     CPU architecture (`linux/amd64` or `linux/arm64`), annotated with local installation and
+         *     update availability status. Fetches and caches `plugins-index.json` from the official
+         *     release mirror for 5 minutes and degrades cleanly to embedded metadata when offline.
+         */
+        get: operations["getPluginCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plugin-trust-keys": {
         parameters: {
             query?: never;
@@ -4051,6 +4074,60 @@ export type components = {
             /** @description Active trusted publisher keys, official keys first. */
             items: components["schemas"]["PluginTrustKey"][];
         };
+        /** @description One pre-built official optional plugin available from the release catalog. */
+        PluginCatalogItem: {
+            /** @description Canonical plugin identifier. */
+            plugin_id: string;
+            /** @description Display name of the plugin. */
+            name: string;
+            /** @description Concise description of the plugin's capabilities. */
+            summary: string;
+            /** @description Target release version available for download. */
+            version: string;
+            /** @description Display category used for store grouping and iconography. */
+            category: string;
+            /**
+             * Format: int32
+             * @description Declared cgroup memory cap in MiB.
+             */
+            memory_max_mb: number;
+            /** @description Other official plugin IDs that should be installed before this plugin. */
+            dependencies: string[];
+            /** @description Direct HTTPS URL to the signed `.qwqpkg` package for this host's architecture. */
+            download_url: string;
+            /** @description Expected SHA-256 digest (`sha256:<hex>`) from `plugins-index.json` when fetched online. */
+            sha256?: string;
+            /**
+             * Format: int64
+             * @description Archive size in bytes when known.
+             */
+            size: number;
+            /** @description Whether this plugin is currently installed on the host. */
+            installed: boolean;
+            /** @description Currently active version on this host when installed. */
+            installed_version?: string;
+            /** @description Current host revision for optimistic concurrency during updates. */
+            installed_revision?: string;
+            /** @description Whether the catalog version differs from the installed version. */
+            update_available: boolean;
+        };
+        /** @description Official pre-built plugin catalog for the running host's architecture. */
+        PluginCatalogResponse: {
+            /** @description Release tag resolved for the catalog (for example `v0.1.11`). */
+            release: string;
+            /** @description Target OS and architecture (`linux/amd64` or `linux/arm64`). */
+            platform: string;
+            /**
+             * @description Whether metadata came live from the release index or embedded fallback.
+             * @enum {string}
+             */
+            source: "github_release" | "builtin_fallback";
+            /** @description Whether the live release index was successfully reached. */
+            online: boolean;
+            fetched_at: components["schemas"]["Timestamp"];
+            /** @description Pre-built official plugins available for one-click install or update. */
+            items: components["schemas"]["PluginCatalogItem"][];
+        };
         /**
          * @description The pre-install view of a staged package (GAPS gap 4), produced by verification and parsing
          *     without installing. All manifest texts are written by the plugin author: untrusted.
@@ -6616,6 +6693,34 @@ export interface operations {
             503: components["responses"]["Unavailable"];
             504: components["responses"]["Timeout"];
             507: components["responses"]["InsufficientStorage"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getPluginCatalog: {
+        parameters: {
+            query?: {
+                /** @description Set to `1` or `true` to bypass the 5-minute catalog cache and fetch fresh metadata. */
+                refresh?: "0" | "1" | "true" | "false";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The official plugin catalog matched to this host's architecture and installed state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginCatalogResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
             default: components["responses"]["Error"];
         };
     };
