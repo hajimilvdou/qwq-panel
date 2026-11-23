@@ -1,0 +1,119 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* @qwq/kit v1 公共基础色板与插件工作台样式变量（引用宿主 adoptedStyleSheets 动态 Token） */
+
+:root {
+  --bg: #f6f4ef;
+  --surface: #ffffff;
+  --surface-2: #f1eee7;
+  --border: rgba(15, 23, 42, 0.12);
+  --text: #18181b;
+  --muted: #64748b;
+  --accent: #0f766e;
+  --accent-fg: #ffffff;
+  --ok: #15803d;
+  --warn: #b45309;
+  --danger: #b91c1c;
+  --radius: 10px;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+:root[data-theme="dark"] {
+  --bg: #111315;
+  --surface: #181b1f;
+  --surface-2: #20242a;
+  --border: rgba(255, 255, 255, 0.12);
+  --text: #f4f4f5;
+  --muted: #9ca3af;
+  --accent: #2dd4bf;
+  --accent-fg: #0b1215;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --danger: #f87171;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.qwq-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.qwq-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.qwq-btn.ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.qwq-btn.danger {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.qwq-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.qwq-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.qwq-badge.ok {
+  color: var(--ok);
+  border-color: currentColor;
+}
+
+.qwq-badge.warn {
+  color: var(--warn);
+  border-color: currentColor;
+}
+
+.qwq-badge.danger {
+  color: var(--danger);
+  border-color: currentColor;
+}
+
+.qwq-mono {
+  font-family: var(--font-mono);
+}

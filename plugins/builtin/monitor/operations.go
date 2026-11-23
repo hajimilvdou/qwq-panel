@@ -16,6 +16,12 @@ type diskSnapshot struct {
 	Level      string    `json:"level"`
 	Thresholds threshold `json:"thresholds"`
 }
+type metricLevels struct {
+	CPU    string `json:"cpu"`
+	Memory string `json:"mem"`
+	Disk   string `json:"disk"`
+	Swap   string `json:"swap"`
+}
 type snapshotResponse struct {
 	Current          Point          `json:"current"`
 	Points           []Point        `json:"points"`
@@ -24,6 +30,7 @@ type snapshotResponse struct {
 	Uptime           uint64         `json:"uptime_seconds"`
 	Disks            []diskSnapshot `json:"disks"`
 	PrimaryDiskMount string         `json:"primary_disk_mount"`
+	Levels           metricLevels   `json:"levels"`
 }
 type historyRequest struct {
 	Range  string `json:"range,omitempty"`
@@ -76,7 +83,22 @@ func (i *instance) snapshot(_ context.Context, _ emptyRequest) (snapshotResponse
 	if len(points) == 0 || i.samples.lastError != "" {
 		status = "unavailable"
 	}
-	return snapshotResponse{Current: current, Points: points, Status: status, ResetEpoch: i.samples.resetEpoch, Uptime: i.samples.uptime, Disks: i.samples.diskSnapshotsLocked(), PrimaryDiskMount: i.samples.cfg.primaryDiskMount()}, nil
+	levels := metricLevels{
+		CPU:    i.samples.cfg.Thresholds.CPU.level(current.CPU),
+		Memory: i.samples.cfg.Thresholds.Memory.level(current.Memory),
+		Disk:   i.samples.cfg.Thresholds.Disk.level(current.Disk),
+		Swap:   i.samples.cfg.Thresholds.Memory.level(current.Swap),
+	}
+	return snapshotResponse{
+		Current:          current,
+		Points:           points,
+		Status:           status,
+		ResetEpoch:       i.samples.resetEpoch,
+		Uptime:           i.samples.uptime,
+		Disks:            i.samples.diskSnapshotsLocked(),
+		PrimaryDiskMount: i.samples.cfg.primaryDiskMount(),
+		Levels:           levels,
+	}, nil
 }
 
 // diskSnapshotsLocked 仅暴露配置选中的真实挂载点，缺失目标保留 unavailable。

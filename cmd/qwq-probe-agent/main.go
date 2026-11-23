@@ -41,6 +41,7 @@ type reportFrame struct {
 	KernelVersion string           `json:"kernel"`
 	Arch          string           `json:"arch"`
 	VirtType      string           `json:"virt"`
+	CPUModel      string           `json:"cpu_model"`
 	CPUCores      int              `json:"cpu_cores"`
 	MemTotal      uint64           `json:"mem_total"`
 	MemUsed       uint64           `json:"mem_used"`
@@ -161,6 +162,8 @@ func main() {
 		pingTickStep++
 		seq++
 
+		cpuModel, cpuCores := readCPUInfo()
+		hasIPv4, hasIPv6 := detectDualStack()
 		frame := reportFrame{
 			NodeID:        *nodeID,
 			TimestampUnix: now.Unix(),
@@ -169,8 +172,10 @@ func main() {
 			Sequence:      seq,
 			BootEpoch:     bootEpoch,
 			OSName:        readOSRelease(),
+			KernelVersion: readKernelRelease(),
 			Arch:          runtime.GOOS + "/" + runtime.GOARCH,
-			CPUCores:      runtime.NumCPU(),
+			CPUModel:      cpuModel,
+			CPUCores:      cpuCores,
 			MemTotal:      memTotal,
 			MemUsed:       memTotal - min(memTotal, memAvail),
 			SwapTotal:     swapTotal,
@@ -188,7 +193,8 @@ func main() {
 			TCPConns:      tcpConns,
 			UDPConns:      udpConns,
 			UptimeSeconds: uptime,
-			HasIPv4:       true,
+			HasIPv4:       hasIPv4,
+			HasIPv6:       hasIPv6,
 			CarrierPingMs: pings,
 		}
 
@@ -419,4 +425,78 @@ func readOSRelease() string {
 		}
 	}
 	return runtime.GOOS
+}
+
+func readKernelRelease() string {
+	raw, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+func readCPUInfo() (model string, cores int) {
+	raw, err := os.ReadFile("/proc/cpuinfo")
+	if err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			key, val, ok := strings.Cut(line, ":")
+			if !ok {
+				continue
+			}
+			k := strings.TrimSpace(key)
+			v := strings.TrimSpace(val)
+			switch k {
+			case "processor":
+				cores++
+			case "model name", "Hardware", "Processor":
+				if model == "" && v != "" {
+					model = v
+				}
+			}
+		}
+	}
+	if cores <= 0 {
+		cores = runtime.NumCPU()
+	}
+	return model, cores
+}
+
+// detectDualStack 基于本机非环回网络地址与 /proc/net/if_inet6 真实探测 IPv4/IPv6 双栈能力。
+func detectDualStack() (hasIPv4, hasIPv6 bool) {
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+				continue
+			}
+			if ip.To4() != nil {
+				hasIPv4 = true
+			} else {
+				hasIPv6 = true
+			}
+		}
+	}
+	if !hasIPv6 {
+		if raw, err := os.ReadFile("/proc/net/if_inet6"); err == nil {
+			for _, line := range strings.Split(string(raw), "\n") {
+				fields := strings.Fields(line)
+				if len(fields) < 6 {
+					continue
+				}
+				// 跳过 loopback (lo) 与 link-local (fe80...)
+				if fields[5] == "lo" || strings.HasPrefix(strings.ToLower(fields[0]), "fe80") || fields[0] == "00000000000000000000000000000001" {
+					continue
+				}
+				hasIPv6 = true
+				break
+			}
+		}
+	}
+	return hasIPv4, hasIPv6
 }

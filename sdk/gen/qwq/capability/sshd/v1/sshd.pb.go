@@ -686,10 +686,13 @@ type VerifyPortResponse struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Reachable bool                   `protobuf:"varint,1,opt,name=reachable,proto3" json:"reachable,omitempty"`
 	// The SSH version banner (SSH-2.0-...) when reachable.
-	Banner        string          `protobuf:"bytes,2,opt,name=banner,proto3" json:"banner,omitempty"`
-	Error         *v1.ErrorDetail `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Banner string          `protobuf:"bytes,2,opt,name=banner,proto3" json:"banner,omitempty"`
+	Error  *v1.ErrorDetail `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	// True when the host network namespace observes at least one non-loopback
+	// TCP_ESTABLISHED session on the verified port.
+	HasExternalConnection bool `protobuf:"varint,4,opt,name=has_external_connection,json=hasExternalConnection,proto3" json:"has_external_connection,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *VerifyPortResponse) Reset() {
@@ -741,6 +744,13 @@ func (x *VerifyPortResponse) GetError() *v1.ErrorDetail {
 		return x.Error
 	}
 	return nil
+}
+
+func (x *VerifyPortResponse) GetHasExternalConnection() bool {
+	if x != nil {
+		return x.HasExternalConnection
+	}
+	return false
 }
 
 type SetLoginPolicyRequest struct {
@@ -1179,11 +1189,12 @@ const file_qwq_capability_sshd_v1_sshd_proto_rawDesc = "" +
 	"\x0ftransaction_ref\x18\x04 \x01(\tR\x0etransactionRef\"c\n" +
 	"\x11VerifyPortRequest\x12:\n" +
 	"\acontext\x18\x01 \x01(\v2 .qwq.platform.v1.HostCallContextR\acontext\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\rR\x04port\"~\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\"\xb6\x01\n" +
 	"\x12VerifyPortResponse\x12\x1c\n" +
 	"\treachable\x18\x01 \x01(\bR\treachable\x12\x16\n" +
 	"\x06banner\x18\x02 \x01(\tR\x06banner\x122\n" +
-	"\x05error\x18\x03 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error\"\xf7\x02\n" +
+	"\x05error\x18\x03 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error\x126\n" +
+	"\x17has_external_connection\x18\x04 \x01(\bR\x15hasExternalConnection\"\xf7\x02\n" +
 	"\x15SetLoginPolicyRequest\x12:\n" +
 	"\acontext\x18\x01 \x01(\v2 .qwq.platform.v1.HostCallContextR\acontext\x12(\n" +
 	"\rpassword_auth\x18\x02 \x01(\bH\x00R\fpasswordAuth\x88\x01\x01\x12/\n" +

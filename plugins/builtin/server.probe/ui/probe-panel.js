@@ -280,10 +280,18 @@
     $('track-badge').textContent = caps.tls_certificates_ready ? '轨道 A 可借用' : '轨道 B 自闭环';
 
     const nodes = Array.isArray(data.public_nodes) ? data.public_nodes : [];
-    const cardsHTML = nodes.map((n) => {
+    const renderNodeCard = (n, editable) => {
       const cpu = Number(n.live?.cpu_pct || 0).toFixed(1);
       const rxMbps = (Number(n.live?.net_rx_bps || 0) / 1e6).toFixed(2);
       const txMbps = (Number(n.live?.net_tx_bps || 0) / 1e6).toFixed(2);
+      const quotaGB = n.quota_bytes ? (Number(n.quota_bytes) / (1024 ** 3)).toFixed(0) + ' GB' : '不限流量';
+      const expText = typeof n.expires_in_days === 'number' ? ` · 剩余 ${n.expires_in_days} 天` : '';
+      const actions = editable
+        ? `<div class="theme-item-actions">
+            <button type="button" class="btn ghost" data-edit-node="${esc(n.id)}">编辑</button>
+            ${n.is_local ? '' : `<button type="button" class="btn danger" data-remove-node="${esc(n.id)}">删除</button>`}
+          </div>`
+        : '';
       return `<div class="node-card">
         <div class="node-card-head">
           <strong>[${esc(n.region_code)}] ${esc(n.name)}</strong>
@@ -292,10 +300,14 @@
         <div class="node-card-metrics">
           CPU ${cpu}% · ↓ ${rxMbps} Mbps / ↑ ${txMbps} Mbps · 90天在线 ${Number(n.uptime_90d_pct || 100).toFixed(2)}%
         </div>
+        <div class="node-card-metrics">
+          配额 ${esc(quotaGB)} (${esc(n.quota_mode || 'both')}) · 每月 ${Number(n.reset_day || 1)} 日重置${esc(expText)}
+        </div>
+        ${actions}
       </div>`;
-    }).join('');
-    $('admin-nodes-grid').innerHTML = cardsHTML;
-    $('visitor-nodes-grid').innerHTML = cardsHTML;
+    };
+    $('admin-nodes-grid').innerHTML = nodes.map((n) => renderNodeCard(n, true)).join('');
+    $('visitor-nodes-grid').innerHTML = nodes.map((n) => renderNodeCard(n, false)).join('');
     if (data.settings?.site_title) {
       $('preview-title').textContent = data.settings.site_title;
     }
@@ -672,17 +684,98 @@
     }
   });
 
+  function resetNodeForm() {
+    $('node-id').value = '';
+    $('node-name').value = '';
+    $('node-region').value = 'JP';
+    $('node-quota-mode').value = 'both';
+    $('node-quota-gb').value = '';
+    $('node-reset-day').value = '1';
+    $('node-expires-at').value = '';
+    $('add-node-btn').textContent = '添加节点并生成安装命令';
+    $('cancel-edit-node-btn').hidden = true;
+  }
+
+  function hostConfirm(title, message) {
+    if (!port) return Promise.resolve(false);
+    const id = `cf_${++seq}`;
+    return new Promise((resolve) => {
+      pendingConfirm.set(id, { resolve });
+      send({ t: 'ui.confirm', id, title, message, destructive: true });
+    });
+  }
+
+  $('cancel-edit-node-btn').addEventListener('click', resetNodeForm);
+
+  $('admin-nodes-grid').addEventListener('click', async (e) => {
+    const editBtn = e.target.closest('[data-edit-node]');
+    if (editBtn) {
+      const nodeId = editBtn.dataset.editNode;
+      const node = (latest?.public_nodes || []).find((x) => x.id === nodeId);
+      if (!node) return;
+      $('node-id').value = node.id;
+      $('node-name').value = node.name || '';
+      $('node-region').value = node.region_code || 'HK';
+      $('node-quota-mode').value = node.quota_mode || 'both';
+      $('node-quota-gb').value = node.quota_bytes ? String(Math.round(Number(node.quota_bytes) / (1024 ** 3))) : '0';
+      $('node-reset-day').value = String(node.reset_day || 1);
+      if (typeof node.expires_in_days === 'number') {
+        const dt = new Date(Date.now() + node.expires_in_days * 86400 * 1000);
+        $('node-expires-at').value = dt.toISOString().slice(0, 10);
+      } else {
+        $('node-expires-at').value = '';
+      }
+      $('add-node-btn').textContent = `保存节点编辑 (${node.id})`;
+      $('cancel-edit-node-btn').hidden = false;
+      $('node-name').focus();
+      return;
+    }
+    const delBtn = e.target.closest('[data-remove-node]');
+    if (delBtn) {
+      const nodeId = delBtn.dataset.removeNode;
+      const ok = await hostConfirm('删除探针节点', `确认移除节点 ${nodeId} 并立即吊销其上报令牌？`);
+      if (!ok) return;
+      try {
+        await invoke('probe.nodes.remove', { id: nodeId });
+        toast(`已移除节点 ${nodeId}`);
+        if ($('node-id').value === nodeId) resetNodeForm();
+        void refresh();
+      } catch (err) {
+        if (err && err.awaitingApproval) toast('节点删除已提交，等待审批确认');
+        else toast('移除节点失败：' + (err.message || '未知错误'));
+      }
+    }
+  });
+
   $('add-node-btn').addEventListener('click', async () => {
+    const id = $('node-id').value.trim();
     const name = $('node-name').value.trim();
     const region = $('node-region').value.trim() || 'HK';
     const quotaMode = $('node-quota-mode').value;
+    const quotaGB = Math.max(0, Number($('node-quota-gb').value || 0));
+    const resetDay = Math.min(31, Math.max(1, Math.floor(Number($('node-reset-day').value || 1))));
+    const expDateStr = $('node-expires-at').value.trim();
+    const expiresAt = expDateStr ? Math.floor(new Date(expDateStr + 'T00:00:00Z').getTime() / 1000) : 0;
     if (!name) return;
+    const payload = {
+      name,
+      region_code: region,
+      quota_mode: quotaMode,
+      quota_bytes: Math.floor(quotaGB * (1024 ** 3)),
+      reset_day: resetDay,
+      expires_at: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : 0
+    };
+    if (id) payload.id = id;
+    if (publicOrigin) payload.public_origin = publicOrigin;
     try {
-      const res = await invoke('probe.nodes.upsert', { name, region_code: region, quota_mode: quotaMode });
-      $('install-cmd-actions').hidden = false;
-      $('install-cmd-box').hidden = false;
-      $('install-cmd-box').textContent = formatInstallCmd(res.linux_install);
-      $('node-name').value = '';
+      const res = await invoke('probe.nodes.upsert', payload);
+      if (res.linux_install) {
+        $('install-cmd-actions').hidden = false;
+        $('install-cmd-box').hidden = false;
+        $('install-cmd-box').textContent = formatInstallCmd(res.linux_install);
+      }
+      toast(id ? `节点「${name}」已更新` : `节点「${name}」已创建`);
+      resetNodeForm();
       void refresh();
     } catch (err) {
       if (err && err.awaitingApproval) {

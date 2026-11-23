@@ -390,11 +390,12 @@ type sshdDropInDTO struct {
 }
 
 type portSagaPublicView struct {
-	TransactionRef  string `json:"transaction_ref"`
-	OldPort         uint32 `json:"old_port"`
-	NewPort         uint32 `json:"new_port"`
-	DeadlineUnix    int64  `json:"deadline_unix"`
-	FirewallManaged bool   `json:"firewall_managed"`
+	TransactionRef             string `json:"transaction_ref"`
+	OldPort                    uint32 `json:"old_port"`
+	NewPort                    uint32 `json:"new_port"`
+	DeadlineUnix               int64  `json:"deadline_unix"`
+	FirewallManaged            bool   `json:"firewall_managed"`
+	ExternalConnectionDetected bool   `json:"external_connection_detected,omitempty"`
 }
 
 type sshdStatusResponse struct {
@@ -670,12 +671,22 @@ func (i *instance) handleSSHDStatus(ctx context.Context, req pluginsdk.Request) 
 	}
 	var sagaView *portSagaPublicView
 	if saga, found, err := i.loadPortSaga(ctx, req.Host()); err == nil && found {
+		extConn := false
+		if saga.NewPort >= 1 && saga.NewPort <= 65535 {
+			if vr, vErr := client.VerifyPort(ctx, &sshdv1.VerifyPortRequest{
+				Context: meta,
+				Port:    saga.NewPort,
+			}); vErr == nil && vr.GetError() == nil {
+				extConn = vr.GetHasExternalConnection()
+			}
+		}
 		sagaView = &portSagaPublicView{
-			TransactionRef:  saga.TransactionRef,
-			OldPort:         saga.OldPort,
-			NewPort:         saga.NewPort,
-			DeadlineUnix:    saga.DeadlineUnix,
-			FirewallManaged: saga.FirewallManaged,
+			TransactionRef:             saga.TransactionRef,
+			OldPort:                    saga.OldPort,
+			NewPort:                    saga.NewPort,
+			DeadlineUnix:               saga.DeadlineUnix,
+			FirewallManaged:            saga.FirewallManaged,
+			ExternalConnectionDetected: extConn,
 		}
 	}
 	return marshalResponse(sshdStatusResponse{
@@ -1175,6 +1186,17 @@ func firewallClientWrite(ctx context.Context, host *pluginsdk.Host) (firewallv1.
 	return firewallv1.NewFirewallServiceClient(host.Conn()), meta, nil
 }
 
+func firewallClientWriteAutonomous(ctx context.Context, host *pluginsdk.Host, reason string) (firewallv1.FirewallServiceClient, *platformv1.HostCallContext, error) {
+	if host == nil || host.Conn() == nil {
+		return nil, nil, pluginsdk.ErrNoHost
+	}
+	meta, err := host.CapabilityContextAutonomous(ctx, reason)
+	if err != nil {
+		return nil, nil, err
+	}
+	return firewallv1.NewFirewallServiceClient(host.Conn()), meta, nil
+}
+
 func sshdClientReadOnly(ctx context.Context, host *pluginsdk.Host) (sshdv1.SshdServiceClient, *platformv1.HostCallContext, error) {
 	if host == nil || host.Conn() == nil {
 		return nil, nil, pluginsdk.ErrNoHost
@@ -1191,6 +1213,17 @@ func sshdClientWrite(ctx context.Context, host *pluginsdk.Host) (sshdv1.SshdServ
 		return nil, nil, pluginsdk.ErrNoHost
 	}
 	meta, err := host.CapabilityContext(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sshdv1.NewSshdServiceClient(host.Conn()), meta, nil
+}
+
+func sshdClientWriteAutonomous(ctx context.Context, host *pluginsdk.Host, reason string) (sshdv1.SshdServiceClient, *platformv1.HostCallContext, error) {
+	if host == nil || host.Conn() == nil {
+		return nil, nil, pluginsdk.ErrNoHost
+	}
+	meta, err := host.CapabilityContextAutonomous(ctx, reason)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1239,6 +1272,53 @@ func banClientWrite(ctx context.Context, host *pluginsdk.Host) (banv1.BanService
 		return nil, nil, err
 	}
 	return banv1.NewBanServiceClient(host.Conn()), meta, nil
+}
+
+func banClientWriteAutonomous(ctx context.Context, host *pluginsdk.Host, reason string) (banv1.BanServiceClient, *platformv1.HostCallContext, error) {
+	if host == nil || host.Conn() == nil {
+		return nil, nil, pluginsdk.ErrNoHost
+	}
+	meta, err := host.CapabilityContextAutonomous(ctx, reason)
+	if err != nil {
+		return nil, nil, err
+	}
+	return banv1.NewBanServiceClient(host.Conn()), meta, nil
+}
+
+type securityAlertPayload struct {
+	Source    string            `json:"source"`
+	Severity  string            `json:"severity"`
+	Title     string            `json:"title"`
+	Message   string            `json:"message"`
+	DedupKey  string            `json:"dedup_key,omitempty"`
+	Tags      map[string]string `json:"tags,omitempty"`
+	Timestamp time.Time         `json:"timestamp"`
+}
+
+func (i *instance) publishSecurityAlert(ctx context.Context, host *pluginsdk.Host, severity, subject, title, message, dedupKey string, tags map[string]string) {
+	if host == nil || host.Conn() == nil {
+		return
+	}
+	raw, err := json.Marshal(securityAlertPayload{
+		Source:    "security.basic",
+		Severity:  severity,
+		Title:     title,
+		Message:   message,
+		DedupKey:  dedupKey,
+		Tags:      tags,
+		Timestamp: i.nowTime().UTC(),
+	})
+	if err != nil {
+		return
+	}
+	if _, err := host.PublishEvent(ctx, pluginsdk.EventDraft{
+		Type:          "security.alert",
+		SchemaVersion: "1",
+		Subject:       subject,
+		Payload:       raw,
+	}); err != nil {
+		i.Logger().Warn("发布 security.alert 告警事件失败", "subject", subject, "error", err.Error())
+	}
 }
 
 func resolveRevision(explicit string, req pluginsdk.Request, subject string) string {

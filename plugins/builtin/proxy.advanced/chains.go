@@ -251,7 +251,7 @@ func (s *proxyStore) UpsertChain(ctx context.Context, in chainUpsertRequest) (ch
 	}
 	mode := strings.TrimSpace(in.Mode)
 	if mode == "" {
-		mode = "both"
+		mode = "client_dialer"
 	}
 	if mode != "server_forward" && mode != "client_dialer" && mode != "both" {
 		return chainRecord{}, false, pluginsdk.Errorf("INVALID_ARGUMENT", "mode 仅支持 server_forward / client_dialer / both")
@@ -525,17 +525,17 @@ func renderXrayChainOutbounds(chains []chainWithSecret, users []userRecord) map[
 			ob["protocol"] = "socks"
 			srv := map[string]any{"address": c.Server, "port": c.Port}
 			if c.Secret.Username != "" {
-				srv["users"] = []map[string]any{{"user": c.Secret.Username, "pass": "<REDACTED>"}}
+				srv["users"] = []map[string]any{{"user": c.Secret.Username, "auth_encrypted": c.Secret.Password != ""}}
 			}
 			ob["settings"] = map[string]any{"servers": []map[string]any{srv}}
 		case "http":
 			srv := map[string]any{"address": c.Server, "port": c.Port}
 			if c.Secret.Username != "" {
-				srv["users"] = []map[string]any{{"user": c.Secret.Username, "pass": "<REDACTED>"}}
+				srv["users"] = []map[string]any{{"user": c.Secret.Username, "auth_encrypted": c.Secret.Password != ""}}
 			}
 			ob["settings"] = map[string]any{"servers": []map[string]any{srv}}
 		case "vless":
-			uObj := map[string]any{"id": "<REDACTED>", "encryption": "none"}
+			uObj := map[string]any{"credential_source": "encrypted_store", "encryption": "none"}
 			if c.Secret.Flow != "" {
 				uObj["flow"] = c.Secret.Flow
 			}
@@ -544,11 +544,11 @@ func renderXrayChainOutbounds(chains []chainWithSecret, users []userRecord) map[
 			}
 		case "trojan":
 			ob["settings"] = map[string]any{
-				"servers": []map[string]any{{"address": c.Server, "port": c.Port, "password": "<REDACTED>"}},
+				"servers": []map[string]any{{"address": c.Server, "port": c.Port, "credential_source": "encrypted_store"}},
 			}
 		case "shadowsocks":
 			ob["settings"] = map[string]any{
-				"servers": []map[string]any{{"address": c.Server, "port": c.Port, "method": c.Secret.Method, "password": "<REDACTED>"}},
+				"servers": []map[string]any{{"address": c.Server, "port": c.Port, "method": c.Secret.Method, "credential_source": "encrypted_store"}},
 			}
 		}
 		if c.Secret.TLS {

@@ -3,6 +3,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
@@ -111,6 +112,29 @@ type aliyunRecord struct {
 	line   string
 }
 
+// aliyunRecordRevision 剥离单次请求信封字段（RequestId、DomainName）后再计算记录对象指纹，
+// 确保 DescribeDomainRecords 与 O(1) DescribeDomainRecordInfo 返回同一记录时版本指纹完全一致，
+// 同时保留 Status、Line、Locked、Priority 等所有远端元数据变更检测能力。
+func aliyunRecordRevision(raw []byte) (string, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var obj map[string]any
+	if err := dec.Decode(&obj); err != nil || obj == nil {
+		return "", fault.New("PROVIDER_INVALID", "阿里云记录对象格式无效")
+	}
+	var trailing any
+	if !errors.Is(dec.Decode(&trailing), io.EOF) {
+		return "", fault.New("PROVIDER_INVALID", "阿里云记录对象包含尾随数据")
+	}
+	delete(obj, "RequestId")
+	delete(obj, "DomainName")
+	normalized, err := json.Marshal(obj)
+	if err != nil {
+		return "", fault.New("PROVIDER_INVALID", "阿里云记录对象无法规范化")
+	}
+	return providerRevision(normalized)
+}
+
 func parseAliyunRecord(scope dns.Scope, raw json.RawMessage) (aliyunRecord, error) {
 	var payload struct {
 		RecordID string         `json:"RecordId"`
@@ -134,7 +158,7 @@ func parseAliyunRecord(scope dns.Scope, raw json.RawMessage) (aliyunRecord, erro
 	if err != nil {
 		return aliyunRecord{}, err
 	}
-	version, err := providerRevision(raw)
+	version, err := aliyunRecordRevision(raw)
 	if err != nil {
 		return aliyunRecord{}, err
 	}
@@ -198,8 +222,8 @@ func (p *aliyunProvider) List(ctx context.Context, scope dns.Scope) ([]dns.Recor
 	return records, nil
 }
 
-// get 先用 RecordId 核验远端 zone，再以同一分页 API 完整对象复核指纹。
-// 避免 Get/List 响应投影不同或 RequestId 变化制造错误版本，同时保护所有远端元数据。
+// get 直接通过 O(1) 的 DescribeDomainRecordInfo(RecordId) 读取单条记录并核验 zone 归属与完整元数据指纹，
+// 避免在多记录大域名上执行 O(N) 的 DescribeDomainRecords 全表翻页扫描。
 func (p *aliyunProvider) get(ctx context.Context, scope dns.Scope, id string) (aliyunRecord, error) {
 	if sameScope(p.scope, scope) != nil || !aliyunID(id) {
 		return aliyunRecord{}, fault.New("SCOPE_INVALID", "阿里云记录查询范围无效")
@@ -208,7 +232,10 @@ func (p *aliyunProvider) get(ctx context.Context, scope dns.Scope, id string) (a
 	if err != nil {
 		return aliyunRecord{}, err
 	}
-	var identity struct{ RecordID, DomainName string }
+	var identity struct {
+		RecordID   string `json:"RecordId"`
+		DomainName string `json:"DomainName"`
+	}
 	if json.Unmarshal(data, &identity) != nil || identity.RecordID != id {
 		return aliyunRecord{}, fault.New("PROVIDER_INVALID", "阿里云记录查询身份无效")
 	}
@@ -216,16 +243,7 @@ func (p *aliyunProvider) get(ctx context.Context, scope dns.Scope, id string) (a
 	if err != nil || domain != scope.ZoneName {
 		return aliyunRecord{}, fault.New("ZONE_DENIED", "阿里云记录不属于授权 zone")
 	}
-	entries, err := p.records(ctx, scope)
-	if err != nil {
-		return aliyunRecord{}, err
-	}
-	for _, entry := range entries {
-		if entry.record.ID == id {
-			return entry, nil
-		}
-	}
-	return aliyunRecord{}, fault.New("NOT_FOUND", "阿里云记录不存在")
+	return parseAliyunRecord(scope, data)
 }
 
 func aliyunWriteParameters(scope dns.Scope, record dns.Record) (url.Values, error) {

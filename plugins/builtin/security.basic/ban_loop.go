@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -117,13 +118,33 @@ func (i *instance) runBanCycle(ctx context.Context) {
 	activeCount := i.readBanCountBestEffort(ctx, host)
 	applyOK := true
 	if len(candidates) > 0 {
-		appliedCount, applyErr := i.applyCandidateBans(ctx, host, candidates, cfg.BanTTLSeconds)
+		appliedCount, addedIPs, applyErr := i.applyCandidateBans(ctx, host, candidates, cfg.BanTTLSeconds)
 		if applyErr != nil {
 			applyOK = false
 			i.setBanError(applyErr.Error())
 		} else {
 			activeCount = appliedCount
 			i.clearBannedBuckets(candidates)
+			if len(addedIPs) > 0 {
+				ipPreview := strings.Join(addedIPs, ", ")
+				if len(addedIPs) > 5 {
+					ipPreview = fmt.Sprintf("%s 等 %d 个 IP", strings.Join(addedIPs[:5], ", "), len(addedIPs))
+				}
+				i.publishSecurityAlert(
+					ctx,
+					host,
+					"warn",
+					"bans/auto",
+					fmt.Sprintf("SSH 防爆破已自动封禁 %d 个来源 IP", len(addedIPs)),
+					fmt.Sprintf("检测到暴力破解行为，已自动封禁：%s（TTL %d 秒，当前活跃封禁总数 %d）。", ipPreview, cfg.BanTTLSeconds, activeCount),
+					"security.ban.auto:"+addedIPs[0],
+					map[string]string{
+						"event":        "ssh_bruteforce_ban",
+						"banned_count": fmt.Sprintf("%d", len(addedIPs)),
+						"sample_ip":    addedIPs[0],
+					},
+				)
+			}
 		}
 	}
 
@@ -227,17 +248,17 @@ func (i *instance) aggregateCandidates(failures []*banv1.AuthFailure, nowMs int6
 	return candidates
 }
 
-func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host, candidates []string, ttlSec uint32) (int, error) {
+func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host, candidates []string, ttlSec uint32) (int, []string, error) {
 	banRead, banReadMeta, err := banClientReadOnly(ctx, host)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	listResp, err := banRead.ListBans(ctx, &banv1.ListBansRequest{Context: banReadMeta})
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if err := protoError(listResp.GetError()); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
 	existing := listResp.GetBans()
@@ -248,19 +269,21 @@ func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host,
 		}
 	}
 	toAdd := make([]*banv1.BanEntry, 0, len(candidates))
+	addedIPs := make([]string, 0, len(candidates))
 	for _, ip := range candidates {
 		if _, already := existingSet[ip]; already {
 			continue
 		}
 		toAdd = append(toAdd, &banv1.BanEntry{Ip: ip, TtlSeconds: ttlSec})
+		addedIPs = append(addedIPs, ip)
 	}
 	if len(toAdd) == 0 {
-		return len(existing), nil
+		return len(existing), nil, nil
 	}
 
-	banWrite, banWriteMeta, err := banClientWrite(ctx, host)
+	banWrite, banWriteMeta, err := banClientWriteAutonomous(ctx, host, "ban_loop")
 	if err != nil {
-		return len(existing), err
+		return len(existing), nil, err
 	}
 	revision := listResp.GetRevision()
 
@@ -287,10 +310,10 @@ func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host,
 				ExpectedRevision: revision,
 			})
 			if err != nil {
-				return len(existing), err
+				return len(existing), nil, err
 			}
 			if err := protoError(rmResp.GetError()); err != nil {
-				return len(existing), err
+				return len(existing), nil, err
 			}
 			if rmResp.GetRevision() != "" {
 				revision = rmResp.GetRevision()
@@ -300,6 +323,7 @@ func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host,
 
 	if len(toAdd) > maxBanEntries {
 		toAdd = toAdd[:maxBanEntries]
+		addedIPs = addedIPs[:maxBanEntries]
 	}
 	applyResp, err := banWrite.ApplyBans(ctx, &banv1.ApplyBansRequest{
 		Context:          banWriteMeta,
@@ -307,12 +331,12 @@ func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host,
 		ExpectedRevision: revision,
 	})
 	if err != nil {
-		return len(existing), err
+		return len(existing), nil, err
 	}
 	if err := protoError(applyResp.GetError()); err != nil {
-		return len(existing), err
+		return len(existing), nil, err
 	}
-	return int(applyResp.GetActiveCount()), nil
+	return int(applyResp.GetActiveCount()), addedIPs, nil
 }
 
 func (i *instance) clearBannedBuckets(ips []string) {

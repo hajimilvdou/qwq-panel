@@ -87,7 +87,11 @@
       </section>
 
       <section class="card">
-        <h3>多用户管理 · 并发连接数 / 在线 IP 限制</h3>
+        <div class="card-head">
+          <h3>多用户管理 · 并发连接数 / 在线 IP 限制</h3>
+          <button id="btn-user-create-open" class="btn" type="button">+ 新建订阅用户</button>
+        </div>
+        <p class="card-desc">实时活跃连接数与在线 IP 统计适用于内置托管守护协议（AnyTLS / Brutal 透明接管）；原生 Xray 协议连接上限可通过下方 nftables 规则承接。</p>
         <div id="copy-feedback" class="muted" aria-live="polite"></div>
         <div class="table-wrap">
           <table>
@@ -314,15 +318,15 @@
 
       <section class="card">
         <h3>新增 / 更新链式代理落地节点</h3>
-        <p class="card-desc">同时支持服务端出口链式转发（Xray <code>proxySettings.tag</code>）与客户端订阅链式导出（Clash <code>dialer-proxy</code> / sing-box <code>detour</code>）。密码与 UUID 采用本地 AES-256-GCM 加密存储，列表与预览永不明文回显。</p>
+        <p class="card-desc">默认采用完整闭环的 <strong>客户端订阅链式导出</strong>（Clash <code>dialer-proxy</code> / sing-box <code>detour</code>），同时保留服务端出口链预览。密码与 UUID 采用本地 AES-256-GCM 加密存储，列表与预览永不明文回显。</p>
         <div class="form-grid">
           <label>节点 ID <input id="c-id" placeholder="如 jp-home-socks" /></label>
           <label>显示名称 <input id="c-name" placeholder="日本家宽落地" /></label>
           <label>工作模式
             <select id="c-mode">
-              <option value="both">服务端转发 + 客户端订阅 (both)</option>
-              <option value="server_forward">仅服务端出口转发 (server_forward)</option>
-              <option value="client_dialer">仅客户端订阅 dialer-proxy (client_dialer)</option>
+              <option value="client_dialer" selected>客户端订阅 dialer-proxy / detour（推荐 · 已闭环）</option>
+              <option value="both">客户端订阅 + 服务端出口预览 (both)</option>
+              <option value="server_forward">仅服务端出口预览 (server_forward)</option>
             </select>
           </label>
           <label>落地协议
@@ -959,6 +963,161 @@
       <div class="modal-footer">
         <span id="nc-meta" class="muted"></span>
         <button id="nc-close-btn" class="btn ghost" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 弹窗 3: 新建订阅用户 ==================== -->
+  <div id="user-create-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="uc-modal-title">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="uc-modal-title">新建订阅用户</h3>
+        <button id="uc-close" class="modal-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid-2">
+          <label>用户 ID（小写字母开头，同步至 core.xray）
+            <input id="uc-id" class="mono" maxlength="32" placeholder="如 alice" />
+          </label>
+          <label>显示名称 / 备注
+            <input id="uc-name" maxlength="64" placeholder="如 Alice 手机端" />
+          </label>
+          <label class="form-span-full">套餐配置方式
+            <select id="uc-plan-mode">
+              <option value="existing">绑定已有套餐</option>
+              <option value="custom">为此用户自定义配额与上下行限速</option>
+            </select>
+          </label>
+          <label id="uc-existing-plan-wrap" class="form-span-full">选择套餐
+            <select id="uc-plan"><option value="">请先创建套餐或切换自定义</option></select>
+          </label>
+        </div>
+
+        <div id="uc-custom-plan-box" class="builder-group mt-12 hidden">
+          <div class="builder-group-title">自定义流量配额与带宽策略（自动生成专属套餐）</div>
+          <div class="form-grid-2">
+            <label>周期流量配额 (GiB，0=不限)
+              <input id="uc-custom-quota" type="number" min="0" value="100" />
+            </label>
+            <label>月度账单重置日 (0=不重置，1–28)
+              <input id="uc-custom-reset-day" type="number" min="0" max="28" value="1" />
+            </label>
+            <label>下行限速 (Kbps，0=不限)
+              <input id="uc-custom-down" type="number" min="0" value="50000" />
+            </label>
+            <label>上行限速 (Kbps，0=不限)
+              <input id="uc-custom-up" type="number" min="0" value="20000" />
+            </label>
+          </div>
+        </div>
+
+        <div class="form-grid-2 mt-12">
+          <label>最大连接覆盖 (-1 继承 / 0 不限)
+            <input id="uc-max-conns" type="number" min="-1" max="65535" value="-1" />
+          </label>
+          <label>最大在线 IP 覆盖 (-1 继承 / 0 不限)
+            <input id="uc-max-ips" type="number" min="-1" max="1024" value="-1" />
+          </label>
+          <label class="form-span-full">绑定链式落地节点（可选）
+            <select id="uc-chain"><option value="">（跟随默认 / 直连）</option></select>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span class="muted">创建后将一次性颁发真实订阅链接（数据库仅存哈希）。</span>
+        <div class="actions actions-tight">
+          <button id="uc-cancel" class="btn ghost" type="button">取消</button>
+          <button id="uc-submit" class="btn" type="button">创建用户并签发订阅</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 弹窗 4: 一次性订阅令牌与多客户端一键复制 ==================== -->
+  <div id="user-sub-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="us-modal-title">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="us-modal-title">订阅链接已签发（仅展示一次）</h3>
+        <button id="us-close" class="modal-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="info-note amber">
+          请立即保存并分发以下订阅链接！出于安全原因，面板数据库仅保存令牌 SHA-256 哈希，关闭本窗口后无法再次查看明文（若遗失可执行“轮换订阅”重新签发）。
+        </div>
+        <div class="builder-group mt-12">
+          <div class="builder-group-title">
+            <span id="us-user-label">用户订阅令牌</span>
+            <button id="us-copy-token" class="btn sm ghost" type="button">复制纯 Token</button>
+          </div>
+          <pre id="us-token-code" class="preview-code"></pre>
+        </div>
+        <div class="builder-group mt-12">
+          <div class="builder-group-title">多客户端真实订阅地址</div>
+          <div class="form-grid-2">
+            <label class="form-span-full">Clash / Mihomo 订阅 URL
+              <div class="input-row">
+                <input id="us-url-clash" class="mono" readonly />
+                <button id="us-copy-clash" class="btn sm" type="button">复制 Clash</button>
+              </div>
+            </label>
+            <label class="form-span-full">Sing-box 订阅 URL
+              <div class="input-row">
+                <input id="us-url-singbox" class="mono" readonly />
+                <button id="us-copy-singbox" class="btn sm" type="button">复制 Sing-box</button>
+              </div>
+            </label>
+            <label class="form-span-full">Base64 / V2Ray 通用订阅 URL
+              <div class="input-row">
+                <input id="us-url-base64" class="mono" readonly />
+                <button id="us-copy-base64" class="btn sm" type="button">复制 Base64</button>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span id="us-meta" class="muted"></span>
+        <button id="us-close-btn" class="btn" type="button">我已保存，关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 弹窗 5: 小时级流量趋势抽屉 ==================== -->
+  <div id="user-history-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="uh-modal-title">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="uh-modal-title">小时级流量趋势</h3>
+        <button id="uh-close" class="modal-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="actions actions-tight mb-6">
+          <div class="pill-group" id="uh-range-pills">
+            <button type="button" class="pill active" data-hours="24">近 24 小时</button>
+            <button type="button" class="pill" data-hours="72">近 72 小时</button>
+            <button type="button" class="pill" data-hours="168">近 7 天</button>
+          </div>
+          <span id="uh-summary" class="muted"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间段 (小时桶)</th>
+                <th>上行</th>
+                <th>下行</th>
+                <th>合计</th>
+                <th>相对峰值</th>
+              </tr>
+            </thead>
+            <tbody id="uh-body">
+              <tr><td colspan="5" class="muted">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span id="uh-meta" class="muted"></span>
+        <button id="uh-close-btn" class="btn ghost" type="button">关闭</button>
       </div>
     </div>
   </div>

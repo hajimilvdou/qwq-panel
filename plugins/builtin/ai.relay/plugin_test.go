@@ -8,15 +8,21 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 
 	pb "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
 	"github.com/qwq-panel/qwq/sdk/manifest"
@@ -455,5 +461,283 @@ func TestAIRelayAll12OperationsPortalAndPublicRouteE2E(t *testing.T) {
 	rmProg := runRelayJob(t, srv, "relay.channels.remove", map[string]any{"id": chOut.ID})
 	if !strings.Contains(string(rmProg.GetResultJson()), `"removed":true`) {
 		t.Fatalf("channels.remove 结果异常: %s", rmProg.GetResultJson())
+	}
+}
+
+// ======================== SecretField 信封、门户令牌兼容/登出/吊销、动态预扣与熔断告警测试 ========================
+
+type fakeHostSecretsAndEvents struct {
+	pb.UnimplementedHostSecretsServiceServer
+	pb.UnimplementedHostEventsServiceServer
+
+	mu      sync.Mutex
+	secrets map[string][]byte
+	events  []*pb.EventDraft
+}
+
+func (f *fakeHostSecretsAndEvents) RevealSecret(_ context.Context, req *pb.RevealSecretRequest) (*pb.RevealSecretResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.secrets[req.GetSecretRef()]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "secret %q not found", req.GetSecretRef())
+	}
+	return &pb.RevealSecretResponse{Value: append([]byte(nil), v...)}, nil
+}
+
+func (f *fakeHostSecretsAndEvents) PublishEvent(_ context.Context, req *pb.PublishEventRequest) (*pb.PublishEventResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if req.GetEvent() != nil {
+		f.events = append(f.events, req.GetEvent())
+	}
+	return &pb.PublishEventResponse{EventId: "evt_relay_1", Sequence: uint64(len(f.events))}, nil
+}
+
+func TestAIRelaySecretFieldPortalHeadersLogoutRevokeAndDynamicReserve(t *testing.T) {
+	// 1) 验证大上下文动态预扣逻辑远高于默认下限。
+	largeReserve := ComputeDynamicReserveMicros(DynamicReserveInput{
+		DefaultReserveMicros: 50_000,
+		EstimatedInputTokens: 200_000,
+		RequestedMaxTokens:   4096,
+		BillingMode:          "token",
+		InputMicrosPer1K:     3000,
+		OutputMicrosPer1K:    15000,
+	})
+	if largeReserve < 600_000 {
+		t.Fatalf("200K 输入动态预扣应 >= 600000 micros，实际 %d", largeReserve)
+	}
+	perCallReserve := ComputeDynamicReserveMicros(DynamicReserveInput{
+		DefaultReserveMicros: 50_000,
+		BillingMode:          "per_call",
+		PerCallMicros:        120_000,
+	})
+	if perCallReserve != 120_000 {
+		t.Fatalf("per_call 动态预扣应为 120000，实际 %d", perCallReserve)
+	}
+
+	// 2) 搭建带 HostSecrets + HostEvents 的 bufconn 宿主夹具，验证 $secret / $keep_secret 与 relay.alert。
+	lis := bufconn.Listen(256 << 10)
+	hostSrv := grpc.NewServer()
+	fakeHost := &fakeHostSecretsAndEvents{
+		secrets: map[string][]byte{
+			"sec-ch-1":     []byte(`"sk-upstream-revealed-1"`),
+			"sec-ld-1":     []byte("ld-revealed-secret"),
+			"sec-smtp-1":   []byte("smtp-revealed-pass"),
+			"sec-u-pass-1": []byte("PortalUserPass123!"),
+		},
+	}
+	pb.RegisterHostSecretsServiceServer(hostSrv, fakeHost)
+	pb.RegisterHostEventsServiceServer(hostSrv, fakeHost)
+	go func() { _ = hostSrv.Serve(lis) }()
+	t.Cleanup(func() {
+		hostSrv.Stop()
+		_ = lis.Close()
+	})
+
+	hostConn, err := grpc.NewClient("passthrough:///ai-relay-host",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("连接 fakeHost 失败: %v", err)
+	}
+	t.Cleanup(func() { _ = hostConn.Close() })
+
+	var sawSecret string
+	failUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawSecret = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer failUpstream.Close()
+
+	srv, err := pluginsdk.Serve(t.Context(), pluginsdk.Options{
+		Plugin:             &Plugin{maintenanceInterval: time.Hour},
+		Manifest:           Manifest(),
+		Registrar:          grpc.NewServer(),
+		Host:               hostConn,
+		DefaultGracePeriod: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("pluginsdk.Serve 失败: %v", err)
+	}
+	t.Cleanup(srv.Close)
+
+	rc := &pb.RequestContext{InstanceId: "default", NodeId: "local", Locale: "zh-CN"}
+	if _, err := srv.Initialize(t.Context(), &pb.InitializeRequest{
+		Context:        rc,
+		InstanceHandle: "ai-relay-sec-handle",
+		DataDir:        t.TempDir(),
+		ConfigJson:     []byte(`{"allow_private_upstream":true,"default_reserve_micros":50000}`),
+		ConfigRevision: "1",
+	}); err != nil {
+		t.Fatalf("Initialize 失败: %v", err)
+	}
+	if _, err := srv.Start(t.Context(), &pb.StartRequest{Context: rc}); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	if _, err := srv.Activate(t.Context(), &pb.ActivateRequest{Context: rc}); err != nil {
+		t.Fatalf("Activate 失败: %v", err)
+	}
+
+	// SecretField $secret 信封用于 settings.update / channels.upsert / users.create。
+	runRelayJob(t, srv, "relay.settings.update", map[string]any{
+		"site_title":            "Secret Relay",
+		"linuxdo_client_id":     "cid-sec",
+		"linuxdo_client_secret": map[string]any{"$secret": "sec-ld-1"},
+		"smtp": map[string]any{
+			"host":         "smtp.example.com",
+			"port":         587,
+			"username":     "mailer@example.com",
+			"password":     map[string]any{"$secret": "sec-smtp-1"},
+			"from_address": "mailer@example.com",
+		},
+	})
+
+	chProg := runRelayJob(t, srv, "relay.channels.upsert", map[string]any{
+		"name":       "Upstream-Secret",
+		"kind":       "openai_compatible",
+		"base_url":   failUpstream.URL,
+		"credential": map[string]any{"$secret": "sec-ch-1"},
+		"groups":     []string{"default"},
+		"models":     []string{"gpt-4o"},
+	})
+	var chOut struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(chProg.GetResultJson(), &chOut); err != nil || chOut.ID == "" {
+		t.Fatalf("channels.upsert($secret) 失败: %s", chProg.GetResultJson())
+	}
+
+	// 使用 $keep_secret 更新渠道名称，保留已落盘密文。
+	runRelayJob(t, srv, "relay.channels.upsert", map[string]any{
+		"id":         chOut.ID,
+		"name":       "Upstream-Secret-Renamed",
+		"kind":       "openai_compatible",
+		"base_url":   failUpstream.URL,
+		"credential": map[string]any{"$keep_secret": true},
+		"groups":     []string{"default"},
+		"models":     []string{"gpt-4o"},
+	})
+
+	runRelayJob(t, srv, "relay.users.create", map[string]any{
+		"username":    "bob_portal",
+		"password":    map[string]any{"$secret": "sec-u-pass-1"},
+		"group_name":  "default",
+		"init_micros": 5_000_000,
+	})
+
+	// 校验 portal.css 静态外链可正常返回。
+	cssResp, err := srv.ServePublicRoute(t.Context(), &pb.ServePublicRouteRequest{
+		Context: rc, Route: "portal", Method: http.MethodGet, Path: "/portal/portal.css",
+	})
+	if err != nil || cssResp.GetStatus() != http.StatusOK || !strings.Contains(string(cssResp.GetBody()), ".auth-box") {
+		t.Fatalf("/portal/portal.css 响应异常: status=%d err=%v", cssResp.GetStatus(), err)
+	}
+
+	// 登录并改用宿主转发的 X-QWQ-Relay-Token 请求 /portal/api/me。
+	loginResp, err := srv.ServePublicRoute(t.Context(), &pb.ServePublicRouteRequest{
+		Context: rc, Route: "portal", Method: http.MethodPost, Path: "/portal/api/auth/submit",
+		Body: []byte(`{"mode":"login","username":"bob_portal","password":"PortalUserPass123!"}`),
+	})
+	if err != nil || loginResp.GetStatus() != http.StatusOK {
+		t.Fatalf("portal login 失败: status=%d body=%s err=%v", loginResp.GetStatus(), loginResp.GetBody(), err)
+	}
+	var loginOut struct {
+		SessionToken string `json:"session_token"`
+	}
+	if err := json.Unmarshal(loginResp.GetBody(), &loginOut); err != nil || !strings.HasPrefix(loginOut.SessionToken, "rly_sess_") {
+		t.Fatalf("session_token 异常: %s", loginResp.GetBody())
+	}
+	relaySessHdr := []*pb.HttpHeader{{Name: "x-qwq-relay-token", Value: loginOut.SessionToken}}
+
+	// 签发子令牌（仅创建时返回一次明文）。
+	mintResp, err := srv.ServePublicRoute(t.Context(), &pb.ServePublicRouteRequest{
+		Context: rc, Route: "portal", Method: http.MethodPost, Path: "/portal/api/tokens", Headers: relaySessHdr,
+		Body: []byte(`{"name":"cursor-key","rpm_limit":30}`),
+	})
+	if err != nil || mintResp.GetStatus() != http.StatusOK {
+		t.Fatalf("mint token 失败: status=%d body=%s err=%v", mintResp.GetStatus(), mintResp.GetBody(), err)
+	}
+	var mintOut struct {
+		PlainKey string `json:"plain_key"`
+	}
+	if err := json.Unmarshal(mintResp.GetBody(), &mintOut); err != nil || !strings.HasPrefix(mintOut.PlainKey, "sk-qwq-") {
+		t.Fatalf("mint plain_key 异常: %s", mintResp.GetBody())
+	}
+
+	// 通过 X-QWQ-Relay-Token 访问 /portal/api/me：必须返回 200 且仅返回掩码前缀，绝不回显 plain_key。
+	meResp, err := srv.ServePublicRoute(t.Context(), &pb.ServePublicRouteRequest{
+		Context: rc, Route: "portal", Method: http.MethodGet, Path: "/portal/api/me", Headers: relaySessHdr,
+	})
+	if err != nil || meResp.GetStatus() != http.StatusOK {
+		t.Fatalf("使用 X-QWQ-Relay-Token 访问 /portal/api/me 应返回 200，实际 status=%d body=%s err=%v", meResp.GetStatus(), meResp.GetBody(), err)
+	}
+	if strings.Contains(string(meResp.GetBody()), mintOut.PlainKey) {
+		t.Fatalf("/portal/api/me 泄漏了完整子令牌明文: %s", meResp.GetBody())
+	}
+	var meOut struct {
+		Tokens []struct {
+			ID        string `json:"id"`
+			KeyMasked string `json:"key_masked"`
+			PlainKey  string `json:"plain_key"`
+		} `json:"tokens"`
+	}
+	if err := json.Unmarshal(meResp.GetBody(), &meOut); err != nil || len(meOut.Tokens) != 1 {
+		t.Fatalf("解析 /portal/api/me tokens 失败: %s", meResp.GetBody())
+	}
+	if !strings.HasSuffix(meOut.Tokens[0].KeyMasked, "****") || meOut.Tokens[0].PlainKey != "" {
+		t.Fatalf("子令牌脱敏格式不符: %+v", meOut.Tokens[0])
+	}
+
+	// 触发唯一上游返回 502：验证 $secret 真实解封为 Bearer sk-upstream-revealed-1，并触发熔断与 relay.alert 事件。
+	failResp, err := srv.ServePublicRoute(t.Context(), &pb.ServePublicRouteRequest{
+		Context: rc, Route: "v1", Method: http.MethodPost, Path: "/v1/chat/completions",
+		Headers: []*pb.HttpHeader{{Name: "x-qwq-relay-token", Value: mintOut.PlainKey}},
+		Body:    []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`),
+	})
+	if err != nil || failResp.GetStatus() != http.StatusBadGateway {
+		t.Fatalf("上游 502 应返回 502，实际 status=%d body=%s err=%v", failResp.GetStatus(), failResp.GetBody(), err)
+	}
+	if sawSecret != "Bearer sk-upstream-revealed-1" {
+		t.Fatalf("$secret/$keep_secret 上游凭据未正确生效，实际 Authorization=%q", sawSecret)
+	}
+	fakeHost.mu.Lock()
+	eventCount := len(fakeHost.events)
+	var firstEvtType string
+	if eventCount > 0 {
+		firstEvtType = fakeHost.events[0].GetType()
+	}
+	fakeHost.mu.Unlock()
+	if eventCount == 0 || firstEvtType != "relay.alert" {
+		t.Fatalf("全部上游 502 熔断后应发布 relay.alert 事件，实际 count=%d type=%q", eventCount, firstEvtType)
+	}
+
+	// 吊销子令牌：DELETE /portal/api/tokens/{id} 后再调 /v1/models 必须返回 401。
+	delResp, err := srv.ServePublicRoute(t.Context(), &pb.ServePublicRouteRequest{
+		Context: rc, Route: "portal", Method: http.MethodDelete, Path: "/portal/api/tokens/" + meOut.Tokens[0].ID, Headers: relaySessHdr,
+	})
+	if err != nil || delResp.GetStatus() != http.StatusOK {
+		t.Fatalf("DELETE /portal/api/tokens/{id} 失败: status=%d body=%s err=%v", delResp.GetStatus(), delResp.GetBody(), err)
+	}
+	afterRevoke, err := srv.ServePublicRoute(t.Context(), &pb.ServePublicRouteRequest{
+		Context: rc, Route: "v1", Method: http.MethodGet, Path: "/v1/models",
+		Headers: []*pb.HttpHeader{{Name: "x-qwq-relay-token", Value: mintOut.PlainKey}},
+	})
+	if err != nil || afterRevoke.GetStatus() != http.StatusUnauthorized {
+		t.Fatalf("吊销后的子令牌应返回 401，实际 status=%d err=%v", afterRevoke.GetStatus(), err)
+	}
+
+	// 退出登录：POST /portal/api/auth/logout 后再调 /portal/api/me 必须返回 401。
+	logoutResp, err := srv.ServePublicRoute(t.Context(), &pb.ServePublicRouteRequest{
+		Context: rc, Route: "portal", Method: http.MethodPost, Path: "/portal/api/auth/logout", Headers: relaySessHdr,
+	})
+	if err != nil || logoutResp.GetStatus() != http.StatusOK {
+		t.Fatalf("POST /portal/api/auth/logout 失败: status=%d body=%s err=%v", logoutResp.GetStatus(), logoutResp.GetBody(), err)
+	}
+	afterLogout, err := srv.ServePublicRoute(t.Context(), &pb.ServePublicRouteRequest{
+		Context: rc, Route: "portal", Method: http.MethodGet, Path: "/portal/api/me", Headers: relaySessHdr,
+	})
+	if err != nil || afterLogout.GetStatus() != http.StatusUnauthorized {
+		t.Fatalf("登出后的会话应返回 401，实际 status=%d err=%v", afterLogout.GetStatus(), err)
 	}
 }

@@ -48,3 +48,9 @@ CREATE TABLE IF NOT EXISTS notify_deliveries (
 
 CREATE INDEX IF NOT EXISTS idx_notify_deliveries_created ON notify_deliveries(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notify_deliveries_channel ON notify_deliveries(channel_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS notify_cooldowns (
+    cool_key TEXT PRIMARY KEY,
+    fired_at INTEGER NOT NULL
+) STRICT;
+

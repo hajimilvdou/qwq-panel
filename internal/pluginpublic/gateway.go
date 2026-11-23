@@ -32,28 +32,31 @@ const (
 )
 
 func (g *Gateway) buildThemeSandboxCSP(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	} else {
-		remote := extractRemoteIP(r.RemoteAddr)
-		if addr, err := netip.ParseAddr(remote); err == nil && g.isTrustedProxyIP(addr) {
-			if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
-				scheme = "https"
-			}
-		}
-	}
+	scheme := g.effectiveProto(r)
 	host := strings.TrimSpace(r.Host)
 	if host == "" || strings.ContainsAny(host, " \t\r\n;\"'<>\\") {
-		return "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob: https: http:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+		return "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
 	}
 	origin := scheme + "://" + host
 	return "sandbox allow-scripts; default-src 'none'; " +
 		"script-src " + origin + "; " +
 		"style-src 'unsafe-inline' " + origin + "; " +
-		"img-src data: blob: https: http:; " +
+		"img-src data: blob: " + origin + "; " +
 		"font-src data: " + origin + "; " +
 		"connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+}
+
+func (g *Gateway) effectiveProto(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	remote := extractRemoteIP(r.RemoteAddr)
+	if addr, err := netip.ParseAddr(remote); err == nil && g.isTrustedProxyIP(addr) {
+		if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+			return "https"
+		}
+	}
+	return "http"
 }
 
 type ctxFromCustomDomainKey struct{}
@@ -493,6 +496,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ClientIP:        clientIP,
 		RelayAuthBearer: safeToken,
 		ExtraHeaders: map[string]string{
+			"Host":                  r.Host,
+			"X-Forwarded-Proto":     g.effectiveProto(r),
+			"If-None-Match":         r.Header.Get("If-None-Match"),
 			"anthropic-version":     r.Header.Get("anthropic-version"),
 			"anthropic-beta":        r.Header.Get("anthropic-beta"),
 			"X-Session-ID":          r.Header.Get("X-Session-ID"),

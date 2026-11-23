@@ -29,9 +29,18 @@
     </section>
 
     <section data-pane="channels" class="card">
-      <h3>添加 / 更新通知渠道（密钥 AES-256-GCM 加密存储）</h3>
+      <div class="section-head">
+        <div>
+          <h3 id="ch-form-title">添加 / 更新通知渠道（密钥 AES-256-GCM 加密存储）</h3>
+          <div class="sub" id="ch-edit-hint" hidden>正在编辑既有渠道：敏感字段留空将自动保留原加密凭据。</div>
+        </div>
+        <button class="btn ghost" id="btn-ch-cancel" type="button" hidden>取消编辑</button>
+      </div>
+      <input id="ch-id" type="hidden" value="" />
       <div class="form-grid">
-        <label>渠道名称 <input id="ch-name" placeholder="如 运维主群 Telegram" /></label>
+        <label>渠道名称
+          <input id="ch-name" placeholder="如 运维主群 Telegram" autocomplete="off" />
+        </label>
         <label>通道类型
           <select id="ch-kind">
             <option value="telegram">Telegram Bot</option>
@@ -43,25 +52,101 @@
             <option value="smtp">SMTP 邮件</option>
           </select>
         </label>
-        <label>Webhook URL / SMTP 主机 <input id="ch-url" placeholder="https://... 或 smtp.example.com" /></label>
-        <label>Bot Token / 签名密钥 / SMTP 密码 <input id="ch-secret" type="password" placeholder="加密保存，留空保留原值" /></label>
-        <label>Chat ID / 收件邮箱 (逗号分隔) <input id="ch-target" placeholder="-100123456 或 ops@example.com" /></label>
+        <label class="checkbox-inline">
+          <input id="ch-enabled" type="checkbox" checked />
+          <span>启用该通知渠道</span>
+        </label>
       </div>
+
+      <!-- Telegram 专用字段 -->
+      <div id="fields-telegram" class="form-grid">
+        <label>Bot Token
+          <input id="tg-token" type="password" placeholder="123456:AAH...（留空保留原值）" autocomplete="new-password" />
+        </label>
+        <label>Chat ID
+          <input id="tg-chat" placeholder="如 -1001234567890" autocomplete="off" />
+        </label>
+        <label>Topic Thread ID（选填）
+          <input id="tg-thread" placeholder="群组话题 ID（选填）" autocomplete="off" />
+        </label>
+        <label>自定义 API Base（选填）
+          <input id="tg-api-base" placeholder="默认 https://api.telegram.org" autocomplete="off" />
+        </label>
+      </div>
+
+      <!-- Webhook / 飞书 / 钉钉 / 企微 / Discord 专用字段 -->
+      <div id="fields-webhook" class="form-grid" hidden>
+        <label>Webhook URL
+          <input id="wh-url" placeholder="https://...（编辑留空保留原 URL）" autocomplete="off" />
+        </label>
+        <label>签名密钥 Secret（选填）
+          <input id="wh-secret" type="password" placeholder="加密保存，留空保留原值" autocomplete="new-password" />
+        </label>
+      </div>
+
+      <!-- SMTP 完整专用字段 -->
+      <div id="fields-smtp" class="form-grid" hidden>
+        <label>SMTP 服务器主机 (smtp_host)
+          <input id="smtp-host" placeholder="如 smtp.example.com" autocomplete="off" />
+        </label>
+        <label>SMTP 端口 (smtp_port，常用 465 / 587)
+          <input id="smtp-port" type="number" min="1" max="65535" value="587" placeholder="465 或 587" />
+        </label>
+        <label>SMTP 认证账号 (smtp_user)
+          <input id="smtp-user" placeholder="如 alerts@example.com" autocomplete="off" />
+        </label>
+        <label>SMTP 密码 / 授权码 (smtp_pass)
+          <input id="smtp-pass" type="password" placeholder="加密保存，编辑留空保留原值" autocomplete="new-password" />
+        </label>
+        <label>发件人邮箱 (smtp_from)
+          <input id="smtp-from" placeholder="如 alerts@example.com" autocomplete="off" />
+        </label>
+        <label>收件人邮箱列表 (smtp_to，逗号分隔)
+          <input id="smtp-to" placeholder="ops@example.com, admin@example.com" autocomplete="off" />
+        </label>
+        <label class="checkbox-inline">
+          <input id="smtp-tls" type="checkbox" />
+          <span>启用隐式 TLS（端口 465 自动启用；587 自动协商 STARTTLS）</span>
+        </label>
+      </div>
+
       <div class="actions">
         <button class="btn" id="btn-save-ch" type="button">加密保存渠道</button>
         <button class="btn ghost" id="btn-refresh" type="button">刷新状态</button>
       </div>
-      <table>
-        <thead><tr><th>名称</th><th>类型</th><th>脱敏配置</th><th>最近状态</th><th>操作</th></tr></thead>
-        <tbody id="channels-tbody"></tbody>
-      </table>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>名称与状态</th>
+              <th>类型</th>
+              <th>脱敏配置</th>
+              <th>最近投递</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="channels-tbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section data-pane="rules" class="card" hidden>
-      <h3>告警路由、聚合冷却与静默时段</h3>
+      <div class="section-head">
+        <div>
+          <h3 id="rl-form-title">告警路由、聚合冷却与静默时段</h3>
+          <div class="sub" id="rl-edit-hint" hidden>正在编辑既有路由规则。</div>
+        </div>
+        <button class="btn ghost" id="btn-rl-cancel" type="button" hidden>取消编辑</button>
+      </div>
+      <input id="rl-id" type="hidden" value="" />
       <div class="form-grid">
-        <label>规则名称 <input id="rl-name" placeholder="如 探针与安全高危告警" /></label>
-        <label>来源匹配（支持 * 通配） <input id="rl-src" value="*" /></label>
+        <label>规则名称
+          <input id="rl-name" placeholder="如 探针与安全高危告警" autocomplete="off" />
+        </label>
+        <label>来源匹配（支持 * 通配）
+          <input id="rl-src" value="*" autocomplete="off" />
+        </label>
         <label>最低告警级别
           <select id="rl-sev">
             <option value="info">info 及以上</option>
@@ -69,25 +154,60 @@
             <option value="critical">仅 critical</option>
           </select>
         </label>
-        <label>目标渠道 ID（逗号分隔） <input id="rl-chs" placeholder="从渠道列表复制 nch_..." /></label>
-        <label>同事件冷却时间 (秒) <input id="rl-cool" type="number" value="300" min="0" max="86400" /></label>
-        <label>静默开始 (HH:MM) <input id="rl-qs" placeholder="如 23:00" /></label>
-        <label>静默结束 (HH:MM) <input id="rl-qe" placeholder="如 07:30" /></label>
-        <label>时区 <input id="rl-tz" value="Asia/Shanghai" /></label>
+        <label>同事件冷却时间 (秒)
+          <input id="rl-cool" type="number" value="300" min="0" max="86400" />
+        </label>
+        <label>静默开始 (HH:MM)
+          <input id="rl-qs" placeholder="如 23:00" autocomplete="off" />
+        </label>
+        <label>静默结束 (HH:MM)
+          <input id="rl-qe" placeholder="如 07:30" autocomplete="off" />
+        </label>
+        <label>时区
+          <input id="rl-tz" value="Asia/Shanghai" autocomplete="off" />
+        </label>
+        <label class="checkbox-inline">
+          <input id="rl-enabled" type="checkbox" checked />
+          <span>启用该路由规则</span>
+        </label>
+        <label class="checkbox-inline">
+          <input id="rl-bypass" type="checkbox" checked />
+          <span>允许 critical 级别穿透静默窗口</span>
+        </label>
       </div>
+
+      <div class="ch-picker-block">
+        <div class="picker-label">目标通知渠道（多选）</div>
+        <div id="rl-channels-box" class="ch-checkbox-grid"></div>
+      </div>
+
       <div class="actions">
         <button class="btn" id="btn-save-rl" type="button">保存路由规则</button>
       </div>
-      <table>
-        <thead><tr><th>规则名</th><th>来源</th><th>级别</th><th>冷却</th><th>静默窗口</th><th>操作</th></tr></thead>
-        <tbody id="rules-tbody"></tbody>
-      </table>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>规则名与状态</th>
+              <th>来源 / 级别</th>
+              <th>目标渠道</th>
+              <th>冷却</th>
+              <th>静默窗口</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="rules-tbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section data-pane="deliveries" class="card" hidden>
       <h3>模拟告警分发与投递审计</h3>
       <div class="form-grid">
-        <label>事件来源 <input id="dp-src" value="server.probe" /></label>
+        <label>事件来源
+          <input id="dp-src" value="server.probe" autocomplete="off" />
+        </label>
         <label>严重级别
           <select id="dp-sev">
             <option value="info">info</option>
@@ -95,16 +215,31 @@
             <option value="critical">critical</option>
           </select>
         </label>
-        <label>告警标题 <input id="dp-title" value="节点 CPU 负载告警演练" /></label>
-        <label>告警正文 <input id="dp-msg" value="节点 hk-edge-01 5 分钟负载达到 3.2，请核查。" /></label>
+        <label>告警标题
+          <input id="dp-title" value="节点 CPU 负载告警演练" autocomplete="off" />
+        </label>
+        <label>告警正文
+          <input id="dp-msg" value="节点 hk-edge-01 5 分钟负载达到 3.2，请核查。" autocomplete="off" />
+        </label>
       </div>
       <div class="actions">
         <button class="btn" id="btn-dispatch" type="button">触发演练分发</button>
       </div>
-      <table>
-        <thead><tr><th>来源</th><th>级别</th><th>标题</th><th>通道</th><th>结果</th><th>尝试</th></tr></thead>
-        <tbody id="deliveries-tbody"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>来源 / 级别</th>
+              <th>标题</th>
+              <th>通道</th>
+              <th>结果与失败原因</th>
+              <th>尝试</th>
+            </tr>
+          </thead>
+          <tbody id="deliveries-tbody"></tbody>
+        </table>
+      </div>
     </section>
   </main>
   <script src="./plugin.js"></script>

@@ -136,7 +136,17 @@ func (s *Service) Run(ctx context.Context, request sandbox.CapabilityRequest) (s
 		if err != nil {
 			return bridge.Failure("PORT_VERIFY_FAILED", "SSH 端口未能验证"), nil
 		}
-		return bridge.Pack(&sshdv1.VerifyPortResponse{Reachable: true, Banner: banner}), nil
+		hasExternal := false
+		if probe, ok := s.Runtime.(interface {
+			HasExternalConnection(context.Context, uint32) bool
+		}); ok {
+			hasExternal = probe.HasExternalConnection(ctx, query.Port)
+		}
+		return bridge.Pack(&sshdv1.VerifyPortResponse{
+			Reachable:             true,
+			Banner:                banner,
+			HasExternalConnection: hasExternal,
+		}), nil
 	case "sshd.write-dropin":
 		var tag map[string]json.RawMessage
 		var kind string

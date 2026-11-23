@@ -52,6 +52,26 @@ func (s prerequisiteConsumerSource) CurrentConsumer(ctx context.Context, origin 
 	if err != nil || !validPrerequisiteOrigin(origin) {
 		return hostauth.ConsumerFacts{}, prerequisiteConsumerDenied()
 	}
+	if want.PluginID != "core.xray" {
+		snapshot, err := c.readPluginConfiguration(ctx, want.PluginID, false)
+		if err != nil {
+			return hostauth.ConsumerFacts{}, err
+		}
+		defer clear(snapshot.config.Config)
+		if err := snapshot.requireCurrent(ctx, c); err != nil {
+			return hostauth.ConsumerFacts{}, err
+		}
+		rev := "0"
+		if snapshot.found {
+			rev = strconv.FormatInt(snapshot.config.Revision, 10)
+		}
+		return hostauth.ConsumerFacts{
+			Consumer:       want,
+			BindingRef:     want.ProfileID,
+			ConfigRevision: rev,
+			PluginVersion:  snapshot.version.Version,
+		}, nil
+	}
 	snapshot, err := c.readPrerequisiteConfiguration(ctx, want.PluginID)
 	if err != nil {
 		return hostauth.ConsumerFacts{}, err
@@ -90,9 +110,26 @@ func (s prerequisiteConsumerSource) CurrentConsumer(ctx context.Context, origin 
 
 func (c *Controller) prerequisiteConsumer(input certificates.Consumer) (certificates.Consumer, error) {
 	consumer, err := certificates.CanonicalConsumer(input)
-	if err != nil || c == nil || c.ops == nil || consumer.NodeID != c.ops.NodeID() || consumer.PluginID != "core.xray" ||
+	if err != nil || c == nil || c.ops == nil || consumer.NodeID != c.ops.NodeID() ||
 		consumer.Purpose == "panel.https" || !IsValidCertificateConsumerPurpose(consumer.Purpose) || !corev1.ValidID(consumer.ProfileID) {
 		return certificates.Consumer{}, prerequisiteConsumerDenied()
+	}
+	if _, supported := SupportedTLSConsumerPlugins[consumer.PluginID]; !supported {
+		return certificates.Consumer{}, prerequisiteConsumerDenied()
+	}
+	switch consumer.PluginID {
+	case "web.ingress":
+		if consumer.Purpose != "ingress.https" {
+			return certificates.Consumer{}, prerequisiteConsumerDenied()
+		}
+	case "server.probe":
+		if consumer.Purpose != "probe.https" {
+			return certificates.Consumer{}, prerequisiteConsumerDenied()
+		}
+	default:
+		if consumer.Purpose == "ingress.https" || consumer.Purpose == "probe.https" {
+			return certificates.Consumer{}, prerequisiteConsumerDenied()
+		}
 	}
 	// Core Intent v2 没有测试信任字段；只能返回真实契约允许的生产事实。
 	consumer.Test = false

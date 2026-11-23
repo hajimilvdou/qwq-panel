@@ -68,9 +68,9 @@ func TestInterruptedTransactionHasExplicitRecovery(t *testing.T) {
 		t.Fatal("stale recovery accepted")
 	}
 	mutation.ExpectedRevision = current.Revision
-	// 模拟 helper 退出后由新已授权 operation 接续；普通 COMMIT 仍不接受新 operation。
-	if result := portCall(t, s, r, "COMMIT_NEW", owned.TransactionRef, mutation.OperationID); result.Code != "PERMISSION_DENIED" {
-		t.Fatal("normal transaction binding was loosened")
+	// 跨插件或错误 TransactionRef 发起 COMMIT_NEW 仍必须拒绝；本插件实例则可通过 sshd.recover-dropin 恢复。
+	if result := portCallAs(t, s, r, "other.plugin", "default", "COMMIT_NEW", owned.TransactionRef, mutation.OperationID); result.Code != "PERMISSION_DENIED" {
+		t.Fatal("foreign transaction commit was accepted")
 	}
 	restarted := *s
 	if result := helperCall(t, &restarted, "security.basic", "sshd.recover-dropin", mutation); !result.OK {

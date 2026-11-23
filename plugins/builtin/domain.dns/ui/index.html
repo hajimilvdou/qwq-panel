@@ -5,19 +5,260 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DNS 托管</title>
+  <link rel="stylesheet" href="plugin.css">
   <script src="dns.js" defer></script>
 </head>
 <body>
 <main id="dns-app">
-  <header>
-    <h1>DNS 托管与解析校验</h1>
-    <p id="status" role="status">正在连接宿主...</p>
+  <header class="head">
+    <div>
+      <h1>DNS 托管与解析校验</h1>
+      <p class="muted" id="summary-sub">凭据由宿主加密托管，插件仅接收最小权限公开元数据</p>
+    </div>
+    <div class="status-row">
+      <span class="badge" id="status" role="status">正在连接宿主…</span>
+      <button id="refresh-all" type="button" class="btn">刷新全部</button>
+    </div>
   </header>
-  <section aria-label="提供商概览">
-    <p>已启用提供商：<strong id="enabled-count">—</strong> / <span id="total-count">—</span></p>
-    <p>已发现托管域：<strong id="zone-count">—</strong></p>
-    <p id="summary-sub">等待宿主摘要同步</p>
-    <button id="refresh" type="button">刷新摘要</button>
+
+  <div id="notice-bar" class="banner" hidden></div>
+
+  <section class="kpi-grid" aria-label="提供商概览">
+    <article class="kpi-card">
+      <span class="muted">已启用服务商</span>
+      <strong id="enabled-count">—</strong>
+    </article>
+    <article class="kpi-card">
+      <span class="muted">已登记服务商总数</span>
+      <strong id="total-count">—</strong>
+    </article>
+    <article class="kpi-card">
+      <span class="muted">已发现托管域 (Zones)</span>
+      <strong id="zone-count">—</strong>
+    </article>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="DNS 管理分区">
+    <button type="button" class="tab" role="tab" data-tab="providers" aria-selected="true">DNS 服务商凭据</button>
+    <button type="button" class="tab" role="tab" data-tab="zones" aria-selected="false">托管域名区域 (Zones)</button>
+    <button type="button" class="tab" role="tab" data-tab="records" aria-selected="false">解析记录与传播预检</button>
+  </nav>
+
+  <!-- Tab 1: DNS 服务商凭据 -->
+  <section id="tab-providers" class="stack">
+    <article class="card">
+      <div class="card-head">
+        <div>
+          <h2>已登记 DNS 服务商</h2>
+          <p class="muted">支持 Cloudflare API Token 与阿里云 DNS AccessKey，明文密钥由宿主提前提取保护。</p>
+        </div>
+        <div class="actions-row">
+          <button type="button" class="btn" id="reload-providers-btn">同步服务商</button>
+          <button type="button" class="btn primary" id="open-register-btn">+ 添加服务商</button>
+        </div>
+      </div>
+
+      <div id="register-modal" class="modal-card" hidden>
+        <div class="card-head">
+          <h3>登记 DNS 服务商凭据</h3>
+          <button type="button" class="btn sm" id="close-register-btn">收起</button>
+        </div>
+        <div class="form-grid">
+          <label class="field">
+            <span>服务商 ID (唯一标识)</span>
+            <input id="reg-provider-id" type="text" placeholder="如 cf-primary 或 aliyun-cn">
+          </label>
+          <label class="field">
+            <span>服务商类型</span>
+            <select id="reg-kind">
+              <option value="cloudflare">Cloudflare (API Token)</option>
+              <option value="aliyun">阿里云 DNS (AccessKey)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>显示名称</span>
+            <input id="reg-name" type="text" placeholder="如 主力 Cloudflare 账号">
+          </label>
+        </div>
+        <div id="cred-cloudflare" class="form-grid">
+          <label class="field">
+            <span>Cloudflare API Token (Zone:Read + DNS:Edit)</span>
+            <input id="reg-cf-token" type="password" autocomplete="off" placeholder="粘贴最小权限 API Token">
+          </label>
+        </div>
+        <div id="cred-aliyun" class="form-grid" hidden>
+          <label class="field">
+            <span>阿里云 AccessKey ID</span>
+            <input id="reg-ali-id" type="text" autocomplete="off" placeholder="LTAI5t...">
+          </label>
+          <label class="field">
+            <span>阿里云 AccessKey Secret</span>
+            <input id="reg-ali-secret" type="password" autocomplete="off" placeholder="粘贴 AccessKey Secret">
+          </label>
+        </div>
+        <div class="actions-row">
+          <button type="button" class="btn primary" id="submit-register-btn">保存并校验凭据</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>名称</th>
+              <th>类型</th>
+              <th>状态</th>
+              <th>托管域数</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="providers-tbody">
+            <tr><td colspan="6" class="muted">等待加载服务商列表…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+  </section>
+
+  <!-- Tab 2: 托管域名区域 (Zones) -->
+  <section id="tab-zones" class="stack" hidden>
+    <article class="card">
+      <div class="card-head">
+        <div>
+          <h2>托管域名区域 (Zones) 发现与授权</h2>
+          <p class="muted">仅对明确授权的 Zone 开放记录变更与 ACME DNS-01 挑战能力，未授权域保持隔离。</p>
+        </div>
+        <div class="actions-row">
+          <select id="zone-provider-select" aria-label="选择 DNS 服务商"></select>
+          <button type="button" class="btn primary" id="discover-zones-btn">发现远端域名</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>域名 (Zone)</th>
+              <th>Zone ID</th>
+              <th>授权状态</th>
+              <th>版本</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="zones-tbody">
+            <tr><td colspan="5" class="muted">请先选择服务商并点击「发现远端域名」</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+  </section>
+
+  <!-- Tab 3: 解析记录与传播预检 -->
+  <section id="tab-records" class="stack" hidden>
+    <article class="card">
+      <div class="card-head">
+        <div>
+          <h2>受管 Zone 解析记录</h2>
+          <p class="muted" id="records-rev-hint">选择已授权托管域后加载快照，支持 A / AAAA / CNAME / TXT 乐观锁变更。</p>
+        </div>
+        <div class="actions-row">
+          <select id="rec-zone-select" aria-label="选择已授权 Zone"></select>
+          <button type="button" class="btn primary" id="load-records-btn">加载记录</button>
+        </div>
+      </div>
+
+      <div class="modal-card">
+        <div class="card-head">
+          <h3 id="rec-form-title">新增解析记录</h3>
+          <button type="button" class="btn sm" id="rec-reset-btn" hidden>取消编辑</button>
+        </div>
+        <input id="rec-edit-id" type="hidden" value="">
+        <input id="rec-edit-rev" type="hidden" value="">
+        <div class="form-grid">
+          <label class="field">
+            <span>记录类型</span>
+            <select id="rec-type">
+              <option value="A">A</option>
+              <option value="AAAA">AAAA</option>
+              <option value="CNAME">CNAME</option>
+              <option value="TXT">TXT</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>完整域名 (FQDN)</span>
+            <input id="rec-name" type="text" placeholder="如 app.example.com">
+          </label>
+          <label class="field">
+            <span>记录目标值</span>
+            <input id="rec-value" type="text" placeholder="如 198.51.100.10">
+          </label>
+          <label class="field">
+            <span>TTL (秒，0=默认)</span>
+            <input id="rec-ttl" type="number" min="0" max="86400" value="300">
+          </label>
+          <label class="field field-check">
+            <input id="rec-proxied" type="checkbox">
+            <span>Cloudflare 橙云代理</span>
+          </label>
+        </div>
+        <div class="actions-row">
+          <button type="button" class="btn primary" id="rec-submit-btn">提交记录变更</button>
+          <input id="rec-attempt-id" type="text" placeholder="上次 attempt_id（对账用）">
+          <button type="button" class="btn" id="rec-reconcile-btn">对账未确认尝试 (Reconcile)</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>类型</th>
+              <th>域名</th>
+              <th>记录值</th>
+              <th>TTL</th>
+              <th>标记</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="records-tbody">
+            <tr><td colspan="6" class="muted">请选择已授权 Zone 并加载记录</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="card-head">
+        <div>
+          <h2>DNS 传播与权威/公共解析预检 (dns.check)</h2>
+          <p class="muted">并行观测权威 NS、公共递归解析器及 CAA 约束，确认记录已全网传播生效。</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label class="field">
+          <span>待校验完整域名</span>
+          <input id="chk-name" type="text" placeholder="如 app.example.com">
+        </label>
+        <label class="field">
+          <span>记录类型</span>
+          <select id="chk-type">
+            <option value="A">A</option>
+            <option value="AAAA">AAAA</option>
+            <option value="CNAME">CNAME</option>
+            <option value="TXT">TXT</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>期望观测值</span>
+          <input id="chk-value" type="text" placeholder="如 198.51.100.10">
+        </label>
+      </div>
+      <div class="actions-row">
+        <button type="button" class="btn primary" id="run-check-btn">执行传播预检</button>
+        <span id="chk-summary" class="muted"></span>
+      </div>
+      <div id="chk-observations" class="obs-list"></div>
+    </article>
   </section>
 </main>
 </body>

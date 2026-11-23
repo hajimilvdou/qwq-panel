@@ -494,7 +494,7 @@ func TestNodesEncryptionRedactionMultiProfileSyncAndBrutalPPV2(t *testing.T) {
 	}
 	var profiles []any
 	for _, n := range managed {
-		prof, ok := buildCoreV2ProfileFromNode(n, activeUsers)
+		prof, ok := buildCoreV2ProfileFromNodeWithSlots(n, activeUsers, nil)
 		if !ok {
 			t.Fatalf("构建 profile 失败: %+v", n)
 		}

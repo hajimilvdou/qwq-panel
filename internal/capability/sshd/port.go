@@ -69,7 +69,7 @@ func (s *Service) save(transaction *transactionRecord) error {
 }
 
 func (s *Service) setPort(ctx context.Context, pluginID string, mutation PortMutation) sandbox.CapabilityResponse {
-	if mutation.Kind != "port" || !validRevision(mutation.ExpectedRevision) || mutation.NewPort == 0 || mutation.NewPort > 65535 || !validOperationID(mutation.OperationID) || sandbox.ValidateID(mutation.InstanceID) != nil || (mutation.Stage != "ADD_NEW" && mutation.Stage != "COMMIT_NEW" && mutation.Stage != "ROLLBACK") {
+	if mutation.Kind != "port" || !validRevision(mutation.ExpectedRevision) || mutation.NewPort == 0 || mutation.NewPort > 65535 || !validPortMutationOperationID(mutation.Stage, mutation.OperationID) || sandbox.ValidateID(mutation.InstanceID) != nil || (mutation.Stage != "ADD_NEW" && mutation.Stage != "COMMIT_NEW" && mutation.Stage != "ROLLBACK") {
 		return bridge.Failure("VALIDATION_FAILED", "端口事务参数无效")
 	}
 	before, err := s.Repository.Read(ctx, Match{})
@@ -144,7 +144,16 @@ func (s *Service) setPort(ctx context.Context, pluginID string, mutation PortMut
 		}
 		transaction = &transactionRecord{Kind: "port", Reference: hex.EncodeToString(nonce[:]), PluginID: pluginID, InstanceID: mutation.InstanceID, OperationID: mutation.OperationID, NewPort: mutation.NewPort, Before: slices.Clone(before.Content), BeforePorts: slices.Clone(before.Ports), ExternalRevision: before.ExternalRevision, OriginalRevision: before.Revision, CreatedAt: s.now()}
 	} else {
-		if transaction == nil || transaction.Kind != "port" || mutation.TransactionRef != transaction.Reference || transaction.PluginID != pluginID || transaction.InstanceID != mutation.InstanceID || transaction.OperationID != mutation.OperationID || transaction.NewPort != mutation.NewPort {
+		if transaction == nil || !VerifyPortTransactionContinuation(PortTransactionIdentity{
+			Kind:           transaction.Kind,
+			Reference:      transaction.Reference,
+			PluginID:       transaction.PluginID,
+			InstanceID:     transaction.InstanceID,
+			NewPort:        transaction.NewPort,
+			CurrentOpID:    mutation.OperationID,
+			CandidateRef:   mutation.TransactionRef,
+			CandidateStage: mutation.Stage,
+		}, pluginID, mutation.InstanceID, mutation.NewPort) {
 			return bridge.Failure("PERMISSION_DENIED", "事务与当前派发身份不匹配")
 		}
 		if before.ExternalRevision != transaction.ExternalRevision || (before.Revision != transaction.AppliedRevision && before.Revision != transaction.ExpectedRevision) {
@@ -161,6 +170,7 @@ func (s *Service) setPort(ctx context.Context, pluginID string, mutation PortMut
 			if err := s.Runtime.RequireSSHPort(ctx, mutation.NewPort); err != nil {
 				return bridge.Failure("PRECONDITION_FAILED", "防火墙尚未确认放行新 SSH 端口，请先更新保留端口；旧入口保持可用")
 			}
+			transaction.OperationID = mutation.OperationID
 			policy.Ports = []uint32{mutation.NewPort}
 		} else {
 			return s.rollbackPort(ctx, before, transaction)

@@ -21,23 +21,27 @@
     "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "attestations/sbom.spdx.json": "sha256:aa94fcbc643101bdeab31233077031406c2c828732a143fccacd71af8a5ce5c9",
     "schemas/checks.response.json": "sha256:ddafab2ab01b1da2df7e66256923fd59c988ed77c39b619f188131dc05fda94a",
-    "schemas/config.schema.json": "sha256:eb74716fdbc9db1adba548ba568eb62becde618aea56094c43d8cf733b934961",
+    "schemas/config.schema.json": "sha256:510d65d2dc9d794c6d529a1795435071787b0c6510d08e638a50ee224e96235a",
     "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
     "schemas/ingress.ai.digest.response.json": "sha256:be84e8a37b1d3a95d24b9e7082be1f9107029708308c13dbc8c36d534aee3ed3",
     "schemas/ingress.apply.response.json": "sha256:11bee6ba0691dfe9fdacfa04374436781f748926bae62c05f5e18596fb5bf4b8",
     "schemas/ingress.delete.response.json": "sha256:d6b9084de92a9a5640506e09e8395dbfafcee62232d781e1856b112b65f17d75",
     "schemas/ingress.id.request.json": "sha256:94b6382be7e0bb471952ea5e274d039c44640acecec4fcfd8dd7c05421e476f8",
-    "schemas/ingress.overview.response.json": "sha256:d1ad1b7a9b4f6fe3673c0683db84e3371a8ac058c1b81aaef6338bb87b5652ff",
+    "schemas/ingress.overview.response.json": "sha256:de6c7737021f3f3c5acd13479c69db7b71f5174b4fb6507735e03942975eabee",
     "schemas/ingress.preview.response.json": "sha256:f247034a24b87f9962104530bc2df26cf3926cbb0a6011e97ffec6d90548c5bb",
     "schemas/ingress.probe.response.json": "sha256:bc95a60b106021a3c6b2fc147a5673e4fadeeb7d6d09260a7ad5064b16428d61",
     "schemas/ingress.rollback.request.json": "sha256:80dcf9217bac3de74eab49ca5123de9a6e4d61c27f4a0534db72db9df651e751",
     "schemas/ingress.rollback.response.json": "sha256:d9900ac8896c77504a37d9415da78438a09b53438a1102cf33c7718270862966",
     "schemas/ingress.site.upsert.request.json": "sha256:2e4e22af300e8a5724899959c5f81562614e0dc859cd26c35af246be2a05a177",
     "schemas/ingress.site.upsert.response.json": "sha256:f2c9aa101c91475109f593a3ca606c531c63d5d6c7a304ae45a602c41faa6738",
+    "schemas/ingress.tls.inspect.request.json": "sha256:7c2c7187cf096c3a1f016dc854d110ccabec39c9d254a3d9e2756c2c412a5a7b",
+    "schemas/ingress.tls.inspect.response.json": "sha256:eceedced80fbbcb25df8fa534bc2f7117a0eeeea8ef2a8e1ba9600bd44c09171",
+    "schemas/ingress.tls.reload.request.json": "sha256:c061616ede3019520ea5d52ab2e12d54322edf4de860749d00c729b1f5128750",
+    "schemas/ingress.tls.reload.response.json": "sha256:eceedced80fbbcb25df8fa534bc2f7117a0eeeea8ef2a8e1ba9600bd44c09171",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
-    "ui/index.html": "sha256:001a95fcceb801e873c5efcc237c6e884e33b03411e040b73098f027a94424fc",
-    "ui/plugin.css": "sha256:4061996f5b44cfa5250b771c4b172ddafea3b0c1aa0887f9910be81c2935951f",
-    "ui/plugin.js": "sha256:bf10304e8bbbcfcdbf9bb9679f811d24ba5df76f8a5f194592914ff549ad365c"
+    "ui/index.html": "sha256:4f6116dedbb452b6eb46caf80b823afa50d697a7a5868ae5376afac5551619f8",
+    "ui/plugin.css": "sha256:6bb45daa9effa8be17b391586c9eb4b8f2a7f6aeb81907ad0d3a7203a197114e",
+    "ui/plugin.js": "sha256:7d742f1a9279f59b23a797a87c249afad4b94e2b6258520383bab2a1dbc38ab2"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -265,6 +269,49 @@
       ],
       "request_schema": "schemas/ingress.id.request.json",
       "response_schema": "schemas/ingress.probe.response.json"
+    },
+    {
+      "name": "ingress.tls.reload",
+      "api_version": "v2",
+      "permission": "web.ingress:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "approval": "auto",
+      "summary": "从插件私有物化目录核验摘要并原子热重载 SNI TLS 证书",
+      "capabilities": [
+        {
+          "name": "network.listen",
+          "scope": "ingress"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/ingress.tls.reload.request.json",
+      "response_schema": "schemas/ingress.tls.reload.response.json"
+    },
+    {
+      "name": "ingress.tls.inspect",
+      "api_version": "v2",
+      "permission": "web.ingress:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "只读观测指定 TLS 绑定在内置反代 SNI 缓存中的代际与监听状态",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/ingress.tls.inspect.request.json",
+      "response_schema": "schemas/ingress.tls.inspect.response.json"
     }
   ],
   "capabilities": [

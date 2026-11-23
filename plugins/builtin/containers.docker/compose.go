@@ -47,131 +47,9 @@ func validateStackName(name string) (string, error) {
 	return name, nil
 }
 
-// analyzeComposeYAML 执行静态安全校验：强阻断 include / 越界 env_file / 根目录挂载 / privileged: true，
-// 并对宿主机网络/PID/docker.sock 等中高危项生成审批预警，供审批卡与 AI 清晰呈现风险。
+// analyzeComposeYAML 使用结构化缩进状态机执行严格 Compose YAML 安全校验。
 func analyzeComposeYAML(raw string) ([]string, error) {
-	if len(raw) == 0 || len(raw) > maxComposeYAMLBytes {
-		return nil, fmt.Errorf("compose_yaml 不能为空且不得超过 %d 字节", maxComposeYAMLBytes)
-	}
-	if strings.ContainsRune(raw, '\x00') {
-		return nil, errors.New("compose_yaml 不得包含 NUL 字节")
-	}
-	hasServices := false
-	inEnvFileBlock := false
-	envFileIndent := 0
-	warnings := make([]string, 0)
-	lines := strings.Split(raw, "\n")
-	for _, ln := range lines {
-		trimmed := strings.TrimSpace(ln)
-		if strings.HasPrefix(trimmed, "#") || trimmed == "" {
-			continue
-		}
-		indent := len(ln) - len(strings.TrimLeft(ln, " \t"))
-		if strings.HasPrefix(ln, "services:") {
-			hasServices = true
-		}
-		low := strings.ToLower(strings.Join(strings.Fields(trimmed), " "))
-		lowUnquoted := strings.NewReplacer(`"`, "", `'`, "").Replace(low)
-
-		// 1. 强阻断 include:（防止跨目录引用宿主机任意 compose / 敏感文件）
-		if strings.HasPrefix(lowUnquoted, "include:") {
-			return nil, errors.New("出于安全限制，禁止在 compose_yaml 中使用 include: 指令")
-		}
-
-		// 2. 强阻断越界 env_file:（禁止绝对路径或含 .. 跳出栈工作目录）
-		if inEnvFileBlock {
-			if indent <= envFileIndent && !strings.HasPrefix(trimmed, "-") {
-				inEnvFileBlock = false
-			} else if strings.HasPrefix(trimmed, "-") || strings.HasPrefix(lowUnquoted, "path:") {
-				val := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(trimmed, "-"), "path:"))
-				val = strings.Trim(val, `"' `)
-				if isOutOfBoundsEnvFile(val) {
-					return nil, fmt.Errorf("禁止越界 env_file 路径 %q（仅允许当前栈目录内相对路径）", val)
-				}
-			}
-		}
-		if strings.HasPrefix(lowUnquoted, "env_file:") {
-			rest := strings.TrimSpace(trimmed[len("env_file:"):])
-			if rest == "" {
-				inEnvFileBlock = true
-				envFileIndent = indent
-			} else {
-				rest = strings.Trim(rest, `[]"' `)
-				for _, item := range strings.Split(rest, ",") {
-					p := strings.Trim(strings.TrimSpace(item), `"'`)
-					if p != "" && isOutOfBoundsEnvFile(p) {
-						return nil, fmt.Errorf("禁止越界 env_file 路径 %q（仅允许当前栈目录内相对路径）", p)
-					}
-				}
-			}
-		}
-
-		// 3. 强阻断 privileged: true（特权容器等同宿主机 root 逃逸）
-		if strings.Contains(lowUnquoted, "privileged: true") || strings.Contains(lowUnquoted, "privileged:true") {
-			return nil, errors.New("出于安全限制，禁止部署 privileged: true 特权容器")
-		}
-
-		// 4. 强阻断宿主机根目录 / 挂载（含短语法 - /:/... 与长语法 source: /）
-		if isRootBindMount(lowUnquoted) {
-			return nil, errors.New("出于安全限制，禁止将宿主机根目录 / 挂载至容器内")
-		}
-
-		if strings.Contains(lowUnquoted, "network_mode: host") {
-			warnings = appendUnique(warnings, "检测到 network_mode: host（容器将共享宿主机网络命名空间）")
-		}
-		if strings.Contains(lowUnquoted, "pid: host") {
-			warnings = appendUnique(warnings, "检测到 pid: host（容器将可见并可干扰宿主机进程空间）")
-		}
-		if strings.Contains(lowUnquoted, "sys_admin") {
-			warnings = appendUnique(warnings, "检测到 CAP_SYS_ADMIN 能力（接近特权容器权限）")
-		}
-		if strings.Contains(lowUnquoted, "/var/run/docker.sock") {
-			warnings = appendUnique(warnings, "检测到挂载 /var/run/docker.sock（等同宿主机容器控制权）")
-		}
-	}
-	if !hasServices {
-		return nil, errors.New("compose_yaml 缺少顶层 services: 定义")
-	}
-	return warnings, nil
-}
-
-func isOutOfBoundsEnvFile(p string) bool {
-	if p == "" {
-		return false
-	}
-	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") || strings.Contains(p, "..") || strings.Contains(p, `\`) {
-		return true
-	}
-	cleaned := filepath.ToSlash(filepath.Clean(p))
-	return strings.HasPrefix(cleaned, "/") || cleaned == ".." || strings.HasPrefix(cleaned, "../")
-}
-
-func isRootBindMount(lowUnquoted string) bool {
-	if strings.HasPrefix(lowUnquoted, "- /:/") || strings.Contains(lowUnquoted, " - /:/") {
-		return true
-	}
-	if lowUnquoted == "source: /" || strings.HasPrefix(lowUnquoted, "source: / ") {
-		return true
-	}
-	if strings.HasPrefix(lowUnquoted, "- ") {
-		spec := strings.TrimSpace(strings.TrimPrefix(lowUnquoted, "- "))
-		if idx := strings.IndexByte(spec, ':'); idx > 0 {
-			src := strings.TrimSpace(spec[:idx])
-			if src == "/" || strings.TrimRight(src, "/") == "" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func appendUnique(list []string, v string) []string {
-	for _, item := range list {
-		if item == v {
-			return list
-		}
-	}
-	return append(list, v)
+	return ValidateComposeYAMLStrict(raw)
 }
 
 func detectComposeCmd() (string, []string) {
@@ -285,7 +163,7 @@ func (s *stackStore) listStacks(ctx context.Context) ([]ComposeStack, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT name, work_dir, status, warnings_json, last_error, revision, created_at, updated_at
+		`SELECT name, compose_yaml, work_dir, status, warnings_json, last_error, revision, created_at, updated_at
 		 FROM compose_stacks ORDER BY name ASC`)
 	if err != nil {
 		return nil, err
@@ -295,7 +173,7 @@ func (s *stackStore) listStacks(ctx context.Context) ([]ComposeStack, error) {
 	for rows.Next() {
 		var st ComposeStack
 		var warnRaw string
-		if err := rows.Scan(&st.Name, &st.WorkDir, &st.Status, &warnRaw, &st.LastError, &st.Revision, &st.CreatedAt, &st.UpdatedAt); err != nil {
+		if err := rows.Scan(&st.Name, &st.ComposeYAML, &st.WorkDir, &st.Status, &warnRaw, &st.LastError, &st.Revision, &st.CreatedAt, &st.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(warnRaw), &st.Warnings)

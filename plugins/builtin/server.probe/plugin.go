@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"strings"
@@ -66,15 +67,16 @@ func resolveProbeSecretOrPlain(ctx context.Context, host *pluginsdk.Host, field 
 
 type instance struct {
 	*pluginsdk.InstanceBase
-	cfgMu   sync.RWMutex
-	cfg     probeConfig
-	store   *ProbeStore
-	domains *DomainBindingCoordinator
-	ai      *AINativeController
-	portal  *PortalGateway
+	cfgMu        sync.RWMutex
+	cfg          probeConfig
+	store        *ProbeStore
+	domains      *DomainBindingCoordinator
+	ai           *AINativeController
+	portal       *PortalGateway
+	publishAlert func(context.Context, pluginsdk.EventDraft) error
 }
 
-func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pluginsdk.Instance, error) {
+func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (pluginsdk.Instance, error) {
 	cfg := probeConfig{
 		CollectLocalHost:    true,
 		LocalNodeName:       "本机主控节点",
@@ -116,22 +118,35 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 	}
 
 	base := pluginsdk.NewInstanceBase(info)
-	domains := NewDomainBindingCoordinator(info.DataDir, []byte(info.ID), nil, func() HostDNCCapabilities {
+	sealingSecret, err := LoadOrCreateProbeSealingSecret(info.DataDir)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	domains := NewDomainBindingCoordinator(info.DataDir, sealingSecret, nil, func() HostDNCCapabilities {
 		return HostDNCCapabilities{
 			RunningInPanel:          true,
 			DomainDNSPluginReady:    false,
 			CertificatesPluginReady: false,
 		}
 	})
+	clear(sealingSecret)
 	store.mu.RLock()
 	loadedSettings := store.settings
 	store.mu.RUnlock()
 	_ = domains.ReloadSealedBundle(time.Now(), loadedSettings)
 
+	initialAdminPwd := ""
+	if cfg.StandaloneAdminPassword.Plain != "" || cfg.StandaloneAdminPassword.SecretRef != "" {
+		if resolved, rerr := resolveProbeSecretOrPlain(ctx, base.Host(), cfg.StandaloneAdminPassword, "standalone_admin_password"); rerr == nil {
+			initialAdminPwd = resolved
+		}
+	}
+
 	aiCtrl := NewAINativeController(store, domains)
-	portal := NewPortalGateway(store, domains, aiCtrl, cfg.StandaloneAdminPassword.Plain, time.Now)
-	if cfg.StandaloneAdminPassword.Plain != "" && loadedSettings.StandaloneAdminVerifier == "" {
-		if verifier, vErr := EncodeAdminVerifier(cfg.StandaloneAdminPassword.Plain); vErr == nil {
+	portal := NewPortalGateway(store, domains, aiCtrl, initialAdminPwd, time.Now)
+	if initialAdminPwd != "" && loadedSettings.StandaloneAdminVerifier == "" {
+		if verifier, vErr := EncodeAdminVerifier(initialAdminPwd); vErr == nil {
 			store.mu.Lock()
 			store.settings.StandaloneAdminVerifier = verifier
 			saved := store.settings
@@ -148,6 +163,14 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 		domains:      domains,
 		ai:           aiCtrl,
 		portal:       portal,
+	}
+	inst.publishAlert = func(pctx context.Context, draft pluginsdk.EventDraft) error {
+		host := inst.Host()
+		if host == nil || host.Conn() == nil {
+			return nil
+		}
+		_, err := host.PublishEvent(pctx, draft)
+		return err
 	}
 	inst.registerOperations()
 	return inst, nil
@@ -189,17 +212,23 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 		i.cfgMu.Lock()
 		i.cfg = next
 		i.cfgMu.Unlock()
-		if next.StandaloneAdminPassword.Plain != "" {
-			verifier, err := EncodeAdminVerifier(next.StandaloneAdminPassword.Plain)
+		if next.StandaloneAdminPassword.Plain != "" || next.StandaloneAdminPassword.SecretRef != "" {
+			pwd, err := resolveProbeSecretOrPlain(ctx, i.Host(), next.StandaloneAdminPassword, "standalone_admin_password")
 			if err != nil {
-				return pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
+				return pluginsdk.Errorf("SECRET_REVEAL_FAILED", "读取独立管理口令失败: %v", err)
 			}
-			i.store.mu.Lock()
-			i.store.settings.StandaloneAdminVerifier = verifier
-			saved := i.store.settings
-			i.store.mu.Unlock()
-			i.portal.SetAdminVerifier(verifier)
-			_ = i.store.PersistSettings(ctx, saved)
+			if pwd != "" {
+				verifier, err := EncodeAdminVerifier(pwd)
+				if err != nil {
+					return pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
+				}
+				i.store.mu.Lock()
+				i.store.settings.StandaloneAdminVerifier = verifier
+				saved := i.store.settings
+				i.store.mu.Unlock()
+				i.portal.SetAdminVerifier(verifier)
+				_ = i.store.PersistSettings(ctx, saved)
+			}
 		}
 	}
 	return nil
@@ -254,15 +283,118 @@ func (i *instance) backgroundLoop(ctx context.Context) {
 			cancel()
 			return
 		case <-sampleTicker.C:
+			now := time.Now()
 			i.cfgMu.RLock()
 			collectLocal := i.cfg.CollectLocalHost
 			i.cfgMu.RUnlock()
 			if collectLocal {
 				prevSnap = i.sampleLocalHostOnce(ctx, prevSnap)
 			}
+			i.evaluateLivenessAndPublishAlerts(ctx, now, 2)
+			i.runDueServiceChecks(ctx, now)
 		case <-flushTicker.C:
 			_ = i.store.FlushPeriodic(ctx, time.Now())
 		}
+	}
+}
+
+func (i *instance) evaluateLivenessAndPublishAlerts(ctx context.Context, now time.Time, tickSeconds int64) []OfflineTransition {
+	i.store.mu.RLock()
+	snaps := make([]NodeLivenessSnapshot, 0, len(i.store.nodes))
+	for _, n := range i.store.nodes {
+		snaps = append(snaps, NodeLivenessSnapshot{
+			ID:                n.ID,
+			Name:              n.Name,
+			RegionCode:        n.RegionCode,
+			IsLocal:           n.IsLocal,
+			ReportIntervalSec: n.ReportInterval,
+			LastSeenUnix:      n.LastSeenAt,
+			CurrentState:      n.OnlineState,
+		})
+	}
+	i.store.mu.RUnlock()
+
+	dayUTC := now.UTC().Format("2006-01-02")
+	transitions := EvaluateNodeLiveness(
+		now,
+		tickSeconds,
+		snaps,
+		func(nodeID string, up bool, deltaSec int64) {
+			i.store.mu.Lock()
+			recordDailyCheckWithDeltaLocked(i.store.sla90d, nodeID, dayUTC, up, uint32(max(deltaSec, 1)), 0)
+			i.store.mu.Unlock()
+		},
+		func(nodeID, nextState string) {
+			i.store.mu.Lock()
+			var updated *NodeRecord
+			if n, ok := i.store.nodes[nodeID]; ok {
+				n.OnlineState = nextState
+				cp := *n
+				updated = &cp
+			}
+			i.store.mu.Unlock()
+			if updated != nil {
+				_ = i.store.PersistNode(ctx, updated)
+			}
+		},
+	)
+
+	if i.publishAlert != nil {
+		for _, tr := range transitions {
+			payload, err := BuildProbeAlertEventPayload(tr, now)
+			if err != nil {
+				continue
+			}
+			pctx, pcancel := context.WithTimeout(ctx, 2*time.Second)
+			_ = i.publishAlert(pctx, pluginsdk.EventDraft{
+				Type:          "probe.alert",
+				SchemaVersion: "1",
+				Subject:       "nodes/" + tr.NodeID,
+				Payload:       payload,
+			})
+			pcancel()
+		}
+	}
+	return transitions
+}
+
+func (i *instance) runDueServiceChecks(ctx context.Context, now time.Time) {
+	nowUnix := now.Unix()
+	i.store.mu.RLock()
+	due := make([]ServiceMonitor, 0, 4)
+	for _, m := range i.store.monitors {
+		if m == nil || !m.Enabled {
+			continue
+		}
+		if m.Kind != "tcp" && m.Kind != "http" && m.Kind != "https" {
+			continue
+		}
+		interval := int64(max(10, m.IntervalSec))
+		if m.LastCheckedAt > 0 && nowUnix-m.LastCheckedAt < interval {
+			continue
+		}
+		due = append(due, *m)
+		if len(due) >= 4 {
+			break
+		}
+	}
+	i.store.mu.RUnlock()
+
+	for _, mon := range due {
+		if ctx.Err() != nil {
+			return
+		}
+		st, lat := ExecuteServiceCheck(ctx, mon)
+		checkedAt := time.Now()
+		i.store.mu.Lock()
+		if cur, ok := i.store.monitors[mon.ID]; ok {
+			cur.LastStatus = st
+			cur.LastLatencyMs = lat
+			cur.LastCheckedAt = checkedAt.Unix()
+			mon = *cur
+		}
+		i.store.mu.Unlock()
+		_ = i.store.PersistServiceMonitorResult(ctx, mon, checkedAt)
 	}
 }
 
@@ -413,17 +545,15 @@ func (i *instance) registerOperations() {
 		return pluginsdk.Response{Payload: b}, nil
 	})
 
-	i.HandleInvoke("probe.series.latency", func(_ context.Context, _ pluginsdk.Request) (pluginsdk.Response, error) {
-		nowMs := time.Now().UnixMilli()
-		b, _ := json.Marshal(map[string]any{
-			"unit": "ms",
-			"max":  200,
-			"series": []map[string]any{
-				{"name": "电信 CT", "color": "teal", "points": [][]any{{nowMs, 34}}},
-				{"name": "联通 CU", "color": "blue", "points": [][]any{{nowMs, 41}}},
-				{"name": "移动 CM", "color": "violet", "points": [][]any{{nowMs, 48}}},
-			},
-		})
+	i.HandleInvoke("probe.series.latency", func(ctx context.Context, _ pluginsdk.Request) (pluginsdk.Response, error) {
+		var readerDB *sql.DB
+		if i.store != nil && i.store.db != nil {
+			readerDB = i.store.db.Reader
+		}
+		b, err := QueryRealCarrierLatencySeries(ctx, readerDB, time.Now(), 60)
+		if err != nil {
+			return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "查询三网延迟时序失败: %v", err)
+		}
 		return pluginsdk.Response{Payload: b}, nil
 	})
 
@@ -640,10 +770,31 @@ func (i *instance) registerOperations() {
 
 	// 5. 写入与撤销 Operations（校验 Preconditions，发出实时 ResourceChange 驱动前端与 AI 跟随模式）
 	i.HandleJob("probe.nodes.upsert", func(_ context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
-		_, _, body := i.portal.handleStandaloneAdminAction(time.Now(), "POST", "/api/admin/nodes", nil, req.Payload)
+		code, _, body := i.portal.handleStandaloneAdminAction(time.Now(), "POST", "/api/admin/nodes", nil, req.Payload)
+		if err := CheckStandaloneAdminStatus(code, body); err != nil {
+			if strings.HasPrefix(err.Error(), "VALIDATION_FAILED:") {
+				return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", strings.TrimSpace(strings.TrimPrefix(err.Error(), "VALIDATION_FAILED:")))
+			}
+			if strings.HasPrefix(err.Error(), "PRECONDITION_FAILED:") {
+				return pluginsdk.Result{}, pluginsdk.Errorf("PRECONDITION_FAILED", "%s", strings.TrimSpace(strings.TrimPrefix(err.Error(), "PRECONDITION_FAILED:")))
+			}
+			return pluginsdk.Result{}, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
+		}
+		rev := "r2"
+		var parsed struct {
+			NodeID   string `json:"node_id"`
+			Revision string `json:"revision"`
+		}
+		if json.Unmarshal(body, &parsed) == nil && parsed.Revision != "" {
+			rev = parsed.Revision
+		}
+		subj := "nodes"
+		if parsed.NodeID != "" {
+			subj = "nodes/" + parsed.NodeID
+		}
 		return pluginsdk.Result{
 			Payload: body,
-			Changes: []pluginsdk.ResourceChange{{Subject: "nodes", Revision: "r2"}},
+			Changes: []pluginsdk.ResourceChange{{Subject: subj, Revision: rev}},
 		}, nil
 	})
 
@@ -777,5 +928,58 @@ func (i *instance) registerOperations() {
 			Payload: body,
 			Changes: []pluginsdk.ResourceChange{{Subject: "domain", Revision: candidate.Revision}},
 		}, nil
+	})
+
+	// 6. 宿主证书自动续期与热载接口（对齐 controller.SupportedTLSConsumerPlugins["server.probe"]）
+	i.HandleInvoke("probe.tls.reload", func(_ context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
+		var in struct {
+			BindingRef       string `json:"binding_ref"`
+			ProfileID        string `json:"profile_id"`
+			Generation       uint64 `json:"generation"`
+			PolicyRevision   string `json:"policy_revision"`
+			FullchainSHA256  string `json:"fullchain_sha256"`
+			PrivateKeySHA256 string `json:"private_key_sha256"`
+			SNI              string `json:"sni"`
+		}
+		if err := json.Unmarshal(req.Payload, &in); err != nil {
+			return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "TLS 热重载请求格式无效")
+		}
+		if strings.TrimSpace(in.BindingRef) == "" || strings.TrimSpace(in.SNI) == "" || in.Generation == 0 {
+			return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "缺少 binding_ref / sni / generation")
+		}
+		i.store.mu.RLock()
+		endpoint := i.store.settings.BuiltinListenAddr
+		i.store.mu.RUnlock()
+		obs, err := i.domains.ReloadMaterializedTLS(
+			time.Now(),
+			in.BindingRef,
+			in.Generation,
+			in.PolicyRevision,
+			in.FullchainSHA256,
+			in.PrivateKeySHA256,
+			in.SNI,
+			endpoint,
+		)
+		if err != nil {
+			return pluginsdk.Response{}, pluginsdk.Errorf("FAILED_PRECONDITION", "加载宿主物化 TLS 证书失败: %s", err.Error())
+		}
+		b, _ := json.Marshal(obs)
+		return pluginsdk.Response{Payload: b}, nil
+	})
+
+	i.HandleInvoke("probe.tls.inspect", func(_ context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
+		var in struct {
+			BindingRef string `json:"binding_ref"`
+			ProfileID  string `json:"profile_id"`
+		}
+		if err := json.Unmarshal(req.Payload, &in); err != nil || strings.TrimSpace(in.BindingRef) == "" {
+			return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "缺少 binding_ref")
+		}
+		i.store.mu.RLock()
+		endpoint := i.store.settings.BuiltinListenAddr
+		i.store.mu.RUnlock()
+		obs := i.domains.InspectMaterializedTLS(in.BindingRef, endpoint)
+		b, _ := json.Marshal(obs)
+		return pluginsdk.Response{Payload: b}, nil
 	})
 }

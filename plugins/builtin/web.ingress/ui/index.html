@@ -12,7 +12,7 @@
     <div class="topbar">
       <div>
         <h2 class="title">轻量反向代理与站点托管</h2>
-        <div class="sub">零依赖内置 Go 反代 + Caddy/Nginx 确定性生成与一键回滚 · <span id="bridge-status">连接中…</span></div>
+        <div class="sub">零依赖内置 Go 反代（支持多路径、SNI TLS 热重载、防重绑定 SSRF）+ Caddy/Nginx 渲染 · <span id="bridge-status">连接中…</span></div>
       </div>
       <div class="tabs" id="nav-tabs">
         <button data-tab="sites" class="active" type="button">反代站点</button>
@@ -29,29 +29,36 @@
     </section>
 
     <section data-pane="sites" class="card">
-      <h3>新增 / 更新反向代理站点</h3>
+      <h3 id="site-form-title">新增 / 更新反向代理站点</h3>
       <div class="form-grid">
         <label>绑定域名 <input id="s-domain" placeholder="如 app.example.com" /></label>
         <label>上游目标地址 <input id="s-upstream" placeholder="http://127.0.0.1:3000" /></label>
-        <label>路径前缀 <input id="s-prefix" value="/" /></label>
+        <label>路径前缀 <input id="s-prefix" value="/" placeholder="如 / 或 /api" /></label>
         <label>TLS 模式
           <select id="s-tls">
             <option value="managed">自动托管 (关联 tls.certificates)</option>
-            <option value="custom">指定证书 ID</option>
+            <option value="custom">指定证书绑定 ID</option>
             <option value="off">仅 HTTP（内网/上游终止）</option>
           </select>
         </label>
-        <label>证书 ID（可选） <input id="s-cert" placeholder="留空自动匹配域名证书" /></label>
+        <label>证书绑定 ID（可选） <input id="s-cert" placeholder="如 certbind_xxx，留空自动匹配" /></label>
         <label>单 IP 限速 RPS（0 关闭） <input id="s-rps" type="number" value="0" min="0" max="10000" /></label>
         <label>BasicAuth 用户名（可选） <input id="s-user" placeholder="留空不启用鉴权" /></label>
         <label>BasicAuth 密码（bcrypt 存储） <input id="s-pass" type="password" placeholder="留空保留原值" /></label>
       </div>
+      <div class="check-row">
+        <label class="check-label"><input id="s-enabled" type="checkbox" checked /> 启用该站点</label>
+        <label class="check-label"><input id="s-ws" type="checkbox" checked /> 支持 WebSocket</label>
+        <label class="check-label"><input id="s-force-https" type="checkbox" checked /> 强制 HTTPS（HSTS / 308 跳转）</label>
+        <label class="check-label"><input id="s-clear-auth" type="checkbox" /> 清除 BasicAuth 密码保护</label>
+      </div>
       <div class="actions">
-        <button class="btn" id="btn-save-site" type="button">保存站点并生成快照</button>
-        <button class="btn ghost" id="btn-apply" type="button">立即热重载生效</button>
+        <button class="btn" id="btn-save-site" type="button">保存站点并立即同步生效</button>
+        <button class="btn ghost" id="btn-cancel-edit" type="button" hidden>取消编辑</button>
+        <button class="btn ghost" id="btn-apply" type="button">强制热重载并渲染配置</button>
       </div>
       <table>
-        <thead><tr><th>域名</th><th>上游</th><th>TLS / 特性</th><th>限速</th><th>操作</th></tr></thead>
+        <thead><tr><th>域名与路径</th><th>上游</th><th>TLS / 特性</th><th>限速</th><th>操作</th></tr></thead>
         <tbody id="sites-tbody"></tbody>
       </table>
     </section>

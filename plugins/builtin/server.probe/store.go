@@ -615,6 +615,34 @@ func (s *ProbeStore) LoadFromDB(ctx context.Context) error {
 		}
 	}
 
+	// 加载已配置的服务拨测监控项
+	monRows, err := s.db.Reader.QueryContext(ctx, `
+		SELECT id, name, kind, carrier_tag, target_addr, interval_sec,
+		       expected_status_min, expected_status_max, public_visible, enabled,
+		       last_status, last_latency_ms, last_checked_at
+		FROM probe_service_monitors`)
+	loadedMonitors := make(map[string]*ServiceMonitor)
+	if err == nil {
+		defer monRows.Close()
+		for monRows.Next() {
+			var m ServiceMonitor
+			var pubVis, en int
+			var latMs int64
+			if err := monRows.Scan(
+				&m.ID, &m.Name, &m.Kind, &m.CarrierTag, &m.TargetAddr, &m.IntervalSec,
+				&m.ExpectedStatusMin, &m.ExpectedStatusMax, &pubVis, &en,
+				&m.LastStatus, &latMs, &m.LastCheckedAt,
+			); err != nil {
+				continue
+			}
+			m.PublicVisible = pubVis != 0
+			m.Enabled = en != 0
+			m.LastLatencyMs = int32(max(0, latMs))
+			cp := m
+			loadedMonitors[m.ID] = &cp
+		}
+	}
+
 	s.mu.Lock()
 	for id, n := range loadedNodes {
 		s.nodes[id] = n
@@ -622,11 +650,56 @@ func (s *ProbeStore) LoadFromDB(ctx context.Context) error {
 	for id, b := range loadedSLA {
 		s.sla90d[id] = b
 	}
+	for id, m := range loadedMonitors {
+		s.monitors[id] = m
+	}
 	if hasSettings {
 		s.settings = cfg
 	}
 	s.mu.Unlock()
 	return nil
+}
+
+// PersistServiceMonitorResult 将后台拨测结果异步/周期回写到 probe_service_monitors 与 probe_daily_sla。
+func (s *ProbeStore) PersistServiceMonitorResult(ctx context.Context, m ServiceMonitor, now time.Time) error {
+	if s.db == nil || m.ID == "" {
+		return nil
+	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	_, err := s.db.Writer.ExecContext(ctx, `
+		UPDATE probe_service_monitors
+		SET last_status = ?, last_latency_ms = ?, last_checked_at = ?
+		WHERE id = ?`,
+		m.LastStatus, int64(m.LastLatencyMs), m.LastCheckedAt, m.ID,
+	)
+	if err != nil {
+		return err
+	}
+	dayUTC := now.UTC().Format("2006-01-02")
+	upInc := int64(0)
+	downSec := int64(max(10, m.IntervalSec))
+	if m.LastStatus == "up" || m.LastStatus == "degraded" {
+		upInc = 1
+		downSec = 0
+	}
+	_, err = s.db.Writer.ExecContext(ctx, `
+		INSERT INTO probe_daily_sla (
+			target_kind, target_id, day_utc, total_checks, up_checks, downtime_seconds, avg_latency_ms, incident_summary
+		) VALUES ('service', ?, ?, 1, ?, ?, ?, '')
+		ON CONFLICT(target_kind, target_id, day_utc) DO UPDATE SET
+			total_checks = probe_daily_sla.total_checks + 1,
+			up_checks = probe_daily_sla.up_checks + excluded.up_checks,
+			downtime_seconds = probe_daily_sla.downtime_seconds + excluded.downtime_seconds,
+			avg_latency_ms = CASE
+				WHEN excluded.avg_latency_ms > 0 AND probe_daily_sla.avg_latency_ms > 0
+					THEN (probe_daily_sla.avg_latency_ms * 7 + excluded.avg_latency_ms) / 8
+				WHEN excluded.avg_latency_ms > 0 THEN excluded.avg_latency_ms
+				ELSE probe_daily_sla.avg_latency_ms
+			END`,
+		m.ID, dayUTC, upInc, downSec, int64(max(0, m.LastLatencyMs)),
+	)
+	return err
 }
 
 func boolToInt(b bool) int {

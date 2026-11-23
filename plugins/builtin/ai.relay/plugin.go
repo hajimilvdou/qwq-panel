@@ -12,7 +12,6 @@ import (
 	"io"
 	"io/fs"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -197,6 +196,9 @@ type instance struct {
 	now                 func() time.Time
 	maintenanceInterval time.Duration
 }
+
+// 编译期断言 *instance 实现 pluginsdk.PublicHTTPStreamer，使 SDK 在 Start 时自动桥接 public-stream.sock。
+var _ pluginsdk.PublicHTTPStreamer = (*instance)(nil)
 
 func (i *instance) configSnapshot() relayConfig {
 	i.mu.RLock()
@@ -430,6 +432,13 @@ func (i *instance) handleSettingsGet(ctx context.Context, req pluginsdk.Request)
 }
 
 func (i *instance) handleSettingsUpdate(ctx context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
+	type smtpPatchInput struct {
+		Host        string                `json:"host"`
+		Port        int                   `json:"port"`
+		Username    string                `json:"username"`
+		Password    pluginsdk.SecretField `json:"password"`
+		FromAddress string                `json:"from_address"`
+	}
 	var in struct {
 		SiteTitle               *string                          `json:"site_title"`
 		SiteAnnouncement        *string                          `json:"site_announcement"`
@@ -438,7 +447,7 @@ func (i *instance) handleSettingsUpdate(ctx context.Context, req pluginsdk.Reque
 		EmailDomainAllowlist    []string                         `json:"email_domain_allowlist"`
 		AllowLinuxDoSignup      *bool                            `json:"allow_linuxdo_signup"`
 		LinuxDoClientID         *string                          `json:"linuxdo_client_id"`
-		LinuxDoClientSecret     string                           `json:"linuxdo_client_secret"`
+		LinuxDoClientSecret     pluginsdk.SecretField            `json:"linuxdo_client_secret"`
 		LinuxDoMinTrustLevel    *int                             `json:"linuxdo_min_trust_level"`
 		LinuxDoTierRules        map[string]store.LinuxDoTierRule `json:"linuxdo_tier_rules"`
 		DefaultSignupMicros     *int64                           `json:"default_signup_micros"`
@@ -449,13 +458,39 @@ func (i *instance) handleSettingsUpdate(ctx context.Context, req pluginsdk.Reque
 		CheckinMinMicros        *int64                           `json:"checkin_min_micros"`
 		CheckinMaxMicros        *int64                           `json:"checkin_max_micros"`
 		CheckinDripBelowMicros  *int64                           `json:"checkin_drip_below_micros"`
-		SMTP                    *store.SMTPConfig                `json:"smtp"`
+		SMTP                    *smtpPatchInput                  `json:"smtp"`
 	}
 	if err := decodeStrictJSON(req.Payload, &in); err != nil {
 		return pluginsdk.Result{}, err
 	}
 	if in.LinuxDoMinTrustLevel != nil && (*in.LinuxDoMinTrustLevel < 0 || *in.LinuxDoMinTrustLevel > 4) {
 		return pluginsdk.Result{}, invalidField("/linuxdo_min_trust_level", "OUT_OF_RANGE", "linuxdo_min_trust_level 必须在 0..4 之间")
+	}
+
+	ldSecret, keepLDSecret, err := in.LinuxDoClientSecret.ResolveString(ctx, req.Host(), "plugin.operation")
+	if err != nil {
+		return pluginsdk.Result{}, err
+	}
+	if keepLDSecret {
+		ldSecret = ""
+	}
+
+	var smtpCfg *store.SMTPConfig
+	if in.SMTP != nil {
+		smtpPass, keepSMTPPass, err := in.SMTP.Password.ResolveString(ctx, req.Host(), "plugin.operation")
+		if err != nil {
+			return pluginsdk.Result{}, err
+		}
+		if keepSMTPPass {
+			smtpPass = ""
+		}
+		smtpCfg = &store.SMTPConfig{
+			Host:        strings.TrimSpace(in.SMTP.Host),
+			Port:        in.SMTP.Port,
+			Username:    strings.TrimSpace(in.SMTP.Username),
+			Password:    smtpPass,
+			FromAddress: strings.TrimSpace(in.SMTP.FromAddress),
+		}
 	}
 
 	view, err := i.ledger.UpdateSettings(ctx, store.SettingsPatch{
@@ -467,7 +502,7 @@ func (i *instance) handleSettingsUpdate(ctx context.Context, req pluginsdk.Reque
 		HasEmailDomainAllowlist: in.EmailDomainAllowlist != nil,
 		AllowLinuxDoSignup:      in.AllowLinuxDoSignup,
 		LinuxDoClientID:         in.LinuxDoClientID,
-		LinuxDoClientSecret:     in.LinuxDoClientSecret,
+		LinuxDoClientSecret:     ldSecret,
 		LinuxDoMinTrustLevel:    in.LinuxDoMinTrustLevel,
 		LinuxDoTierRules:        in.LinuxDoTierRules,
 		DefaultSignupMicros:     in.DefaultSignupMicros,
@@ -478,7 +513,7 @@ func (i *instance) handleSettingsUpdate(ctx context.Context, req pluginsdk.Reque
 		CheckinMinMicros:        in.CheckinMinMicros,
 		CheckinMaxMicros:        in.CheckinMaxMicros,
 		CheckinDripBelowMicros:  in.CheckinDripBelowMicros,
-		SMTP:                    in.SMTP,
+		SMTP:                    smtpCfg,
 	})
 	if err != nil {
 		return pluginsdk.Result{}, mapStoreError(err)
@@ -507,18 +542,18 @@ func (i *instance) handleChannelsList(ctx context.Context, req pluginsdk.Request
 
 func (i *instance) handleChannelsUpsert(ctx context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
 	var in struct {
-		ID            string            `json:"id"`
-		Name          string            `json:"name"`
-		Kind          string            `json:"kind"`
-		BaseURL       string            `json:"base_url"`
-		Credential    string            `json:"credential"`
-		Groups        []string          `json:"groups"`
-		Models        []string          `json:"models"`
-		ModelMapping  map[string]string `json:"model_mapping"`
-		Priority      int               `json:"priority"`
-		Weight        int               `json:"weight"`
-		MaxConcurrent int               `json:"max_concurrent"`
-		Enabled       *bool             `json:"enabled"`
+		ID            string                `json:"id"`
+		Name          string                `json:"name"`
+		Kind          string                `json:"kind"`
+		BaseURL       string                `json:"base_url"`
+		Credential    pluginsdk.SecretField `json:"credential"`
+		Groups        []string              `json:"groups"`
+		Models        []string              `json:"models"`
+		ModelMapping  map[string]string     `json:"model_mapping"`
+		Priority      int                   `json:"priority"`
+		Weight        int                   `json:"weight"`
+		MaxConcurrent int                   `json:"max_concurrent"`
+		Enabled       *bool                 `json:"enabled"`
 	}
 	if err := decodeStrictJSON(req.Payload, &in); err != nil {
 		return pluginsdk.Result{}, err
@@ -532,6 +567,13 @@ func (i *instance) handleChannelsUpsert(ctx context.Context, req pluginsdk.Reque
 	if u, err := url.Parse(strings.TrimSpace(in.BaseURL)); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return pluginsdk.Result{}, invalidField("/base_url", "INVALID_URL", "base_url 必须是合法的 http/https 地址")
 	}
+	credPlain, keepCred, err := in.Credential.ResolveString(ctx, req.Host(), "plugin.operation")
+	if err != nil {
+		return pluginsdk.Result{}, err
+	}
+	if keepCred {
+		credPlain = ""
+	}
 	enabled := true
 	if in.Enabled != nil {
 		enabled = *in.Enabled
@@ -541,7 +583,7 @@ func (i *instance) handleChannelsUpsert(ctx context.Context, req pluginsdk.Reque
 		Name:          strings.TrimSpace(in.Name),
 		Kind:          in.Kind,
 		BaseURL:       proxy.NormalizeUpstreamBaseURL(in.BaseURL),
-		Credential:    in.Credential,
+		Credential:    credPlain,
 		Groups:        in.Groups,
 		Models:        in.Models,
 		ModelMapping:  in.ModelMapping,
@@ -744,22 +786,26 @@ func (i *instance) handleUsersList(ctx context.Context, req pluginsdk.Request) (
 
 func (i *instance) handleUsersCreate(ctx context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
 	var in struct {
-		Username          string `json:"username"`
-		Password          string `json:"password"`
-		Email             string `json:"email"`
-		GroupName         string `json:"group_name"`
-		InitMicros        *int64 `json:"init_micros"`
-		DailyRefillMicros int64  `json:"daily_refill_micros"`
-		AutoRefillCycle   string `json:"auto_refill_cycle"`
+		Username          string                `json:"username"`
+		Password          pluginsdk.SecretField `json:"password"`
+		Email             string                `json:"email"`
+		GroupName         string                `json:"group_name"`
+		InitMicros        *int64                `json:"init_micros"`
+		DailyRefillMicros int64                 `json:"daily_refill_micros"`
+		AutoRefillCycle   string                `json:"auto_refill_cycle"`
 	}
 	if err := decodeStrictJSON(req.Payload, &in); err != nil {
+		return pluginsdk.Result{}, err
+	}
+	passwordPlain, _, err := in.Password.ResolveString(ctx, req.Host(), "plugin.operation")
+	if err != nil {
 		return pluginsdk.Result{}, err
 	}
 	initM := int64(5_000_000)
 	if in.InitMicros != nil {
 		initM = *in.InitMicros
 	}
-	user, err := i.ledger.CreateUserByAdmin(ctx, in.Username, in.Password, in.Email, in.GroupName, initM, in.DailyRefillMicros, in.AutoRefillCycle)
+	user, err := i.ledger.CreateUserByAdmin(ctx, in.Username, passwordPlain, in.Email, in.GroupName, initM, in.DailyRefillMicros, in.AutoRefillCycle)
 	if err != nil {
 		return pluginsdk.Result{}, mapStoreError(err)
 	}
@@ -972,7 +1018,7 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 	}
 
 	if cleanPath == "/v1/models" && r.Method == http.MethodGet {
-		tok, resv, err := i.ledger.AuthorizeAndReserve(rawKey, "", clientIPFromRequest(r), 1)
+		tok, resv, err := i.ledger.AuthorizeAndReserve(rawKey, "", ExtractTrustedClientIP(r), 1)
 		if err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized", "message": err.Error()})
 			return
@@ -1007,7 +1053,7 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 		return
 	}
 
-	rawBody, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	rawBody, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request", "message": "failed to read body"})
 		return
@@ -1022,7 +1068,17 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 	}
 
 	cfg := i.configSnapshot()
-	tok, reservation, err := i.ledger.AuthorizeAndReserve(rawKey, ir.Model, clientIPFromRequest(r), cfg.DefaultReserveMicros)
+	pricing := i.router.PricingFor(ir.Model)
+	reserveMicros := ComputeDynamicReserveMicros(DynamicReserveInput{
+		DefaultReserveMicros: cfg.DefaultReserveMicros,
+		EstimatedInputTokens: ir.EstimatedInputTokens,
+		RequestedMaxTokens:   ir.MaxTokens,
+		InputMicrosPer1K:     pricing.InputMicrosPer1K,
+		OutputMicrosPer1K:    pricing.OutputMicrosPer1K,
+		PerCallMicros:        pricing.PerCallMicros,
+		BillingMode:          pricing.BillingMode,
+	})
+	tok, reservation, err := i.ledger.AuthorizeAndReserve(rawKey, ir.Model, ExtractTrustedClientIP(r), reserveMicros)
 	if err != nil {
 		status := http.StatusUnauthorized
 		if strings.HasPrefix(err.Error(), "QUOTA_EXHAUSTED") {
@@ -1039,6 +1095,7 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 	candidates := i.router.SelectCandidates(tok.EffectiveGroup(), ir.Model, ir.SessionHint, i.nowTime())
 	if len(candidates) == 0 {
 		reservation.Settle(0, store.UsageLogRecord{})
+		i.publishAllChannelsTrippedAlert(r.Context(), tok.EffectiveGroup(), ir.Model, "当前分组无可用健康上游渠道")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no_upstream", "message": "当前分组无可用健康上游渠道"})
 		return
 	}
@@ -1052,7 +1109,13 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 			lastErrMsg = err.Error()
 			continue
 		}
-		_, _ = ch.RefreshOAuthIfNeeded(r.Context(), client, i.nowTime())
+		if refreshed, _ := ch.RefreshOAuthIfNeeded(r.Context(), client, i.nowTime()); refreshed {
+			if bundleJSON, ok := ch.OAuthBundleJSON(); ok {
+				if persistErr := i.ledger.PersistRefreshedChannelCredential(r.Context(), ch.ID, bundleJSON); persistErr != nil {
+					log.Printf("ai.relay: persist refreshed oauth token failed (channel=%s): %v", ch.ID, persistErr)
+				}
+			}
+		}
 		upURL, hdrs, upBody, encErr := proxy.EncodeUpstreamRequest(ch, protoIn, rawBody, ir)
 		if encErr != nil {
 			ch.ReleaseSlot()
@@ -1113,8 +1176,8 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 		_ = upResp.Body.Close()
 		ch.ReleaseSlot()
 
-		pricing := i.router.PricingFor(ir.Model)
-		cost := pricing.CalculateMicros(usage.InputTokens, usage.CachedReadTokens, usage.CacheWriteTokens, usage.OutputTokens, 1.0)
+		settlePricing := i.router.PricingFor(ir.Model)
+		cost := settlePricing.CalculateMicros(usage.InputTokens, usage.CachedReadTokens, usage.CacheWriteTokens, usage.OutputTokens, 1.0)
 		reservation.Settle(cost, store.UsageLogRecord{
 			UserID:           tok.User.UserID,
 			TokenID:          tok.TokenID,
@@ -1133,7 +1196,36 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 	}
 
 	reservation.Settle(0, store.UsageLogRecord{})
+	if len(i.router.SelectCandidates(tok.EffectiveGroup(), ir.Model, "", i.nowTime())) == 0 {
+		i.publishAllChannelsTrippedAlert(r.Context(), tok.EffectiveGroup(), ir.Model, lastErrMsg)
+	}
 	writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_failed", "message": lastErrMsg})
+}
+
+func (i *instance) publishAllChannelsTrippedAlert(ctx context.Context, group, model, reason string) {
+	host := i.Host()
+	if host == nil || host.Conn() == nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"group":   group,
+		"model":   model,
+		"reason":  reason,
+		"time_ms": i.nowTime().UTC().UnixMilli(),
+	})
+	if err != nil {
+		return
+	}
+	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if _, err := host.PublishEvent(pctx, pluginsdk.EventDraft{
+		Type:          "relay.alert",
+		SchemaVersion: "1",
+		Subject:       "channels/all_tripped",
+		Payload:       payload,
+	}); err != nil {
+		log.Printf("ai.relay: publish relay.alert failed (group=%s model=%s): %v", group, model, err)
+	}
 }
 
 func (i *instance) handlePortalHTTP(w http.ResponseWriter, r *http.Request, cleanPath string) {
@@ -1145,6 +1237,17 @@ func (i *instance) handlePortalHTTP(w http.ResponseWriter, r *http.Request, clea
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+		return
+	}
+	if subPath == "/portal.css" {
+		raw, err := fs.ReadFile(embeddedPortalUI, "portal_ui/portal.css")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(raw)
 		return
@@ -1170,8 +1273,14 @@ func (i *instance) handlePortalHTTP(w http.ResponseWriter, r *http.Request, clea
 			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "请求格式无效"})
 			return
 		}
-		if _, err := i.ledger.SendEmailOTP(r.Context(), in.Email); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		if err := i.ledger.SendEmailOTPWithDelivery(r.Context(), in.Email, ExtractTrustedClientIP(r)); err != nil {
+			code := http.StatusBadRequest
+			if strings.HasPrefix(err.Error(), "RATE_LIMITED") {
+				code = http.StatusTooManyRequests
+			} else if strings.HasPrefix(err.Error(), "SMTP_NOT_CONFIGURED") {
+				code = http.StatusServiceUnavailable
+			}
+			writeJSON(w, code, map[string]string{"message": err.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"sent": true})
@@ -1248,10 +1357,10 @@ func (i *instance) handlePortalHTTP(w http.ResponseWriter, r *http.Request, clea
 		http.Redirect(w, r, "/p/ai.relay/portal/#relay_session="+url.QueryEscape(sess), http.StatusFound)
 
 	default:
-		// 其余门户接口严格校验 rly_sess_* 隔离会话，绝不接受 qwq_* 面板令牌！
-		sessTok := strings.TrimSpace(r.Header.Get("X-Relay-Session"))
-		if strings.HasPrefix(sessTok, "qwq_") {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "拒绝面板凭据访问分发门户"})
+		// 其余门户接口严格校验 rly_sess_* 隔离会话，兼容宿主转发的 X-QWQ-Relay-Token，绝不接受 qwq_* 面板令牌！
+		sessTok, err := ExtractPortalSessionToken(r)
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"message": err.Error()})
 			return
 		}
 		userID, ok := i.ledger.ValidateSession(sessTok)
@@ -1259,12 +1368,16 @@ func (i *instance) handlePortalHTTP(w http.ResponseWriter, r *http.Request, clea
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"message": "请先登录分发门户"})
 			return
 		}
-		i.handlePortalAuthed(w, r, subPath, userID)
+		i.handlePortalAuthed(w, r, subPath, userID, sessTok)
 	}
 }
 
-func (i *instance) handlePortalAuthed(w http.ResponseWriter, r *http.Request, subPath, userID string) {
+func (i *instance) handlePortalAuthed(w http.ResponseWriter, r *http.Request, subPath, userID, sessTok string) {
 	switch {
+	case subPath == "/api/auth/logout" && r.Method == http.MethodPost:
+		i.ledger.DeleteSession(sessTok)
+		writeJSON(w, http.StatusOK, map[string]any{"logged_out": true})
+
 	case subPath == "/api/me" && r.Method == http.MethodGet:
 		user, err := i.ledger.GetUserByID(r.Context(), userID)
 		if err != nil {
@@ -1324,6 +1437,23 @@ func (i *instance) handlePortalAuthed(w http.ResponseWriter, r *http.Request, su
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"plain_key": plainKey})
 
+	case strings.HasPrefix(subPath, "/api/tokens/") && r.Method == http.MethodDelete:
+		tokID := strings.TrimSpace(strings.TrimPrefix(subPath, "/api/tokens/"))
+		if tokID == "" || strings.Contains(tokID, "/") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "无效的令牌 ID"})
+			return
+		}
+		revoked, err := i.ledger.RevokeUserToken(r.Context(), userID, tokID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": err.Error()})
+			return
+		}
+		if !revoked {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "未找到该子令牌"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": tokID, "revoked": true})
+
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "portal api not found"})
 	}
@@ -1370,29 +1500,19 @@ func detectDownstreamProtocol(cleanPath string) (proxy.ProtocolKind, string, boo
 	return "", "", false
 }
 
-func clientIPFromRequest(r *http.Request) string {
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		first, _, _ := strings.Cut(xff, ",")
-		if s := strings.TrimSpace(first); s != "" {
-			return s
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil && host != "" {
-		return host
-	}
-	return strings.TrimSpace(r.RemoteAddr)
-}
-
 func (i *instance) oauthCallbackURL(r *http.Request) string {
-	if origin := i.configSnapshot().PublicOrigin; origin != "" {
+	if origin := strings.TrimRight(strings.TrimSpace(i.configSnapshot().PublicOrigin), "/"); origin != "" {
 		return origin + "/p/ai.relay/portal/api/oauth/linuxdo/callback"
 	}
-	scheme := "https"
-	if r.TLS == nil {
-		scheme = "http"
+	scheme := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")))
+	if scheme != "https" && scheme != "http" {
+		if r.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
 	}
-	host := r.Host
+	host := strings.TrimSpace(r.Host)
 	if host == "" {
 		host = "localhost"
 	}

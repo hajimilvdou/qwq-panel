@@ -224,6 +224,13 @@ func (s *ProbeStore) activeCarrierTargetsLocked() map[string]string {
 }
 
 func recordDailyCheckLocked(store map[string][]DailySLABucket, id, dayUTC string, up bool, latencyMs int32) {
+	recordDailyCheckWithDeltaLocked(store, id, dayUTC, up, 2, latencyMs)
+}
+
+func recordDailyCheckWithDeltaLocked(store map[string][]DailySLABucket, id, dayUTC string, up bool, deltaSec uint32, latencyMs int32) {
+	if deltaSec == 0 {
+		deltaSec = 1
+	}
 	buckets := store[id]
 	if len(buckets) > 0 && buckets[len(buckets)-1].DayUTC == dayUTC {
 		b := &buckets[len(buckets)-1]
@@ -231,7 +238,7 @@ func recordDailyCheckLocked(store map[string][]DailySLABucket, id, dayUTC string
 		if up {
 			b.UpChecks++
 		} else {
-			b.DowntimeSeconds += 2
+			b.DowntimeSeconds += deltaSec
 		}
 		if latencyMs > 0 {
 			if b.AvgLatencyMs == 0 {
@@ -244,17 +251,20 @@ func recordDailyCheckLocked(store map[string][]DailySLABucket, id, dayUTC string
 		return
 	}
 	upCount := uint32(0)
+	downSec := deltaSec
 	pct := 0.0
 	if up {
 		upCount = 1
+		downSec = 0
 		pct = 100.0
 	}
 	buckets = append(buckets, DailySLABucket{
-		DayUTC:        dayUTC,
-		TotalChecks:   1,
-		UpChecks:      upCount,
-		UptimePercent: pct,
-		AvgLatencyMs:  max(0, latencyMs),
+		DayUTC:          dayUTC,
+		TotalChecks:     1,
+		UpChecks:        upCount,
+		UptimePercent:   pct,
+		DowntimeSeconds: downSec,
+		AvgLatencyMs:    max(0, latencyMs),
 	})
 	if len(buckets) > 90 {
 		buckets = buckets[len(buckets)-90:]

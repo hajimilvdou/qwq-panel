@@ -84,9 +84,11 @@ function collectPluginFilesByExt(ext) {
     }
   };
   for (const pluginName of readdirSync(builtinDir)) {
-    const uiDir = join(builtinDir, pluginName, 'ui');
-    if (!existsSync(uiDir) || !statSync(uiDir).isDirectory()) continue;
-    walk(uiDir);
+    for (const sub of ['ui', 'portal_ui']) {
+      const uiDir = join(builtinDir, pluginName, sub);
+      if (!existsSync(uiDir) || !statSync(uiDir).isDirectory()) continue;
+      walk(uiDir);
+    }
   }
   return files.sort();
 }

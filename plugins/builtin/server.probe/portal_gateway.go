@@ -192,6 +192,20 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 		}, data
 	}
 
+	// 通道 2.8：由当前探针入口自托管的 Agent 安装脚本（消除硬编码不可达占位域名）
+	if (cleanSub == "/install-probe-agent.sh" || cleanSub == "/probe-agent.ps1") && method == http.MethodGet {
+		if cleanSub == "/probe-agent.ps1" {
+			return http.StatusOK, map[string]string{
+				"Content-Type":  "text/plain; charset=utf-8",
+				"Cache-Control": "no-cache",
+			}, []byte(probeAgentInstallPS1)
+		}
+		return http.StatusOK, map[string]string{
+			"Content-Type":  "text/x-shellscript; charset=utf-8",
+			"Cache-Control": "no-cache",
+		}, []byte(probeAgentInstallSH)
+	}
+
 	// 通道 3：私有探针访客口令解锁（受 BoundedAuthGuard 防暴破保护）
 	if cleanSub == "/api/public/unlock" && method == http.MethodPost {
 		nowUnix := now.Unix()
@@ -736,13 +750,16 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 
 	case path == "/api/admin/nodes" && method == http.MethodPost:
 		var req struct {
-			ID         string    `json:"id"`
-			Name       string    `json:"name"`
-			RegionCode string    `json:"region_code"`
-			GroupName  string    `json:"group_name"`
-			QuotaBytes uint64    `json:"quota_bytes"`
-			QuotaMode  QuotaMode `json:"quota_mode"`
-			ResetDay   int       `json:"reset_day"`
+			ID           string    `json:"id"`
+			Name         string    `json:"name"`
+			RegionCode   string    `json:"region_code"`
+			GroupName    string    `json:"group_name"`
+			QuotaBytes   uint64    `json:"quota_bytes"`
+			QuotaMode    QuotaMode `json:"quota_mode"`
+			ResetDay     int       `json:"reset_day"`
+			ExpiresAt    *int64    `json:"expires_at,omitempty"`
+			ProviderName string    `json:"provider_name,omitempty"`
+			PublicOrigin string    `json:"public_origin,omitempty"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Name) == "" {
 			return jsonResp(http.StatusBadRequest, map[string]any{"error": "VALIDATION_FAILED"})
@@ -781,6 +798,12 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 			existing.QuotaBytes = req.QuotaBytes
 			existing.QuotaMode = req.QuotaMode
 			existing.ResetDay = req.ResetDay
+			if req.ExpiresAt != nil && *req.ExpiresAt >= 0 {
+				existing.ExpiresAt = *req.ExpiresAt
+			}
+			if strings.TrimSpace(req.ProviderName) != "" {
+				existing.ProviderName = truncateSafe(req.ProviderName, 48)
+			}
 			existing.Revision = nextRevision(existing.Revision)
 			saved = *existing
 		} else {
@@ -798,6 +821,10 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 				g.store.mu.Unlock()
 				return jsonResp(http.StatusBadRequest, map[string]any{"error": "INVALID_NODE_ID"})
 			}
+			var expiresAt int64
+			if req.ExpiresAt != nil && *req.ExpiresAt > 0 {
+				expiresAt = *req.ExpiresAt
+			}
 			rec := &NodeRecord{
 				ID:               id,
 				Name:             truncateSafe(req.Name, 64),
@@ -809,6 +836,8 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 				QuotaBytes:       req.QuotaBytes,
 				QuotaMode:        req.QuotaMode,
 				ResetDay:         req.ResetDay,
+				ExpiresAt:        expiresAt,
+				ProviderName:     truncateSafe(req.ProviderName, 48),
 				OnlineState:      "pending",
 				Revision:         "r1",
 			}
@@ -824,6 +853,14 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 		endpoint := "/p/server.probe/agent/v1/report"
 		if dom != "" {
 			endpoint = "https://" + dom + "/api/probe/v1/report"
+		} else if origin := sanitizePublicOrigin(req.PublicOrigin); origin != "" {
+			endpoint = origin + "/p/server.probe/agent/v1/report"
+		} else if reqHost := strings.TrimSpace(extractHeaderCI(headers, "Host")); reqHost != "" && !strings.ContainsAny(reqHost, " \t\r\n/\\") {
+			proto := "https"
+			if strings.EqualFold(strings.TrimSpace(extractHeaderCI(headers, "X-Forwarded-Proto")), "http") {
+				proto = "http"
+			}
+			endpoint = proto + "://" + reqHost + "/p/server.probe/agent/v1/report"
 		}
 		if !created {
 			return jsonResp(http.StatusOK, map[string]any{
@@ -839,6 +876,23 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 			"report_endpoint": endpoint,
 			"linux_install":   BuildAgentInstallCommand("linux", endpoint, id, plainTok),
 		})
+
+	case strings.HasPrefix(path, "/api/admin/nodes/") && method == http.MethodDelete:
+		id := strings.TrimSpace(strings.TrimPrefix(path, "/api/admin/nodes/"))
+		if id == "" || id == "local" || !isValidNodeID(id) {
+			return jsonResp(http.StatusBadRequest, map[string]any{"error": "INVALID_NODE_ID"})
+		}
+		g.store.mu.Lock()
+		_, existed := g.store.nodes[id]
+		delete(g.store.nodes, id)
+		delete(g.store.live, id)
+		delete(g.store.sla90d, id)
+		g.store.mu.Unlock()
+		if !existed {
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "NODE_NOT_FOUND"})
+		}
+		_ = g.store.DeleteNode(context.Background(), id)
+		return jsonResp(http.StatusOK, map[string]any{"removed": id})
 
 	case path == "/api/admin/domain/bind" && method == http.MethodPost:
 		var req struct {
@@ -879,14 +933,93 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 	return jsonResp(http.StatusNotFound, map[string]any{"error": "UNKNOWN_ADMIN_ENDPOINT"})
 }
 
-// BuildAgentInstallCommand 拼装单向安全探针 Agent 一键部署命令（带严格单引号转义防 Shell/PowerShell 注入）。
+func sanitizePublicOrigin(raw string) string {
+	s := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if s == "" || strings.ContainsAny(s, " \t\r\n'\"<>\\") {
+		return ""
+	}
+	lower := strings.ToLower(s)
+	if !strings.HasPrefix(lower, "https://") && !strings.HasPrefix(lower, "http://") {
+		return ""
+	}
+	rest := s[strings.Index(s, "://")+3:]
+	if rest == "" || strings.Contains(rest, "/") {
+		return ""
+	}
+	return s
+}
+
+const probeAgentInstallSH = `#!/usr/bin/env bash
+set -euo pipefail
+ENDPOINT="" NODE="" TOKEN=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --endpoint) ENDPOINT="$2"; shift 2 ;;
+    --node)     NODE="$2"; shift 2 ;;
+    --token)    TOKEN="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ -z "$ENDPOINT" ] || [ -z "$NODE" ] || [ -z "$TOKEN" ]; then
+  echo "Usage: install-probe-agent.sh --endpoint <url> --node <id> --token <prb_agt_...>" >&2
+  exit 2
+fi
+install -d -m 0700 /etc/qwq-probe-agent
+cat >/etc/qwq-probe-agent/agent.env <<EOF
+QWQ_PROBE_ENDPOINT=${ENDPOINT}
+QWQ_PROBE_NODE=${NODE}
+QWQ_PROBE_TOKEN=${TOKEN}
+EOF
+chmod 0600 /etc/qwq-probe-agent/agent.env
+cat >/etc/systemd/system/qwq-probe-agent.service <<'EOF'
+[Unit]
+Description=qwq Probe One-Way Telemetry Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/qwq-probe-agent/agent.env
+ExecStart=/usr/local/bin/qwq-probe-agent
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+if command -v systemctl >/dev/null 2>&1 && [ -x /usr/local/bin/qwq-probe-agent ]; then
+  systemctl daemon-reload
+  systemctl enable --now qwq-probe-agent.service
+fi
+echo "qwq-probe-agent configured for node ${NODE}"
+`
+
+const probeAgentInstallPS1 = `function Install-QwqProbeAgent {
+  param(
+    [Parameter(Mandatory=$true)][string]$Endpoint,
+    [Parameter(Mandatory=$true)][string]$Node,
+    [Parameter(Mandatory=$true)][string]$Token
+  )
+  $env:QWQ_PROBE_ENDPOINT = $Endpoint
+  $env:QWQ_PROBE_NODE = $Node
+  $env:QWQ_PROBE_TOKEN = $Token
+  Write-Host "Configured qwq-probe-agent for node $Node -> $Endpoint"
+}
+`
+
+// BuildAgentInstallCommand 拼装单向安全探针 Agent 一键部署命令（脚本地址派生自当前可达 public_origin/reportURL，带严格单引号转义）。
 func BuildAgentInstallCommand(platform, reportURL, nodeID, token string) string {
+	scriptBase := deriveScriptBaseURL(reportURL)
 	if platform == "windows" {
 		psEsc := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
-		return "irm https://get.qwq.panel/probe-agent.ps1 | iex; Install-QwqProbeAgent -Endpoint " + psEsc(reportURL) + " -Node " + psEsc(nodeID) + " -Token " + psEsc(token)
+		return "irm " + psEsc(scriptBase+"/probe-agent.ps1") + " | iex; Install-QwqProbeAgent -Endpoint " + psEsc(reportURL) + " -Node " + psEsc(nodeID) + " -Token " + psEsc(token)
 	}
 	shEsc := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-	return "curl -fsSL https://get.qwq.panel/install-probe-agent.sh | sudo bash -s -- --endpoint " + shEsc(reportURL) + " --node " + shEsc(nodeID) + " --token " + shEsc(token)
+	return "curl -fsSL " + shEsc(scriptBase+"/install-probe-agent.sh") + " | sudo bash -s -- --endpoint " + shEsc(reportURL) + " --node " + shEsc(nodeID) + " --token " + shEsc(token)
 }
 
 func isValidNodeID(id string) bool {

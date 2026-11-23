@@ -11,18 +11,108 @@
 </head>
 <body>
 <main id="monitor">
-  <header class="page-head"><div><h1>本机资源</h1><p id="sample-time">等待宿主采样</p></div><div class="controls"><span id="status" role="status">连接中</span><button id="pause" type="button" aria-pressed="false">暂停</button></div></header>
+  <header class="page-head">
+    <div>
+      <h1>本机资源</h1>
+      <p id="sample-time">等待宿主采样</p>
+    </div>
+    <div class="controls">
+      <span id="status" role="status">连接中</span>
+      <button id="pause" type="button" aria-pressed="false">暂停</button>
+    </div>
+  </header>
+
   <section class="gauges" aria-label="资源使用率">
-    <article class="resource"><div class="meter" id="cpu-meter" role="meter" aria-label="CPU 使用率" aria-valuemin="0" aria-valuemax="100"><span id="cpu-value">—</span></div><h2>CPU</h2><p>处理器使用率</p></article>
-    <article class="resource"><div class="meter" id="mem-meter" role="meter" aria-label="内存使用率" aria-valuemin="0" aria-valuemax="100"><span id="mem-value">—</span></div><h2>内存</h2><p>已用内存占比</p></article>
-    <article class="resource"><div class="meter" id="disk-meter" role="meter" aria-label="磁盘使用率" aria-valuemin="0" aria-valuemax="100"><span id="disk-value">—</span></div><h2 id="disk-title">磁盘</h2><p id="disk-note">等待挂载点采样</p></article>
+    <article class="resource" id="cpu-card" data-level="unavailable">
+      <div class="meter" id="cpu-meter" role="meter" aria-label="CPU 使用率" aria-valuemin="0" aria-valuemax="100"><span id="cpu-value">—</span></div>
+      <h2>CPU</h2>
+      <p id="cpu-note">处理器使用率 · IOWait —</p>
+    </article>
+    <article class="resource" id="mem-card" data-level="unavailable">
+      <div class="meter" id="mem-meter" role="meter" aria-label="内存使用率" aria-valuemin="0" aria-valuemax="100"><span id="mem-value">—</span></div>
+      <h2>内存</h2>
+      <p id="mem-note">已用内存占比</p>
+    </article>
+    <article class="resource" id="swap-card" data-level="unavailable">
+      <div class="meter" id="swap-meter" role="meter" aria-label="Swap 使用率" aria-valuemin="0" aria-valuemax="100"><span id="swap-value">—</span></div>
+      <h2>Swap</h2>
+      <p id="swap-note">交换分区未启用或等待采样</p>
+    </article>
+    <article class="resource" id="disk-card" data-level="unavailable">
+      <div class="meter" id="disk-meter" role="meter" aria-label="磁盘使用率" aria-valuemin="0" aria-valuemax="100"><span id="disk-value">—</span></div>
+      <h2 id="disk-title">磁盘</h2>
+      <p id="disk-note">等待挂载点采样</p>
+    </article>
   </section>
-  <div class="history-head"><h2>短期趋势</h2><div class="segments" aria-label="历史范围"><button type="button" data-range="5m" aria-pressed="true">最近 5 分钟</button><button type="button" data-range="1h" aria-pressed="false">最近 1 小时</button></div></div>
+
+  <section class="meta-strip" aria-label="系统负载与运行时长">
+    <div class="meta-item">
+      <span class="meta-label">1 / 5 / 15m 负载</span>
+      <strong id="load-value">— / — / —</strong>
+    </div>
+    <div class="meta-item">
+      <span class="meta-label">CPU IOWait</span>
+      <strong id="iowait-value">—</strong>
+    </div>
+    <div class="meta-item">
+      <span class="meta-label">系统运行时长 (Uptime)</span>
+      <strong id="uptime-value">—</strong>
+    </div>
+    <div class="meta-item">
+      <span class="meta-label">磁盘实时吞吐</span>
+      <strong id="disk-io-value">—</strong>
+    </div>
+  </section>
+
+  <div class="history-head">
+    <h2>短期趋势</h2>
+    <div class="segments" aria-label="历史范围">
+      <button type="button" data-range="5m" aria-pressed="true">最近 5 分钟</button>
+      <button type="button" data-range="1h" aria-pressed="false">最近 1 小时</button>
+    </div>
+  </div>
+
   <section class="charts" aria-label="监控趋势">
-    <article class="chart"><header><h3>网络吞吐</h3><p><span class="teal">入 <b id="rx-value">—</b></span><span class="violet">出 <b id="tx-value">—</b></span> Mbps</p></header><svg id="net-chart" viewBox="0 0 600 180" role="img" aria-label="入站与出站网络吞吐趋势"><path class="grid" d="M0 30H600M0 90H600M0 150H600"/><path class="line teal-line"/><path class="line violet-line"/></svg><p class="chart-note" id="net-note">有效数据到达后显示趋势</p></article>
-    <article class="chart"><header><h3>CPU 与内存</h3><p><span class="teal">CPU</span><span class="violet">内存</span></p></header><svg id="resource-chart" viewBox="0 0 600 180" role="img" aria-label="CPU 与内存使用率趋势"><path class="grid" d="M0 30H600M0 90H600M0 150H600"/><path class="line teal-line"/><path class="line violet-line"/></svg><p class="chart-note" id="resource-note">范围 0–100%</p></article>
+    <article class="chart">
+      <header>
+        <h3>网络吞吐</h3>
+        <p><span class="teal">入 <b id="rx-value">—</b></span><span class="violet">出 <b id="tx-value">—</b></span> Mbps</p>
+      </header>
+      <svg id="net-chart" viewBox="0 0 600 180" role="img" aria-label="入站与出站网络吞吐趋势">
+        <path class="grid" d="M0 30H600M0 90H600M0 150H600"/>
+        <path class="line teal-line"/>
+        <path class="line violet-line"/>
+      </svg>
+      <p class="chart-note" id="net-note">有效数据到达后显示趋势</p>
+    </article>
+    <article class="chart">
+      <header>
+        <h3>CPU 与内存</h3>
+        <p><span class="teal">CPU</span><span class="violet">内存</span><span class="amber">IOWait</span></p>
+      </header>
+      <svg id="resource-chart" viewBox="0 0 600 180" role="img" aria-label="CPU、内存与 IOWait 使用率趋势">
+        <path class="grid" d="M0 30H600M0 90H600M0 150H600"/>
+        <path class="line teal-line"/>
+        <path class="line violet-line"/>
+        <path class="line amber-line"/>
+      </svg>
+      <p class="chart-note" id="resource-note">范围 0–100%</p>
+    </article>
+    <article class="chart chart-wide">
+      <header>
+        <h3>磁盘读写吞吐 (Disk IO)</h3>
+        <p><span class="teal">读 <b id="disk-read-value">—</b></span><span class="violet">写 <b id="disk-write-value">—</b></span> MB/s</p>
+      </header>
+      <svg id="disk-io-chart" viewBox="0 0 600 180" role="img" aria-label="磁盘读写吞吐趋势">
+        <path class="grid" d="M0 30H600M0 90H600M0 150H600"/>
+        <path class="line teal-line"/>
+        <path class="line violet-line"/>
+      </svg>
+      <p class="chart-note" id="disk-io-note">等待连续磁盘块设备采样</p>
+    </article>
   </section>
-  <p class="history-note">短期历史保存在内存中，服务重启后重新采样。</p>
+
+  <p class="history-note">最近 1 小时粗粒度历史环会在停机时自动快照到宿主 KV，1 小时内重启自动恢复。</p>
 </main>
 </body>
 </html>

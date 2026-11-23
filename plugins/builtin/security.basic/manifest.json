@@ -47,10 +47,10 @@
     "schemas/sshd.set_login_policy.request.json": "sha256:ebe804da41ed9ea029768ed8621f39f980dded490ef71cf28b2f0fa1ae69e08a",
     "schemas/sshd.set_login_policy.response.json": "sha256:24a128ac1dafb289eca8f383ea39773af8109347d98ef4f640b0c64656bd665e",
     "schemas/sshd.status.request.json": "sha256:8797461339fd07222572571dff7c67658ad403cd5df23c515dfd2923e10428a9",
-    "schemas/sshd.status.response.json": "sha256:f8fa9a329bfdeb79856a39fc72622215017001a1153ac747487766b99b9971fc",
-    "ui/index.html": "sha256:86f8b67a6873853c26356fea7a03a6dfeee08fe194fee4bd2d3676dae052f9ec",
-    "ui/plugin.css": "sha256:f199659aaf9ad12bed5caa0f663a4c64a80560ca64e97378a08e3a1221f28d97",
-    "ui/security.js": "sha256:4d37983eeb7ace8ba04d95297d168794b99bb48ca37cf41568de041829ea300e"
+    "schemas/sshd.status.response.json": "sha256:514d8c4c63524c8c02b51ebcf2395b2b9ec1f0f1d994d6148b4b74360e328c19",
+    "ui/index.html": "sha256:c64ef3d15f4eb4a4852e8aabb3dc01a822d3058e6e2539416a8b74b9b155bf6b",
+    "ui/plugin.css": "sha256:09f66168c7d39e2ffbc7c8b875a7877498ab3fc8318506c175284e2c2a6d8bd9",
+    "ui/security.js": "sha256:386950c7403980b796a56ecfbd729d1764c6788b96315a462214b43a2bdfd55a"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -105,6 +105,11 @@
       "name": "state.kv.write",
       "scope": "self",
       "reason": "持久化防爆破扫描游标、安全概览缓存与 SSH 端口切换事务状态"
+    },
+    {
+      "name": "events.publish",
+      "scope": "security.alert",
+      "reason": "在防爆破自动封禁与 SSH 改端口超时自动回滚时发布安全告警事件"
     }
   ],
   "operations": [

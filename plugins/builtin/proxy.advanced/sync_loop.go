@@ -201,7 +201,7 @@ func (i *instance) syncCoreXrayLockedWithWARP(ctx context.Context, host *plugins
 		return "", err
 	}
 
-	writeMeta, err := host.CapabilityContext(ctx)
+	writeMeta, err := host.CapabilityContextAutonomous(ctx, "proxy_traffic_sync")
 	if err != nil {
 		return "", err
 	}
@@ -272,7 +272,7 @@ func (i *instance) syncTrafficShapingLocked(ctx context.Context, host *pluginsdk
 		})
 	}
 
-	writeMeta, err := host.CapabilityContext(ctx)
+	writeMeta, err := host.CapabilityContextAutonomous(ctx, "proxy_traffic_sync")
 	if err != nil {
 		return false, "", err
 	}
@@ -308,10 +308,6 @@ func (i *instance) syncTrafficShapingLocked(ctx context.Context, host *pluginsdk
 }
 
 // ======================== core.xray 脱敏配置合并（$secret_present -> $keep_secret） ========================
-
-func mergeCoreXrayConfigWithWARP(redactedRaw []byte, activeUsers []userRecord, warpCfg *warpWithSecrets, writeNewWARPSecret bool) ([]byte, error) {
-	return mergeCoreXrayConfigWithWARPAndNodes(redactedRaw, activeUsers, nil, warpCfg, writeNewWARPSecret)
-}
 
 func mergeCoreXrayConfigWithWARPAndNodes(redactedRaw []byte, activeUsers []userRecord, managedNodes []proxyNodeRecord, warpCfg *warpWithSecrets, writeNewWARPSecret bool) ([]byte, error) {
 	trimmed := bytes.TrimSpace(redactedRaw)

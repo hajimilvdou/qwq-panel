@@ -35,6 +35,8 @@ service MetricsService {
 
 message ReadMetricsRequest {
   qwq.platform.v1.HostCallContext context = 1;
+  // Optional canonical absolute mount points to query via statfs (max 32).
+  repeated string disk_mounts = 2;
 }
 message ReadMetricsResponse {
   MetricsSnapshot snapshot = 1;

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qwq-panel/qwq/internal/capability/docker"
 	"github.com/qwq-panel/qwq/internal/capability/sysctl"
 	"github.com/qwq-panel/qwq/internal/sandbox"
 )
@@ -185,5 +186,37 @@ func TestCapabilityDispatchesSysctlApplyAndRollback(t *testing.T) {
 	}
 	if base.calls != 0 || len(ranArgs) < 2 {
 		t.Fatalf("sysctl 请求应由 sysctl.Service 处理，实际 base.calls=%d ranArgs=%v", base.calls, ranArgs)
+	}
+}
+
+func TestCapabilityDispatchesDockerRunnerAndBlocksDisallowedEndpoints(t *testing.T) {
+	base := &fixtureCapabilityRunner{}
+	dockerSvc := &docker.Service{
+		Runner: &docker.ControlledDockerCapabilityRunner{
+			SocketPath: filepath.Join(t.TempDir(), "missing-docker.sock"),
+			StacksRoot: t.TempDir(),
+		},
+	}
+	server := newCapabilityServer(newDockerDispatchRunner(base, dockerSvc), slog.New(slog.DiscardHandler), "test")
+
+	badResp := server.handle(t.Context(), sandbox.CapabilityRequest{
+		Op:         "docker.api.write",
+		ID:         "containers.docker",
+		ParamsJSON: []byte(`{"method":"POST","path":"/containers/create"}`),
+	})
+	if badResp.OK || badResp.Code != "PERMISSION_DENIED" {
+		t.Fatalf("expected PERMISSION_DENIED for /containers/create, got %+v", badResp)
+	}
+
+	badCompose := server.handle(t.Context(), sandbox.CapabilityRequest{
+		Op:         "docker.compose",
+		ID:         "containers.docker",
+		ParamsJSON: []byte(`{"stack_name":"demo","action":"up","yaml_content":"services:\n  app:\n    image: nginx:alpine\n    privileged : true\n"}`),
+	})
+	if badCompose.OK || badCompose.Code != "VALIDATION_FAILED" {
+		t.Fatalf("expected VALIDATION_FAILED for privileged compose, got %+v", badCompose)
+	}
+	if base.calls != 0 {
+		t.Fatalf("docker verbs must not fall through to base runner, got base.calls=%d", base.calls)
 	}
 }

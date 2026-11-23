@@ -234,8 +234,8 @@ func TestGatewayTrailingSlashRedirectThemeSandboxAndUploadLimit(t *testing.T) {
 			t.Fatalf("theme sandbox CSP %q missing %q", themeCSP, want)
 		}
 	}
-	if strings.Contains(themeCSP, "script-src https:") || strings.Contains(themeCSP, "script-src 'unsafe-inline'") {
-		t.Fatalf("theme sandbox CSP must not allow wildcard or inline scripts: %q", themeCSP)
+	if strings.Contains(themeCSP, "script-src https:") || strings.Contains(themeCSP, "script-src 'unsafe-inline'") || strings.Contains(themeCSP, "img-src data: blob: https:") {
+		t.Fatalf("theme sandbox CSP must not allow wildcard scripts/images or inline scripts: %q", themeCSP)
 	}
 
 	// 4. /theme-frame/ subpath enforces same-origin sandbox CSP for iframes,

@@ -28,7 +28,7 @@
     "schemas/core.apply.request.json": "sha256:45c58b4e56fd27cbf8e45cf5c3852c3b6b7dbd2168d61bde3366bef96605bb37",
     "schemas/core.apply.response.json": "sha256:7b7dfce9be9e27d1f5a4b8233e2700958985031e87c827d47dc2998470766105",
     "schemas/core.capabilities.request.json": "sha256:0e0674274d30094e0feb651a101f2c77467674907c5786969bdf67eeaced7481",
-    "schemas/core.capabilities.response.json": "sha256:1781c181badc001dd266a518d114589e82b2e2397b260724b584a013ae571966",
+    "schemas/core.capabilities.response.json": "sha256:7a3690905c9a219a08a7194e180e082d59ea37742a81362ab4f36cbcdba323be",
     "schemas/core.observe.request.json": "sha256:8851bcea567ecafb5e1911108575b7afbabcec16ff7aa8b6963839069fd9ee69",
     "schemas/core.observe.response.json": "sha256:24f9dc81b79ccc8861be015ebe72a404713776ad41e10787c51ea7876375a794",
     "schemas/core.status.request.json": "sha256:483db7b92c62b484b97436f3ab53bda644aeb94e21c551865d12a8b3b58d8c16",

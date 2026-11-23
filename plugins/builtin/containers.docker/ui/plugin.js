@@ -22,6 +22,20 @@
     return errObj.detail || errObj.message || errObj.code || fallback;
   }
 
+  function timeoutForOperation(operation) {
+    if (operation === 'docker.compose.deploy') return 95000;
+    if (operation === 'docker.images.prune') return 65000;
+    if (
+      operation === 'docker.container.action' ||
+      operation === 'docker.container.limits' ||
+      operation === 'docker.container.remove' ||
+      operation === 'docker.compose.remove'
+    ) {
+      return 35000;
+    }
+    return 15000;
+  }
+
   const runAction = async (fn, okMsg) => {
     try {
       await fn();
@@ -39,10 +53,11 @@
   const invoke = (operation, payload = {}) => new Promise((resolve, reject) => {
     if (!port) return reject(new Error('宿主桥尚未就绪'));
     const id = `dk_${++seq}`;
+    const timeoutMs = timeoutForOperation(operation);
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error('宿主响应超时'));
-    }, 15000);
+      reject(new Error(`宿主响应超时 (${Math.round(timeoutMs / 1000)}s)`));
+    }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     send({ t: 'api.invoke', id, operation, payload });
   });
@@ -82,9 +97,39 @@
 
   function badge(state) {
     const span = document.createElement('span');
-    span.className = 'badge ' + (state === 'running' ? 'ok' : (state === 'error' ? 'err' : 'warn'));
+    const cls = state === 'running' ? 'ok' : (state === 'error' || state === 'degraded' ? 'err' : 'warn');
+    span.className = 'badge ' + cls;
     span.textContent = state;
     return span;
+  }
+
+  function makeBtn(label, className, onClick) {
+    const btn = document.createElement('button');
+    btn.className = className;
+    btn.type = 'button';
+    btn.textContent = label;
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  function renderInspectBox(ct) {
+    const box = document.getElementById('inspect-box');
+    const title = document.getElementById('inspect-title');
+    const meta = document.getElementById('inspect-meta');
+    if (!ct) {
+      box.hidden = true;
+      return;
+    }
+    title.textContent = `容器详情：${ct.name || ct.id}（${ct.state || '-'}）`;
+    const parts = [
+      `镜像：${ct.image || '-'}`,
+      `内存：${Number(ct.memory_mb || 0).toFixed(1)} MiB / 上限 ${ct.memory_limit_mb > 0 ? Number(ct.memory_limit_mb).toFixed(1) + ' MiB' : '不限'}`,
+      `CPU：${Number(ct.cpu_percent || 0).toFixed(1)}%`,
+      `重启次数：${ct.restart_count ?? 0}`,
+      `OOMKilled：${ct.oom_killed ? '是（发生过 OOM）' : '否'}`,
+    ];
+    meta.textContent = parts.join(' · ');
+    box.hidden = false;
   }
 
   async function refresh() {
@@ -112,25 +157,47 @@
         pTd.textContent = (c.ports || []).join(', ') || '-';
         tr.appendChild(pTd);
         const act = document.createElement('td');
-        const rBtn = document.createElement('button');
-        rBtn.className = 'btn ghost';
-        rBtn.type = 'button';
-        rBtn.textContent = '重启';
-        rBtn.addEventListener('click', () => void runAction(async () => {
+        act.className = 'row-actions';
+
+        const startBtn = makeBtn('启动', 'btn ghost btn-sm', () => void runAction(async () => {
+          await invoke('docker.container.action', { id: c.id, action: 'start' });
+          await refresh();
+        }, `已启动容器 ${c.name}`));
+
+        const stopBtn = makeBtn('停止', 'btn ghost btn-sm', () => void runAction(async () => {
+          await invoke('docker.container.action', { id: c.id, action: 'stop' });
+          await refresh();
+        }, `已停止容器 ${c.name}`));
+
+        const restartBtn = makeBtn('重启', 'btn ghost btn-sm', () => void runAction(async () => {
           await invoke('docker.container.action', { id: c.id, action: 'restart' });
           await refresh();
         }, `已重启容器 ${c.name}`));
-        const lBtn = document.createElement('button');
-        lBtn.className = 'btn ghost btn-gap';
-        lBtn.type = 'button';
-        lBtn.textContent = '日志';
-        lBtn.addEventListener('click', () => void runAction(async () => {
-          document.getElementById('lim-id').value = c.short_id;
+
+        const inspectBtn = makeBtn('详情/限额', 'btn ghost btn-sm', () => void runAction(async () => {
+          document.getElementById('lim-id').value = c.short_id || c.id;
+          document.getElementById('lim-mem').value = '';
+          document.getElementById('lim-cpu').value = '';
+          const res = await invoke('docker.container.inspect', { id: c.id });
+          renderInspectBox(res.container);
+        }, `已加载容器 ${c.name} 详情，可在下方留空或调整资源限额`));
+
+        const logsBtn = makeBtn('日志', 'btn ghost btn-sm', () => void runAction(async () => {
+          document.getElementById('lim-id').value = c.short_id || c.id;
           const res = await invoke('docker.container.logs', { id: c.id, tail: 100 });
           document.getElementById('logs-pre').textContent = res.logs || '(无日志输出)';
           switchTab('images');
         }, `已加载容器 ${c.name} 最新日志`));
-        act.append(rBtn, lBtn);
+
+        const removeBtn = makeBtn('删除', 'btn danger btn-sm', () => void runAction(async () => {
+          const ok = await hostConfirm('删除容器', `确认强制删除容器「${c.name}」(${c.short_id})？此操作不可逆。`, { danger: true, confirmLabel: '确认删除' });
+          if (!ok) return;
+          await invoke('docker.container.remove', { id: c.id, force: true });
+          await refresh();
+          setStatus(`已删除容器 ${c.name}`);
+        }));
+
+        act.append(startBtn, stopBtn, restartBtn, inspectBtn, logsBtn, removeBtn);
         tr.appendChild(act);
         ct.appendChild(tr);
       }
@@ -139,17 +206,45 @@
       st.replaceChildren();
       for (const s of data.stacks || []) {
         const tr = document.createElement('tr');
-        for (const txt of [s.name, s.status, `v${s.revision}`, (s.warnings || []).join('；') || '无高危提示']) {
-          const td = document.createElement('td');
-          td.textContent = txt;
-          tr.appendChild(td);
+
+        const nameTd = document.createElement('td');
+        const nameBtn = makeBtn(s.name, 'link-btn', () => {
+          document.getElementById('cp-name').value = s.name;
+          document.getElementById('cp-yaml').value = s.compose_yaml || '';
+          setStatus(`已回填 Compose 栈「${s.name}」到编辑器`);
+        });
+        nameTd.appendChild(nameBtn);
+        tr.appendChild(nameTd);
+
+        const stTd = document.createElement('td');
+        stTd.appendChild(badge(s.status || 'saved'));
+        tr.appendChild(stTd);
+
+        const revTd = document.createElement('td');
+        revTd.textContent = `v${s.revision}`;
+        tr.appendChild(revTd);
+
+        const infoTd = document.createElement('td');
+        const warns = Array.isArray(s.warnings) ? s.warnings : [];
+        if (warns.length > 0) {
+          const warnDiv = document.createElement('div');
+          warnDiv.className = 'stack-warn';
+          warnDiv.textContent = '预警：' + warns.join('；');
+          infoTd.appendChild(warnDiv);
         }
+        if (s.last_error) {
+          const errDiv = document.createElement('div');
+          errDiv.className = 'stack-err';
+          errDiv.textContent = '最近错误：' + s.last_error;
+          infoTd.appendChild(errDiv);
+        }
+        if (warns.length === 0 && !s.last_error) {
+          infoTd.textContent = '无高危提示';
+        }
+        tr.appendChild(infoTd);
+
         const act = document.createElement('td');
-        const dBtn = document.createElement('button');
-        dBtn.className = 'btn danger';
-        dBtn.type = 'button';
-        dBtn.textContent = '移除';
-        dBtn.addEventListener('click', () => {
+        const dBtn = makeBtn('移除', 'btn danger btn-sm', () => {
           void runAction(async () => {
             const ok = await hostConfirm('移除 Compose 编排栈', `确认停止并移除 Compose 编排栈「${s.name}」？`, { danger: true, confirmLabel: '确认移除' });
             if (!ok) return;
@@ -182,11 +277,15 @@
 
   document.getElementById('btn-refresh').addEventListener('click', () => void refresh());
   document.getElementById('btn-limits').addEventListener('click', () => void runAction(async () => {
-    await invoke('docker.container.limits', {
-      id: document.getElementById('lim-id').value.trim(),
-      memory_mb: Number(document.getElementById('lim-mem').value || 0),
-      cpus: Number(document.getElementById('lim-cpu').value || 0),
-    });
+    const id = document.getElementById('lim-id').value.trim();
+    const memRaw = document.getElementById('lim-mem').value.trim();
+    const cpuRaw = document.getElementById('lim-cpu').value.trim();
+    if (!id) throw new Error('请先选择或输入目标容器 ID / 名称');
+    if (memRaw === '' && cpuRaw === '') throw new Error('请至少填写内存上限或 CPU 核数上限之一（留空表示不修改该项）');
+    const payload = { id };
+    if (memRaw !== '') payload.memory_mb = Number(memRaw);
+    if (cpuRaw !== '') payload.cpus = Number(cpuRaw);
+    await invoke('docker.container.limits', payload);
     await refresh();
   }, '容器资源限额已更新'));
 

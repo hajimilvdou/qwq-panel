@@ -4,6 +4,8 @@ package controller
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/qwq-panel/qwq/internal/platform/problem"
@@ -140,4 +142,34 @@ func ensureHostChannelForSpec(hosts HostChannels, spec updater.InstanceSpec) err
 	return ensureHostChannel(hosts, spec.PluginID)
 }
 
+// IsActiveBackgroundInstance implements hostsvc.AutonomousInstanceChecker:
+// returns true only when the active installed manifest of pluginID declares
+// lifecycle.background == true and the supervisor currently holds a live client
+// for the instance.
+func (rt *PluginRuntime) IsActiveBackgroundInstance(pluginID, instanceID string) bool {
+	if rt == nil || instanceID != DefaultInstanceID || sandbox.ValidateID(pluginID) != nil {
+		return false
+	}
+	if _, err := rt.live(pluginID); err != nil {
+		return false
+	}
+	if rt.opts.PluginDir == nil {
+		return false
+	}
+	dir, err := rt.opts.PluginDir(pluginID)
+	if err != nil {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return false
+	}
+	m, err := manifest.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return m.Lifecycle.Background
+}
+
 var _ hostsvc.OperationResolver = (*hostCapabilityResolver)(nil)
+var _ hostsvc.AutonomousInstanceChecker = (*PluginRuntime)(nil)

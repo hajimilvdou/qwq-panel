@@ -82,6 +82,7 @@ type DomainBindingCoordinator struct {
 	panelHosts  map[string]struct{}
 	activeCert  atomic.Pointer[tls.Certificate]
 	activeMeta  atomic.Pointer[BoundCertSummary]
+	tlsObs      atomic.Pointer[probeTLSBindingObservation]
 	dncDetector func() HostDNCCapabilities
 }
 

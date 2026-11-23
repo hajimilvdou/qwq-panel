@@ -15,6 +15,9 @@
     "bound_addr": {
       "type": "string"
     },
+    "https_bound_addr": {
+      "type": "string"
+    },
     "active_routes": {
       "type": "integer"
     },

@@ -57,14 +57,21 @@
         </div>
       </div>
       <div class="field-row">
-        <input id="node-name" type="text" placeholder="新节点名称，如 东京软银 · 02">
+        <input id="node-id" type="hidden" value="">
+        <input id="node-name" type="text" placeholder="节点名称，如 东京软银 · 02">
         <input id="node-region" type="text" placeholder="地区码 (HK / JP / US / SG)" value="JP">
         <select id="node-quota-mode">
           <option value="both">双向合计计费 (in + out)</option>
           <option value="max">单向取大计费 max(in, out)</option>
           <option value="out_only">仅计出站流量 (out_only)</option>
         </select>
+        <input id="node-quota-gb" type="number" min="0" step="1" placeholder="月流量配额 (GB，0=不限)">
+        <input id="node-reset-day" type="number" min="1" max="31" value="1" placeholder="流量重置日 (1-31)">
+        <input id="node-expires-at" type="date" aria-label="账单到期日" title="账单到期日">
+      </div>
+      <div class="btn-group">
         <button type="button" class="btn primary" id="add-node-btn">添加节点并生成安装命令</button>
+        <button type="button" class="btn ghost" id="cancel-edit-node-btn" hidden>取消编辑</button>
       </div>
       <div class="snippet-bar" id="install-cmd-actions" hidden>
         <button type="button" class="btn ghost" id="copy-install-cmd-btn">复制安装命令</button>

@@ -23,7 +23,34 @@ import (
 //  2. 打通 AnyTLS / VLESS-TLS / VMess-TLS / Trojan-TLS / Hysteria2 五大协议的宿主 TLS 证书消费门禁。
 // ============================================================================
 
-// IsValidCertificateConsumerPurpose 定义宿主允许代理核心消费的证书用途集合（同步更新 certificates/validate.go:66）。
+// TLSConsumerSpec describes an official host-approved TLS certificate consumer plugin.
+type TLSConsumerSpec struct {
+	PluginID        string
+	ReloadOperation string
+	InspectOp       string
+}
+
+// SupportedTLSConsumerPlugins lists all builtin plugins authorized to consume
+// host-materialized TLS certificates and receive automatic renewal reloads.
+var SupportedTLSConsumerPlugins = map[string]TLSConsumerSpec{
+	"core.xray": {
+		PluginID:        "core.xray",
+		ReloadOperation: "tls.reload",
+		InspectOp:       "tls.inspect",
+	},
+	"web.ingress": {
+		PluginID:        "web.ingress",
+		ReloadOperation: "ingress.tls.reload",
+		InspectOp:       "ingress.tls.inspect",
+	},
+	"server.probe": {
+		PluginID:        "server.probe",
+		ReloadOperation: "probe.tls.reload",
+		InspectOp:       "probe.tls.inspect",
+	},
+}
+
+// IsValidCertificateConsumerPurpose 定义宿主允许受控消费者使用的证书用途集合（同步更新 certificates/validate.go:66）。
 func IsValidCertificateConsumerPurpose(purpose string) bool {
 	switch purpose {
 	case "panel.https",
@@ -32,7 +59,9 @@ func IsValidCertificateConsumerPurpose(purpose string) bool {
 		"proxy.vless",
 		"proxy.vmess",
 		"proxy.trojan",
-		"proxy.tls":
+		"proxy.tls",
+		"ingress.https",
+		"probe.https":
 		return true
 	default:
 		return false

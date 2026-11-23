@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ type Server struct {
 	manifest   *manifest.Manifest
 	descriptor *platformv1.PluginDescriptor
 	hostConn   grpc.ClientConnInterface
+	hostSocket string
 	log        *slog.Logger
 	baseCtx    context.Context
 	grace      time.Duration
@@ -152,6 +154,21 @@ func (s *Server) Start(ctx context.Context, req *platformv1.StartRequest) (*plat
 	if err := in.transition(StateReady, StateInitialized); err != nil {
 		return nil, err
 	}
+	if streamer, ok := in.author.(PublicHTTPStreamer); ok {
+		hostSock := s.hostSocket
+		if hostSock == "" {
+			hostSock = os.Getenv(EnvHostSocket)
+		}
+		if hostSock != "" {
+			bridge, bErr := StartPublicStreamBridge(hostSock, streamer, nil)
+			if bErr != nil {
+				in.log.Warn("failed to start public stream bridge; falling back to buffered ABI", slog.String("error", bErr.Error()))
+			} else if bridge != nil {
+				in.setStreamBridge(bridge)
+				in.log.Info("public stream bridge listening", slog.String("socket", bridge.SocketPath()))
+			}
+		}
+	}
 	in.log.Info("instance ready")
 	return &platformv1.StartResponse{}, nil
 }
@@ -268,6 +285,7 @@ func (s *Server) Stop(ctx context.Context, req *platformv1.StopRequest) (*platfo
 			}
 		}
 	}
+	in.closeStreamBridge(dctx)
 	if st, ok := in.author.(Stopper); ok {
 		hctx := in.callContext(dctx, req.GetContext(), 0, false)
 		if err := safelyRun(in, "stop", func() error { return st.Stop(hctx) }); err != nil {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/anytls"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/apply"
@@ -18,13 +19,24 @@ import (
 
 // driverRuntime 绑定同一实例的私有存储、进程、事务与状态源。
 type driverRuntime struct {
-	store       *state.Store
-	process     apply.Process
-	obfs        apply.ObfsManager
-	anytls      apply.AnyTLSManager
-	controller  *apply.Engine
-	coreVersion string
-	trusted     bool
+	store         *state.Store
+	process       apply.Process
+	obfs          apply.ObfsManager
+	anytls        apply.AnyTLSManager
+	anytlsAligner *anytls.LosslessEpochAligner
+	alignerOnce   sync.Once
+	controller    *apply.Engine
+	coreVersion   string
+	trusted       bool
+}
+
+func (d *driverRuntime) alignAnyTLSCounters(xrayEpoch string, totals map[string]int64) map[string]int64 {
+	d.alignerOnce.Do(func() {
+		if d.anytlsAligner == nil {
+			d.anytlsAligner = anytls.NewLosslessEpochAligner()
+		}
+	})
+	return d.anytlsAligner.ProjectForEpoch(xrayEpoch, totals)
 }
 
 func locateOptionalObfsBinary() *coreproc.ObfsSupervisor {
@@ -70,6 +82,7 @@ func newDriverRuntime(i *instance) (*driverRuntime, error) {
 	}
 	driver.process = process
 	driver.anytls = anytls.NewSupervisor()
+	driver.anytlsAligner = anytls.NewLosslessEpochAligner()
 	driver.controller, err = apply.New(apply.Options{Store: store, Process: process, Binary: binary, Obfs: driver.obfs, AnyTLS: driver.anytls, Socket: socket, DataDir: i.DataDir()})
 	if err != nil {
 		return nil, mapApplyError(err)

@@ -4,6 +4,7 @@ package metrics
 
 import (
 	"context"
+	"errors"
 
 	"github.com/qwq-panel/qwq/internal/pluginhost/hostsvc"
 	metricsv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/metrics/v1"
@@ -18,8 +19,15 @@ func (f Forwarder) Forward(ctx context.Context, call hostsvc.CapabilityCall) (ho
 	if call.Service != "metrics" || call.Method != "ReadMetrics" || f.Collector == nil {
 		return hostsvc.CapabilityResult{}, status.Error(codes.Unavailable, "能力执行器尚未接入")
 	}
-	snapshot, err := f.Collector.Collect(ctx)
+	var reqMounts []string
+	if req, ok := call.Request.(*metricsv1.ReadMetricsRequest); ok && req != nil {
+		reqMounts = req.GetDiskMounts()
+	}
+	snapshot, err := f.Collector.CollectMounts(ctx, reqMounts)
 	if err != nil {
+		if errors.Is(err, ErrInvalidMounts) {
+			return hostsvc.CapabilityResult{}, status.Error(codes.InvalidArgument, "磁盘挂载点配置无效")
+		}
 		if ctx.Err() != nil {
 			return hostsvc.CapabilityResult{}, status.FromContextError(ctx.Err()).Err()
 		}

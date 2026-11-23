@@ -100,6 +100,10 @@ func openIngressStore(dataDir, schemaSQL string, nowFn func() time.Time) (*ingre
 		_ = db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
+	if err := MigrateIngressSitesCompositeUnique(context.Background(), db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
 	if nowFn == nil {
 		nowFn = time.Now
 	}
@@ -264,7 +268,7 @@ func (s *ingressStore) upsertSite(ctx context.Context, p siteUpsertParams) (Site
 		_ = s.db.QueryRowContext(ctx, `SELECT id, basic_auth_user, basic_auth_hash, revision FROM ingress_sites WHERE id = ?`, p.ID).
 			Scan(&existingID, &existingUser, &existingHash, &existingRev)
 	} else {
-		_ = s.db.QueryRowContext(ctx, `SELECT id, basic_auth_user, basic_auth_hash, revision FROM ingress_sites WHERE domain = ?`, domain).
+		_ = s.db.QueryRowContext(ctx, `SELECT id, basic_auth_user, basic_auth_hash, revision FROM ingress_sites WHERE domain = ? AND path_prefix = ?`, domain, prefix).
 			Scan(&existingID, &existingUser, &existingHash, &existingRev)
 	}
 
@@ -370,7 +374,7 @@ func (s *ingressStore) listSitesLocked(ctx context.Context) ([]SiteRecord, error
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, domain, enabled, upstream_url, path_prefix, websocket, tls_mode, cert_id, force_https,
 		        rate_limit_rps, rate_limit_burst, basic_auth_user, basic_auth_hash, extra_headers_json, notes, revision, created_at, updated_at
-		 FROM ingress_sites ORDER BY domain ASC`)
+		 FROM ingress_sites ORDER BY domain ASC, path_prefix ASC`)
 	if err != nil {
 		return nil, err
 	}

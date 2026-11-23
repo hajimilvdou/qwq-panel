@@ -5,6 +5,7 @@ package hostsvc
 import (
 	"context"
 	"regexp"
+	"strings"
 	"time"
 
 	platformv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
@@ -26,14 +27,15 @@ type capabilityPolicy struct {
 }
 
 type capabilityGate struct {
-	grants                 map[string]struct{}
-	writes, scans, metrics *tokenBucket
+	grants                        map[string]struct{}
+	writes, auton, scans, metrics *tokenBucket
 }
 
 func newCapabilityGate(grants []*platformv1.Capability, limits Limits) *capabilityGate {
 	gate := &capabilityGate{
 		grants:  make(map[string]struct{}, len(grants)),
 		writes:  newTokenBucket(limits.CapabilityWritesPerMinute, defaultBurst(limits.CapabilityWritesPerMinute)),
+		auton:   newTokenBucket(limits.AutonomousWritesPerMinute, defaultBurst(limits.AutonomousWritesPerMinute)),
 		scans:   newTokenBucket(limits.BanScansPerMinute, 1),
 		metrics: newTokenBucket(limits.MetricsReadsPerMinute, 2),
 	}
@@ -88,18 +90,24 @@ func (s *Server) authorizeCapability(ctx context.Context, request proto.Message,
 		meta = callMetaOf(contextual.GetContext())
 	}
 	if policy.write {
-		if meta.OperationID == "" {
-			return CapabilityCall{}, status.Error(codes.FailedPrecondition, "能力写入需要正在派发的 operation")
-		}
-		if s.cfg.OperationResolver == nil {
-			return CapabilityCall{}, unavailable("operation resolver")
-		}
-		binding, err := s.cfg.OperationResolver.Resolve(ctx, s.cfg.InstanceID, meta.OperationID)
-		if err != nil {
-			return CapabilityCall{}, capabilityFailure(err)
-		}
-		if !binding.Dispatched || (binding.Effect != "write" && binding.Effect != "destructive") || !capabilityMatches(binding.Capabilities, policy.name, scope, policy.account) {
-			return CapabilityCall{}, status.Error(codes.PermissionDenied, "operation 未派发给本实例或未声明对应写能力")
+		if strings.HasPrefix(meta.OperationID, autonomousOpPrefix) {
+			if err := s.authorizeAutonomousWrite(request, policy, scope, meta.OperationID, s.cfg.AutonomousChecker, s.capabilities.auton); err != nil {
+				return CapabilityCall{}, err
+			}
+		} else {
+			if meta.OperationID == "" {
+				return CapabilityCall{}, status.Error(codes.FailedPrecondition, "能力写入需要正在派发的 operation")
+			}
+			if s.cfg.OperationResolver == nil {
+				return CapabilityCall{}, unavailable("operation resolver")
+			}
+			binding, err := s.cfg.OperationResolver.Resolve(ctx, s.cfg.InstanceID, meta.OperationID)
+			if err != nil {
+				return CapabilityCall{}, capabilityFailure(err)
+			}
+			if !binding.Dispatched || (binding.Effect != "write" && binding.Effect != "destructive") || !capabilityMatches(binding.Capabilities, policy.name, scope, policy.account) {
+				return CapabilityCall{}, status.Error(codes.PermissionDenied, "operation 未派发给本实例或未声明对应写能力")
+			}
 		}
 	}
 	if s.cfg.CapabilityForwarder == nil {

@@ -523,3 +523,69 @@ func TestSixQuotaSourcesAndAntiHoarding(t *testing.T) {
 		t.Fatalf("次日低余额用户签到失败: g2=%d err=%v", g2, err)
 	}
 }
+
+func TestDisabledUserRejectedAndSMTPMetadataBlocked(t *testing.T) {
+	ctx := context.Background()
+	eng, cleanup := newTestLedger(t, nil)
+	defer cleanup()
+
+	_, err := eng.UpdateSettings(ctx, SettingsPatch{
+		AllowLinuxDoSignup:     ptr(true),
+		LinuxDoMinTrustLevel:   ptr(0),
+		CheckinEnabled:         ptr(true),
+		CheckinMinMicros:       ptr(int64(100_000)),
+		CheckinMaxMicros:       ptr(int64(100_000)),
+		CheckinDripBelowMicros: ptr(int64(0)),
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings 失败: %v", err)
+	}
+
+	ldSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth2/token":
+			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "tok-disabled-check"})
+		case "/api/user":
+			_ = json.NewEncoder(w).Encode(LinuxDoUserProfile{ID: json.Number("900123"), Username: "banned_ld", TrustLevel: 2, Active: true})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ldSrv.Close()
+	eng.SetLinuxDoBaseURL(ldSrv.URL)
+
+	uid, _, _, err := eng.LoginOrSignupWithLinuxDo(ctx, "cid", "csec", "http://cb", "code1", "ver1")
+	if err != nil {
+		t.Fatalf("首次 LinuxDo 注册失败: %v", err)
+	}
+	codes, _, err := eng.GenerateCodes(ctx, "cdk_single", "Gift", 100_000, 1, 1, "", "CDK-BAN-CHECK", 24)
+	if err != nil || len(codes) != 1 {
+		t.Fatalf("生成兑换码失败: %v", err)
+	}
+
+	// 封禁该账号后，DailyCheckIn / RedeemCode / LinuxDo 二次登录必须全部返回 USER_DISABLED。
+	if _, err := eng.AdjustUserQuota(ctx, uid, 0, "", "disabled", nil, "", "ban user"); err != nil {
+		t.Fatalf("封禁用户失败: %v", err)
+	}
+	if _, _, err := eng.DailyCheckIn(ctx, uid); err == nil || !strings.HasPrefix(err.Error(), "USER_DISABLED") {
+		t.Fatalf("封禁用户 DailyCheckIn 应返回 USER_DISABLED，实际: %v", err)
+	}
+	if _, _, err := eng.RedeemCode(ctx, uid, codes[0]); err == nil || !strings.HasPrefix(err.Error(), "USER_DISABLED") {
+		t.Fatalf("封禁用户 RedeemCode 应返回 USER_DISABLED，实际: %v", err)
+	}
+	if _, _, _, err := eng.LoginOrSignupWithLinuxDo(ctx, "cid", "csec", "http://cb", "code2", "ver2"); err == nil || !strings.HasPrefix(err.Error(), "USER_DISABLED") {
+		t.Fatalf("封禁用户 LinuxDo 登录应返回 USER_DISABLED，实际: %v", err)
+	}
+
+	// SMTP 元数据 IP 硬拦截验证（AWS/GCP 169.254.169.254、阿里云 100.100.100.200、metadata.google.internal）。
+	for _, badHost := range []string{"169.254.169.254", "100.100.100.200", "metadata.google.internal"} {
+		err := SendVerificationEmailBounded(ctx, RelaySMTPConfig{
+			Host: badHost,
+			Port: 587,
+			From: "noreply@example.com",
+		}, "user@example.com", "Test", "123456")
+		if err == nil || !strings.Contains(err.Error(), "SSRF_BLOCKED") {
+			t.Fatalf("SMTP 主机 %s 应命中 SSRF_BLOCKED，实际: %v", badHost, err)
+		}
+	}
+}

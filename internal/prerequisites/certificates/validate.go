@@ -70,7 +70,9 @@ func validConsumerPurpose(purpose string) bool {
 		"proxy.vless",
 		"proxy.vmess",
 		"proxy.trojan",
-		"proxy.tls":
+		"proxy.tls",
+		"ingress.https",
+		"probe.https":
 		return true
 	default:
 		return false

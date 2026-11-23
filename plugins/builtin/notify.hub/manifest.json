@@ -36,9 +36,9 @@
     "schemas/notify.rule.upsert.request.json": "sha256:677383e5088e5c675612671a0599ebdbab66b348047de5538cab096e1974442a",
     "schemas/notify.rule.upsert.response.json": "sha256:81b9b6d31807b67ad8f4c2584b5b71b53668431bd73b0ed3cf7e98771775775f",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
-    "ui/index.html": "sha256:4e39dde5852c44e105c49631c849c5f82168be4f4b2a67dbe690f91acb70fc45",
-    "ui/plugin.css": "sha256:8d545a4e2e95aaa2a8bb0d83cb995ce37b17a5db5726cd064ff1b2a926b3f065",
-    "ui/plugin.js": "sha256:ce23aadd986eef27b99666d68c64173fe85d518a84095d20b896fa0e502e43ac"
+    "ui/index.html": "sha256:8ab34bdccce7ba49d6779855ea3ed5f7345bb451f9702d0c92dee10fd6bba64c",
+    "ui/plugin.css": "sha256:7cdef9e489e7c31c8f33b27b7a20e5928da94867e7d5c84d302f866b74dcc259",
+    "ui/plugin.js": "sha256:d1e164c8b2833e23d15efcc890bb0dceb3a345ddc76073a61021902294e7c531"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -249,7 +249,7 @@
       "risk": "low",
       "idempotent": false,
       "timeout_ms": 30000,
-      "approval": "ai_confirm",
+      "approval": "auto",
       "approval_summary": "触发告警通知分发",
       "approval_description": "按既有路由规则、冷却去重和静默时段向匹配的外部通知通道推送结构化事件。",
       "summary": "按路由规则与降噪策略分发一条结构化告警事件",

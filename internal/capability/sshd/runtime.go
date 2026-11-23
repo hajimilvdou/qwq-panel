@@ -134,6 +134,11 @@ func (r SystemRuntime) Verify(ctx context.Context, port uint32) (string, error) 
 	return "", errPortVerification
 }
 
+// HasExternalConnection 在宿主真实网络命名空间检测目标端口是否存在非回环外部 SSH 连接。
+func (r SystemRuntime) HasExternalConnection(_ context.Context, port uint32) bool {
+	return HostNetnsHasExternalSSHConn(port)
+}
+
 // loopbackBanner 有界读取 SSH 横幅，不执行认证，不访问任何外部地址。
 func loopbackBanner(ctx context.Context, address string) (string, error) {
 	dialer := net.Dialer{Timeout: 750 * time.Millisecond}

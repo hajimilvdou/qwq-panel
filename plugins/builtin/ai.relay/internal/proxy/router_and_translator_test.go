@@ -368,3 +368,87 @@ func TestBaseURLNormalizationAndCrossProtocolNonStreamAggregation(t *testing.T) 
 		t.Fatalf("unexpected usage: %+v", usage)
 	}
 }
+
+func TestAnthropicSSEStateMachineToolsAnd5xxCooldown(t *testing.T) {
+	// 1) AnthropicSSEStateMachine 必须为 thinking 与 text 分配独立递增的 content_block index 并完整开闭。
+	var buf strings.Builder
+	sm := NewAnthropicSSEStateMachine(&buf, "claude-sonnet-4-5")
+	sm.EmitDelta(128, "step-one ", "")
+	sm.EmitDelta(128, "step-two", "")
+	sm.EmitDelta(128, "", "final answer")
+	sm.Finish(128, 42, "end_turn")
+	out := buf.String()
+	for _, want := range []string{
+		`"index":0,"content_block":{"type":"thinking","thinking":""}`,
+		`"type":"thinking_delta"`,
+		`"type":"content_block_stop","index":0`,
+		`"index":1,"content_block":{"type":"text","text":""}`,
+		`"type":"text_delta"`,
+		`"type":"content_block_stop","index":1`,
+		`event: message_delta`,
+		`event: message_stop`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("AnthropicSSEStateMachine 输出缺少 %q:\n%s", want, out)
+		}
+	}
+
+	// 2) OpenAI <-> Anthropic 请求翻译必须保留 tools / tool_choice / temperature。
+	rawOpenAI := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"temperature":0.25,
+		"tools":[{"type":"function","function":{"name":"get_weather","description":"fetch weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}],
+		"tool_choice":{"type":"function","function":{"name":"get_weather"}},
+		"messages":[{"role":"user","content":"weather in Tokyo"}]
+	}`)
+	ir, err := ParseDownstreamRequest(ProtoOpenAIChat, "", rawOpenAI)
+	if err != nil {
+		t.Fatalf("ParseDownstreamRequest(OpenAI tools) 失败: %v", err)
+	}
+	if ir.Temperature == nil || *ir.Temperature != 0.25 || len(ir.Tools) != 1 || len(ir.ToolChoice) == 0 {
+		t.Fatalf("CanonicalRequest 未保留 temperature/tools/tool_choice: %+v", ir)
+	}
+	antCh := &UpstreamChannel{ID: "ant-tools", Kind: ChanAnthropicNative, BaseURL: "https://api.anthropic.com"}
+	antCh.SetCredential("sk-ant-1")
+	_, _, antBody, err := EncodeUpstreamRequest(antCh, ProtoOpenAIChat, rawOpenAI, ir)
+	if err != nil {
+		t.Fatalf("EncodeUpstreamRequest(->Anthropic) 失败: %v", err)
+	}
+	antStr := string(antBody)
+	for _, want := range []string{`"temperature":0.25`, `"input_schema"`, `"name":"get_weather"`, `"type":"tool"`} {
+		if !strings.Contains(antStr, want) {
+			t.Fatalf("Anthropic 上游请求缺少 %q:\n%s", want, antStr)
+		}
+	}
+
+	// 反向 Anthropic -> OpenAI 也应保留 tools / tool_choice / temperature。
+	irAnt, err := ParseDownstreamRequest(ProtoAnthropicMessages, "", antBody)
+	if err != nil {
+		t.Fatalf("ParseDownstreamRequest(Anthropic tools) 失败: %v", err)
+	}
+	oaCh := &UpstreamChannel{ID: "oa-tools", Kind: ChanOpenAICompat, BaseURL: "https://api.openai.com"}
+	oaCh.SetCredential("sk-oa-1")
+	_, _, oaBody, err := EncodeUpstreamRequest(oaCh, ProtoAnthropicMessages, antBody, irAnt)
+	if err != nil {
+		t.Fatalf("EncodeUpstreamRequest(->OpenAI) 失败: %v", err)
+	}
+	oaStr := string(oaBody)
+	for _, want := range []string{`"temperature":0.25`, `"type":"function"`, `"name":"get_weather"`} {
+		if !strings.Contains(oaStr, want) {
+			t.Fatalf("OpenAI 上游请求缺少 %q:\n%s", want, oaStr)
+		}
+	}
+
+	// 3) 500/502/503/504 应触发短冷却熔断，冷却到期后恢复健康。
+	now := time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC)
+	for _, code := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout} {
+		ch := &UpstreamChannel{ID: "c-5xx"}
+		ch.MarkUpstreamStatus(code, 60*time.Second, now)
+		if ch.CooldownUntil.Load() <= now.Add(5*time.Second).UnixMilli() {
+			t.Fatalf("HTTP %d 后渠道应进入冷却期", code)
+		}
+		if ch.CooldownUntil.Load() > now.Add(20*time.Second).UnixMilli() {
+			t.Fatalf("HTTP %d 短冷却期结束后渠道应恢复", code)
+		}
+	}
+}

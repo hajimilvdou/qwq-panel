@@ -9,6 +9,7 @@ import (
 	banv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/ban/v1"
 	certificatesv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/certificates/v1"
 	dnsv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/dns/v1"
+	dockerv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/docker/v1"
 	firewallv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/firewall/v1"
 	metricsv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/metrics/v1"
 	pluginconfigv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/pluginconfig/v1"
@@ -19,7 +20,7 @@ import (
 // ======================== 按授予选择性注册 ========================
 // 未授予的服务不进入 gRPC registry；同一服务内的 RPC 仍逐项过能力门。
 func (s *Server) registerCapabilityServices() {
-	var firewall, sshd, account, ban, metrics, dns, certificates, pluginconfig, traffic bool
+	var firewall, sshd, account, ban, metrics, dns, certificates, pluginconfig, traffic, docker bool
 	for _, capability := range s.cfg.GrantedCapabilities {
 		switch capability.Name {
 		case "system.firewall.manage":
@@ -40,6 +41,8 @@ func (s *Server) registerCapabilityServices() {
 			pluginconfig = true
 		case "system.traffic.shape":
 			traffic = true
+		case "system.docker.read", "system.docker.manage":
+			docker = true
 		}
 	}
 	if firewall {
@@ -68,6 +71,9 @@ func (s *Server) registerCapabilityServices() {
 	}
 	if traffic {
 		trafficv1.RegisterTrafficServiceServer(s.gs, &trafficCapabilityService{s: s})
+	}
+	if docker {
+		dockerv1.RegisterDockerServiceServer(s.gs, &dockerCapabilityService{s: s})
 	}
 }
 
@@ -200,4 +206,22 @@ func (x *trafficCapabilityService) ApplyShapingRules(ctx context.Context, req *t
 
 func (x *trafficCapabilityService) ClearShapingRules(ctx context.Context, req *trafficv1.ClearShapingRulesRequest) (*trafficv1.ClearShapingRulesResponse, error) {
 	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "traffic", method: "ClearShapingRules", verb: "traffic.clear", name: "system.traffic.shape", write: true}, new(trafficv1.ClearShapingRulesResponse))
+}
+
+// ======================== Docker 受控代理与编排 RPC 适配（PLG-FIX-04 / PLG-FIX-05） ========================
+type dockerCapabilityService struct {
+	dockerv1.UnimplementedDockerServiceServer
+	s *Server
+}
+
+func (x *dockerCapabilityService) ProxyRead(ctx context.Context, req *dockerv1.ProxyReadRequest) (*dockerv1.ProxyReadResponse, error) {
+	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "docker", method: "ProxyRead", verb: "docker.api.read", name: "system.docker.read"}, new(dockerv1.ProxyReadResponse))
+}
+
+func (x *dockerCapabilityService) ProxyWrite(ctx context.Context, req *dockerv1.ProxyWriteRequest) (*dockerv1.ProxyWriteResponse, error) {
+	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "docker", method: "ProxyWrite", verb: "docker.api.write", name: "system.docker.manage", write: true}, new(dockerv1.ProxyWriteResponse))
+}
+
+func (x *dockerCapabilityService) ComposeAction(ctx context.Context, req *dockerv1.ComposeActionRequest) (*dockerv1.ComposeActionResponse, error) {
+	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "docker", method: "ComposeAction", verb: "docker.compose", name: "system.docker.manage", write: true}, new(dockerv1.ComposeActionResponse))
 }

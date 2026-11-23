@@ -122,14 +122,24 @@ body {
   margin-bottom: 16px;
 }
 .card h3 {
-  margin: 0 0 6px;
+  margin: 0 0 4px;
   font-size: 15px;
+}
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 .form-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   margin-top: 12px;
+}
+.form-grid[hidden] {
+  display: none;
 }
 label {
   display: flex;
@@ -137,6 +147,19 @@ label {
   gap: 5px;
   font-size: 12px;
   color: var(--text-2);
+}
+.checkbox-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+  padding-top: 18px;
+}
+.checkbox-inline input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
 }
 input,
 select,
@@ -147,6 +170,37 @@ textarea {
   background: var(--bg);
   color: var(--text);
   font-size: 13px;
+}
+.ch-picker-block {
+  margin-top: 14px;
+}
+.picker-label {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+.ch-checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ch-checkbox-item {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.ch-checkbox-item input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  padding: 0;
 }
 .actions {
   display: flex;
@@ -173,6 +227,10 @@ textarea {
   background: var(--brick-soft);
   color: var(--brick);
 }
+.btn.sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
 .btn-gap {
   margin-left: 6px;
 }
@@ -195,17 +253,53 @@ textarea {
   background: var(--brick-soft);
   color: var(--brick);
 }
+.badge.muted {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.cell-stack {
+  display: grid;
+  gap: 4px;
+}
+.cell-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.err-msg {
+  color: var(--brick);
+  background: var(--brick-soft);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  word-break: break-word;
+}
+.sup-msg {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.ts-cell {
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin-top: 12px;
+}
 table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  margin-top: 12px;
 }
 th,
 td {
   text-align: left;
   padding: 10px 8px;
   border-bottom: 1px solid var(--line);
+  vertical-align: top;
 }
 th {
   font-size: 12px;
@@ -215,4 +309,9 @@ th {
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+}
+.empty-cell {
+  text-align: center;
+  color: var(--text-2);
+  padding: 16px 8px;
 }

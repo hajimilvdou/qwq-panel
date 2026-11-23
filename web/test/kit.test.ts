@@ -3,6 +3,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createPluginBridge,
+  generateOpenSSHEd25519KeyPair,
+  invokeWithApprovalFollowup,
   parseInitialFragment,
   PluginHostError,
   PluginInvokeError,
@@ -416,5 +418,47 @@ describe('@qwq/kit v1 ↔ PluginBridge 端到端握手与调用', () => {
     expect(activeHref(items, '/plugins/security.basic/firewall')).toBe('/plugins/security.basic/firewall');
     expect(isActive('/plugins/security.basic', '/plugins/security.basic/firewall', items)).toBe(false);
     expect(isActive('/plugins/security.basic/firewall', '/plugins/security.basic/firewall', items)).toBe(true);
+  });
+
+  it('STEP-11: invokeWithApprovalFollowup 自动跟单审批与 generateOpenSSHEd25519KeyPair 生成标准 OpenSSH 私钥', async () => {
+    const toasts: string[] = [];
+    let subCb: ((ev: { subject: string; operation_id?: string }) => void) | null = null;
+    let unsubbed = 0;
+    const fakeBridge = {
+      invokeOutcome: async () => ({ kind: 'awaiting_approval' as const, operationId: 'op_wait_1', approvalId: 'apr_1' }),
+      toast: (msg: string) => toasts.push(msg),
+      subscribe: (_patterns: string[], cb: (ev: { subject: string; operation_id?: string }) => void) => {
+        subCb = cb;
+        return () => {
+          unsubbed++;
+        };
+      },
+    };
+    let settledCount = 0;
+    const outcome = await invokeWithApprovalFollowup(
+      fakeBridge as unknown as Parameters<typeof invokeWithApprovalFollowup>[0],
+      'nodes.upsert',
+      {},
+      {
+        pluginId: 'server.probe',
+        onBackgroundSettled: () => {
+          settledCount++;
+        },
+      },
+    );
+    expect(outcome.kind).toBe('awaiting_approval');
+    expect(toasts.length).toBe(1);
+    expect(subCb).not.toBeNull();
+    subCb!({ subject: 'plugins/server.probe/nodes', operation_id: 'op_wait_1' });
+    await Promise.resolve();
+    expect(settledCount).toBe(1);
+    expect(unsubbed).toBe(1);
+
+    if (typeof crypto !== 'undefined' && crypto.subtle) {
+      const kp = await generateOpenSSHEd25519KeyPair('test@qwq');
+      expect(kp.publicKeyAuthorized.startsWith('ssh-ed25519 ')).toBe(true);
+      expect(kp.publicKeyAuthorized.endsWith(' test@qwq')).toBe(true);
+      expect(kp.privateKeyOpenSSHPEM).toContain('OPENSSH PRIVATE KEY-----');
+    }
   });
 });

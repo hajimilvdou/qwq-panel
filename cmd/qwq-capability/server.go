@@ -11,11 +11,39 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/qwq-panel/qwq/internal/capability/docker"
 	"github.com/qwq-panel/qwq/internal/capability/sysctl"
 	"github.com/qwq-panel/qwq/internal/sandbox"
 )
 
-const capabilityRequestTimeout = 30 * time.Second
+const (
+	capabilityRequestTimeout = 30 * time.Second
+	composeRequestTimeout    = 95 * time.Second
+)
+
+// dockerDispatchRunner 将 docker.api.read / docker.api.write / docker.compose 路由到受控 Docker 能力服务，
+// 其余能力 verb 继续委派给基础 runner。
+type dockerDispatchRunner struct {
+	base   sandbox.CapabilityRunner
+	docker *docker.Service
+}
+
+func newDockerDispatchRunner(base sandbox.CapabilityRunner, svc *docker.Service) sandbox.CapabilityRunner {
+	return dockerDispatchRunner{base: base, docker: svc}
+}
+
+func (r dockerDispatchRunner) Run(ctx context.Context, request sandbox.CapabilityRequest) (sandbox.CapabilityResponse, error) {
+	switch request.Op {
+	case "docker.api.read", "docker.api.write", "docker.compose":
+		if r.docker != nil {
+			return r.docker.Run(ctx, request)
+		}
+	}
+	if r.base != nil {
+		return r.base.Run(ctx, request)
+	}
+	return sandbox.CapabilityResponse{Code: "UNIMPLEMENTED", Error: "该能力执行器尚未接入"}, nil
+}
 
 // sysctlDispatchRunner 将 sysctl.apply / sysctl.rollback 路由到受控白名单 sysctl 服务，
 // 其余能力 verb 继续委派给基础 runner。
@@ -94,6 +122,16 @@ func (s *capabilityServer) serveConn(ctx context.Context, connection net.Conn) {
 		s.logger.Warn("capability request rejected", "code", "INVALID_JSON")
 		_ = sandbox.WriteHelperJSON(connection, sandbox.CapabilityResponse{Code: "VALIDATION_FAILED", Error: "能力请求格式无效"})
 		return
+	}
+	if request.Op == "docker.compose" {
+		cancel()
+		requestCtx, cancel = context.WithTimeout(ctx, composeRequestTimeout)
+		defer cancel()
+		if deadline, ok := requestCtx.Deadline(); ok {
+			if err := connection.SetDeadline(deadline); err != nil {
+				return
+			}
+		}
 	}
 	executionCtx, finish := sandbox.WatchHelperDisconnect(requestCtx, connection)
 	response := s.handle(executionCtx, request)

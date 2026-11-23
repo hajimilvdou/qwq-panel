@@ -833,6 +833,7 @@ type persistedAnyTLSProfile struct {
 	Port          int               `json:"port"`
 	PaddingScheme []string          `json:"padding_scheme,omitempty"`
 	UserDigests   map[string]string `json:"user_digests"`
+	UserMarks     map[string]uint32 `json:"user_marks,omitempty"`
 }
 
 const anytlsStateFile = "runtime/anytls_state.json"
@@ -860,6 +861,15 @@ func (e *Engine) persistAnyTLSSpecs(specs []anytls.ProfileSpec) {
 			sum := sha256.Sum256(pwd)
 			digests[uid] = hex.EncodeToString(sum[:])
 		}
+		var marks map[string]uint32
+		if len(s.UserMarks) > 0 {
+			marks = make(map[string]uint32, len(s.UserMarks))
+			for uid, m := range s.UserMarks {
+				if m != 0 {
+					marks[uid] = m
+				}
+			}
+		}
 		records = append(records, persistedAnyTLSProfile{
 			ProfileID:     s.ProfileID,
 			BindingRef:    s.BindingRef,
@@ -868,6 +878,7 @@ func (e *Engine) persistAnyTLSSpecs(specs []anytls.ProfileSpec) {
 			Port:          s.Port,
 			PaddingScheme: slices.Clone(s.PaddingScheme),
 			UserDigests:   digests,
+			UserMarks:     marks,
 		})
 	}
 	raw, err := json.Marshal(records)
@@ -989,6 +1000,7 @@ func (e *Engine) rebuildAnyTLSSpecs(ctx context.Context, summary *state.V2Intent
 			KeyPEM:        keyPEM,
 			PaddingScheme: slices.Clone(rec.PaddingScheme),
 			UserDigests:   digests,
+			UserMarks:     rec.UserMarks,
 		})
 	}
 	return out, nil
@@ -1038,6 +1050,15 @@ func buildAnyTLSSpecs(intent *corev2.Intent, materials xrayconfig.V2Materials) [
 		for uid, pwd := range pm.AnyTLS.Auth {
 			users[uid] = append([]byte(nil), pwd...)
 		}
+		var userMarks map[string]uint32
+		for _, u := range p.Users {
+			if u.TrafficMark != 0 {
+				if userMarks == nil {
+					userMarks = make(map[string]uint32)
+				}
+				userMarks[u.ID] = u.TrafficMark
+			}
+		}
 		out = append(out, anytls.ProfileSpec{
 			ProfileID:     p.ID,
 			BindingRef:    p.AnyTLS.TLS.BindingRef,
@@ -1048,6 +1069,7 @@ func buildAnyTLSSpecs(intent *corev2.Intent, materials xrayconfig.V2Materials) [
 			KeyPEM:        pm.AnyTLS.TLS.Material.PrivateKeyPEM(),
 			PaddingScheme: slices.Clone(p.AnyTLS.PaddingScheme),
 			Users:         users,
+			UserMarks:     userMarks,
 		})
 	}
 	return out
@@ -1070,6 +1092,13 @@ func cloneAnyTLSSpecs(specs []anytls.ProfileSpec) []anytls.ProfileSpec {
 				digests[uid] = d
 			}
 		}
+		var marks map[string]uint32
+		if len(s.UserMarks) > 0 {
+			marks = make(map[string]uint32, len(s.UserMarks))
+			for uid, m := range s.UserMarks {
+				marks[uid] = m
+			}
+		}
 		out[i] = anytls.ProfileSpec{
 			ProfileID:     s.ProfileID,
 			BindingRef:    s.BindingRef,
@@ -1081,6 +1110,7 @@ func cloneAnyTLSSpecs(specs []anytls.ProfileSpec) []anytls.ProfileSpec {
 			PaddingScheme: slices.Clone(s.PaddingScheme),
 			Users:         users,
 			UserDigests:   digests,
+			UserMarks:     marks,
 		}
 	}
 	return out

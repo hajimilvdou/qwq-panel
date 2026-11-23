@@ -510,3 +510,38 @@ func TestAnyTLSV2UoTUDPEcho(t *testing.T) {
 	}
 	writeTestFrame(t, conn, cmdFIN, 9, nil)
 }
+
+func TestTokenBucketShaperAndEpochAligner(t *testing.T) {
+	aligner := NewLosslessEpochAligner()
+	const hundredMiB int64 = 100 * 1024 * 1024
+	p1 := aligner.ProjectForEpoch("epoch-1", map[string]int64{"u1": hundredMiB})
+	if p1["u1"] != hundredMiB {
+		t.Fatalf("epoch-1 want %d got %d", hundredMiB, p1["u1"])
+	}
+	p2 := aligner.ProjectForEpoch("epoch-2", map[string]int64{"u1": hundredMiB + 2048})
+	if p2["u1"] != 2048 {
+		t.Fatalf("epoch-2 want 2048 got %d", p2["u1"])
+	}
+	p3 := aligner.ProjectForEpoch("epoch-2", map[string]int64{"u1": hundredMiB + 4096})
+	if p3["u1"] != 4096 {
+		t.Fatalf("epoch-2 steady want 4096 got %d", p3["u1"])
+	}
+
+	// TokenBucketShaper: unlimited returns immediately, bounded conn wraps cleanly
+	unlim := NewTokenBucketShaper(0)
+	if err := unlim.WaitN(t.Context(), 1<<20); err != nil {
+		t.Fatalf("unlimited shaper failed: %v", err)
+	}
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	shaped := WrapConnWithUserShaper(t.Context(), c1, NewTokenBucketShaper(10000), NewTokenBucketShaper(10000))
+	msg := []byte("shaped-payload")
+	go func() {
+		_, _ = shaped.Write(msg)
+	}()
+	buf := make([]byte, len(msg))
+	if _, err := io.ReadFull(c2, buf); err != nil || !bytes.Equal(buf, msg) {
+		t.Fatalf("shaped conn echo mismatch: err=%v got=%q", err, string(buf))
+	}
+}

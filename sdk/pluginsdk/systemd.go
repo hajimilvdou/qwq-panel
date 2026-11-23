@@ -189,11 +189,16 @@ func ServeSystemd(ctx context.Context, opts SystemdOptions, serveOptions Options
 		idleTTL = serveOptions.IdleTTL
 	}
 
+	hostSockPath := opts.HostSocket
+	if hostSockPath == "" {
+		hostSockPath = os.Getenv(EnvHostSocket)
+	}
 	pluginServer, err := Serve(ctx, Options{
 		Plugin:             serveOptions.Plugin,
 		Manifest:           serveOptions.Manifest,
 		Registrar:          srv,
 		Host:               hostConn,
+		HostSocket:         hostSockPath,
 		Logger:             log,
 		DefaultGracePeriod: serveOptions.DefaultGracePeriod,
 		ReleaseGracePeriod: serveOptions.ReleaseGracePeriod,

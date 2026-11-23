@@ -771,7 +771,7 @@ func TestWARPRegisterConfigureAndCoreSync(t *testing.T) {
 			{"id":"vless-main","enabled":true,"listen":"0.0.0.0","port":443,"protocol":"vless","users":[{"id":"u1","uuid":{"$secret_present":true}}],"vless":{"transport":"raw","flow":"xtls-rprx-vision","security":{"mode":"reality","target":"example.com:443","server_names":["example.com"],"private_key":{"$secret_present":true},"short_ids":["1234"]}}}
 		]
 	}`)
-	merged, err := mergeCoreXrayConfigWithWARP(redactedXray, []userRecord{{ID: "u1", VLESSUUID: "11111111-1111-1111-1111-111111111111", Status: "active"}}, savedWARP, true)
+	merged, err := mergeCoreXrayConfigWithWARPAndNodes(redactedXray, []userRecord{{ID: "u1", VLESSUUID: "11111111-1111-1111-1111-111111111111", Status: "active"}}, nil, savedWARP, true)
 	if err != nil {
 		t.Fatalf("mergeCoreXrayConfigWithWARP failed: %v", err)
 	}
@@ -793,4 +793,135 @@ func TestWARPRegisterConfigureAndCoreSync(t *testing.T) {
 	if err != nil || afterDel != nil {
 		t.Fatalf("WARP record should be deleted: %+v, err=%v", afterDel, err)
 	}
+}
+
+// TestBrutalDiscoversManagedTCPNodesAndChainsDefaultClientDialer 验证 STEP-07 修复：
+// 1. brutal.status 自动发现托管节点库中所有 vless/trojan/shadowsocks TCP 节点；
+// 2. chains.upsert 缺省 mode 默认为 client_dialer 且 chains.preview 不再输出误导性的 "<REDACTED>"；
+// 3. 后台同步路径在无前台 OperationID 时使用 auton:proxy_traffic_sync 自治上下文写入 PutConfig。
+func TestBrutalDiscoversManagedTCPNodesAndChainsDefaultClientDialer(t *testing.T) {
+	h, _ := newExtProxyHarness(t, `{"public_host":"proxy.example.com"}`)
+
+	// 1. 添加托管 Trojan 与 Shadowsocks TCP 节点（sync_core=false 仅落本地托管节点表）
+	for _, nodeReq := range []map[string]any{
+		{
+			"id": "trojan-managed", "name": "香港 Trojan", "protocol": "trojan", "transport": "raw",
+			"security_mode": "tls", "listen": "0.0.0.0", "port": 18443, "enabled": true, "sync_core": false,
+			"config": map[string]any{"password": "trojan-test-password", "sni": "trojan.example.com"},
+		},
+		{
+			"id": "ss-managed", "name": "日本 SS", "protocol": "shadowsocks", "transport": "raw",
+			"security_mode": "none", "listen": "0.0.0.0", "port": 18399, "enabled": true, "sync_core": false,
+			"config": map[string]any{"method": "aes-256-gcm", "password": "ss-test-password"},
+		},
+	} {
+		resp := invokeProxy(t, h.srv, "nodes.upsert", nodeReq)
+		if resp.GetError() != nil {
+			t.Fatalf("nodes.upsert %v failed: %+v", nodeReq["id"], resp.GetError())
+		}
+	}
+
+	bResp := invokeProxy(t, h.srv, "brutal.status", map[string]any{})
+	if bResp.GetError() != nil {
+		t.Fatalf("brutal.status failed: %+v", bResp.GetError())
+	}
+	var bOut struct {
+		TCPInbounds []struct {
+			InboundTag string `json:"inbound_tag"`
+			Protocol   string `json:"protocol"`
+			TargetPort int    `json:"target_port"`
+		} `json:"tcp_inbounds"`
+	}
+	if err := json.Unmarshal(bResp.GetPayloadJson(), &bOut); err != nil {
+		t.Fatal(err)
+	}
+	foundTrojan, foundSS := false, false
+	for _, inb := range bOut.TCPInbounds {
+		if inb.InboundTag == "trojan-managed" && inb.Protocol == "trojan" && inb.TargetPort == 18443 {
+			foundTrojan = true
+		}
+		if inb.InboundTag == "ss-managed" && inb.Protocol == "shadowsocks" && inb.TargetPort == 18399 {
+			foundSS = true
+		}
+	}
+	if !foundTrojan || !foundSS {
+		t.Fatalf("brutal.status 未完整发现托管 TCP 节点: %+v", bOut.TCPInbounds)
+	}
+
+	// 2. chains.upsert 省略 mode 时默认 client_dialer；chains.preview 不含 "<REDACTED>"
+	cResp := invokeProxy(t, h.srv, "chains.upsert", map[string]any{
+		"id": "c-default-mode", "name": "默认客户端链式", "protocol": "socks5",
+		"server": "198.51.100.10", "port": 1080,
+		"config": map[string]any{"username": "u", "password": "p"},
+	})
+	if cResp.GetError() != nil {
+		t.Fatalf("chains.upsert failed: %+v", cResp.GetError())
+	}
+	var cOut struct {
+		Chain chainRecord `json:"chain"`
+	}
+	if err := json.Unmarshal(cResp.GetPayloadJson(), &cOut); err != nil {
+		t.Fatal(err)
+	}
+	if cOut.Chain.Mode != "client_dialer" {
+		t.Fatalf("chains.upsert default mode want client_dialer got %q", cOut.Chain.Mode)
+	}
+	// 创建一条 both 模式用于验证 preview 不含 "<REDACTED>"
+	if r2 := invokeProxy(t, h.srv, "chains.upsert", map[string]any{
+		"id": "c-preview-check", "name": "预览检查", "mode": "both", "protocol": "trojan",
+		"server": "198.51.100.11", "port": 443,
+		"config": map[string]any{"password": "secret-trojan-pass"},
+	}); r2.GetError() != nil {
+		t.Fatalf("chains.upsert both failed: %+v", r2.GetError())
+	}
+	pResp := invokeProxy(t, h.srv, "chains.preview", map[string]any{})
+	if pResp.GetError() != nil {
+		t.Fatalf("chains.preview failed: %+v", pResp.GetError())
+	}
+	pText := string(pResp.GetPayloadJson())
+	if strings.Contains(pText, "<REDACTED>") || strings.Contains(pText, "secret-trojan-pass") {
+		t.Fatalf("chains.preview 不应包含 <REDACTED> 或明文密码: %s", pText)
+	}
+
+	// 3. 触发后台超配额巡检，断言 PutConfig 收到 auton:proxy_traffic_sync 自治上下文
+	if p := runProxyJob(t, h.srv, "plans.upsert", map[string]any{
+		"id": "tiny-quota", "name": "小配额", "quota_bytes": 1024, "down_limit_kbps": 1000,
+	}, nil); p.GetError() != nil {
+		t.Fatal(p.GetError())
+	}
+	if u := runProxyJob(t, h.srv, "users.create", map[string]any{
+		"id": "u-auton", "display_name": "AutonUser", "plan_id": "tiny-quota",
+	}, nil); u.GetError() != nil {
+		t.Fatal(u.GetError())
+	}
+	h.invoke.mu.Lock()
+	h.invoke.observeJSON = []byte(`{
+		"reset_epoch": "ep-auton-1",
+		"series": [{"kind":"user","id":"u-auton","present":true,"uplink_present":true,"downlink_present":true,"uplink_bytes":"1000","downlink_bytes":"1000"}]
+	}`)
+	h.invoke.mu.Unlock()
+
+	h.cfgSvc.mu.Lock()
+	beforeCalls := h.cfgSvc.putCalls
+	h.cfgSvc.mu.Unlock()
+
+	rc := &pb.RequestContext{InstanceId: "default", NodeId: "local", Locale: "zh-CN"}
+	if _, err := h.srv.Activate(t.Context(), &pb.ActivateRequest{Context: rc}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		h.cfgSvc.mu.Lock()
+		gotCalls := h.cfgSvc.putCalls
+		gotOp := h.cfgSvc.lastPutOpID
+		h.cfgSvc.mu.Unlock()
+		if gotCalls > beforeCalls {
+			if gotOp != "auton:proxy_traffic_sync" {
+				t.Fatalf("后台配额同步 PutConfig 应携带 auton:proxy_traffic_sync，实际 %q", gotOp)
+			}
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("后台 syncLoop 未触发超配额自动 PutConfig 同步")
 }

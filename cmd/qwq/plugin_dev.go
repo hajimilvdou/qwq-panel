@@ -1023,6 +1023,7 @@ func renderScaffoldHTML(spec scaffoldSpec) string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>%s</title>
+  <link rel="stylesheet" href="/plugin-ui/_kit/v1/kit-base.css" />
   <link rel="stylesheet" href="./plugin.css" />
 </head>
 <body>

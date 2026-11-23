@@ -55,7 +55,8 @@
         "old_port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "切换前保留监听的旧 SSH 端口。" },
         "new_port": { "type": "integer", "minimum": 1024, "maximum": 65535, "description": "待验证并切换的新 SSH 端口。" },
         "deadline_unix": { "type": "integer", "minimum": 0, "description": "超时自动回滚截止时间戳（Unix 秒）。" },
-        "firewall_managed": { "type": "boolean", "description": "本次事务是否同步托管了 inet qwq 防火墙规则。" }
+        "firewall_managed": { "type": "boolean", "description": "本次事务是否同步托管了 inet qwq 防火墙规则。" },
+        "external_connection_detected": { "type": "boolean", "description": "宿主网络命名空间是否已检测到新 SSH 端口上的外部 ESTABLISHED 会话。" }
       }
     }
   }

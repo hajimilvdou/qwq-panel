@@ -94,8 +94,13 @@ type Config struct {
 	GrantedCapabilities []*platformv1.Capability
 	// OperationResolver 绑定所有能力写入到本实例正在运行的 operation。
 	OperationResolver OperationResolver
+	// AutonomousChecker 核验后台守护实例是否被 manifest 授权且处于活跃态，
+	// 仅在此前提下放行白名单内的 auton:* 后台自治能力写调用。
+	AutonomousChecker AutonomousInstanceChecker
 	// CapabilityForwarder 注入宿主事实并执行经过授权的能力调用。
 	CapabilityForwarder CapabilityForwarder
+	// OnEventPublished 在 PublishEvent 落库成功后旁路通知宿主事件桥（如 notify.hub 告警中继）。
+	OnEventPublished func(pluginID string, draft *platformv1.EventDraft, assignedEventID string)
 
 	// Peer authenticates every accepted connection. Required.
 	Peer PeerVerifier
@@ -160,6 +165,8 @@ type Limits struct {
 	SecretRevealsPerMinute int
 	// CapabilityWritesPerMinute 是能力写调用限频，默认 60/min。
 	CapabilityWritesPerMinute int
+	// AutonomousWritesPerMinute 是后台自治能力写调用限频，默认 12/min。
+	AutonomousWritesPerMinute int
 	// BanScansPerMinute 是 journald 扫描限频，默认 6/min。
 	BanScansPerMinute int
 	// MetricsReadsPerMinute 是 metrics 读限频，默认 120/min、突发 2。
@@ -191,6 +198,7 @@ const (
 	DefaultAuditPerMinute         = 1200
 	DefaultSecretReveals          = 1200
 	DefaultCapabilityWrites       = 60
+	DefaultAutonomousWrites       = 12
 	DefaultBanScans               = 6
 	DefaultMetricsReads           = 120
 	DefaultWaitTimeout            = 60 * time.Second
@@ -220,6 +228,7 @@ func DefaultLimits() Limits {
 		AuditPerMinute:            DefaultAuditPerMinute,
 		SecretRevealsPerMinute:    DefaultSecretReveals,
 		CapabilityWritesPerMinute: DefaultCapabilityWrites,
+		AutonomousWritesPerMinute: DefaultAutonomousWrites,
 		BanScansPerMinute:         DefaultBanScans,
 		MetricsReadsPerMinute:     DefaultMetricsReads,
 		WaitTimeout:               DefaultWaitTimeout,
@@ -294,6 +303,9 @@ func (l Limits) withDefaults() Limits {
 	if l.CapabilityWritesPerMinute == 0 {
 		l.CapabilityWritesPerMinute = d.CapabilityWritesPerMinute
 	}
+	if l.AutonomousWritesPerMinute == 0 {
+		l.AutonomousWritesPerMinute = d.AutonomousWritesPerMinute
+	}
 	if l.BanScansPerMinute == 0 {
 		l.BanScansPerMinute = d.BanScansPerMinute
 	}
@@ -332,6 +344,7 @@ func (l Limits) validate() error {
 		{"AuditPerMinute", int64(l.AuditPerMinute)},
 		{"SecretRevealsPerMinute", int64(l.SecretRevealsPerMinute)},
 		{"CapabilityWritesPerMinute", int64(l.CapabilityWritesPerMinute)},
+		{"AutonomousWritesPerMinute", int64(l.AutonomousWritesPerMinute)},
 		{"BanScansPerMinute", int64(l.BanScansPerMinute)},
 		{"MetricsReadsPerMinute", int64(l.MetricsReadsPerMinute)},
 	} {

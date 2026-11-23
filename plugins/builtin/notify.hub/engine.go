@@ -31,9 +31,6 @@ type routerEngine struct {
 	allowPrivate bool
 	now          func() time.Time
 	retryBackoff []time.Duration
-
-	coolMu   sync.Mutex
-	cooldown map[string]time.Time
 }
 
 func (e *routerEngine) UpdateClient(client *http.Client, allowPrivate bool) {
@@ -59,7 +56,6 @@ func newRouterEngine(st *store, client *http.Client, allowPrivate bool, nowFn fu
 		allowPrivate: allowPrivate,
 		now:          nowFn,
 		retryBackoff: []time.Duration{200 * time.Millisecond, 600 * time.Millisecond},
-		cooldown:     make(map[string]time.Time),
 	}
 }
 
@@ -123,42 +119,23 @@ func parseHHMM(v string) (int, bool) {
 	return h*60 + m, true
 }
 
-func (e *routerEngine) isInCooldown(key string, sec int, now time.Time) bool {
-	if sec <= 0 {
+func (e *routerEngine) isInCooldown(ctx context.Context, key string, sec int, now time.Time) bool {
+	if sec <= 0 || e.store == nil {
 		return false
 	}
-	e.coolMu.Lock()
-	defer e.coolMu.Unlock()
-	if last, ok := e.cooldown[key]; ok && now.Sub(last) < time.Duration(sec)*time.Second {
-		return true
+	firedAt, found, err := e.store.getCooldown(ctx, key)
+	if err != nil || !found {
+		return false
 	}
-	return false
+	elapsed := now.Unix() - firedAt
+	return elapsed >= 0 && elapsed < int64(sec)
 }
 
-func (e *routerEngine) markCooldown(key string, sec int, now time.Time) {
-	if sec <= 0 {
+func (e *routerEngine) markCooldown(ctx context.Context, key string, sec int, now time.Time) {
+	if sec <= 0 || e.store == nil {
 		return
 	}
-	e.coolMu.Lock()
-	defer e.coolMu.Unlock()
-	if len(e.cooldown) >= maxCooldownKeys {
-		// 先驱逐过期条目，仍满时按最旧时间腾出空间，保证 1C1G 内存绝对有界。
-		var oldestKey string
-		var oldestAt time.Time
-		for k, t := range e.cooldown {
-			if now.Sub(t) >= 24*time.Hour {
-				delete(e.cooldown, k)
-				continue
-			}
-			if oldestKey == "" || t.Before(oldestAt) {
-				oldestKey, oldestAt = k, t
-			}
-		}
-		if len(e.cooldown) >= maxCooldownKeys && oldestKey != "" {
-			delete(e.cooldown, oldestKey)
-		}
-	}
-	e.cooldown[key] = now
+	_ = e.store.setCooldown(ctx, key, now.Unix())
 }
 
 func (e *routerEngine) dispatch(ctx context.Context, ev NotifyEvent) (DispatchSummary, error) {
@@ -184,6 +161,7 @@ func (e *routerEngine) dispatch(ctx context.Context, ev NotifyEvent) (DispatchSu
 		dedup = ev.Source + "|" + ev.Title
 	}
 	seenCh := make(map[string]bool)
+	suppressedOnce := make(map[string]bool)
 
 	for _, rule := range rules {
 		if !rule.Enabled {
@@ -222,26 +200,32 @@ func (e *routerEngine) dispatch(ctx context.Context, ev NotifyEvent) (DispatchSu
 			}
 
 			if quiet {
-				rec.Status = "suppressed_quiet"
-				rec.ErrorMsg = fmt.Sprintf("quiet window %s-%s (%s)", rule.QuietStart, rule.QuietEnd, rule.QuietTZ)
-				_ = e.store.recordDelivery(ctx, rec)
-				summary.Suppressed++
-				summary.Deliveries = append(summary.Deliveries, rec)
+				if !suppressedOnce[chID] {
+					suppressedOnce[chID] = true
+					rec.Status = "suppressed_quiet"
+					rec.ErrorMsg = fmt.Sprintf("quiet window %s-%s (%s)", rule.QuietStart, rule.QuietEnd, rule.QuietTZ)
+					_ = e.store.recordDelivery(ctx, rec)
+					summary.Suppressed++
+					summary.Deliveries = append(summary.Deliveries, rec)
+				}
 				continue
 			}
-			seenCh[chID] = true
 
 			coolKey := rule.ID + "|" + ch.ID + "|" + dedup
-			if e.isInCooldown(coolKey, rule.CooldownSec, ev.Timestamp) {
-				rec.Status = "suppressed_cooldown"
-				rec.ErrorMsg = fmt.Sprintf("dedup cooldown %ds", rule.CooldownSec)
-				_ = e.store.recordDelivery(ctx, rec)
-				summary.Suppressed++
-				summary.Deliveries = append(summary.Deliveries, rec)
+			if e.isInCooldown(ctx, coolKey, rule.CooldownSec, ev.Timestamp) {
+				if !suppressedOnce[chID] {
+					suppressedOnce[chID] = true
+					rec.Status = "suppressed_cooldown"
+					rec.ErrorMsg = fmt.Sprintf("dedup cooldown %ds", rule.CooldownSec)
+					_ = e.store.recordDelivery(ctx, rec)
+					summary.Suppressed++
+					summary.Deliveries = append(summary.Deliveries, rec)
+				}
 				continue
 			}
 
 			out, attempts := e.sendWithRetry(ctx, ch, ev)
+			seenCh[chID] = true
 			rec.Attempts = attempts
 			rec.HTTPStatus = out.HTTPStatus
 			if out.Err != nil {
@@ -251,7 +235,7 @@ func (e *routerEngine) dispatch(ctx context.Context, ev NotifyEvent) (DispatchSu
 				summary.Failed++
 			} else {
 				rec.Status = "sent"
-				e.markCooldown(coolKey, rule.CooldownSec, ev.Timestamp)
+				e.markCooldown(ctx, coolKey, rule.CooldownSec, ev.Timestamp)
 				e.store.markChannelStatus(ctx, ch.ID, "ok", "")
 				summary.Sent++
 			}

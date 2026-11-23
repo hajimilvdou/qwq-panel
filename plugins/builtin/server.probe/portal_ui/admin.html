@@ -203,7 +203,8 @@
       <!-- Tab 3: 节点与 Agent -->
       <div class="tab-panel" id="panel-nodes" hidden>
         <article class="card">
-          <h2>新增监控服务器 &amp; 生成单向 Agent 安装命令</h2>
+          <h2 id="adm-node-form-title">新增监控服务器 &amp; 生成单向 Agent 安装命令</h2>
+          <input id="adm-node-id" type="hidden" value="">
           <div class="form-grid">
             <label class="field">
               <span>节点名称</span>
@@ -221,8 +222,21 @@
                 <option value="out_only">仅计出站 (tx)</option>
               </select>
             </label>
+            <label class="field">
+              <span>月流量配额 (GB，0=不限)</span>
+              <input id="adm-node-quota-gb" type="number" min="0" step="1" value="0" placeholder="如 1000">
+            </label>
+            <label class="field">
+              <span>流量重置日 (1-31)</span>
+              <input id="adm-node-reset-day" type="number" min="1" max="31" value="1">
+            </label>
+            <label class="field">
+              <span>账单到期日</span>
+              <input id="adm-node-expires-at" type="date">
+            </label>
           </div>
-          <div class="row-end">
+          <div class="row-end row-gap">
+            <button type="button" class="btn ghost" id="adm-cancel-edit-node" hidden>取消编辑</button>
             <button type="button" class="btn primary" id="adm-add-node">生成单向安全探针命令</button>
           </div>
           <pre id="adm-install-cmd" class="code-box" hidden></pre>

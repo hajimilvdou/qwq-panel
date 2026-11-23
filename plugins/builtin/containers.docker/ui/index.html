@@ -12,7 +12,7 @@
     <div class="topbar">
       <div>
         <h2 class="title">轻量容器与 Compose 管理</h2>
-        <div class="sub">直连 Unix Socket Docker Engine API（零重型 SDK 依赖，严格内存与日志上界）· <span id="bridge-status">连接中…</span></div>
+        <div class="sub">受控宿主 Docker 能力代理（严格端点白名单、结构化 Compose 安全扫描与有界日志）· <span id="bridge-status">连接中…</span></div>
       </div>
       <div class="tabs" id="nav-tabs">
         <button data-tab="containers" class="active" type="button">容器与资源限额</button>
@@ -29,7 +29,7 @@
     </section>
 
     <section data-pane="containers" class="card">
-      <h3>容器列表（支持启停、动态调内存上限与有界日志排查）</h3>
+      <h3>容器列表（支持启停、重启、详情查看、动态资源限额、日志排查与删除）</h3>
       <div class="actions">
         <button class="btn ghost" id="btn-refresh" type="button">刷新容器列表</button>
       </div>
@@ -37,10 +37,14 @@
         <thead><tr><th>名称 / ID</th><th>镜像</th><th>状态</th><th>端口映射</th><th>操作</th></tr></thead>
         <tbody id="containers-tbody"></tbody>
       </table>
+      <div id="inspect-box" class="inspect-box" hidden>
+        <div class="inspect-title" id="inspect-title">容器实时详情</div>
+        <div class="inspect-meta" id="inspect-meta"></div>
+      </div>
       <div class="form-grid mt-16">
-        <label>目标容器 ID / 名称 <input id="lim-id" placeholder="点击表格或手动填入" /></label>
-        <label>内存上限 (MiB) <input id="lim-mem" type="number" value="256" min="16" max="65536" /></label>
-        <label>CPU 核数上限（可选） <input id="lim-cpu" type="number" step="0.25" value="1" min="0" max="64" /></label>
+        <label>目标容器 ID / 名称 <input id="lim-id" placeholder="点击表格“详情/限额”或手动填入" /></label>
+        <label>内存上限 (MiB，留空不修改) <input id="lim-mem" type="number" placeholder="留空不修改 (6..65536)" min="6" max="65536" /></label>
+        <label>CPU 核数上限（留空不修改） <input id="lim-cpu" type="number" step="0.25" placeholder="留空不修改 (0.1..64)" min="0.01" max="64" /></label>
       </div>
       <div class="actions">
         <button class="btn" id="btn-limits" type="button">动态更新容器资源限额</button>
@@ -48,9 +52,9 @@
     </section>
 
     <section data-pane="compose" class="card" hidden>
-      <h3>受管 Compose 编排栈（内置特权/宿主机挂载安全静态扫描）</h3>
+      <h3>受管 Compose 编排栈（内置结构化特权/宿主机挂载安全静态扫描）</h3>
       <div class="form-grid">
-        <label>栈名称 <input id="cp-name" placeholder="如 blog-stack" /></label>
+        <label>栈名称 <input id="cp-name" placeholder="如 blog-stack（点击下方栈名可回填编辑）" /></label>
       </div>
       <label class="mt-10">compose.yml 内容
         <textarea id="cp-yaml" rows="8" placeholder="services:&#10;  web:&#10;    image: nginx:alpine&#10;    restart: unless-stopped"></textarea>
@@ -60,7 +64,7 @@
         <button class="btn ghost" id="btn-dryrun" type="button">仅安全校验并暂存 (Dry Run)</button>
       </div>
       <table>
-        <thead><tr><th>栈名</th><th>状态</th><th>版本</th><th>安全提示</th><th>操作</th></tr></thead>
+        <thead><tr><th>栈名（点击回填）</th><th>状态</th><th>版本</th><th>安全提示 / 最近错误</th><th>操作</th></tr></thead>
         <tbody id="stacks-tbody"></tbody>
       </table>
     </section>

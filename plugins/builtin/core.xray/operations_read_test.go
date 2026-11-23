@@ -190,11 +190,11 @@ func TestFakeReadValidateAndCapabilitiesDoNotRevealSecrets(t *testing.T) {
 		t.Fatal("missing historical revision was guessed")
 	}
 	capabilities := decodeReadResult[capabilitiesResult](t, readInvoke(t, srv, "core.capabilities", `{}`))
-	if capabilities.CoreVersion != "26.11.9" || capabilities.DriverVersion != "0.1.0" || capabilities.SchemaVersion != "1" {
+	if capabilities.CoreVersion != "26.11.9" || capabilities.DriverVersion != "0.1.0" || capabilities.SchemaVersion != "2" {
 		t.Fatal("capabilities omitted locked versions")
 	}
 	for _, verified := range capabilities.Verified {
-		if verified == "connection_forwarding" || verified == "per_user_mark" || verified == "hysteria2" || verified == "ss2022" {
+		if verified == "connection_forwarding" || verified == "per_user_mark" {
 			t.Fatal("unverified capability was advertised")
 		}
 	}

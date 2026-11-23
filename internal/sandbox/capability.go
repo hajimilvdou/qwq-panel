@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 )
@@ -66,7 +67,13 @@ func (c *CapabilityClient) Call(ctx context.Context, request CapabilityRequest) 
 	if c == nil || c.HelperClient == nil {
 		return response, problem.New(problem.Unavailable, "The capability helper is not configured.")
 	}
-	if err := c.exchange(ctx, request, &response); err != nil {
+	client := c.HelperClient
+	if request.Op == "docker.compose" && client.Timeout == 0 {
+		copied := *client
+		copied.Timeout = 95 * time.Second
+		client = &copied
+	}
+	if err := client.exchange(ctx, request, &response); err != nil {
 		return response, err
 	}
 	if len(response.ResultJSON) > 0 && !json.Valid(response.ResultJSON) {
@@ -83,7 +90,8 @@ func CapabilityVerbAllowed(op string) bool {
 		"account.list-keys", "account.import-key", "account.remove-key", "account.generate-key", "account.set-password",
 		"ban.scan", "ban.apply", "ban.remove", "ban.list",
 		"traffic.status", "traffic.apply", "traffic.clear",
-		"sysctl.apply", "sysctl.rollback":
+		"sysctl.apply", "sysctl.rollback",
+		"docker.api.read", "docker.api.write", "docker.compose":
 		return true
 	default:
 		return false

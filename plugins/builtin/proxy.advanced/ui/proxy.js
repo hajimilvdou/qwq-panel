@@ -36,11 +36,16 @@
   const pendingCopy = new Map();
 
   let cachedUsers = [];
+  let cachedPlans = [];
   let cachedChains = [];
   let cachedInbounds = [];
   let cachedWARP = null;
   let cachedWARPPresets = {};
   let cachedNodes = [];
+
+  const userCreateModal = { open: false };
+  const userSubModal = { open: false, token: '', baseUrl: '' };
+  const userHistoryModal = { open: false, userId: '', displayName: '', hours: 24 };
 
   const send = (msg) => {
     if (port) port.postMessage(msg);
@@ -317,6 +322,8 @@
   // ==================== 视图 1: 套餐与多用户渲染 ====================
 
   function renderPlans(plans) {
+    cachedPlans = plans;
+    renderPlanSelects();
     const tbody = $('plans-body');
     clearNode(tbody);
     $('plans-summary').textContent = `${plans.length} 个套餐`;
@@ -350,13 +357,187 @@
     }
   }
 
-  async function copySubscriptionHint(userId) {
+  function renderPlanSelects() {
+    const sel = $('uc-plan');
+    if (!sel) return;
+    const prev = sel.value;
+    clearNode(sel);
+    if (!cachedPlans.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '暂无套餐（请切换上方「自定义配额与上下行限速」）';
+      sel.appendChild(opt);
+    } else {
+      for (const p of cachedPlans) {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        const q = p.quota_bytes > 0 ? formatBytes(p.quota_bytes) : '不限流量';
+        opt.textContent = `${p.name} (${p.id} · ${q} · ${formatRate(p.down_limit_kbps)}/${formatRate(p.up_limit_kbps)})`;
+        sel.appendChild(opt);
+      }
+      if (prev && cachedPlans.some((p) => p.id === prev)) sel.value = prev;
+    }
+  }
+
+  function openUserSubModal({ userId, displayName, token, path, subtitle }) {
     const origin = getPublicOrigin();
-    const url = `${origin}/p/proxy.advanced/sub/<创建或轮换时一次性颁发的令牌>`;
-    const ok = await hostCopy(url, `已复制 ${userId} 的订阅路径提示`);
-    $('copy-feedback').textContent = ok
-      ? `已复制 ${userId} 的订阅路径提示：${url}`
-      : `请手动复制：${url}`;
+    const cleanPath = String(path || `/p/proxy.advanced/sub/${token}`).replace(/^\/+/, '/');
+    const baseUrl = `${origin}${cleanPath}`;
+    userSubModal.open = true;
+    userSubModal.token = String(token || '');
+    userSubModal.baseUrl = baseUrl;
+    $('us-user-label').textContent = `用户 ${displayName || userId} (${userId}) 一次性订阅令牌`;
+    $('us-token-code').textContent = userSubModal.token;
+    $('us-url-clash').value = `${baseUrl}?format=clash`;
+    $('us-url-singbox').value = `${baseUrl}?format=singbox`;
+    $('us-url-base64').value = `${baseUrl}?format=v2ray`;
+    $('us-meta').textContent = subtitle || '关闭本窗口后明文令牌不再展示';
+    $('user-sub-modal').classList.remove('hidden');
+  }
+
+  function closeUserSubModal() {
+    userSubModal.open = false;
+    userSubModal.token = '';
+    userSubModal.baseUrl = '';
+    $('us-token-code').textContent = '';
+    $('us-url-clash').value = '';
+    $('us-url-singbox').value = '';
+    $('us-url-base64').value = '';
+    $('user-sub-modal').classList.add('hidden');
+  }
+
+  function updateUserCreatePlanMode() {
+    const isCustom = $('uc-plan-mode').value === 'custom';
+    $('uc-existing-plan-wrap').classList.toggle('hidden', isCustom);
+    $('uc-custom-plan-box').classList.toggle('hidden', !isCustom);
+  }
+
+  function openUserCreateModal() {
+    userCreateModal.open = true;
+    $('uc-id').value = '';
+    $('uc-name').value = '';
+    $('uc-max-conns').value = '-1';
+    $('uc-max-ips').value = '-1';
+    $('uc-plan-mode').value = cachedPlans.length > 0 ? 'existing' : 'custom';
+    renderPlanSelects();
+    renderUserSelects();
+    updateUserCreatePlanMode();
+    $('user-create-modal').classList.remove('hidden');
+  }
+
+  function closeUserCreateModal() {
+    userCreateModal.open = false;
+    $('user-create-modal').classList.add('hidden');
+  }
+
+  function formatHourBucket(ms) {
+    if (!ms) return '-';
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:00`;
+  }
+
+  async function loadUserUsageHistory(userId, hours) {
+    const tbody = $('uh-body');
+    clearNode(tbody);
+    const loadingTr = document.createElement('tr');
+    const loadingTd = document.createElement('td');
+    loadingTd.colSpan = 5;
+    loadingTd.className = 'muted';
+    loadingTd.textContent = '正在加载小时级流量记录…';
+    loadingTr.appendChild(loadingTd);
+    tbody.appendChild(loadingTr);
+
+    const res = await runAction(`查询 ${userId} 流量历史`, () => invoke('users.usage_history', { user_id: userId, hours }));
+    if (!res) return;
+    const points = Array.isArray(res.points) ? res.points : [];
+    clearNode(tbody);
+
+    let sumUp = 0;
+    let sumDown = 0;
+    let peak = 0;
+    for (const pt of points) {
+      const u = Number(pt.up_bytes || 0);
+      const d = Number(pt.down_bytes || 0);
+      sumUp += u;
+      sumDown += d;
+      if (u + d > peak) peak = u + d;
+    }
+    $('uh-summary').textContent = `近 ${hours}h 合计：${formatBytes(sumUp + sumDown)}（上行 ${formatBytes(sumUp)} / 下行 ${formatBytes(sumDown)}）`;
+    $('uh-meta').textContent = `共 ${points.length} 个小时桶`;
+
+    if (!points.length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.className = 'muted';
+      td.textContent = '该时间窗口内暂无流量采样记录';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+
+    for (const pt of points.slice().reverse()) {
+      const up = Number(pt.up_bytes || 0);
+      const down = Number(pt.down_bytes || 0);
+      const total = up + down;
+      const pct = peak > 0 ? Math.max(1, Math.round((total / peak) * 100)) : 0;
+
+      const tr = document.createElement('tr');
+      const c1 = document.createElement('td');
+      c1.className = 'mono';
+      c1.textContent = formatHourBucket(pt.bucket_hour_ms);
+      tr.appendChild(c1);
+
+      const c2 = document.createElement('td');
+      c2.textContent = formatBytes(up);
+      tr.appendChild(c2);
+
+      const c3 = document.createElement('td');
+      c3.textContent = formatBytes(down);
+      tr.appendChild(c3);
+
+      const c4 = document.createElement('td');
+      c4.textContent = formatBytes(total);
+      tr.appendChild(c4);
+
+      const c5 = document.createElement('td');
+      const prog = document.createElement('progress');
+      prog.className = 'quota-progress';
+      prog.max = 100;
+      prog.value = pct;
+      c5.appendChild(prog);
+      tr.appendChild(c5);
+
+      tbody.appendChild(tr);
+    }
+  }
+
+  function openUserHistoryModal(user) {
+    userHistoryModal.open = true;
+    userHistoryModal.userId = user.id;
+    userHistoryModal.displayName = user.display_name || user.id;
+    userHistoryModal.hours = 24;
+    $('uh-modal-title').textContent = `小时级流量趋势 · ${userHistoryModal.displayName} (${user.id})`;
+    for (const b of document.querySelectorAll('#uh-range-pills button')) {
+      b.classList.toggle('active', Number(b.dataset.hours) === 24);
+    }
+    $('user-history-modal').classList.remove('hidden');
+    void loadUserUsageHistory(user.id, 24);
+  }
+
+  function closeUserHistoryModal() {
+    userHistoryModal.open = false;
+    $('user-history-modal').classList.add('hidden');
+  }
+
+  function fillUserLimitsForm(u) {
+    $('ul-user').value = u.id;
+    $('ul-conns').value = String(u.max_connections_override ?? -1);
+    $('ul-ips').value = String(u.max_ips_override ?? -1);
+    $('ul-chain').value = u.chain_id || '';
+    $('ul-conns').focus();
+    showBanner(`已选中用户 ${u.display_name} (${u.id})，请在下方调整连接/IP/链式绑定后点击「保存用户限制与链式绑定」。`, 'ok');
   }
 
   function renderUserSelects() {
@@ -391,6 +572,23 @@
       chainSel.appendChild(opt);
     }
     if (prevChain && cachedChains.some((c) => c.id === prevChain)) chainSel.value = prevChain;
+
+    const ucChain = $('uc-chain');
+    if (ucChain) {
+      const prevUcChain = ucChain.value;
+      clearNode(ucChain);
+      const opt0 = document.createElement('option');
+      opt0.value = '';
+      opt0.textContent = '（跟随默认 / 直连）';
+      ucChain.appendChild(opt0);
+      for (const c of cachedChains) {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = `${c.name} (${c.id})`;
+        ucChain.appendChild(opt);
+      }
+      if (prevUcChain && cachedChains.some((c) => c.id === prevUcChain)) ucChain.value = prevUcChain;
+    }
   }
 
   function renderUsers(users) {
@@ -460,14 +658,81 @@
       tr.appendChild(tdMark);
 
       const tdAct = document.createElement('td');
-      const btnCopy = document.createElement('button');
-      btnCopy.type = 'button';
-      btnCopy.className = 'btn sm ghost';
-      btnCopy.textContent = '复制订阅说明';
-      btnCopy.addEventListener('click', () => {
-        void copySubscriptionHint(u.id);
+      const actWrap = document.createElement('div');
+      actWrap.className = 'actions actions-tight';
+
+      const isActive = u.status === 'active';
+      const btnToggle = document.createElement('button');
+      btnToggle.type = 'button';
+      btnToggle.className = isActive ? 'btn sm ghost' : 'btn sm';
+      btnToggle.textContent = isActive ? '停用' : '启用';
+      btnToggle.addEventListener('click', async () => {
+        const nextStatus = isActive ? 'disabled' : 'active';
+        const ok = await hostConfirm({
+          title: `${isActive ? '停用' : '启用'}代理用户`,
+          body: `确认将用户「${u.display_name} (${u.id})」切换为 ${nextStatus} 并同步 core.xray 与 HTB 限速？`,
+          confirmLabel: isActive ? '确认停用' : '确认启用',
+          danger: isActive,
+        });
+        if (!ok) return;
+        const r = await runAction(`${isActive ? '停用' : '启用'}用户 ${u.id}`, () =>
+          invoke('users.set_status', {
+            user_id: u.id,
+            status: nextStatus,
+            expected_revision: String(u.revision || ''),
+          }));
+        if (r) {
+          showBanner(`用户 ${u.id} 状态已更新为 ${r.user?.status || nextStatus}`, 'ok');
+          void refreshProxyHome();
+        }
       });
-      tdAct.appendChild(btnCopy);
+      actWrap.appendChild(btnToggle);
+
+      const btnRotate = document.createElement('button');
+      btnRotate.type = 'button';
+      btnRotate.className = 'btn sm ghost';
+      btnRotate.textContent = '轮换订阅';
+      btnRotate.addEventListener('click', async () => {
+        const ok = await hostConfirm({
+          title: '轮换用户订阅链接',
+          body: `确认轮换用户「${u.display_name} (${u.id})」的公开订阅令牌？旧订阅链接将立即失效，并一次性展示新链接。`,
+          confirmLabel: '确认轮换',
+          danger: true,
+        });
+        if (!ok) return;
+        const r = await runAction(`轮换 ${u.id} 订阅令牌`, () =>
+          invoke('users.rotate_subscription', {
+            user_id: u.id,
+            expected_revision: String(u.revision || ''),
+          }));
+        if (r && r.subscription_token) {
+          openUserSubModal({
+            userId: u.id,
+            displayName: u.display_name,
+            token: r.subscription_token,
+            path: r.subscription_path,
+            subtitle: `新订阅修订号 rev ${r.revision || '-'}，旧链接已失效`,
+          });
+          void refreshProxyHome();
+        }
+      });
+      actWrap.appendChild(btnRotate);
+
+      const btnLimits = document.createElement('button');
+      btnLimits.type = 'button';
+      btnLimits.className = 'btn sm ghost';
+      btnLimits.textContent = '调整限额';
+      btnLimits.addEventListener('click', () => fillUserLimitsForm(u));
+      actWrap.appendChild(btnLimits);
+
+      const btnHistory = document.createElement('button');
+      btnHistory.type = 'button';
+      btnHistory.className = 'btn sm ghost';
+      btnHistory.textContent = '流量趋势';
+      btnHistory.addEventListener('click', () => openUserHistoryModal(u));
+      actWrap.appendChild(btnHistory);
+
+      tdAct.appendChild(actWrap);
       tr.appendChild(tdAct);
 
       tbody.appendChild(tr);
@@ -2222,6 +2487,111 @@
     }
   });
 
+  // 新建订阅用户弹窗事件
+  $('btn-user-create-open').addEventListener('click', openUserCreateModal);
+  $('uc-close').addEventListener('click', closeUserCreateModal);
+  $('uc-cancel').addEventListener('click', closeUserCreateModal);
+  $('user-create-modal').addEventListener('click', (e) => {
+    if (e.target === $('user-create-modal')) closeUserCreateModal();
+  });
+  $('uc-plan-mode').addEventListener('change', updateUserCreatePlanMode);
+  $('uc-submit').addEventListener('click', async () => {
+    const id = $('uc-id').value.trim();
+    const displayName = $('uc-name').value.trim() || id;
+    if (!id) {
+      showBanner('请输入小写字母开头的用户 ID', 'warn');
+      return;
+    }
+    const mode = $('uc-plan-mode').value;
+    let planId = $('uc-plan').value.trim();
+    if (mode === 'custom') {
+      const rawCustomId = `custom-${id}`.slice(0, 32);
+      const quotaGB = Math.max(0, Number($('uc-custom-quota').value) || 0);
+      const resetDay = Math.min(28, Math.max(0, Number($('uc-custom-reset-day').value) || 0));
+      const downKbps = Math.max(0, Number($('uc-custom-down').value) || 0);
+      const upKbps = Math.max(0, Number($('uc-custom-up').value) || 0);
+      const pRes = await runAction(`保存专属套餐 ${rawCustomId}`, () =>
+        invoke('plans.upsert', {
+          id: rawCustomId,
+          name: `${displayName} 专属配额`,
+          quota_bytes: Math.round(quotaGB * 1024 * 1024 * 1024),
+          down_limit_kbps: downKbps,
+          up_limit_kbps: upKbps,
+          max_connections: 0,
+          max_ips: 0,
+          billing_reset_day: resetDay,
+          validity_days: 0,
+        }));
+      if (!pRes) return;
+      planId = pRes.plan?.id || rawCustomId;
+    }
+    if (!planId) {
+      showBanner('请选择已有套餐或切换为自定义配额与上下行限速', 'warn');
+      return;
+    }
+    const payload = {
+      id,
+      display_name: displayName,
+      plan_id: planId,
+      max_connections_override: Number($('uc-max-conns').value),
+      max_ips_override: Number($('uc-max-ips').value),
+      chain_id: $('uc-chain').value,
+    };
+    const r = await runAction(`创建订阅用户 ${id}`, () => invoke('users.create', payload));
+    if (!r) return;
+    closeUserCreateModal();
+    if (r.subscription_token) {
+      openUserSubModal({
+        userId: r.user?.id || id,
+        displayName: r.user?.display_name || displayName,
+        token: r.subscription_token,
+        path: r.subscription_path,
+        subtitle: r.shaping_degraded
+          ? `已同步 core.xray (rev ${r.core_revision || '-'}) · 限速降级提示：${r.shaping_degraded_reason}`
+          : `已同步 core.xray (rev ${r.core_revision || '-'}) 与内核限速`,
+      });
+    } else {
+      showBanner(`用户 ${id} 已创建`, 'ok');
+    }
+    void refreshProxyHome();
+  });
+
+  // 一次性订阅令牌弹窗事件
+  $('us-close').addEventListener('click', closeUserSubModal);
+  $('us-close-btn').addEventListener('click', closeUserSubModal);
+  $('user-sub-modal').addEventListener('click', (e) => {
+    if (e.target === $('user-sub-modal')) closeUserSubModal();
+  });
+  $('us-copy-token').addEventListener('click', () => {
+    void hostCopy(userSubModal.token, '已复制纯订阅 Token');
+  });
+  $('us-copy-clash').addEventListener('click', () => {
+    void hostCopy($('us-url-clash').value, '已复制 Clash 订阅链接');
+  });
+  $('us-copy-singbox').addEventListener('click', () => {
+    void hostCopy($('us-url-singbox').value, '已复制 Sing-box 订阅链接');
+  });
+  $('us-copy-base64').addEventListener('click', () => {
+    void hostCopy($('us-url-base64').value, '已复制 Base64 通用订阅链接');
+  });
+
+  // 小时级流量历史抽屉事件
+  $('uh-close').addEventListener('click', closeUserHistoryModal);
+  $('uh-close-btn').addEventListener('click', closeUserHistoryModal);
+  $('user-history-modal').addEventListener('click', (e) => {
+    if (e.target === $('user-history-modal')) closeUserHistoryModal();
+  });
+  $('uh-range-pills').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-hours]');
+    if (!btn || !userHistoryModal.userId) return;
+    const h = Number(btn.dataset.hours) || 24;
+    userHistoryModal.hours = h;
+    for (const b of document.querySelectorAll('#uh-range-pills button')) {
+      b.classList.toggle('active', Number(b.dataset.hours) === h);
+    }
+    void loadUserUsageHistory(userHistoryModal.userId, h);
+  });
+
   // ==================== 事件绑定：视图 2（节点管理与双模式构建器） ====================
 
   $('btn-node-add').addEventListener('click', () => openNodeBuilder(null));
@@ -2875,7 +3245,10 @@
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (configViewer.open) closeConfigViewer();
+    if (userSubModal.open) closeUserSubModal();
+    else if (userHistoryModal.open) closeUserHistoryModal();
+    else if (userCreateModal.open) closeUserCreateModal();
+    else if (configViewer.open) closeConfigViewer();
     else if (builder.open) closeNodeBuilder();
   });
 

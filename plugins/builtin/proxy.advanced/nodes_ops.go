@@ -1183,10 +1183,6 @@ func (i *instance) trySyncManagedNodesToCore(ctx context.Context, host *pluginsd
 	return true, putResp.GetRevision(), note
 }
 
-func buildCoreV2ProfileFromNode(n proxyNodeRecord, activeUsers []userRecord) (map[string]any, bool) {
-	return buildCoreV2ProfileFromNodeWithSlots(n, activeUsers, nil)
-}
-
 func buildCoreV2ProfileFromNodeWithSlots(n proxyNodeRecord, activeUsers []userRecord, existingSlots map[string]map[string]bool) (map[string]any, bool) {
 	needTLS := (n.Protocol == corev2.ProtocolHysteria2 || n.Protocol == corev2.ProtocolAnyTLS) ||
 		((n.Protocol == corev2.ProtocolVLESS || n.Protocol == corev2.ProtocolVMess || n.Protocol == corev2.ProtocolTrojan) && n.SecurityMode == "tls")

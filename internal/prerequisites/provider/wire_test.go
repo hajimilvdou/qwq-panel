@@ -225,7 +225,13 @@ func (a *wireAPI) aliyun(request *http.Request) (*http.Response, error) {
 				if a.foreign {
 					domain = "other.example.net"
 				}
-				return a.response(200, map[string]any{"RequestId": requestID, "RecordId": record["RecordId"], "DomainName": domain}), nil
+				resp := make(map[string]any, len(record)+2)
+				for k, v := range record {
+					resp[k] = v
+				}
+				resp["RequestId"] = requestID
+				resp["DomainName"] = domain
+				return a.response(200, resp), nil
 			}
 		}
 		return a.response(400, map[string]any{"RequestId": requestID, "Code": "InvalidRecordId.NotFound"}), nil

@@ -16,15 +16,17 @@
       </div>
       <div class="tabs" id="nav-tabs">
         <button data-tab="channels" class="active" type="button">上游渠道与 Sub2API 池</button>
-        <button data-tab="auth" type="button">注册开关与 LinuxDo 分级</button>
+        <button data-tab="pricings" type="button">模型倍率配置</button>
+        <button data-tab="auth" type="button">注册开关与 SMTP / LinuxDo</button>
         <button data-tab="codes" type="button">邀请码与福利兑换码</button>
         <button data-tab="users" type="button">团体成员与配额</button>
       </div>
     </div>
 
     <section data-pane="channels" class="card">
-      <h2>新增上游 API 渠道 / OAuth 订阅账号池</h2>
+      <h2 id="ch-form-title">新增上游 API 渠道 / OAuth 订阅账号池</h2>
       <p class="sub">支持标准 API Key 与 Claude Max / Codex / Gemini OAuth 池聚合，自动会话粘性命中 Prompt Cache 1 折缓存。</p>
+      <div id="ch-edit-banner" class="edit-banner" hidden></div>
       <div class="form-grid">
         <label>渠道名称 <input id="ch-name" placeholder="如 Claude-Max-Pool-01" /></label>
         <label>渠道类型
@@ -45,10 +47,40 @@
       </div>
       <div class="actions-row">
         <button class="btn" id="btn-save-channel" type="button">加密保存上游渠道</button>
+        <button class="btn ghost" id="btn-cancel-channel-edit" type="button" hidden>取消编辑</button>
       </div>
       <table>
         <thead><tr><th>名称</th><th>协议类型</th><th>分组</th><th>健康状态</th><th>TTFT</th><th>操作</th></tr></thead>
         <tbody id="channels-tbody"></tbody>
+      </table>
+    </section>
+
+    <section data-pane="pricings" class="card" hidden>
+      <h2>模型统计倍率与缓存折扣配置</h2>
+      <p class="sub">配置各模型的虚拟统计折算单价（1,000,000 micros = $1.00 统计额度；例如 3000 micros/1K = $3.00/1M Tokens）。</p>
+      <div class="form-grid">
+        <label>模型标识 <input id="pr-model" placeholder="如 claude-sonnet-4-5" /></label>
+        <label>计费统计模式
+          <select id="pr-mode">
+            <option value="token">按 Token 计费 (token)</option>
+            <option value="per_call">按次计费 (per_call)</option>
+          </select>
+        </label>
+        <label>输入单价 (micros / 1K Token) <input id="pr-in" type="number" min="0" value="3000" /></label>
+        <label>输出单价 (micros / 1K Token) <input id="pr-out" type="number" min="0" value="15000" /></label>
+        <label>Prompt Cache 读折扣倍率 <input id="pr-cache-r" type="number" min="0" max="2" step="0.05" value="0.1" /></label>
+        <label>Prompt Cache 写倍率 <input id="pr-cache-w" type="number" min="0" max="5" step="0.05" value="1.25" /></label>
+        <label>按次单价 (micros / 次) <input id="pr-per-call" type="number" min="0" value="0" /></label>
+      </div>
+      <div class="actions-row">
+        <button class="btn" id="btn-save-pricing" type="button">保存模型倍率</button>
+        <button class="btn ghost" id="btn-preset-claude" type="button">填入 Claude Sonnet 常用值</button>
+        <button class="btn ghost" id="btn-preset-gpt4o" type="button">填入 GPT-4o 常用值</button>
+        <button class="btn ghost" id="btn-preset-gemini" type="button">填入 Gemini 2.5 Pro 常用值</button>
+      </div>
+      <table>
+        <thead><tr><th>本次已保存模型</th><th>模式</th><th>输入 (micros/1K)</th><th>输出 (micros/1K)</th><th>缓存读/写</th><th>按次单价</th></tr></thead>
+        <tbody id="pricings-tbody"></tbody>
       </table>
     </section>
 
@@ -80,8 +112,21 @@
         <label>默认注册初始统计额度 ($) <input id="st-init-usd" type="number" value="5" step="0.5" /></label>
         <label>每日签到低余额补水门槛 ($) <input id="st-drip-usd" type="number" value="10" step="1" /></label>
       </div>
+
+      <div class="section-divider">
+        <h3>门户 SMTP 发信配置 <span id="st-smtp-badge" class="badge">未配置</span></h3>
+        <p class="sub">开启邮箱验证码注册时需配置 SMTP 服务器；密码采用 AES-256-GCM 加密落盘，留空不覆盖已有密码。</p>
+        <div class="form-grid">
+          <label>SMTP 服务器主机 <input id="st-smtp-host" placeholder="如 smtp.resend.com 或 smtp.qq.com" /></label>
+          <label>SMTP 端口 <input id="st-smtp-port" type="number" min="1" max="65535" value="587" /></label>
+          <label>SMTP 用户名 <input id="st-smtp-user" placeholder="账号或 apikey" /></label>
+          <label>SMTP 密码 / 授权码 <input id="st-smtp-pass" type="password" placeholder="未修改请留空" /></label>
+          <label>发件人邮箱地址 <input id="st-smtp-from" placeholder="noreply@example.com" /></label>
+        </div>
+      </div>
+
       <div class="actions-row">
-        <button class="btn" id="btn-save-settings" type="button">保存门户注册与福利策略</button>
+        <button class="btn" id="btn-save-settings" type="button">保存门户注册与 SMTP 策略</button>
       </div>
     </section>
 
@@ -119,10 +164,43 @@
         <button class="btn" id="btn-create-user" type="button">直接创建分发成员</button>
       </div>
       <table>
-        <thead><tr><th>用户名</th><th>来源</th><th>分组</th><th>剩余额度</th><th>累计已用</th><th>日回血上限</th></tr></thead>
+        <thead><tr><th>用户名</th><th>来源</th><th>分组</th><th>状态</th><th>剩余额度</th><th>累计已用</th><th>日回血上限</th><th>操作</th></tr></thead>
         <tbody id="users-tbody"></tbody>
       </table>
     </section>
+
+    <div id="user-adjust-modal" class="modal-backdrop" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="adj-modal-title">
+        <div class="modal-header">
+          <h2 id="adj-modal-title" class="title-flush">调整成员额度与账号状态</h2>
+          <button type="button" class="btn ghost sm" id="btn-adj-close">关闭</button>
+        </div>
+        <p id="adj-user-summary" class="sub"></p>
+        <div class="form-grid">
+          <label>增减统计额度 ($, 负数扣减) <input id="adj-delta-usd" type="number" step="0.5" value="0" /></label>
+          <label>路由分组 <input id="adj-group" placeholder="如 default / pro" /></label>
+          <label>账号状态
+            <select id="adj-status">
+              <option value="active">正常启用 (active)</option>
+              <option value="disabled">封禁停用 (disabled)</option>
+            </select>
+          </label>
+          <label>周期自动回血上限 ($) <input id="adj-refill-usd" type="number" min="0" step="1" value="0" /></label>
+          <label>自动回血周期
+            <select id="adj-refill-cycle">
+              <option value="none">关闭 (none)</option>
+              <option value="daily">每日 (daily)</option>
+              <option value="monthly">每月 (monthly)</option>
+            </select>
+          </label>
+          <label>审计备注 <input id="adj-note" placeholder="管理员调额或状态变更原因" /></label>
+        </div>
+        <div class="actions-row">
+          <button type="button" class="btn" id="btn-adj-submit">确认提交</button>
+          <button type="button" class="btn ghost" id="btn-adj-cancel">取消</button>
+        </div>
+      </div>
+    </div>
   </main>
   <script src="./plugin.js"></script>
 </body>

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	dockerv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/docker/v1"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
 
@@ -77,10 +78,11 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 	if err != nil {
 		return nil, pluginsdk.Errorf("INTERNAL", "初始化 Compose 状态库失败: %s", err.Error())
 	}
+	base := pluginsdk.NewInstanceBase(info)
 	inst := &instance{
-		InstanceBase: pluginsdk.NewInstanceBase(info),
+		InstanceBase: base,
 		cfg:          cfg,
-		docker:       newDockerClient(cfg.DockerSocket, time.Duration(cfg.HTTPTimeoutSeconds)*time.Second),
+		docker:       newDockerClient(cfg.DockerSocket, time.Duration(cfg.HTTPTimeoutSeconds)*time.Second, base.Host()),
 		stacks:       st,
 	}
 	for _, op := range []string{
@@ -178,7 +180,7 @@ func (i *instance) ApplyConfig(_ context.Context, cand pluginsdk.Config) error {
 	if err != nil {
 		return err
 	}
-	nextClient := newDockerClient(cfg.DockerSocket, time.Duration(cfg.HTTPTimeoutSeconds)*time.Second)
+	nextClient := newDockerClient(cfg.DockerSocket, time.Duration(cfg.HTTPTimeoutSeconds)*time.Second, i.Host())
 	i.mu.Lock()
 	i.cfg = cfg
 	i.docker = nextClient
@@ -302,14 +304,59 @@ func (i *instance) handleOverview(ctx context.Context) (pluginsdk.Response, erro
 	if err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
 	}
-	composeBin, _ := detectComposeCmd()
+	if info.Available {
+		reconcileStackStatuses(stacks, containers)
+	}
+	composeAvail := dk.useHostCapability()
+	if !composeAvail {
+		composeBin, _ := detectComposeCmd()
+		composeAvail = composeBin != ""
+	}
 	return jsonResp(map[string]any{
 		"daemon":            info,
-		"compose_available": composeBin != "",
+		"compose_available": composeAvail,
 		"containers":        containers,
 		"images":            images,
 		"stacks":            stacks,
 	})
+}
+
+// reconcileStackStatuses 将实时容器运行状态对账回 compose_stacks 展示状态：
+// 关联容器全停显示 stopped，存在退出或 unhealthy 容器时显示 degraded，全部健康运行显示 running。
+func reconcileStackStatuses(stacks []ComposeStack, containers []ContainerSummary) {
+	for idx := range stacks {
+		proj := "qwq_" + stacks[idx].Name
+		total, running, abnormal := 0, 0, 0
+		for _, c := range containers {
+			matched := c.ComposeProject == proj ||
+				strings.HasPrefix(c.Name, proj+"-") ||
+				strings.HasPrefix(c.Name, proj+"_")
+			if !matched {
+				continue
+			}
+			total++
+			if c.State == "running" {
+				running++
+				if strings.Contains(strings.ToLower(c.Status), "unhealthy") {
+					abnormal++
+				}
+			} else {
+				abnormal++
+			}
+		}
+		if total > 0 {
+			switch {
+			case running == 0:
+				stacks[idx].Status = "stopped"
+			case abnormal > 0:
+				stacks[idx].Status = "degraded"
+			default:
+				stacks[idx].Status = "running"
+			}
+		} else if stacks[idx].Status == "running" {
+			stacks[idx].Status = "stopped"
+		}
+	}
 }
 
 func (i *instance) handleAIDigest(ctx context.Context) (pluginsdk.Response, error) {
@@ -477,6 +524,36 @@ func (i *instance) handleComposeDeploy(ctx context.Context, payload []byte) (plu
 		}
 		return jsonResp(map[string]any{"deployed": false, "dry_run": true, "stack": st})
 	}
+	if i.Host() != nil && i.Host().Conn() != nil {
+		st, err := i.stacks.saveStack(ctx, req.Name, req.ComposeYAML, "saved", "", warnings)
+		if err != nil {
+			return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
+		}
+		hc, err := i.Host().CapabilityContext(ctx)
+		if err != nil {
+			return pluginsdk.Response{}, err
+		}
+		resp, err := dockerv1.NewDockerServiceClient(i.Host().Conn()).ComposeAction(ctx, &dockerv1.ComposeActionRequest{
+			Context:     hc,
+			StackName:   st.Name,
+			Action:      "up",
+			YamlContent: req.ComposeYAML,
+		})
+		if err != nil {
+			_, _ = i.stacks.saveStack(ctx, st.Name, req.ComposeYAML, "error", err.Error(), warnings)
+			return pluginsdk.Response{}, pluginsdk.Errorf("FAILED_PRECONDITION", "docker compose up 失败: %s", err.Error())
+		}
+		if e := resp.GetError(); e != nil && e.GetCode() != "" {
+			_, _ = i.stacks.saveStack(ctx, st.Name, req.ComposeYAML, "error", e.GetMessage(), warnings)
+			return pluginsdk.Response{}, pluginsdk.Errorf(e.GetCode(), "docker compose up 失败: %s", e.GetMessage())
+		}
+		mergedWarnings := warnings
+		if len(resp.GetWarnings()) > 0 {
+			mergedWarnings = resp.GetWarnings()
+		}
+		st, _ = i.stacks.saveStack(ctx, st.Name, req.ComposeYAML, "running", "", mergedWarnings)
+		return jsonResp(map[string]any{"deployed": true, "dry_run": false, "stack": st})
+	}
 	bin, baseArgs := detectComposeCmd()
 	if bin == "" {
 		st, _ := i.stacks.saveStack(ctx, req.Name, req.ComposeYAML, "saved", "宿主机未安装 docker compose CLI", warnings)
@@ -518,7 +595,15 @@ func (i *instance) handleComposeRemove(ctx context.Context, payload []byte) (plu
 	if err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
 	}
-	if bin, baseArgs := detectComposeCmd(); bin != "" {
+	if i.Host() != nil && i.Host().Conn() != nil {
+		if hc, hcErr := i.Host().CapabilityContext(ctx); hcErr == nil {
+			_, _ = dockerv1.NewDockerServiceClient(i.Host().Conn()).ComposeAction(ctx, &dockerv1.ComposeActionRequest{
+				Context:   hc,
+				StackName: safeName,
+				Action:    "down",
+			})
+		}
+	} else if bin, baseArgs := detectComposeCmd(); bin != "" {
 		workDir := filepath.Join(i.stacks.dataDir, "stacks", safeName)
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		args := append(append([]string{}, baseArgs...), "-f", filepath.Join(workDir, "compose.yml"), "-p", "qwq_"+safeName, "down")

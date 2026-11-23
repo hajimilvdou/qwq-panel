@@ -38,6 +38,7 @@ type fakePluginConfigService struct {
 	revision         string
 	putCalls         int
 	lastPutJSON      []byte
+	lastPutOpID      string
 	lastTriggerApply bool
 	lastExpectedRev  string
 	failErr          *pb.ErrorDetail
@@ -128,6 +129,7 @@ func (s *fakePluginConfigService) PutConfig(_ context.Context, req *pluginconfig
 	}
 	s.putCalls++
 	s.lastPutJSON = append([]byte(nil), req.GetConfigJson()...)
+	s.lastPutOpID = req.GetContext().GetOperationId()
 	s.lastTriggerApply = req.GetTriggerApply()
 	s.lastExpectedRev = req.GetExpectedRevision()
 	s.revision = fmt.Sprintf("core-r%d", s.putCalls+1)

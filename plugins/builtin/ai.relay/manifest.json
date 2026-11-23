@@ -45,9 +45,9 @@
     "schemas/relay.users.create.response.json": "sha256:db791ddad6abd7d2f5de0109f5b24f128a93a41af5a8ae110532ee47f0ccd63b",
     "schemas/relay.users.list.request.json": "sha256:1c7603b39dccd443ebb27ada12c2e70ab4902abfab9a2a2a710d9aaf45a6d579",
     "schemas/relay.users.list.response.json": "sha256:8c02e068c4bd7ba3c171e24257d2ee4336194ac3490037b8ff89e57aa8665a18",
-    "ui/index.html": "sha256:ea422a04848efda869c1153ce7191421cf251e1bbf5d0530502926892a9b58ea",
-    "ui/plugin.css": "sha256:eebd1ae56c68ee32c3cace900e42ef3e8914afe99f897f9f85f272a912ef1302",
-    "ui/plugin.js": "sha256:e4e7eab1ac7dcd5abe5e8f086124e849399f5066ff395fb738a49ad7848798e5"
+    "ui/index.html": "sha256:57823f170af2e00a10f138bf74a7f1337a04923a232c31a2ad6cf4dbffe0d067",
+    "ui/plugin.css": "sha256:f98023b80f9659fce4abdde1d87d8e078d724322373eda64413cdad7e8d2291c",
+    "ui/plugin.js": "sha256:58c030becc99b7c67b872b042c8c8bde27d2e1660573b06459cdf907b77d533b"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -114,6 +114,11 @@
       "name": "state.kv.write",
       "scope": "self",
       "reason": "更新面板首页微件概览缓存"
+    },
+    {
+      "name": "events.publish",
+      "scope": "relay.alert",
+      "reason": "当模型全部上游渠道熔断或不可用时发布告警事件"
     }
   ],
   "operations": [

@@ -5,20 +5,434 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TLS 证书</title>
+  <link rel="stylesheet" href="plugin.css">
   <script src="certs.js" defer></script>
 </head>
 <body>
-<main id="certs-app">
-  <header>
-    <h1>TLS 证书与消费者绑定</h1>
-    <p id="status" role="status">正在连接宿主...</p>
+<main id="certs-app" class="app">
+  <header class="topbar">
+    <div>
+      <h1>TLS 证书与消费者部署</h1>
+      <p id="status" class="subtitle" role="status">正在连接宿主...</p>
+    </div>
+    <div class="toolbar">
+      <button id="refresh-all" class="btn btn-primary" type="button">刷新列表</button>
+    </div>
   </header>
-  <section aria-label="证书概览">
-    <p>已就绪证书：<strong id="ready-count">—</strong> / <span id="total-count">—</span></p>
-    <p>待处理或异常：<strong id="attention-count">—</strong></p>
-    <p id="summary-sub">等待宿主摘要同步</p>
-    <button id="refresh" type="button">刷新摘要</button>
+
+  <section class="kpi-grid" aria-label="证书健康度摘要">
+    <article class="kpi-card" id="kpi-total-card">
+      <div class="kpi-label">已登记证书</div>
+      <div class="kpi-value" id="total-count">—</div>
+      <div class="kpi-sub" id="summary-sub">等待宿主摘要同步</div>
+    </article>
+    <article class="kpi-card" id="kpi-ready-card">
+      <div class="kpi-label">已就绪证书</div>
+      <div class="kpi-value" id="ready-count">—</div>
+      <div class="kpi-sub">消费者握手验证正常</div>
+    </article>
+    <article class="kpi-card" id="kpi-attention-card">
+      <div class="kpi-label">待关注 / 异常</div>
+      <div class="kpi-value" id="attention-count">—</div>
+      <div class="kpi-sub">临近过期或部署失败</div>
+    </article>
+    <article class="kpi-card" id="kpi-bindings-card">
+      <div class="kpi-label">活跃消费者绑定</div>
+      <div class="kpi-value" id="binding-count">—</div>
+      <div class="kpi-sub">覆盖 core.xray / web.ingress / server.probe</div>
+    </article>
+  </section>
+
+  <div id="feedback-banner" class="banner hidden" role="status" aria-live="polite"></div>
+
+  <nav class="tabs" role="tablist" aria-label="TLS 证书功能页签">
+    <button class="tab-btn" type="button" role="tab" id="tab-list" aria-selected="true" aria-controls="panel-list" data-tab="list">
+      证书列表与健康度
+    </button>
+    <button class="tab-btn" type="button" role="tab" id="tab-issue" aria-selected="false" aria-controls="panel-issue" data-tab="issue">
+      申请 ACME 证书 / 导入 PEM
+    </button>
+    <button class="tab-btn" type="button" role="tab" id="tab-bindings" aria-selected="false" aria-controls="panel-bindings" data-tab="bindings">
+      消费者部署绑定与自动续期
+    </button>
+  </nav>
+
+  <!-- Tab 1: 证书列表与健康度 -->
+  <section id="panel-list" class="tab-panel stack" role="tabpanel" aria-labelledby="tab-list">
+    <article class="card">
+      <div class="card-head">
+        <div>
+          <h2>证书清单</h2>
+          <p class="muted">展示 SAN 域名、签发机构、剩余有效期、叶证书指纹及活跃消费者数量；私钥由宿主加密托管。</p>
+        </div>
+        <div class="toolbar">
+          <input id="cert-filter" type="search" placeholder="筛选证书 ID 或 SAN 域名..." aria-label="筛选证书">
+          <button id="reload-list" class="btn" type="button">重新拉取</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>证书 ID / 用途</th>
+              <th>SAN 域名</th>
+              <th>签发机构</th>
+              <th>到期与健康度</th>
+              <th>叶证书指纹</th>
+              <th>活跃消费者</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="cert-tbody">
+            <tr>
+              <td colspan="7" class="empty-state">正在加载证书列表...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <article id="cert-detail-card" class="card hidden" aria-live="polite">
+      <div class="card-head">
+        <div>
+          <h2 id="detail-title">证书详情</h2>
+          <p id="detail-sub" class="muted"></p>
+        </div>
+        <div class="actions-row">
+          <button id="detail-refresh" class="btn btn-sm" type="button">刷新详情</button>
+          <button id="detail-close" class="btn btn-sm" type="button">关闭详情</button>
+        </div>
+      </div>
+
+      <div id="detail-meta" class="detail-grid"></div>
+
+      <div class="stack">
+        <div>
+          <div class="card-head">
+            <h3>证书代历史（Generations）</h3>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>代号</th>
+                  <th>信任级别</th>
+                  <th>签发机构</th>
+                  <th>生效时间</th>
+                  <th>过期时间</th>
+                  <th>指纹</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="detail-gen-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <div class="card-head">
+            <h3>关联消费者绑定（Bindings）</h3>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Binding Ref</th>
+                  <th>消费者插件</th>
+                  <th>节点 / Profile / SNI</th>
+                  <th>目标代 / 运行代</th>
+                  <th>状态</th>
+                  <th>快捷操作</th>
+                </tr>
+              </thead>
+              <tbody id="detail-bind-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </article>
+  </section>
+
+  <!-- Tab 2: 申请 ACME 证书 / 导入 PEM -->
+  <section id="panel-issue" class="tab-panel stack" role="tabpanel" aria-labelledby="tab-issue" hidden>
+    <div class="split-grid">
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <h2>ACME DNS-01 申请向导</h2>
+            <p class="muted">联动 <code>domain.dns</code> 已授权服务商与托管域名区域执行 DNS-01 验证，支持 Let's Encrypt 生产 / 测试环境。</p>
+          </div>
+        </div>
+        <form id="acme-form" class="form-grid">
+          <div class="field">
+            <label for="acme-cert-id">证书资源 ID</label>
+            <input id="acme-cert-id" name="certificate_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 cert-panel-main">
+          </div>
+          <div class="field">
+            <label for="acme-purpose">证书用途</label>
+            <select id="acme-purpose" name="purpose">
+              <option value="tls_server">生产服务端（tls_server）</option>
+              <option value="tls_server_test">测试用途（tls_server_test）</option>
+            </select>
+          </div>
+          <div class="field field-full">
+            <label for="acme-sans">SAN 域名列表（逗号或换行分隔，支持通配符）</label>
+            <textarea id="acme-sans" name="sans" required placeholder="panel.example.com&#10;*.example.com"></textarea>
+          </div>
+          <div class="field">
+            <label for="acme-provider-id">DNS 服务商 ID（domain.dns）</label>
+            <input id="acme-provider-id" name="provider_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 cf-prod">
+          </div>
+          <div class="field">
+            <label for="acme-zone-id">托管域名区域 Zone ID</label>
+            <input id="acme-zone-id" name="zone_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 zone-example-com">
+          </div>
+          <div class="field">
+            <label for="acme-ca">受控 ACME CA 环境</label>
+            <select id="acme-ca" name="ca">
+              <option value="letsencrypt">Let's Encrypt 生产环境（Prod）</option>
+              <option value="letsencrypt_staging">Let's Encrypt 测试环境（Staging）</option>
+            </select>
+          </div>
+          <div class="field field-full">
+            <label class="checkbox-row">
+              <input id="acme-tos" name="accept_terms" type="checkbox" required>
+              <span>我已阅读并同意所选受控 CA 的服务条款（ACME Terms of Service）</span>
+            </label>
+          </div>
+          <div class="field-full actions-row">
+            <button id="acme-submit" class="btn btn-primary" type="submit">提交 ACME 签发任务</button>
+          </div>
+        </form>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <h2>手动导入外部 PEM 证书链与私钥</h2>
+            <p class="muted">私钥提交后将由宿主直接提取并加密保存，校验链与私钥配对、SAN 与信任级别后写入新代。</p>
+          </div>
+        </div>
+        <form id="import-form" class="form-grid">
+          <div class="field">
+            <label for="import-cert-id">证书资源 ID</label>
+            <input id="import-cert-id" name="certificate_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 cert-custom-edge">
+          </div>
+          <div class="field">
+            <label for="import-trust">信任级别</label>
+            <select id="import-trust" name="trust">
+              <option value="public">公共受信（public）</option>
+              <option value="staging">测试 CA（staging）</option>
+              <option value="test">内部测试（test）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="import-purpose">证书用途</label>
+            <select id="import-purpose" name="purpose">
+              <option value="tls_server">生产服务端（tls_server）</option>
+              <option value="tls_server_test">测试用途（tls_server_test）</option>
+            </select>
+          </div>
+          <div class="field field-full">
+            <label for="import-sans">SAN 域名列表（逗号或换行分隔）</label>
+            <input id="import-sans" name="sans" type="text" required placeholder="edge.example.com, api.example.com">
+          </div>
+          <div class="field field-full">
+            <label for="import-chain">完整 PEM 证书链（叶证书在前，不含私钥）</label>
+            <textarea id="import-chain" name="chain_pem" required placeholder="粘贴完整 PEM 证书链内容（叶证书 + 中间证书）"></textarea>
+          </div>
+          <div class="field field-full">
+            <label for="import-key">配对 PEM 私钥（仅宿主加密托管，不回显）</label>
+            <textarea id="import-key" name="private_key" required placeholder="粘贴配对 PEM 私钥内容（由宿主加密保存，插件不留存明文）"></textarea>
+          </div>
+          <div class="field-full actions-row">
+            <button id="import-submit" class="btn btn-primary" type="submit">校验并导入证书</button>
+          </div>
+        </form>
+      </article>
+    </div>
+
+    <article class="card">
+      <div class="card-head">
+        <div>
+          <h2>生成受控自签名测试证书</h2>
+          <p class="muted">仅允许绑定至标记为测试用途的消费者，用于联调或回滚演练。</p>
+        </div>
+      </div>
+      <form id="test-cert-form" class="form-grid">
+        <div class="field">
+          <label for="test-cert-id">测试证书资源 ID</label>
+          <input id="test-cert-id" name="certificate_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 cert-selfsigned-dev">
+        </div>
+        <div class="field">
+          <label for="test-cert-sans">SAN 域名（逗号分隔）</label>
+          <input id="test-cert-sans" name="sans" type="text" required placeholder="test.local, dev.example.com">
+        </div>
+        <div class="field">
+          <label for="test-cert-purpose">证书用途</label>
+          <select id="test-cert-purpose" name="purpose">
+            <option value="tls_server_test">测试用途（tls_server_test）</option>
+            <option value="tls_server">服务端（tls_server）</option>
+          </select>
+        </div>
+        <div class="field-full actions-row">
+          <button id="test-cert-submit" class="btn" type="submit">签发自签名测试证书</button>
+        </div>
+      </form>
+    </article>
+  </section>
+
+  <!-- Tab 3: 消费者部署绑定与自动续期 -->
+  <section id="panel-bindings" class="tab-panel stack" role="tabpanel" aria-labelledby="tab-bindings" hidden>
+    <div class="split-grid">
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <h2>消费者部署绑定 / 回滚 / 解绑</h2>
+            <p class="muted">选择证书与目标消费者插件（core.xray / web.ingress / server.probe），执行受控部署或回滚并进行真实 TLS 握手核验。</p>
+          </div>
+        </div>
+        <form id="binding-form" class="form-grid">
+          <div class="field">
+            <label for="bind-plugin">消费者插件过滤</label>
+            <select id="bind-plugin">
+              <option value="all">全部消费者插件</option>
+              <option value="core.xray">core.xray（Xray 节点）</option>
+              <option value="web.ingress">web.ingress（网关反代）</option>
+              <option value="server.probe">server.probe（独立探针 HTTPS）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="bind-cert-id">目标证书 ID</label>
+            <select id="bind-cert-id" required></select>
+          </div>
+          <div class="field">
+            <label for="bind-ref">绑定引用 ID（binding_ref）</label>
+            <input id="bind-ref" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 bind-xray-main 或从下表选取">
+          </div>
+          <div class="field">
+            <label for="bind-generation">目标证书代号（generation）</label>
+            <input id="bind-generation" type="number" min="1" step="1" value="1" required>
+          </div>
+          <div class="field-full actions-row">
+            <button id="btn-bind" class="btn btn-primary" type="button">绑定并部署（bind）</button>
+            <button id="btn-deploy" class="btn" type="button">切换新代（deploy）</button>
+            <button id="btn-rollback" class="btn" type="button">回滚前代（rollback）</button>
+            <button id="btn-unbind" class="btn btn-danger" type="button">解除绑定（unbind）</button>
+          </div>
+        </form>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>消费者插件</th>
+                <th>证书 ID</th>
+                <th>Binding Ref</th>
+                <th>SNI / 节点</th>
+                <th>目标 / 运行代</th>
+                <th>状态</th>
+                <th>选取</th>
+              </tr>
+            </thead>
+            <tbody id="all-bindings-tbody">
+              <tr>
+                <td colspan="7" class="empty-state">暂无已登记消费者绑定</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <h2>自动续期策略（Renewal Policy）</h2>
+            <p class="muted">锁定 DNS 域、受控 CA、需滚动部署的绑定列表及授权截止时间，支持查询、配置、撤销与立即触发续期。</p>
+          </div>
+        </div>
+        <form id="renewal-form" class="form-grid">
+          <div class="field">
+            <label for="renew-policy-id">续期策略 ID</label>
+            <input id="renew-policy-id" name="policy_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 pol-panel-main">
+          </div>
+          <div class="field">
+            <label for="renew-cert-id">关联证书 ID</label>
+            <select id="renew-cert-id" name="certificate_id" required></select>
+          </div>
+          <div class="field">
+            <label for="renew-provider-id">DNS 服务商 ID</label>
+            <input id="renew-provider-id" name="provider_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 cf-prod">
+          </div>
+          <div class="field">
+            <label for="renew-zone-id">托管域名区域 Zone ID</label>
+            <input id="renew-zone-id" name="zone_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 zone-example-com">
+          </div>
+          <div class="field">
+            <label for="renew-ca">受控 ACME CA</label>
+            <select id="renew-ca" name="ca">
+              <option value="letsencrypt">Let's Encrypt 生产（letsencrypt）</option>
+              <option value="letsencrypt_staging">Let's Encrypt 测试（letsencrypt_staging）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="renew-expires">授权截止时间（RFC3339）</label>
+            <input id="renew-expires" name="expires_at" type="text" required placeholder="2027-01-01T00:00:00Z">
+          </div>
+          <div class="field field-full">
+            <label for="renew-bindings">同步部署的 binding_refs（逗号分隔，至少 1 个）</label>
+            <input id="renew-bindings" name="binding_refs" type="text" required placeholder="bind-probe-https, bind-web-ingress">
+          </div>
+          <div class="field-full actions-row">
+            <button id="btn-renew-save" class="btn btn-primary" type="submit">保存续期策略</button>
+            <button id="btn-renew-query" class="btn" type="button">查询策略状态</button>
+            <button id="btn-renew-now" class="btn" type="button">立即执行续期</button>
+            <button id="btn-renew-revoke" class="btn btn-danger" type="button">撤销续期策略</button>
+          </div>
+        </form>
+
+        <div id="renewal-status-box" class="detail-grid hidden" aria-live="polite"></div>
+      </article>
+    </div>
   </section>
 </main>
+
+<!-- 确认弹窗 -->
+<div id="confirm-backdrop" class="modal-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <h3 id="confirm-title">确认操作</h3>
+    <p id="confirm-message" class="muted"></p>
+    <div class="modal-foot">
+      <button id="confirm-cancel" class="btn" type="button">取消</button>
+      <button id="confirm-ok" class="btn btn-danger" type="button">确认执行</button>
+    </div>
+  </div>
+</div>
+
+<!-- 立即续期弹窗（行内触发） -->
+<div id="renew-modal-backdrop" class="modal-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="renew-modal-title">
+    <h3 id="renew-modal-title">执行既有证书续期（renew_existing）</h3>
+    <p class="muted">输入已激活续期策略 ID 与策略版本；若未填写版本，将先尝试通过 <code>renewal.get</code> 自动读取当前版本。</p>
+    <form id="renew-modal-form" class="form-grid">
+      <div class="field field-full">
+        <label for="modal-renew-cert">证书 ID</label>
+        <input id="modal-renew-cert" type="text" readonly>
+      </div>
+      <div class="field field-full">
+        <label for="modal-renew-policy">续期策略 ID（policy_id）</label>
+        <input id="modal-renew-policy" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 pol-cert-main">
+      </div>
+      <div class="field field-full">
+        <label for="modal-renew-rev">策略版本（policy_revision，留空自动查询）</label>
+        <input id="modal-renew-rev" type="text" placeholder="留空则自动调用 renewal.get 获取">
+      </div>
+      <div class="modal-foot field-full">
+        <button id="renew-modal-cancel" class="btn" type="button">取消</button>
+        <button id="renew-modal-submit" class="btn btn-primary" type="submit">发起续期作业</button>
+      </div>
+    </form>
+  </div>
+</div>
 </body>
 </html>

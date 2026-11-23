@@ -1,0 +1,71 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+:root {
+  color-scheme: light dark;
+  --bg: #f4f7fb;
+  --surface: #ffffff;
+  --fg: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --primary: #2563eb;
+  --primary-soft: rgba(37, 99, 235, 0.09);
+  --ok: #10b981;
+  --danger: #dc2626;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #090d16;
+    --surface: #111827;
+    --fg: #f8fafc;
+    --muted: #94a3b8;
+    --border: #1e293b;
+    --primary: #3b82f6;
+    --primary-soft: rgba(59, 130, 246, 0.15);
+    --danger: #f87171;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-variant-numeric: tabular-nums; }
+.container { max-width: 1080px; margin: 0 auto; padding: 24px 16px 64px; }
+.auth-box { max-width: 420px; margin: 56px auto; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06); }
+.header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+.stat-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin-bottom: 20px; }
+.two-col-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+.card-compact { margin: 0; }
+.card-spaced { margin-top: 16px; }
+.stat-val { font-size: 26px; font-weight: 700; margin-top: 6px; letter-spacing: -0.02em; }
+.invite-code { font-size: 18px; }
+.muted { color: var(--muted); font-size: 13px; }
+.portal-title { margin: 0 0 6px; }
+.portal-desc { margin: 0 0 18px; }
+.app-title { margin: 0; }
+.section-title { margin: 0 0 4px; font-size: 16px; }
+.sub-title { margin: 0 0 10px; font-size: 15px; }
+.seg { display: flex; gap: 4px; background: var(--bg); padding: 4px; border-radius: 10px; margin-bottom: 16px; }
+.seg button { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 8px; border-radius: 7px; font-size: 13px; font-weight: 500; cursor: pointer; }
+.seg button.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; font-size: 13px; }
+input, select { padding: 9px 12px; border-radius: 9px; border: 1px solid var(--border); background: transparent; color: inherit; font-size: 13px; }
+.input-grow { flex: 1; }
+.input-wide { min-width: 210px; }
+.input-cdk { min-width: 220px; }
+.btn { padding: 9px 16px; border-radius: 9px; border: 0; background: var(--primary); color: #fff; font-weight: 600; font-size: 13px; cursor: pointer; }
+.btn.full { width: 100%; }
+.btn.outline { background: transparent; border: 1px solid var(--border); color: var(--fg); font-weight: 500; }
+.btn.danger { background: transparent; border: 1px solid var(--danger); color: var(--danger); font-weight: 500; }
+.btn.linuxdo { width: 100%; background: #1e293b; color: #f8fafc; margin-top: 10px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row-between { justify-content: space-between; }
+.mb-12 { margin-bottom: 12px; }
+.mb-14 { margin-bottom: 14px; }
+.mb-6 { margin-bottom: 6px; }
+.mt-14 { margin-top: 14px; }
+.auth-msg { margin-top: 12px; text-align: center; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--primary-soft); padding: 2px 6px; border-radius: 5px; }
+pre { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px; overflow-x: auto; font-size: 12px; }
+.notice { padding: 10px 14px; border-radius: 10px; background: var(--primary-soft); font-size: 13px; margin-bottom: 16px; }

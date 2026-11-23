@@ -36,7 +36,28 @@
             ],
             "minimum": 0
           },
+          "cpu_iowait_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
           "mem_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "swap_percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "swap_used_mb": {
             "type": [
               "number",
               "null"
@@ -65,6 +86,20 @@
             "minimum": 0
           },
           "load1": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "load5": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "load15": {
             "type": [
               "number",
               "null"

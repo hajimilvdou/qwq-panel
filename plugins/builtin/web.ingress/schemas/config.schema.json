@@ -18,6 +18,20 @@
       "maxLength": 64,
       "default": ""
     },
+    "https_listen_addr": {
+      "type": "string",
+      "maxLength": 64,
+      "default": ""
+    },
+    "trusted_proxies": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "default": []
+    },
     "export_config_path": {
       "type": "string",
       "maxLength": 255,

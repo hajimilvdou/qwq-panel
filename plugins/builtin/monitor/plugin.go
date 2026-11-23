@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"time"
 
 	metricsv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/metrics/v1"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
@@ -28,20 +29,34 @@ type Plugin struct{ source Source }
 
 func New() *Plugin { return &Plugin{} }
 
-func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pluginsdk.Instance, error) {
+func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (pluginsdk.Instance, error) {
 	cfg, err := parseConfig(info.Config)
 	if err != nil {
 		return nil, err
 	}
 	instance := &instance{InstanceBase: pluginsdk.NewInstanceBase(info)}
 	source := p.source
+	var hs *hostSource
 	if source == nil {
-		source = hostSource{base: instance.InstanceBase}
+		hs = &hostSource{base: instance.InstanceBase}
+		source = hs
 	}
 	instance.samples, err = newSampler(cfg, source)
 	if err != nil {
 		return nil, err
 	}
+	if hs != nil {
+		hs.mounts = instance.samples.diskMounts
+	}
+	instance.samples.publishAlert = func(pctx context.Context, draft pluginsdk.EventDraft) error {
+		host := instance.Host()
+		if host == nil || host.Conn() == nil {
+			return nil
+		}
+		_, err := host.PublishEvent(pctx, draft)
+		return err
+	}
+	instance.restoreCoarseHistory(ctx)
 	instance.register()
 	return instance, nil
 }
@@ -51,8 +66,56 @@ type instance struct {
 	samples *sampler
 }
 
-func (i *instance) Activate(context.Context) error   { i.samples.reset(); return i.Go(i.samples.loop) }
-func (i *instance) Deactivate(context.Context) error { i.samples.pause(); return nil }
+func (i *instance) Start(ctx context.Context) error {
+	i.restoreCoarseHistory(ctx)
+	return nil
+}
+
+func (i *instance) Activate(ctx context.Context) error {
+	i.samples.reset()
+	i.restoreCoarseHistory(ctx)
+	return i.Go(i.samples.loop)
+}
+
+func (i *instance) Deactivate(ctx context.Context) error {
+	i.samples.pause()
+	i.persistCoarseHistory(ctx)
+	return nil
+}
+
+func (i *instance) Stop(ctx context.Context) error {
+	i.persistCoarseHistory(ctx)
+	return nil
+}
+
+func (i *instance) persistCoarseHistory(ctx context.Context) {
+	host := i.Host()
+	if host == nil || host.Conn() == nil || i.samples == nil {
+		return
+	}
+	snap := i.samples.exportCoarseSnapshot(i.samples.now())
+	if len(snap.Points) == 0 {
+		return
+	}
+	pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, _ = host.KV().PutJSON(pctx, coarseHistoryKVKey, snap, pluginsdk.PutOption{})
+}
+
+func (i *instance) restoreCoarseHistory(ctx context.Context) {
+	host := i.Host()
+	if host == nil || host.Conn() == nil || i.samples == nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var snap coarseHistorySnapshot
+	_, found, err := host.KV().GetJSON(rctx, coarseHistoryKVKey, &snap)
+	if err != nil || !found {
+		return
+	}
+	_ = i.samples.restoreCoarseSnapshot(snap, i.samples.now())
+}
 func (i *instance) ApplyConfig(_ context.Context, candidate pluginsdk.Config) error {
 	next, err := parseConfig(candidate.JSON)
 	if err != nil {
@@ -78,9 +141,12 @@ func (i *instance) Health(context.Context) pluginsdk.Health {
 	return pluginsdk.Health{Message: message}
 }
 
-type hostSource struct{ base *pluginsdk.InstanceBase }
+type hostSource struct {
+	base   *pluginsdk.InstanceBase
+	mounts func() []string
+}
 
-func (s hostSource) Read(ctx context.Context) (*metricsv1.MetricsSnapshot, error) {
+func (s *hostSource) Read(ctx context.Context) (*metricsv1.MetricsSnapshot, error) {
 	host := s.base.Host()
 	if host == nil || host.Conn() == nil {
 		return nil, pluginsdk.Errorf("UNAVAILABLE", "宿主指标连接未建立")
@@ -89,7 +155,14 @@ func (s hostSource) Read(ctx context.Context) (*metricsv1.MetricsSnapshot, error
 	if err != nil {
 		return nil, err
 	}
-	response, err := metricsv1.NewMetricsServiceClient(host.Conn()).ReadMetrics(ctx, &metricsv1.ReadMetricsRequest{Context: meta})
+	var diskMounts []string
+	if s.mounts != nil {
+		diskMounts = s.mounts()
+	}
+	response, err := metricsv1.NewMetricsServiceClient(host.Conn()).ReadMetrics(ctx, &metricsv1.ReadMetricsRequest{
+		Context:    meta,
+		DiskMounts: diskMounts,
+	})
 	if err != nil {
 		return nil, err
 	}

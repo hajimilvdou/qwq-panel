@@ -42,9 +42,9 @@
     "schemas/docker.overview.response.json": "sha256:923fca39cfe6e5f16f32fbcedaadf785d837ff36ec8e55f14712f221a34f417c",
     "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
-    "ui/index.html": "sha256:4c75fb945823972e10f03a67903ea9bd1180af27045e769cf0bc6180e2fadb45",
-    "ui/plugin.css": "sha256:d03c906528e0377bba9af35fddda4ce173b53e47563a0a7fe4b3ec1a677b26ca",
-    "ui/plugin.js": "sha256:92f43c49e4e286f4ab6e30533e6f49c4111702a370c933f1dd2300188e15df2d"
+    "ui/index.html": "sha256:da9104839b9f4d9d61c6634bf6de5ef86aace3fb75118452da6dd947e3d62453",
+    "ui/plugin.css": "sha256:5c4f9a5db167ba54825c7edaeb8337b09a71954dc8bec027d8cd79bd7577620f",
+    "ui/plugin.js": "sha256:8869729cae88927d01afd3f190133608720609a024cf19a3b4f30ffe9bb6e0c7"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -70,7 +70,7 @@
       "capabilities": [
         {
           "name": "system.docker.read",
-          "scope": "local"
+          "scope": "self"
         }
       ],
       "request_schema": "schemas/empty.request.json",
@@ -89,7 +89,7 @@
       "capabilities": [
         {
           "name": "system.docker.read",
-          "scope": "local"
+          "scope": "self"
         }
       ],
       "request_schema": "schemas/empty.request.json",
@@ -109,7 +109,7 @@
       "capabilities": [
         {
           "name": "system.docker.read",
-          "scope": "local"
+          "scope": "self"
         },
         {
           "name": "state.kv.read",
@@ -132,7 +132,7 @@
       "capabilities": [
         {
           "name": "system.docker.read",
-          "scope": "local"
+          "scope": "self"
         },
         {
           "name": "state.kv.read",
@@ -155,7 +155,7 @@
       "capabilities": [
         {
           "name": "system.docker.read",
-          "scope": "local"
+          "scope": "self"
         }
       ],
       "request_schema": "schemas/docker.id.request.json",
@@ -174,7 +174,7 @@
       "capabilities": [
         {
           "name": "system.docker.read",
-          "scope": "local"
+          "scope": "self"
         }
       ],
       "request_schema": "schemas/docker.container.logs.request.json",
@@ -196,7 +196,7 @@
       "capabilities": [
         {
           "name": "system.docker.manage",
-          "scope": "local"
+          "scope": "self"
         }
       ],
       "request_schema": "schemas/docker.container.action.request.json",
@@ -218,7 +218,7 @@
       "capabilities": [
         {
           "name": "system.docker.manage",
-          "scope": "local"
+          "scope": "self"
         }
       ],
       "request_schema": "schemas/docker.container.limits.request.json",
@@ -240,7 +240,7 @@
       "capabilities": [
         {
           "name": "system.docker.manage",
-          "scope": "local"
+          "scope": "self"
         }
       ],
       "request_schema": "schemas/docker.container.remove.request.json",
@@ -262,7 +262,7 @@
       "capabilities": [
         {
           "name": "system.docker.manage",
-          "scope": "local"
+          "scope": "self"
         }
       ],
       "request_schema": "schemas/docker.images.prune.request.json",
@@ -285,7 +285,7 @@
       "capabilities": [
         {
           "name": "system.docker.manage",
-          "scope": "local"
+          "scope": "self"
         },
         {
           "name": "state.kv.write",
@@ -311,7 +311,7 @@
       "capabilities": [
         {
           "name": "system.docker.manage",
-          "scope": "local"
+          "scope": "self"
         },
         {
           "name": "state.kv.write",
@@ -325,12 +325,12 @@
   "capabilities": [
     {
       "name": "system.docker.read",
-      "scope": "local",
+      "scope": "self",
       "reason": "通过只读 Unix Socket 接口查询容器状态、实时资源占用、OOM 标记与有界日志"
     },
     {
       "name": "system.docker.manage",
-      "scope": "local",
+      "scope": "self",
       "reason": "在审批通过后执行容器启停、动态资源限额更新、镜像清理与受管 Compose 编排"
     },
     {

@@ -42,10 +42,14 @@ const (
 	BatchMaxRows               = 128
 	defaultLinuxDoBase         = "https://connect.linux.do"
 	emailOTPTTL                = 10 * time.Minute
+	emailOTPCooldown           = 60 * time.Second
 	maxEmailOTPAttempts        = 5
 	portalSessionTTL           = 24 * time.Hour
 	oauthStateTTL              = 10 * time.Minute
 )
+
+// ErrUserDisabled 表示分发用户已被管理员停用，禁止登录、签到、核销兑换码或调用 API。
+var ErrUserDisabled = errors.New("USER_DISABLED: 该分发账号已被停用")
 
 // OpenDB 打开并初始化 WAL 模式 SQLite 数据库，同时加载或生成 32 字节本地 AES-256-GCM 主密钥。
 func OpenDB(dataDir, schemaSQL string) (*sql.DB, []byte, error) {
@@ -487,11 +491,13 @@ type LedgerEngine struct {
 	now            func() time.Time
 	linuxDoBaseURL string
 
-	mu          sync.RWMutex
-	users       map[string]*LiveUserQuota
-	tokens      map[string]*LiveAPIToken
-	sessions    map[string]portalSession
-	oauthStates map[string]oauthPKCEState
+	mu               sync.RWMutex
+	users            map[string]*LiveUserQuota
+	tokens           map[string]*LiveAPIToken
+	sessions         map[string]portalSession
+	oauthStates      map[string]oauthPKCEState
+	otpEmailCooldown map[string]time.Time
+	otpIPCooldown    map[string]time.Time
 
 	batchMu   sync.Mutex
 	batchStop func()
@@ -508,16 +514,18 @@ func NewLedgerEngine(db *sql.DB, masterKey []byte, httpClient *http.Client, now 
 		httpClient = &http.Client{Timeout: 12 * time.Second}
 	}
 	return &LedgerEngine{
-		db:             db,
-		masterKey:      append([]byte(nil), masterKey...),
-		httpClient:     httpClient,
-		now:            now,
-		linuxDoBaseURL: defaultLinuxDoBase,
-		users:          make(map[string]*LiveUserQuota),
-		tokens:         make(map[string]*LiveAPIToken),
-		sessions:       make(map[string]portalSession),
-		oauthStates:    make(map[string]oauthPKCEState),
-		batchCh:        make(chan UsageLogRecord, 4096),
+		db:               db,
+		masterKey:        append([]byte(nil), masterKey...),
+		httpClient:       httpClient,
+		now:              now,
+		linuxDoBaseURL:   defaultLinuxDoBase,
+		users:            make(map[string]*LiveUserQuota),
+		tokens:           make(map[string]*LiveAPIToken),
+		sessions:         make(map[string]portalSession),
+		oauthStates:      make(map[string]oauthPKCEState),
+		otpEmailCooldown: make(map[string]time.Time),
+		otpIPCooldown:    make(map[string]time.Time),
+		batchCh:          make(chan UsageLogRecord, 4096),
 	}
 }
 
@@ -1052,14 +1060,88 @@ func (e *LedgerEngine) SignupWithInviteCode(ctx context.Context, username, passw
 	return userID, nil
 }
 
-// SendEmailOTP 校验邮箱注册开关与域名白名单，签发 6 位一次性验证码并保存 SHA-256 摘要。
+func (e *LedgerEngine) checkAndMarkOTPCooldown(email, clientIP string) error {
+	now := e.now()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if email != "" {
+		if until, ok := e.otpEmailCooldown[email]; ok && now.Before(until) {
+			return errors.New("RATE_LIMITED: 该邮箱验证码发送过于频繁，请 60 秒后重试")
+		}
+	}
+	if clientIP != "" {
+		if until, ok := e.otpIPCooldown[clientIP]; ok && now.Before(until) {
+			return errors.New("RATE_LIMITED: 当前 IP 请求验证码过于频繁，请 60 秒后重试")
+		}
+	}
+	if len(e.otpEmailCooldown) > 4096 {
+		for k, v := range e.otpEmailCooldown {
+			if !now.Before(v) {
+				delete(e.otpEmailCooldown, k)
+			}
+		}
+	}
+	if len(e.otpIPCooldown) > 4096 {
+		for k, v := range e.otpIPCooldown {
+			if !now.Before(v) {
+				delete(e.otpIPCooldown, k)
+			}
+		}
+	}
+	nextUntil := now.Add(emailOTPCooldown)
+	if email != "" {
+		e.otpEmailCooldown[email] = nextUntil
+	}
+	if clientIP != "" {
+		e.otpIPCooldown[clientIP] = nextUntil
+	}
+	return nil
+}
+
+// GetSMTPConfig 返回解密后的 SMTP 发信配置及站点标题（未配置时返回 nil, title, nil）。
+func (e *LedgerEngine) GetSMTPConfig(ctx context.Context) (*SMTPConfig, string, error) {
+	var siteTitle string
+	var smtpEnc []byte
+	if err := e.db.QueryRowContext(ctx, `
+		SELECT site_title, smtp_config_enc FROM portal_settings WHERE id = 1;`,
+	).Scan(&siteTitle, &smtpEnc); err != nil {
+		return nil, "", err
+	}
+	if len(smtpEnc) == 0 {
+		return nil, siteTitle, nil
+	}
+	plain, err := DecryptSecret(e.masterKey, smtpEnc)
+	if err != nil {
+		return nil, siteTitle, err
+	}
+	defer clear(plain)
+	var cfg SMTPConfig
+	if err := json.Unmarshal(plain, &cfg); err != nil {
+		return nil, siteTitle, err
+	}
+	return &cfg, siteTitle, nil
+}
+
+// SendEmailOTP 校验邮箱注册开关、域名白名单与每邮箱 60s 冷却，签发 6 位一次性验证码并保存 SHA-256 摘要；
+// 若管理员已配置 SMTP，则在落库后立即调用 SendVerificationEmailBounded 真实发信。
 func (e *LedgerEngine) SendEmailOTP(ctx context.Context, email string) (string, error) {
+	return e.sendEmailOTPInternal(ctx, email, "", false)
+}
+
+// SendEmailOTPWithDelivery 供公开门户 HTTP 入口调用：强制每邮箱 + 每 IP 60s 冷却并要求已配置 SMTP 真实发信。
+func (e *LedgerEngine) SendEmailOTPWithDelivery(ctx context.Context, email, clientIP string) error {
+	_, err := e.sendEmailOTPInternal(ctx, email, clientIP, true)
+	return err
+}
+
+func (e *LedgerEngine) sendEmailOTPInternal(ctx context.Context, email, clientIP string, requireSMTP bool) (string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	var allowEmail int
-	var allowlistJSON string
+	var allowlistJSON, siteTitle string
+	var smtpEnc []byte
 	if err := e.db.QueryRowContext(ctx, `
-		SELECT allow_email_signup, email_domain_allowlist_json FROM portal_settings WHERE id = 1;`,
-	).Scan(&allowEmail, &allowlistJSON); err != nil {
+		SELECT allow_email_signup, email_domain_allowlist_json, site_title, smtp_config_enc FROM portal_settings WHERE id = 1;`,
+	).Scan(&allowEmail, &allowlistJSON, &siteTitle, &smtpEnc); err != nil {
 		return "", err
 	}
 	if allowEmail == 0 {
@@ -1069,6 +1151,12 @@ func (e *LedgerEngine) SendEmailOTP(ctx context.Context, email string) (string, 
 	_ = json.Unmarshal([]byte(allowlistJSON), &allowlist)
 	if !ValidateEmailAllowed(email, allowlist) {
 		return "", errors.New("EMAIL_DOMAIN_DENIED: 该邮箱格式无效或不在允许注册的域名白名单内")
+	}
+	if requireSMTP && len(smtpEnc) == 0 {
+		return "", errors.New("SMTP_NOT_CONFIGURED: 管理员尚未完成门户 SMTP 发信服务器配置")
+	}
+	if err := e.checkAndMarkOTPCooldown(email, strings.TrimSpace(clientIP)); err != nil {
+		return "", err
 	}
 
 	nBig, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
@@ -1092,6 +1180,30 @@ func (e *LedgerEngine) SendEmailOTP(ctx context.Context, email string) (string, 
 			sent_at     = excluded.sent_at;`,
 		email, codeHash, expMs, nowMs); err != nil {
 		return "", err
+	}
+
+	if len(smtpEnc) > 0 {
+		plain, err := DecryptSecret(e.masterKey, smtpEnc)
+		if err != nil {
+			return "", fmt.Errorf("SMTP_CONFIG_CORRUPT: %w", err)
+		}
+		var sc SMTPConfig
+		uErr := json.Unmarshal(plain, &sc)
+		clear(plain)
+		if uErr != nil {
+			return "", fmt.Errorf("SMTP_CONFIG_CORRUPT: %w", uErr)
+		}
+		relayCfg := RelaySMTPConfig{
+			Host:     sc.Host,
+			Port:     sc.Port,
+			Username: sc.Username,
+			Password: sc.Password,
+			From:     sc.FromAddress,
+			UseTLS:   sc.Port == 465 || sc.Port == 587,
+		}
+		if err := SendVerificationEmailBounded(ctx, relayCfg, email, siteTitle, otp); err != nil {
+			return "", err
+		}
 	}
 	return otp, nil
 }
@@ -1263,11 +1375,15 @@ func (e *LedgerEngine) LoginOrSignupWithLinuxDo(
 		return "", "", false, err
 	}
 
+	var userStatus string
 	err = tx.QueryRowContext(ctx, `
-		SELECT u.id, u.username FROM user_oauth_links l JOIN relay_users u ON u.id = l.user_id
+		SELECT u.id, u.username, u.status FROM user_oauth_links l JOIN relay_users u ON u.id = l.user_id
 		WHERE l.provider = 'linuxdo' AND l.external_id = ?;`, extID,
-	).Scan(&userID, &username)
+	).Scan(&userID, &username, &userStatus)
 	if err == nil {
+		if userStatus != "active" {
+			return "", "", false, ErrUserDisabled
+		}
 		_, _ = tx.ExecContext(ctx, `
 			UPDATE user_oauth_links SET trust_level = ?, external_login = ?, last_login_at = ?
 			WHERE provider = 'linuxdo' AND external_id = ?;`,
@@ -1477,7 +1593,7 @@ func (e *LedgerEngine) MintSubKey(ctx context.Context, userID, name string, quot
 
 	sum := sha256.Sum256([]byte(plainKey))
 	keyHash := hex.EncodeToString(sum[:])
-	masked := plainKey[:11] + "..." + plainKey[len(plainKey)-4:]
+	masked := plainKey[:11] + "****"
 	tokID := randomHexID("tok_", 8)
 	if strings.TrimSpace(name) == "" {
 		name = "default-key"
@@ -1514,6 +1630,34 @@ func (e *LedgerEngine) MintSubKey(ctx context.Context, userID, name string, quot
 	}
 	e.mu.Unlock()
 	return plainKey, nil
+}
+
+// RevokeUserToken 吊销属于指定用户的子令牌并立即从内存热缓存驱逐。
+func (e *LedgerEngine) RevokeUserToken(ctx context.Context, userID, tokenID string) (bool, error) {
+	tokenID = strings.TrimSpace(tokenID)
+	if tokenID == "" {
+		return false, errors.New("VALIDATION_FAILED: token_id 不能为空")
+	}
+	var keyHash string
+	err := e.db.QueryRowContext(ctx, `
+		SELECT key_sha256 FROM api_tokens WHERE id = ? AND user_id = ?;`, tokenID, userID,
+	).Scan(&keyHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	res, err := e.db.ExecContext(ctx, `
+		DELETE FROM api_tokens WHERE id = ? AND user_id = ?;`, tokenID, userID)
+	if err != nil {
+		return false, err
+	}
+	e.mu.Lock()
+	delete(e.tokens, keyHash)
+	e.mu.Unlock()
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // GenerateCodes 批量签发注册邀请码、单用 CDK 或群共享口令码。
@@ -1614,6 +1758,17 @@ func (e *LedgerEngine) RedeemCode(ctx context.Context, userID, code string) (gra
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	var userStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM relay_users WHERE id = ?;`, userID).Scan(&userStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, 0, errors.New("NOT_FOUND: 用户不存在")
+		}
+		return 0, 0, err
+	}
+	if userStatus != "active" {
+		return 0, 0, ErrUserDisabled
+	}
+
 	var amount int64
 	var maxClaims, claimed int
 	var expMs int64
@@ -1683,8 +1838,12 @@ func (e *LedgerEngine) DailyCheckIn(ctx context.Context, userID string) (granted
 	}
 
 	var curBal int64
-	if err := tx.QueryRowContext(ctx, `SELECT balance_micros FROM relay_users WHERE id = ?;`, userID).Scan(&curBal); err != nil {
+	var userStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT balance_micros, status FROM relay_users WHERE id = ?;`, userID).Scan(&curBal, &userStatus); err != nil {
 		return 0, 0, err
+	}
+	if userStatus != "active" {
+		return 0, 0, ErrUserDisabled
 	}
 	if dripBelow > 0 && curBal >= dripBelow {
 		return 0, curBal, fmt.Errorf("BALANCE_SUFFICIENT: 当前剩余统计额度充足（仅低于 $%.2f 时开放公益补水）", float64(dripBelow)/float64(MicrosPerDollar))
@@ -1996,7 +2155,13 @@ func (e *LedgerEngine) UpdateSettings(ctx context.Context, patch SettingsPatch) 
 		}
 	}
 	if patch.SMTP != nil {
-		rawSMTP, _ := json.Marshal(patch.SMTP)
+		toSave := *patch.SMTP
+		if strings.TrimSpace(toSave.Password) == "" {
+			if existing, _, gErr := e.GetSMTPConfig(ctx); gErr == nil && existing != nil && existing.Password != "" {
+				toSave.Password = existing.Password
+			}
+		}
+		rawSMTP, _ := json.Marshal(&toSave)
 		enc, err := EncryptSecret(e.masterKey, rawSMTP)
 		clear(rawSMTP)
 		if err != nil {
@@ -2149,6 +2314,22 @@ func (e *LedgerEngine) UpdateChannelHealth(ctx context.Context, id, healthState 
 	return err
 }
 
+// PersistRefreshedChannelCredential 在 OAuth Token 刷新成功后将最新凭据 bundle 加密回写至 upstream_channels.credential_enc。
+func (e *LedgerEngine) PersistRefreshedChannelCredential(ctx context.Context, channelID, rawCredential string) error {
+	if strings.TrimSpace(channelID) == "" || strings.TrimSpace(rawCredential) == "" {
+		return nil
+	}
+	enc, err := EncryptSecret(e.masterKey, []byte(rawCredential))
+	if err != nil {
+		return err
+	}
+	nowMs := e.now().UTC().UnixMilli()
+	_, err = e.db.ExecContext(ctx, `
+		UPDATE upstream_channels SET credential_enc = ?, updated_at = ? WHERE id = ?;`,
+		enc, nowMs, channelID)
+	return err
+}
+
 func (e *LedgerEngine) RemoveChannel(ctx context.Context, id string) (bool, error) {
 	res, err := e.db.ExecContext(ctx, `DELETE FROM upstream_channels WHERE id = ?;`, id)
 	if err != nil {
@@ -2281,7 +2462,7 @@ func (e *LedgerEngine) GetUserByID(ctx context.Context, userID string) (UserView
 
 func (e *LedgerEngine) ListUserTokens(ctx context.Context, userID string) ([]APITokenView, error) {
 	rows, err := e.db.QueryContext(ctx, `
-		SELECT id, name, key_masked, key_ciphertext, group_override, status, quota_limit_micros,
+		SELECT id, name, key_masked, group_override, status, quota_limit_micros,
 		       used_micros, allowed_models_json, allowed_ips_json, rpm_limit, expires_at, last_used_at, created_at
 		FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC;`, userID)
 	if err != nil {
@@ -2291,9 +2472,8 @@ func (e *LedgerEngine) ListUserTokens(ctx context.Context, userID string) ([]API
 	out := make([]APITokenView, 0)
 	for rows.Next() {
 		var t APITokenView
-		var cipherKey []byte
 		var modelsJSON, ipsJSON string
-		if err := rows.Scan(&t.ID, &t.Name, &t.KeyMasked, &cipherKey, &t.GroupOverride, &t.Status,
+		if err := rows.Scan(&t.ID, &t.Name, &t.KeyMasked, &t.GroupOverride, &t.Status,
 			&t.QuotaLimitMicros, &t.UsedMicros, &modelsJSON, &ipsJSON, &t.RPMLimit,
 			&t.ExpiresAt, &t.LastUsedAt, &t.CreatedAt); err != nil {
 			return nil, err
@@ -2302,12 +2482,8 @@ func (e *LedgerEngine) ListUserTokens(ctx context.Context, userID string) ([]API
 		t.AllowedIPs = make([]string, 0)
 		_ = json.Unmarshal([]byte(modelsJSON), &t.AllowedModels)
 		_ = json.Unmarshal([]byte(ipsJSON), &t.AllowedIPs)
-		if len(cipherKey) > 0 {
-			if plain, err := DecryptSecret(e.masterKey, cipherKey); err == nil {
-				t.PlainKey = string(plain)
-				clear(plain)
-			}
-		}
+		// 严禁在 /api/me 列表中回传历史明文子令牌，仅保留掩码前缀（sk-qwq-xxxx****）。
+		t.PlainKey = ""
 		out = append(out, t)
 	}
 	return out, rows.Err()

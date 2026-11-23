@@ -19,6 +19,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	dockerv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/docker/v1"
+	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
 
 const (
@@ -138,14 +141,15 @@ type DockerInfo struct {
 
 // ContainerSummary 是容器列表中的轻量视图。
 type ContainerSummary struct {
-	ID      string   `json:"id"`
-	ShortID string   `json:"short_id"`
-	Name    string   `json:"name"`
-	Image   string   `json:"image"`
-	State   string   `json:"state"`
-	Status  string   `json:"status"`
-	Created int64    `json:"created"`
-	Ports   []string `json:"ports,omitempty"`
+	ID             string   `json:"id"`
+	ShortID        string   `json:"short_id"`
+	Name           string   `json:"name"`
+	Image          string   `json:"image"`
+	State          string   `json:"state"`
+	Status         string   `json:"status"`
+	Created        int64    `json:"created"`
+	Ports          []string `json:"ports,omitempty"`
+	ComposeProject string   `json:"compose_project,omitempty"`
 }
 
 // ContainerDetail 结合 inspect 与单次实时资源统计（含 OOMKilled 标志）。
@@ -179,9 +183,10 @@ type PruneResult struct {
 type dockerClient struct {
 	socketPath string
 	httpClient *http.Client
+	host       *pluginsdk.Host
 }
 
-func newDockerClient(socketPath string, timeout time.Duration) *dockerClient {
+func newDockerClient(socketPath string, timeout time.Duration, host *pluginsdk.Host) *dockerClient {
 	if strings.TrimSpace(socketPath) == "" {
 		socketPath = defaultDockerSocket
 	}
@@ -189,6 +194,7 @@ func newDockerClient(socketPath string, timeout time.Duration) *dockerClient {
 		timeout = 10 * time.Second
 	}
 	tr := &http.Transport{
+		Proxy: nil,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "unix", socketPath)
 		},
@@ -198,42 +204,111 @@ func newDockerClient(socketPath string, timeout time.Duration) *dockerClient {
 	return &dockerClient{
 		socketPath: socketPath,
 		httpClient: &http.Client{Transport: tr, Timeout: timeout},
+		host:       host,
 	}
 }
 
-func (c *dockerClient) doJSON(ctx context.Context, method, path string, body any, out any) error {
-	var bodyReader io.Reader
-	if body != nil {
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return err
+func (c *dockerClient) useHostCapability() bool {
+	return c != nil && c.host != nil && c.host.Conn() != nil
+}
+
+func splitPathAndQuery(pathWithQuery string) (cleanPath, rawQuery string) {
+	if idx := strings.IndexByte(pathWithQuery, '?'); idx >= 0 {
+		return pathWithQuery[:idx], pathWithQuery[idx+1:]
+	}
+	return pathWithQuery, ""
+}
+
+func (c *dockerClient) doRaw(ctx context.Context, method, pathWithQuery string, rawBody []byte) (int, []byte, error) {
+	if c.useHostCapability() {
+		cleanPath, rawQuery := splitPathAndQuery(pathWithQuery)
+		client := dockerv1.NewDockerServiceClient(c.host.Conn())
+		if method == http.MethodGet {
+			hc, err := c.host.CapabilityContextReadOnly(ctx)
+			if err != nil {
+				return 0, nil, err
+			}
+			resp, err := client.ProxyRead(ctx, &dockerv1.ProxyReadRequest{
+				Context:  hc,
+				Path:     cleanPath,
+				RawQuery: rawQuery,
+			})
+			if err != nil {
+				return 0, nil, err
+			}
+			if e := resp.GetError(); e != nil && e.GetCode() != "" {
+				return 0, nil, fmt.Errorf("%s: %s", e.GetCode(), e.GetMessage())
+			}
+			return int(resp.GetStatusCode()), resp.GetBody(), nil
 		}
-		bodyReader = bytes.NewReader(raw)
+		hc, err := c.host.CapabilityContext(ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		resp, err := client.ProxyWrite(ctx, &dockerv1.ProxyWriteRequest{
+			Context:  hc,
+			Method:   method,
+			Path:     cleanPath,
+			RawQuery: rawQuery,
+			Body:     rawBody,
+		})
+		if err != nil {
+			return 0, nil, err
+		}
+		if e := resp.GetError(); e != nil && e.GetCode() != "" {
+			return 0, nil, fmt.Errorf("%s: %s", e.GetCode(), e.GetMessage())
+		}
+		return int(resp.GetStatusCode()), resp.GetBody(), nil
 	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://docker/"+dockerAPIVersion+path, bodyReader)
+
+	var bodyReader io.Reader
+	if len(rawBody) > 0 {
+		bodyReader = bytes.NewReader(rawBody)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "http://docker/"+dockerAPIVersion+pathWithQuery, bodyReader)
 	if err != nil {
-		return err
+		return 0, nil, err
 	}
-	if body != nil {
+	if len(rawBody) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
+	return resp.StatusCode, raw, err
+}
+
+func (c *dockerClient) doJSON(ctx context.Context, method, path string, body any, out any) error {
+	var rawBody []byte
+	if body != nil {
+		switch v := body.(type) {
+		case []byte:
+			rawBody = v
+		case json.RawMessage:
+			rawBody = v
+		default:
+			var err error
+			rawBody, err = json.Marshal(body)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	statusCode, raw, err := c.doRaw(ctx, method, path, rawBody)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if statusCode < 200 || statusCode >= 300 {
 		var errBody struct {
 			Message string `json:"message"`
 		}
 		if json.Unmarshal(raw, &errBody) == nil && errBody.Message != "" {
-			return fmt.Errorf("docker API %d: %s", resp.StatusCode, errBody.Message)
+			return fmt.Errorf("docker API %d: %s", statusCode, errBody.Message)
 		}
-		return fmt.Errorf("docker API %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return fmt.Errorf("docker API %d: %s", statusCode, strings.TrimSpace(string(raw)))
 	}
 	if out != nil && len(raw) > 0 {
 		return json.Unmarshal(raw, out)
@@ -243,7 +318,9 @@ func (c *dockerClient) doJSON(ctx context.Context, method, path string, body any
 
 func (c *dockerClient) probeInfo(ctx context.Context) DockerInfo {
 	info := DockerInfo{SocketPath: c.socketPath}
-	if _, err := os.Stat(c.socketPath); err != nil {
+	if c.useHostCapability() {
+		info.SocketPath = "host://system.docker"
+	} else if _, err := os.Stat(c.socketPath); err != nil {
 		info.Reason = fmt.Sprintf("Docker socket %s 不存在或不可访问", c.socketPath)
 		return info
 	}
@@ -271,12 +348,13 @@ func (c *dockerClient) probeInfo(ctx context.Context) DockerInfo {
 
 func (c *dockerClient) listContainers(ctx context.Context) ([]ContainerSummary, error) {
 	var raw []struct {
-		ID      string   `json:"Id"`
-		Names   []string `json:"Names"`
-		Image   string   `json:"Image"`
-		State   string   `json:"State"`
-		Status  string   `json:"Status"`
-		Created int64    `json:"Created"`
+		ID      string            `json:"Id"`
+		Names   []string          `json:"Names"`
+		Image   string            `json:"Image"`
+		State   string            `json:"State"`
+		Status  string            `json:"Status"`
+		Created int64             `json:"Created"`
+		Labels  map[string]string `json:"Labels"`
 		Ports   []struct {
 			IP          string `json:"IP"`
 			PrivatePort int    `json:"PrivatePort"`
@@ -306,14 +384,15 @@ func (c *dockerClient) listContainers(ctx context.Context) ([]ContainerSummary, 
 			}
 		}
 		out = append(out, ContainerSummary{
-			ID:      r.ID,
-			ShortID: short,
-			Name:    name,
-			Image:   r.Image,
-			State:   r.State,
-			Status:  r.Status,
-			Created: r.Created,
-			Ports:   ports,
+			ID:             r.ID,
+			ShortID:        short,
+			Name:           name,
+			Image:          r.Image,
+			State:          r.State,
+			Status:         r.Status,
+			Created:        r.Created,
+			Ports:          ports,
+			ComposeProject: r.Labels["com.docker.compose.project"],
 		})
 	}
 	return out, nil
@@ -403,6 +482,21 @@ func (c *dockerClient) containerLogs(ctx context.Context, id string, tail int) (
 	}
 	if tail > maxLogLines {
 		tail = maxLogLines
+	}
+	if c.useHostCapability() {
+		pathWithQuery := fmt.Sprintf("/containers/%s/logs?stdout=1&stderr=1&timestamps=1&tail=%d", url.PathEscape(ref), tail)
+		statusCode, raw, err := c.doRaw(ctx, http.MethodGet, pathWithQuery, nil)
+		if err != nil {
+			return "", false, err
+		}
+		if statusCode < 200 || statusCode >= 300 {
+			return "", false, fmt.Errorf("docker logs %d: %s", statusCode, strings.TrimSpace(string(raw)))
+		}
+		ring := newTailRingBuffer(maxLogBytes)
+		if err := demuxDockerStreamToRing(bytes.NewReader(raw), ring); err != nil {
+			return "", false, err
+		}
+		return ring.String(), ring.Truncated(), nil
 	}
 	u := fmt.Sprintf("http://docker/%s/containers/%s/logs?stdout=1&stderr=1&timestamps=1&tail=%d",
 		dockerAPIVersion, url.PathEscape(ref), tail)
@@ -499,19 +593,11 @@ func (c *dockerClient) updateContainerLimits(ctx context.Context, id string, mem
 	if err != nil {
 		return err
 	}
-	body := map[string]any{}
-	if memoryMB > 0 {
-		memBytes := memoryMB * 1024 * 1024
-		body["Memory"] = memBytes
-		body["MemorySwap"] = memBytes
+	payload, err := BuildSafeDockerUpdatePayload(memoryMB, cpus*100)
+	if err != nil {
+		return err
 	}
-	if cpus > 0 {
-		body["NanoCpus"] = int64(cpus * 1e9)
-	}
-	if len(body) == 0 {
-		return errors.New("至少指定 memory_mb 或 cpus 之一")
-	}
-	return c.doJSON(ctx, http.MethodPost, "/containers/"+url.PathEscape(ref)+"/update", body, nil)
+	return c.doJSON(ctx, http.MethodPost, "/containers/"+url.PathEscape(ref)+"/update", payload, nil)
 }
 
 func (c *dockerClient) removeContainer(ctx context.Context, id string, force bool) error {

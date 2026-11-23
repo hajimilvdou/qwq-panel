@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package qwq.capability.docker.v1;
+
+import "qwq/platform/v1/platform.proto";
+
+// Host Capability service: controlled Docker Engine proxy & out-of-cgroup
+// Compose runner (PLG-FIX-04 / PLG-FIX-05).
+//
+// Capabilities:
+//   - system.docker.read:self   -> ProxyRead (allowlisted GET endpoints only)
+//   - system.docker.manage:self -> ProxyWrite (allowlisted POST/DELETE) & ComposeAction
+//
+// The host helper (qwq-capability) pins /var/run/docker.sock and enforces strict
+// endpoint allowlisting and Compose YAML safety checks outside the plugin's
+// 32 MiB cgroup so container management works under DynamicUser=yes without
+// exposing raw docker.sock root escape primitives.
+
+service DockerService {
+  // Proxies an allowlisted read-only Docker Engine GET endpoint.
+  // effect=read, risk=low.
+  rpc ProxyRead(ProxyReadRequest) returns (ProxyReadResponse);
+  // Proxies an allowlisted mutating Docker Engine POST/DELETE endpoint.
+  // effect=write, risk=high.
+  rpc ProxyWrite(ProxyWriteRequest) returns (ProxyWriteResponse);
+  // Runs host-verified `docker compose up -d` or `down` outside the plugin cgroup.
+  // effect=write, risk=high.
+  rpc ComposeAction(ComposeActionRequest) returns (ComposeActionResponse);
+}
+
+message ProxyReadRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  // Clean relative Engine API path such as "/info" or "/containers/json".
+  string path = 2;
+  // URL-encoded query string without leading "?".
+  string raw_query = 3;
+}
+
+message ProxyReadResponse {
+  int32 status_code = 1;
+  bytes body = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+message ProxyWriteRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  // HTTP method: POST or DELETE.
+  string method = 2;
+  // Clean relative Engine API path on the host allowlist.
+  string path = 3;
+  // URL-encoded query string without leading "?".
+  string raw_query = 4;
+  // Optional JSON request body.
+  bytes body = 5;
+}
+
+message ProxyWriteResponse {
+  int32 status_code = 1;
+  bytes body = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+message ComposeActionRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string stack_name = 2;
+  // Action: "up" or "down".
+  string action = 3;
+  // Full compose YAML verified on the host helper before execution.
+  string yaml_content = 4;
+}
+
+message ComposeActionResponse {
+  string output = 1;
+  repeated string warnings = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}

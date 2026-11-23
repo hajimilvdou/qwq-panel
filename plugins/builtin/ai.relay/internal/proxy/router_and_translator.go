@@ -244,6 +244,20 @@ func (c *UpstreamChannel) RefreshOAuthIfNeeded(ctx context.Context, client *http
 	return true, nil
 }
 
+// OAuthBundleJSON 返回当前渠道最新 OAuth 凭据包的 JSON 字符串副本，供刷新后加密回写数据库。
+func (c *UpstreamChannel) OAuthBundleJSON() (string, bool) {
+	c.oauthMu.Lock()
+	defer c.oauthMu.Unlock()
+	if c.oauth == nil {
+		return "", false
+	}
+	raw, err := json.Marshal(c.oauth)
+	if err != nil {
+		return "", false
+	}
+	return string(raw), true
+}
+
 // AcquireSlot 获取渠道并发保护信号量槽位，避免 Sub2API OAuth 账号池并发超载触发风控。
 func (c *UpstreamChannel) AcquireSlot(ctx context.Context) error {
 	if c.Sem == nil {
@@ -268,7 +282,7 @@ func (c *UpstreamChannel) ReleaseSlot() {
 	}
 }
 
-// MarkUpstreamStatus 根据上游 HTTP 状态码执行 429 冷却或 401 熔断保护。
+// MarkUpstreamStatus 根据上游 HTTP 状态码执行 429 冷却、500/502/503/504 短暂冷却熔断或 401/403 熔断保护。
 func (c *UpstreamChannel) MarkUpstreamStatus(statusCode int, retryAfter time.Duration, now time.Time) {
 	switch statusCode {
 	case http.StatusTooManyRequests:
@@ -276,6 +290,12 @@ func (c *UpstreamChannel) MarkUpstreamStatus(statusCode int, retryAfter time.Dur
 			retryAfter = 60 * time.Second
 		}
 		c.CooldownUntil.Store(now.Add(retryAfter).UnixMilli())
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		cd := 15 * time.Second
+		if retryAfter > 0 && retryAfter < 30*time.Second {
+			cd = retryAfter
+		}
+		c.CooldownUntil.Store(now.Add(cd).UnixMilli())
 	case http.StatusUnauthorized, http.StatusForbidden:
 		c.Tripped.Store(true)
 	}
@@ -411,6 +431,8 @@ type CanonicalRequest struct {
 	Messages             []CanonicalMessage `json:"messages"`
 	MaxTokens            int                `json:"max_tokens,omitempty"`
 	Temperature          *float64           `json:"temperature,omitempty"`
+	Tools                []json.RawMessage  `json:"tools,omitempty"`
+	ToolChoice           json.RawMessage    `json:"tool_choice,omitempty"`
 	Stream               bool               `json:"stream"`
 	SessionHint          string             `json:"-"`
 	EstimatedInputTokens int                `json:"-"`
@@ -430,11 +452,14 @@ func ParseDownstreamRequest(protoIn ProtocolKind, urlModel string, raw []byte) (
 	switch protoIn {
 	case ProtoAnthropicMessages:
 		var in struct {
-			Model     string          `json:"model"`
-			System    json.RawMessage `json:"system"`
-			MaxTokens int             `json:"max_tokens"`
-			Stream    bool            `json:"stream"`
-			Metadata  struct {
+			Model       string            `json:"model"`
+			System      json.RawMessage   `json:"system"`
+			MaxTokens   int               `json:"max_tokens"`
+			Temperature *float64          `json:"temperature"`
+			Tools       []json.RawMessage `json:"tools"`
+			ToolChoice  json.RawMessage   `json:"tool_choice"`
+			Stream      bool              `json:"stream"`
+			Metadata    struct {
 				UserID string `json:"user_id"`
 			} `json:"metadata"`
 			Messages []struct {
@@ -447,6 +472,9 @@ func ParseDownstreamRequest(protoIn ProtocolKind, urlModel string, raw []byte) (
 		}
 		cr.Model = in.Model
 		cr.MaxTokens = in.MaxTokens
+		cr.Temperature = in.Temperature
+		cr.Tools = in.Tools
+		cr.ToolChoice = in.ToolChoice
 		cr.Stream = in.Stream
 		cr.System = extractFlexibleText(in.System)
 		cr.SessionHint = in.Metadata.UserID
@@ -459,16 +487,22 @@ func ParseDownstreamRequest(protoIn ProtocolKind, urlModel string, raw []byte) (
 
 	case ProtoOpenAIResponses:
 		var in struct {
-			Model        string          `json:"model"`
-			Instructions string          `json:"instructions"`
-			Input        json.RawMessage `json:"input"`
-			Stream       bool            `json:"stream"`
+			Model        string            `json:"model"`
+			Instructions string            `json:"instructions"`
+			Input        json.RawMessage   `json:"input"`
+			Temperature  *float64          `json:"temperature"`
+			Tools        []json.RawMessage `json:"tools"`
+			ToolChoice   json.RawMessage   `json:"tool_choice"`
+			Stream       bool              `json:"stream"`
 		}
 		if err := json.Unmarshal(raw, &in); err != nil {
 			return cr, err
 		}
 		cr.Model = in.Model
 		cr.System = in.Instructions
+		cr.Temperature = in.Temperature
+		cr.Tools = in.Tools
+		cr.ToolChoice = in.ToolChoice
 		cr.Stream = in.Stream
 		cr.Messages = []CanonicalMessage{{Role: "user", Content: extractFlexibleText(in.Input)}}
 
@@ -508,11 +542,13 @@ func ParseDownstreamRequest(protoIn ProtocolKind, urlModel string, raw []byte) (
 
 	default: // ProtoOpenAIChat
 		var in struct {
-			Model       string   `json:"model"`
-			MaxTokens   int      `json:"max_tokens"`
-			Temperature *float64 `json:"temperature"`
-			Stream      bool     `json:"stream"`
-			User        string   `json:"user"`
+			Model       string            `json:"model"`
+			MaxTokens   int               `json:"max_tokens"`
+			Temperature *float64          `json:"temperature"`
+			Tools       []json.RawMessage `json:"tools"`
+			ToolChoice  json.RawMessage   `json:"tool_choice"`
+			Stream      bool              `json:"stream"`
+			User        string            `json:"user"`
 			Messages    []struct {
 				Role    string          `json:"role"`
 				Content json.RawMessage `json:"content"`
@@ -524,6 +560,8 @@ func ParseDownstreamRequest(protoIn ProtocolKind, urlModel string, raw []byte) (
 		cr.Model = in.Model
 		cr.MaxTokens = in.MaxTokens
 		cr.Temperature = in.Temperature
+		cr.Tools = in.Tools
+		cr.ToolChoice = in.ToolChoice
 		cr.Stream = in.Stream
 		cr.SessionHint = in.User
 		for _, m := range in.Messages {
@@ -661,6 +699,17 @@ func EncodeUpstreamRequest(ch *UpstreamChannel, protoIn ProtocolKind, rawOrigina
 		if ir.System != "" {
 			payload["system"] = ir.System
 		}
+		if ir.Temperature != nil {
+			payload["temperature"] = *ir.Temperature
+		}
+		if len(ir.Tools) > 0 {
+			payload["tools"] = translateToolsToAnthropic(ir.Tools)
+		}
+		if len(bytes.TrimSpace(ir.ToolChoice)) > 0 {
+			if tc := translateToolChoiceToAnthropic(ir.ToolChoice); tc != nil {
+				payload["tool_choice"] = tc
+			}
+		}
 		b, _ := json.Marshal(payload)
 		hdrs := map[string]string{
 			"Content-Type":      "application/json",
@@ -689,6 +738,17 @@ func EncodeUpstreamRequest(ch *UpstreamChannel, protoIn ProtocolKind, rawOrigina
 		}
 		if ir.System != "" {
 			payload["instructions"] = ir.System
+		}
+		if ir.Temperature != nil {
+			payload["temperature"] = *ir.Temperature
+		}
+		if len(ir.Tools) > 0 {
+			payload["tools"] = translateToolsToOpenAI(ir.Tools)
+		}
+		if len(bytes.TrimSpace(ir.ToolChoice)) > 0 {
+			if tc := translateToolChoiceToOpenAI(ir.ToolChoice); tc != nil {
+				payload["tool_choice"] = tc
+			}
 		}
 		b, _ := json.Marshal(payload)
 		return base + "/v1/responses", map[string]string{
@@ -735,6 +795,17 @@ func EncodeUpstreamRequest(ch *UpstreamChannel, protoIn ProtocolKind, rawOrigina
 		if ir.MaxTokens > 0 {
 			payload["max_tokens"] = ir.MaxTokens
 		}
+		if ir.Temperature != nil {
+			payload["temperature"] = *ir.Temperature
+		}
+		if len(ir.Tools) > 0 {
+			payload["tools"] = translateToolsToOpenAI(ir.Tools)
+		}
+		if len(bytes.TrimSpace(ir.ToolChoice)) > 0 {
+			if tc := translateToolChoiceToOpenAI(ir.ToolChoice); tc != nil {
+				payload["tool_choice"] = tc
+			}
+		}
 		b, _ := json.Marshal(payload)
 		return base + "/v1/chat/completions", map[string]string{
 			"Content-Type":  "application/json",
@@ -765,7 +836,10 @@ func RelayStreamBridge(
 
 	var usage StreamUsage
 	var estOutChars int
-	sentAnthropicStart := false
+	var anthropicSM *AnthropicSSEStateMachine
+	if upProto != downProto && downProto == ProtoAnthropicMessages {
+		anthropicSM = NewAnthropicSSEStateMachine(w, reqModel)
+	}
 
 	emitDownstreamDelta := func(textDelta, reasoningDelta string) {
 		if textDelta == "" && reasoningDelta == "" {
@@ -778,26 +852,8 @@ func RelayStreamBridge(
 
 		switch downProto {
 		case ProtoAnthropicMessages:
-			if !sentAnthropicStart {
-				sentAnthropicStart = true
-				_, _ = fmt.Fprintf(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_qwq\",\"type\":\"message\",\"role\":\"assistant\",\"model\":%q,\"content\":[],\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\n", reqModel)
-				_, _ = io.WriteString(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
-			}
-			if reasoningDelta != "" {
-				chunk, _ := json.Marshal(map[string]any{
-					"type":  "content_block_delta",
-					"index": 0,
-					"delta": map[string]string{"type": "thinking_delta", "thinking": reasoningDelta},
-				})
-				_, _ = fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", chunk)
-			}
-			if textDelta != "" {
-				chunk, _ := json.Marshal(map[string]any{
-					"type":  "content_block_delta",
-					"index": 0,
-					"delta": map[string]string{"type": "text_delta", "text": textDelta},
-				})
-				_, _ = fmt.Fprintf(w, "event: content_block_delta\ndata: %s\n\n", chunk)
+			if anthropicSM != nil {
+				anthropicSM.EmitDelta(usage.InputTokens, reasoningDelta, textDelta)
 			}
 
 		case ProtoOpenAIResponses:
@@ -884,10 +940,8 @@ func RelayStreamBridge(
 	if upProto != downProto {
 		switch downProto {
 		case ProtoAnthropicMessages:
-			if sentAnthropicStart {
-				_, _ = io.WriteString(w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
-				_, _ = fmt.Fprintf(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":%d}}\n\n", max(usage.OutputTokens, estOutChars/4))
-				_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			if anthropicSM != nil && anthropicSM.Started() {
+				anthropicSM.Finish(usage.InputTokens, max(usage.OutputTokens, estOutChars/4), "end_turn")
 			}
 		case ProtoOpenAIResponses:
 			completed, _ := json.Marshal(map[string]any{
@@ -1054,4 +1108,119 @@ func parseUpstreamDeltaAndUsage(payload []byte, proto ProtocolKind, u *StreamUsa
 		}
 	}
 	return "", ""
+}
+
+func translateToolsToAnthropic(tools []json.RawMessage) []any {
+	out := make([]any, 0, len(tools))
+	for _, raw := range tools {
+		var openAI struct {
+			Type     string `json:"type"`
+			Function *struct {
+				Name        string          `json:"name"`
+				Description string          `json:"description"`
+				Parameters  json.RawMessage `json:"parameters"`
+			} `json:"function"`
+		}
+		if json.Unmarshal(raw, &openAI) == nil && openAI.Function != nil && openAI.Function.Name != "" {
+			schema := openAI.Function.Parameters
+			if len(bytes.TrimSpace(schema)) == 0 {
+				schema = json.RawMessage(`{"type":"object","properties":{}}`)
+			}
+			item := map[string]any{
+				"name":         openAI.Function.Name,
+				"input_schema": schema,
+			}
+			if openAI.Function.Description != "" {
+				item["description"] = openAI.Function.Description
+			}
+			out = append(out, item)
+			continue
+		}
+		out = append(out, raw)
+	}
+	return out
+}
+
+func translateToolsToOpenAI(tools []json.RawMessage) []any {
+	out := make([]any, 0, len(tools))
+	for _, raw := range tools {
+		var ant struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			InputSchema json.RawMessage `json:"input_schema"`
+			Type        string          `json:"type"`
+		}
+		if json.Unmarshal(raw, &ant) == nil && ant.Name != "" && len(bytes.TrimSpace(ant.InputSchema)) > 0 {
+			fn := map[string]any{
+				"name":       ant.Name,
+				"parameters": ant.InputSchema,
+			}
+			if ant.Description != "" {
+				fn["description"] = ant.Description
+			}
+			out = append(out, map[string]any{
+				"type":     "function",
+				"function": fn,
+			})
+			continue
+		}
+		out = append(out, raw)
+	}
+	return out
+}
+
+func translateToolChoiceToAnthropic(raw json.RawMessage) any {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	var str string
+	if json.Unmarshal(trimmed, &str) == nil {
+		switch str {
+		case "auto":
+			return map[string]any{"type": "auto"}
+		case "required":
+			return map[string]any{"type": "any"}
+		case "none":
+			return nil
+		}
+	}
+	var obj struct {
+		Type     string `json:"type"`
+		Name     string `json:"name"`
+		Function *struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
+	if json.Unmarshal(trimmed, &obj) == nil && obj.Type == "function" && obj.Function != nil && obj.Function.Name != "" {
+		return map[string]any{"type": "tool", "name": obj.Function.Name}
+	}
+	return raw
+}
+
+func translateToolChoiceToOpenAI(raw json.RawMessage) any {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	var obj struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(trimmed, &obj) == nil {
+		switch obj.Type {
+		case "auto":
+			return "auto"
+		case "any":
+			return "required"
+		case "tool":
+			if obj.Name != "" {
+				return map[string]any{
+					"type":     "function",
+					"function": map[string]string{"name": obj.Name},
+				}
+			}
+		}
+	}
+	return raw
 }

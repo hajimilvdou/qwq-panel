@@ -72,6 +72,46 @@ func (h *Host) CapabilityContext(ctx context.Context) (*platformv1.HostCallConte
 	return h.callContext(ctx, true)
 }
 
+// AutonomousOperationPrefix is the reserved operation_id prefix used by an
+// active background plugin instance (manifest.lifecycle.background == true)
+// when performing guarded autonomous host capability writes (such as brute-force
+// IP banning, SSH port timeout rollback, or periodic traffic quota enforcement).
+const AutonomousOperationPrefix = "auton:"
+
+// CapabilityContextAutonomous builds a HostCallContext for background daemon
+// goroutines started inside Activate via InstanceBase.Go. If ctx already carries
+// a dispatched OperationID it is preserved; otherwise "auton:<reason>" is used
+// so the host can evaluate its autonomous write allowlist and rate limits.
+// Calling it during PlanOperation always fails with PLAN_SIDE_EFFECT.
+func (h *Host) CapabilityContextAutonomous(ctx context.Context, reason string) (*platformv1.HostCallContext, error) {
+	if h == nil || h.conn == nil {
+		return nil, ErrNoHost
+	}
+	ci, _ := callInfoOf(ctx)
+	if ci.planning {
+		return nil, &Error{Code: "PLAN_SIDE_EFFECT", Message: "host state must not be written while planning an operation"}
+	}
+	opID := ci.call.OperationID
+	if opID == "" {
+		cleanReason := strings.TrimSpace(reason)
+		if cleanReason == "" {
+			cleanReason = "background"
+		}
+		for i := 0; i < len(cleanReason); i++ {
+			c := cleanReason[i]
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') {
+				return nil, &Error{Code: "INVALID_AUTONOMOUS_REASON", Message: "invalid autonomous capability reason"}
+			}
+		}
+		opID = AutonomousOperationPrefix + cleanReason
+	}
+	return &platformv1.HostCallContext{
+		InstanceHandle: h.handle,
+		OperationId:    opID,
+		TraceId:        ci.call.TraceID,
+	}, nil
+}
+
 // CapabilityContextReadOnly 构造只读能力上下文，允许 Plan 读取宿主事实。
 // 该方法不授予写权限；宿主按真实 RPC effect 和 operation 派发状态校验写入。
 func (h *Host) CapabilityContextReadOnly(ctx context.Context) (*platformv1.HostCallContext, error) {

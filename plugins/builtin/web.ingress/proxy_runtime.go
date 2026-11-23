@@ -159,29 +159,43 @@ func (c *basicAuthCache) Put(key [32]byte, now time.Time) {
 	c.entries[key] = now.Add(basicAuthCacheTTL)
 }
 
-// BuiltinProxy 实现零外部依赖、低内存占用的内置 Go 反向代理路由器（支持无锁原子热重载、WebSocket、限流与 BasicAuth）。
+// BuiltinProxy 实现零外部依赖、低内存占用的内置 Go 反向代理路由器（支持无锁原子热重载、WebSocket、限流、BasicAuth 与安全 SNI TLS）。
 type BuiltinProxy struct {
-	table     atomic.Pointer[routeTable]
-	transport *http.Transport
-	authCache *basicAuthCache
-	now       func() time.Time
+	table          atomic.Pointer[routeTable]
+	trustedProxies atomic.Pointer[[]netip.Prefix]
+	transport      *http.Transport
+	authCache      *basicAuthCache
+	sni            *SNICertStore
+	now            func() time.Time
 }
 
-func newBuiltinProxy(nowFn func() time.Time) *BuiltinProxy {
+func newBuiltinProxy(nowFn func() time.Time, sni *SNICertStore) *BuiltinProxy {
 	if nowFn == nil {
 		nowFn = time.Now
 	}
-	tr := &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
-		DialContext:         (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		MaxIdleConns:        32,
-		MaxIdleConnsPerHost: 8,
-		IdleConnTimeout:     60 * time.Second,
-		TLSHandshakeTimeout: 5 * time.Second,
-	}
-	p := &BuiltinProxy{transport: tr, authCache: newBasicAuthCache(), now: nowFn}
+	tr := NewSafeIngressTransport(true)
+	p := &BuiltinProxy{transport: tr, authCache: newBasicAuthCache(), sni: sni, now: nowFn}
 	p.table.Store(&routeTable{byHost: map[string][]*compiledRoute{}, loaded: nowFn()})
 	return p
+}
+
+// SetTrustedProxies 原子更新受信上游代理 CIDR 列表。
+func (p *BuiltinProxy) SetTrustedProxies(prefixes []netip.Prefix) {
+	if p == nil {
+		return
+	}
+	copied := append([]netip.Prefix(nil), prefixes...)
+	p.trustedProxies.Store(&copied)
+}
+
+func (p *BuiltinProxy) getTrustedProxies() []netip.Prefix {
+	if p == nil {
+		return nil
+	}
+	if ptr := p.trustedProxies.Load(); ptr != nil {
+		return *ptr
+	}
+	return nil
 }
 
 // Close 释放共享传输池中的空闲连接。
@@ -279,7 +293,9 @@ func (p *BuiltinProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if rt.site.TLSMode != "off" && rt.site.ForceHTTPS && r.TLS == nil && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+	trusted := p.getTrustedProxies()
+	hasHTTPS := p.sni != nil && p.sni.HTTPSListenerActive()
+	if rt.site.TLSMode != "off" && ShouldRedirectHTTPS(r, rt.site.ForceHTTPS, hasHTTPS, trusted) {
 		target := "https://" + r.Host + r.URL.RequestURI()
 		http.Redirect(w, r, target, http.StatusPermanentRedirect)
 		return
@@ -287,10 +303,7 @@ func (p *BuiltinProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	now := p.now()
 	// 先做 O(1) 令牌桶限流再校验 BasicAuth，防止暴力口令请求耗尽 1C1G CPU。
 	if rt.limiter != nil {
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
+		ip := RealClientIP(r, trusted)
 		if !rt.limiter.Allow(ip, now) {
 			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 			return
@@ -325,8 +338,7 @@ type UpstreamProbeResult struct {
 }
 
 func isBlockedUpstreamMetadataIP(ip netip.Addr) bool {
-	u := ip.Unmap()
-	return !u.IsValid() || u.IsLinkLocalUnicast() || linkLocalV4.Contains(u) || cgnatPrefix.Contains(u) || u == ec2MetadataV6
+	return isAlwaysBlockedSpecialIP(ip.Unmap())
 }
 
 func dialSafeUpstreamProbe(ctx context.Context, network, address string) (net.Conn, error) {
@@ -375,6 +387,7 @@ func dialSafeUpstreamProbe(ctx context.Context, network, address string) (net.Co
 var sharedUpstreamProbeClient = &http.Client{
 	Timeout: 3 * time.Second,
 	Transport: &http.Transport{
+		Proxy:               nil,
 		DialContext:         dialSafeUpstreamProbe,
 		MaxIdleConns:        16,
 		MaxIdleConnsPerHost: 2,

@@ -7,20 +7,29 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/qwq-panel/qwq/internal/actor"
 	"github.com/qwq-panel/qwq/internal/operations"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
+	"github.com/qwq-panel/qwq/internal/pluginhost/supervisor"
 	"github.com/qwq-panel/qwq/internal/pluginpublic"
 	"github.com/qwq-panel/qwq/internal/sandbox"
 	"github.com/qwq-panel/qwq/internal/secrets"
 	platformv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
 	"github.com/qwq-panel/qwq/sdk/manifest"
+	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
 
 // ======================== ADR-0024 宿主公开 HTTP 路由转发 ========================
@@ -65,6 +74,9 @@ func (rt *PluginRuntime) ServePublicRoute(ctx context.Context, pluginID string, 
 	}
 	if req.RelayAuthBearer != "" {
 		headers = append(headers, &platformv1.HttpHeader{Name: "X-QWQ-Relay-Token", Value: req.RelayAuthBearer})
+		if strings.HasPrefix(req.RelayAuthBearer, "rly_sess_") {
+			headers = append(headers, &platformv1.HttpHeader{Name: "X-Relay-Session", Value: req.RelayAuthBearer})
+		}
 	}
 	for k, v := range req.ExtraHeaders {
 		if v != "" {
@@ -100,6 +112,168 @@ func (rt *PluginRuntime) ServePublicRoute(ctx context.Context, pluginID string, 
 		Body:       resp.GetBody(),
 	}, nil
 }
+
+var streamBufferPool = &bytesSlicePool{size: 32 << 10}
+
+type bytesSlicePool struct {
+	size int
+	pool sync.Pool
+}
+
+func (p *bytesSlicePool) Get() []byte {
+	if v := p.pool.Get(); v != nil {
+		return *(v.(*[]byte))
+	}
+	return make([]byte, p.size)
+}
+
+func (p *bytesSlicePool) Put(b []byte) {
+	if cap(b) >= p.size {
+		b = b[:p.size]
+		p.pool.Put(&b)
+	}
+}
+
+// ServePublicStream implements pluginpublic.StreamDispatcher for zero-buffer
+// HTTP/SSE public routes over the plugin's private public-stream.sock UDS.
+// When a plugin has not exposed public-stream.sock yet, it falls back cleanly
+// to the buffered ABI route.
+func (rt *PluginRuntime) ServePublicStream(
+	ctx context.Context,
+	pluginID string,
+	req pluginpublic.PublicRequest,
+	body io.Reader,
+	w http.ResponseWriter,
+) error {
+	if err := sandbox.ValidateID(pluginID); err != nil {
+		return problem.New(problem.ValidationFailed, "invalid plugin id")
+	}
+	if _, err := rt.live(pluginID); err != nil {
+		return err
+	}
+	hostSock := supervisor.HostSocketPath(rt.opts.RunDir, pluginID)
+	streamSock := filepath.Join(filepath.Dir(hostSock), pluginsdk.PublicStreamSocketName)
+
+	if st, statErr := os.Stat(streamSock); statErr != nil || (st.Mode()&os.ModeSocket) == 0 {
+		return rt.fallbackBufferedPublicStream(ctx, pluginID, req, body, w)
+	}
+
+	targetPath := req.Path
+	if !strings.HasPrefix(targetPath, "/") {
+		targetPath = "/" + targetPath
+	}
+	if req.Route != "" && !strings.HasPrefix(targetPath, "/"+req.Route+"/") && targetPath != "/"+req.Route {
+		targetPath = "/" + req.Route + targetPath
+	}
+	u := &url.URL{
+		Scheme:   "http",
+		Host:     pluginID + ".qwq.internal",
+		Path:     targetPath,
+		RawQuery: req.RawQuery,
+	}
+
+	outReq, err := http.NewRequestWithContext(ctx, req.Method, u.String(), body)
+	if err != nil {
+		return err
+	}
+
+	dialer := &net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}
+	transport := &http.Transport{
+		DialContext: func(dctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(dctx, "unix", streamSock)
+		},
+		DisableCompression:    true,
+		MaxIdleConns:          8,
+		IdleConnTimeout:       30 * time.Second,
+		ResponseHeaderTimeout: 180 * time.Second,
+	}
+	defer transport.CloseIdleConnections()
+
+	var proxyErr error
+	rp := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.Out.URL = u
+			pr.Out.Host = u.Host
+			injectCanonicalPublicHeaders(pr.Out.Header, req)
+		},
+		Transport:     transport,
+		FlushInterval: -1,
+		BufferPool:    streamBufferPool,
+		ModifyResponse: func(resp *http.Response) error {
+			resp.Header.Del("Set-Cookie")
+			return nil
+		},
+		ErrorHandler: func(_ http.ResponseWriter, _ *http.Request, e error) {
+			proxyErr = e
+		},
+	}
+	rp.ServeHTTP(w, outReq)
+	if proxyErr != nil && !errors.Is(proxyErr, context.Canceled) {
+		return fmt.Errorf("public stream proxy %s: %w", pluginID, proxyErr)
+	}
+	return nil
+}
+
+func injectCanonicalPublicHeaders(hdr http.Header, req pluginpublic.PublicRequest) {
+	if req.UserAgent != "" {
+		hdr.Set("User-Agent", req.UserAgent)
+	}
+	if req.ContentType != "" {
+		hdr.Set("Content-Type", req.ContentType)
+	}
+	if req.ClientIP != "" {
+		hdr.Set("X-QWQ-Client-IP", req.ClientIP)
+	}
+	if req.RelayAuthBearer != "" {
+		hdr.Set("X-QWQ-Relay-Token", req.RelayAuthBearer)
+		if strings.HasPrefix(req.RelayAuthBearer, "rly_sess_") {
+			hdr.Set("X-Relay-Session", req.RelayAuthBearer)
+		}
+	}
+	for k, v := range req.ExtraHeaders {
+		if v != "" {
+			hdr.Set(k, v)
+		}
+	}
+}
+
+func (rt *PluginRuntime) fallbackBufferedPublicStream(
+	ctx context.Context,
+	pluginID string,
+	req pluginpublic.PublicRequest,
+	body io.Reader,
+	w http.ResponseWriter,
+) error {
+	if body != nil {
+		raw, err := io.ReadAll(io.LimitReader(body, (4<<20)+1))
+		if err != nil {
+			return err
+		}
+		if len(raw) > (4 << 20) {
+			http.Error(w, `{"error":"payload_exceeds_buffered_abi_limit"}`, http.StatusRequestEntityTooLarge)
+			return nil
+		}
+		req.Body = raw
+	}
+	resp, err := rt.ServePublicRoute(ctx, pluginID, req)
+	if err != nil {
+		return err
+	}
+	for k, v := range resp.Headers {
+		if !strings.EqualFold(k, "Set-Cookie") {
+			w.Header().Set(k, v)
+		}
+	}
+	code := resp.StatusCode
+	if code < 100 || code > 599 {
+		code = http.StatusOK
+	}
+	w.WriteHeader(code)
+	_, _ = w.Write(resp.Body)
+	return nil
+}
+
+var _ pluginpublic.StreamDispatcher = (*PluginRuntime)(nil)
 
 // SyncPublicRoutes 扫描已安装活动插件的 manifest.json，按 public.route:<name> 能力原子重建公开路由表。
 func (rt *PluginRuntime) SyncPublicRoutes() {

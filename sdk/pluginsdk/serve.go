@@ -40,6 +40,10 @@ type Options struct {
 	// Host is the Agent's Host Service connection for this plugin. It may be
 	// nil in development; host calls then fail with ErrNoHost.
 	Host grpc.ClientConnInterface
+	// HostSocket is the optional path of the host Unix domain socket. When set
+	// (or when $QWQ_HOST_SOCKET is set), instances implementing
+	// [PublicHTTPStreamer] automatically expose public-stream.sock alongside it.
+	HostSocket string
 	// Logger receives structured logs. The default writes JSON to stderr.
 	Logger *slog.Logger
 	// DefaultGracePeriod overrides DefaultGracePeriod when > 0.
@@ -124,6 +128,7 @@ func Serve(ctx context.Context, opts Options) (*Server, error) {
 		manifest:     m,
 		descriptor:   desc,
 		hostConn:     opts.Host,
+		hostSocket:   opts.HostSocket,
 		log:          log,
 		baseCtx:      ctx,
 		grace:        grace,
@@ -211,6 +216,7 @@ func (s *Server) releaseInstance(ctx context.Context, in *instance) {
 	if !in.waitIdle(ctx, s.relGrace) {
 		in.log.Warn("in-flight requests were still running at release")
 	}
+	in.closeStreamBridge(ctx)
 	if re, ok := in.author.(Releaser); ok {
 		// Host-side cleanup does not depend on this hook; log and finish.
 		if err := safelyRun(in, "release", func() error { return re.Release(ctx) }); err != nil {

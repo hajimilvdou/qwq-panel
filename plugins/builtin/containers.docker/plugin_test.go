@@ -101,6 +101,7 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 	var mu sync.Mutex
 	var lastAction string
 	var updatedMem int64
+	var updatedMemSwap int64
 	var removedID string
 
 	mux := http.NewServeMux()
@@ -163,11 +164,13 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 	})
 	mux.HandleFunc("/v1.41/containers/abc1234567890000/update", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Memory int64 `json:"Memory"`
+			Memory     int64 `json:"Memory"`
+			MemorySwap int64 `json:"MemorySwap"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		mu.Lock()
 		updatedMem = body.Memory
+		updatedMemSwap = body.MemorySwap
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"Warnings":[]}`))
@@ -230,19 +233,27 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 	pruned := invokeDocker(t, srv, "docker.images.prune", map[string]any{"all": false})
 
 	mu.Lock()
-	gotAction, gotMem, gotRem := lastAction, updatedMem, removedID
+	gotAction, gotMem, gotSwap, gotRem := lastAction, updatedMem, updatedMemSwap, removedID
 	mu.Unlock()
-	if gotAction != "restart" || gotMem != 256*1024*1024 || gotRem != "def9876543210000" || int(pruned["deleted_count"].(float64)) != 1 {
-		t.Fatalf("docker mutations mismatch: action=%q mem=%d rem=%q pruned=%+v", gotAction, gotMem, gotRem, pruned)
+	if gotAction != "restart" || gotMem != 256*1024*1024 || gotSwap != -1 || gotRem != "def9876543210000" || int(pruned["deleted_count"].(float64)) != 1 {
+		t.Fatalf("docker mutations mismatch: action=%q mem=%d swap=%d rem=%q pruned=%+v", gotAction, gotMem, gotSwap, gotRem, pruned)
 	}
 
-	// 4. Compose YAML 静态安全扫描：高危隔离逃逸项（privileged: true / include / 越界 env_file / 根目录挂载）强阻断，
-	//    其余中高危项（network_mode: host / pid: host / SYS_ADMIN / docker.sock）在 Plan 与 dry_run 中告警。
+	// 4. Compose YAML 深度 AST/缩进安全扫描：所有高危逃逸与绕过载荷必须 100% 被拒绝
 	for _, blockedYAML := range []string{
 		"services:\n  app:\n    image: nginx:alpine\n    privileged: true\n",
+		"services:\n  app:\n    image: nginx:alpine\n    privileged : true\n",
+		"services:\n  app:\n    image: nginx:alpine\n    privileged:\n      true\n",
 		"include:\n  - /etc/passwd\nservices:\n  app:\n    image: nginx:alpine\n",
 		"services:\n  app:\n    image: nginx:alpine\n    env_file:\n      - ../../etc/shadow\n",
 		"services:\n  app:\n    image: nginx:alpine\n    volumes:\n      - /:/host\n",
+		"services:\n  app:\n    image: nginx:alpine\n    volumes:\n      - //:/mnt\n",
+		"services:\n  app:\n    image: nginx:alpine\n    volumes:\n      - /etc:/h\n",
+		"services:\n  app:\n    image: nginx:alpine\n    volumes:\n      - /var/run/docker.sock:/d.sock\n",
+		"services:\n  app:\n    image: nginx:alpine\n    volumes:\n      - type: bind\n        source: /var/lib/qwq\n        target: /data\n",
+		"x-p: &p true\nservices:\n  app:\n    image: nginx:alpine\n    privileged: *p\n",
+		"services:\n  app:\n    image: nginx:alpine\n    cap_add: [SYS_ADMIN]\n",
+		"services:\n  app:\n    image: nginx:alpine\n    pid: \"host\"\n",
 	} {
 		badCP := invokeDockerRaw(t, srv, "docker.compose.deploy", map[string]any{
 			"name": "blocked-demo", "compose_yaml": blockedYAML, "dry_run": true,
@@ -252,7 +263,8 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 		}
 	}
 
-	yamlDoc := "services:\n  app:\n    image: nginx:alpine\n    network_mode: \"host\"\n    pid: \"host\"\n    cap_add:\n      - SYS_ADMIN\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n"
+	// 合法命名卷与栈目录相对挂载 ./data 放行，network_mode: host 在 Plan 与 dry_run 中告警。
+	yamlDoc := "services:\n  app:\n    image: nginx:alpine\n    network_mode: \"host\"\n    volumes:\n      - app_data:/var/lib/app\n      - ./data:/usr/share/nginx/html:ro\nvolumes:\n  app_data:\n"
 	planRaw, _ := json.Marshal(map[string]any{"name": "risky-demo", "compose_yaml": yamlDoc})
 	planResp, err := srv.PlanOperation(t.Context(), &pb.PlanOperationRequest{
 		Context:     &pb.RequestContext{InstanceId: "default", NodeId: "local", OperationId: "plan-cp-1", Locale: "zh-CN"},
@@ -260,16 +272,16 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 		ApiVersion:  "v1",
 		PayloadJson: planRaw,
 	})
-	if err != nil || planResp.GetError() != nil || len(planResp.GetWarnings()) < 4 {
-		t.Fatalf("expected >=4 security warnings in Plan response, got resp=%+v err=%v", planResp, err)
+	if err != nil || planResp.GetError() != nil || len(planResp.GetWarnings()) < 1 {
+		t.Fatalf("expected >=1 security warning in Plan response, got resp=%+v err=%v", planResp, err)
 	}
 	cpRes := invokeDocker(t, srv, "docker.compose.deploy", map[string]any{
 		"name": "risky-demo", "compose_yaml": yamlDoc, "dry_run": true,
 	})
 	stack := cpRes["stack"].(map[string]any)
 	warns := stack["warnings"].([]any)
-	if len(warns) < 4 {
-		t.Fatalf("expected >=4 security warnings on risky compose, got %+v", warns)
+	if len(warns) < 1 {
+		t.Fatalf("expected >=1 security warning on host-network compose, got %+v", warns)
 	}
 	if _, err := os.Stat(filepath.Join(stack["work_dir"].(string), "compose.yml")); err != nil {
 		t.Fatalf("expected compose.yml saved on disk: %v", err)
@@ -283,6 +295,36 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 	digest := invokeDocker(t, srv, "docker.ai.digest", map[string]any{})
 	if len(digest["anomalies"].([]any)) != 1 {
 		t.Fatalf("expected 1 exited container anomaly in AI digest, got %+v", digest)
+	}
+}
+
+func TestReconcileStackStatusesAndBuildSafeDockerUpdatePayload(t *testing.T) {
+	stacks := []ComposeStack{
+		{Name: "web", Status: "running"},
+		{Name: "api", Status: "running"},
+		{Name: "job", Status: "running"},
+	}
+	containers := []ContainerSummary{
+		{Name: "qwq_web-app-1", ComposeProject: "qwq_web", State: "exited", Status: "Exited (0)"},
+		{Name: "qwq_api-srv-1", ComposeProject: "qwq_api", State: "running", Status: "Up 1h"},
+		{Name: "qwq_api-worker-1", ComposeProject: "qwq_api", State: "exited", Status: "Exited (137)"},
+		{Name: "qwq_job-runner-1", ComposeProject: "qwq_job", State: "running", Status: "Up 1h (healthy)"},
+	}
+	reconcileStackStatuses(stacks, containers)
+	if stacks[0].Status != "stopped" || stacks[1].Status != "degraded" || stacks[2].Status != "running" {
+		t.Fatalf("unexpected reconciled stack statuses: %+v", stacks)
+	}
+
+	raw, err := BuildSafeDockerUpdatePayload(512, 100)
+	if err != nil {
+		t.Fatalf("BuildSafeDockerUpdatePayload: %v", err)
+	}
+	var doc map[string]int64
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal update payload: %v", err)
+	}
+	if doc["Memory"] != 512*1024*1024 || doc["MemorySwap"] != -1 || doc["NanoCPUs"] != 1000000000 {
+		t.Fatalf("unexpected update payload: %+v", doc)
 	}
 }
 

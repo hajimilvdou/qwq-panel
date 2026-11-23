@@ -224,7 +224,9 @@ func maskChannelConfig(kind string, cfg ChannelConfig) map[string]any {
 	case "smtp":
 		out["smtp_host"] = cfg.SMTPHost
 		out["smtp_port"] = cfg.SMTPPort
+		out["smtp_user"] = cfg.SMTPUser
 		out["smtp_from"] = cfg.SMTPFrom
+		out["smtp_to"] = append([]string(nil), cfg.SMTPTo...)
 		out["smtp_to_count"] = len(cfg.SMTPTo)
 		out["smtp_tls"] = cfg.SMTPTLS
 		out["has_password"] = cfg.SMTPPass != ""
@@ -265,14 +267,15 @@ func (s *store) upsertChannel(ctx context.Context, id, name, kind string, enable
 
 	now := s.now().Unix()
 	var existingID string
+	var existingKind string
 	var existingEnc []byte
 	if id != "" {
-		_ = s.db.QueryRowContext(ctx, `SELECT id, config_enc FROM notify_channels WHERE id = ?`, id).Scan(&existingID, &existingEnc)
+		_ = s.db.QueryRowContext(ctx, `SELECT id, kind, config_enc FROM notify_channels WHERE id = ?`, id).Scan(&existingID, &existingKind, &existingEnc)
 	} else {
-		_ = s.db.QueryRowContext(ctx, `SELECT id, config_enc FROM notify_channels WHERE name = ?`, name).Scan(&existingID, &existingEnc)
+		_ = s.db.QueryRowContext(ctx, `SELECT id, kind, config_enc FROM notify_channels WHERE name = ?`, name).Scan(&existingID, &existingKind, &existingEnc)
 	}
 
-	// 编辑既有渠道时若敏感字段留空，则保留原有已加密密钥。
+	// 编辑或启停既有渠道时若敏感字段或未变更的核心字段留空，则保留原有配置。
 	if len(existingEnc) > 0 {
 		if prev, err := s.decryptConfig(existingEnc); err == nil {
 			if cfg.BotToken == "" {
@@ -286,6 +289,36 @@ func (s *store) upsertChannel(ctx context.Context, id, name, kind string, enable
 			}
 			if cfg.SMTPPass == "" {
 				cfg.SMTPPass = prev.SMTPPass
+			}
+			if existingKind == kind {
+				if cfg.ChatID == "" {
+					cfg.ChatID = prev.ChatID
+				}
+				if cfg.APIBase == "" && cfg.ChatID == prev.ChatID && cfg.ThreadID == "" {
+					cfg.APIBase = prev.APIBase
+					cfg.ThreadID = prev.ThreadID
+				}
+				if len(cfg.Headers) == 0 && len(prev.Headers) > 0 {
+					cfg.Headers = prev.Headers
+				}
+				if cfg.SMTPHost == "" {
+					cfg.SMTPHost = prev.SMTPHost
+					if !cfg.SMTPTLS {
+						cfg.SMTPTLS = prev.SMTPTLS
+					}
+				}
+				if cfg.SMTPPort == 0 {
+					cfg.SMTPPort = prev.SMTPPort
+				}
+				if cfg.SMTPUser == "" {
+					cfg.SMTPUser = prev.SMTPUser
+				}
+				if cfg.SMTPFrom == "" {
+					cfg.SMTPFrom = prev.SMTPFrom
+				}
+				if len(cfg.SMTPTo) == 0 {
+					cfg.SMTPTo = prev.SMTPTo
+				}
 			}
 		}
 	} else {
@@ -587,4 +620,35 @@ func (s *store) stats24h(ctx context.Context) (sent, failed, suppressed int) {
 		}
 	}
 	return sent, failed, suppressed
+}
+
+func (s *store) getCooldown(ctx context.Context, key string) (int64, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var firedAt int64
+	err := s.db.QueryRowContext(ctx, `SELECT fired_at FROM notify_cooldowns WHERE cool_key = ?`, key).Scan(&firedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return firedAt, true, nil
+}
+
+func (s *store) setCooldown(ctx context.Context, key string, firedAt int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO notify_cooldowns (cool_key, fired_at) VALUES (?, ?)
+		 ON CONFLICT(cool_key) DO UPDATE SET fired_at = excluded.fired_at`,
+		key, firedAt); err != nil {
+		return err
+	}
+	cutoff := firedAt - 86400
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM notify_cooldowns WHERE fired_at < ?`, cutoff)
+	_, _ = s.db.ExecContext(ctx,
+		`DELETE FROM notify_cooldowns WHERE cool_key NOT IN (SELECT cool_key FROM notify_cooldowns ORDER BY fired_at DESC LIMIT ?)`,
+		maxCooldownKeys)
+	return nil
 }

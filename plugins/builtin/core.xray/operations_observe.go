@@ -111,7 +111,7 @@ func (d *driverRuntime) observe(parent context.Context, filter metrics.Filter) (
 	case metadata.Current.SummaryV2 != nil:
 		values := snapshot.Values
 		if d.anytls != nil {
-			if extra := d.anytls.Counters(); len(extra) > 0 {
+			if extra := d.alignAnyTLSCounters(snapshot.Epoch, d.anytls.Counters()); len(extra) > 0 {
 				merged := make(map[string]int64, len(values)+len(extra))
 				for k, v := range values {
 					merged[k] = v

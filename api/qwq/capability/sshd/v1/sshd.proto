@@ -124,6 +124,9 @@ message VerifyPortResponse {
   // The SSH version banner (SSH-2.0-...) when reachable.
   string banner = 2;
   qwq.platform.v1.ErrorDetail error = 3;
+  // True when the host network namespace observes at least one non-loopback
+  // TCP_ESTABLISHED session on the verified port.
+  bool has_external_connection = 4;
 }
 
 message SetLoginPolicyRequest {

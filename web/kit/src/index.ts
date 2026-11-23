@@ -23,3 +23,12 @@ export {
   type KitInvokeOptions,
   type PluginBridgeClient,
 } from './bridge';
+
+export {
+  generateOpenSSHEd25519KeyPair,
+  h,
+  invokeWithApprovalFollowup,
+  mountAutoResize,
+  type ChildSpec,
+  type TrackedInvokeOptions,
+} from './followup_and_dom';

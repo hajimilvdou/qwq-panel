@@ -162,6 +162,24 @@ type instance struct {
 	bgWG      sync.WaitGroup
 	// bgDone closes when the generation stopped last has fully returned.
 	bgDone chan struct{}
+
+	streamBridge *PublicStreamBridge
+}
+
+func (in *instance) setStreamBridge(b *PublicStreamBridge) {
+	in.mu.Lock()
+	in.streamBridge = b
+	in.mu.Unlock()
+}
+
+func (in *instance) closeStreamBridge(ctx context.Context) {
+	in.mu.Lock()
+	b := in.streamBridge
+	in.streamBridge = nil
+	in.mu.Unlock()
+	if b != nil {
+		_ = b.Close(ctx)
+	}
 }
 
 func newInstance(id, handle string, host *Host, log *slog.Logger) *instance {

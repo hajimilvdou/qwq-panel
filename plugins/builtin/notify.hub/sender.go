@@ -64,6 +64,9 @@ func newSafeHTTPClient(allowPrivate bool, timeout time.Duration) *http.Client {
 			}
 			for _, ip := range ips {
 				ip = ip.Unmap()
+				if isAlwaysBlockedMetadataIP(ip) {
+					return nil, fmt.Errorf("egress blocked to cloud metadata or link-local address %s", ip)
+				}
 				if !allowPrivate && isDisallowedIP(ip) {
 					return nil, fmt.Errorf("egress blocked to private or loopback address %s", ip)
 				}
@@ -87,15 +90,51 @@ func newSafeHTTPClient(allowPrivate bool, timeout time.Duration) *http.Client {
 	}
 }
 
-var notifyCGNATPrefix = netip.MustParsePrefix("100.64.0.0/10")
+var (
+	notifyCGNATPrefix       = netip.MustParsePrefix("100.64.0.0/10")
+	alwaysBlockedMetadataV4 = []netip.Prefix{
+		netip.MustParsePrefix("169.254.0.0/16"),     // AWS/GCP/Azure/DigitalOcean IMDS & IPv4 link-local
+		netip.MustParsePrefix("100.100.100.200/32"), // Alibaba Cloud metadata
+	}
+	alwaysBlockedMetadataV6 = []netip.Prefix{
+		netip.MustParsePrefix("fe80::/10"),         // IPv6 link-local
+		netip.MustParsePrefix("fd00:ec2::254/128"), // AWS IMDSv2 IPv6
+	}
+)
+
+// isAlwaysBlockedMetadataIP 即使开启 allowPrivate（允许企业内网 Webhook/SMTP），
+// 也始终硬性拒绝云厂商元数据与链路本地地址，防止 SSRF 窃取实例元数据凭据。
+func isAlwaysBlockedMetadataIP(ip netip.Addr) bool {
+	if !ip.IsValid() {
+		return true
+	}
+	u := ip.Unmap()
+	if u.IsLinkLocalUnicast() || u.IsLinkLocalMulticast() {
+		return true
+	}
+	if u.Is4() {
+		for _, p := range alwaysBlockedMetadataV4 {
+			if p.Contains(u) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, p := range alwaysBlockedMetadataV6 {
+		if p.Contains(u) {
+			return true
+		}
+	}
+	return false
+}
 
 func isDisallowedIP(ip netip.Addr) bool {
 	if !ip.IsValid() {
 		return true
 	}
 	u := ip.Unmap()
-	return u.IsLoopback() || u.IsPrivate() || u.IsLinkLocalUnicast() ||
-		u.IsLinkLocalMulticast() || u.IsMulticast() || u.IsUnspecified() ||
+	return isAlwaysBlockedMetadataIP(u) || u.IsLoopback() || u.IsPrivate() ||
+		u.IsMulticast() || u.IsUnspecified() ||
 		notifyCGNATPrefix.Contains(u)
 }
 
@@ -164,7 +203,11 @@ func dispatchChannel(ctx context.Context, client *http.Client, allowPrivate bool
 	case "webhook":
 		out = sendCustomWebhook(ctx, client, ch.Config, ev)
 	case "smtp":
-		out = sendSMTP(ctx, allowPrivate, ch.Config, ev)
+		timeout := 12 * time.Second
+		if client != nil && client.Timeout > 0 {
+			timeout = client.Timeout
+		}
+		out = sendSMTP(ctx, allowPrivate, timeout, ch.Config, ev)
 	default:
 		out = SendOutcome{Err: fmt.Errorf("unknown channel kind %q", ch.Kind)}
 	}
@@ -373,7 +416,20 @@ func sendCustomWebhook(ctx context.Context, client *http.Client, cfg ChannelConf
 	return SendOutcome{HTTPStatus: resp.StatusCode}
 }
 
-func sendSMTP(ctx context.Context, allowPrivate bool, cfg ChannelConfig, ev NotifyEvent) SendOutcome {
+// encodeRFC2047Subject 对含非 ASCII 字符的邮件标题执行 RFC 2047 UTF-8 Base64 编码，防止中文乱码。
+func encodeRFC2047Subject(raw string) string {
+	clean := strings.NewReplacer("\r", "", "\n", " ").Replace(raw)
+	return "=?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte(clean)) + "?="
+}
+
+func sendSMTP(ctx context.Context, allowPrivate bool, timeout time.Duration, cfg ChannelConfig, ev NotifyEvent) SendOutcome {
+	if timeout <= 0 {
+		timeout = 12 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
 	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", cfg.SMTPHost)
 	if err != nil {
 		return SendOutcome{Err: err}
@@ -384,13 +440,16 @@ func sendSMTP(ctx context.Context, allowPrivate bool, cfg ChannelConfig, ev Noti
 	verifiedIPs := make([]netip.Addr, 0, len(ips))
 	for _, ip := range ips {
 		u := ip.Unmap()
+		if isAlwaysBlockedMetadataIP(u) {
+			return SendOutcome{Err: fmt.Errorf("smtp egress blocked to cloud metadata or link-local address %s", u)}
+		}
 		if !allowPrivate && isDisallowedIP(u) {
 			return SendOutcome{Err: fmt.Errorf("smtp egress blocked to %s", u)}
 		}
 		verifiedIPs = append(verifiedIPs, u)
 	}
 	portStr := strconv.Itoa(cfg.SMTPPort)
-	dialer := &net.Dialer{Timeout: 8 * time.Second}
+	dialer := &net.Dialer{Deadline: deadline}
 	var conn net.Conn
 	var dialErr error
 	for _, verifiedIP := range verifiedIPs {
@@ -411,6 +470,7 @@ func sendSMTP(ctx context.Context, allowPrivate bool, cfg ChannelConfig, ev Noti
 	if dialErr != nil {
 		return SendOutcome{Err: dialErr}
 	}
+	_ = conn.SetDeadline(deadline)
 	c, err := smtp.NewClient(conn, cfg.SMTPHost)
 	if err != nil {
 		_ = conn.Close()
@@ -441,9 +501,9 @@ func sendSMTP(ctx context.Context, allowPrivate bool, cfg ChannelConfig, ev Noti
 	if err != nil {
 		return SendOutcome{Err: err}
 	}
-	subject := strings.NewReplacer("\r", "", "\n", " ").Replace(severityBadge(ev.Severity) + " " + ev.Title)
+	encodedSubject := encodeRFC2047Subject(severityBadge(ev.Severity) + " " + ev.Title)
 	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n",
-		cfg.SMTPFrom, strings.Join(cfg.SMTPTo, ", "), subject, formatPlainText(ev))
+		cfg.SMTPFrom, strings.Join(cfg.SMTPTo, ", "), encodedSubject, formatPlainText(ev))
 	if _, err := io.WriteString(w, msg); err != nil {
 		_ = w.Close()
 		return SendOutcome{Err: err}

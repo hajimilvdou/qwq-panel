@@ -1,62 +1,406 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>基础安全</title>
-  <link rel="stylesheet" href="./plugin.css">
+  <link rel="stylesheet" href="./plugin.css" />
 </head>
 <body>
   <main id="security-root">
-    <header>
+    <header class="topbar">
       <div>
-        <h1>基础安全</h1>
-        <div id="status" class="muted">正在连接宿主…</div>
+        <h1 class="title">基础安全工作台</h1>
+        <div class="sub">防火墙基线 · SSH 零断连改端口 · 密钥与口令 · 轻量防爆破 · <span id="status">正在连接宿主…</span></div>
       </div>
-      <div class="row">
-        <button id="refresh" type="button">刷新状态</button>
+      <div class="topbar-actions">
+        <nav class="tabs" id="nav-tabs" aria-label="安全模块导航">
+          <button type="button" data-tab="overview" class="active">概览与冲突</button>
+          <button type="button" data-tab="firewall">防火墙规则</button>
+          <button type="button" data-tab="sshd">SSH 与改端口</button>
+          <button type="button" data-tab="keys">密钥与密码</button>
+          <button type="button" data-tab="bans">防爆破封禁</button>
+        </nav>
+        <button id="refresh" class="btn ghost" type="button">刷新状态</button>
       </div>
     </header>
 
-    <section class="grid">
-      <article class="card">
-        <h2>安全概览</h2>
-        <div id="overview-summary">等待读取…</div>
-        <div id="overview-sub" class="muted"></div>
-      </article>
-      <article class="card">
-        <h2>防火墙与共存检测</h2>
-        <div id="fw-summary">等待读取…</div>
-        <div id="conflicts-summary" class="muted"></div>
-      </article>
-      <article class="card">
-        <h2>SSH 基线与改端口事务</h2>
-        <div id="sshd-summary">等待读取…</div>
-        <div id="saga-summary" class="muted"></div>
-      </article>
-      <article class="card">
-        <h2>防爆破封禁</h2>
-        <div id="ban-summary">等待读取…</div>
-        <div id="ban-mode" class="muted"></div>
-      </article>
+    <div id="global-alert" class="banner warn" hidden role="status" aria-live="polite"></div>
+
+    <!-- Tab 1: 概览与冲突检测 -->
+    <section data-pane="overview" class="pane">
+      <div class="stats">
+        <article class="stat">
+          <div class="k">活跃封禁 IP</div>
+          <div class="v" id="ov-bans">-</div>
+          <div class="muted" id="ov-bans-sub">等待读取…</div>
+        </article>
+        <article class="stat">
+          <div class="k">SSH 当前监听端口</div>
+          <div class="v" id="ov-ssh-port">-</div>
+          <div class="muted" id="ov-saga-sub">无挂起事务</div>
+        </article>
+        <article class="stat">
+          <div class="k">SSH 密码登录</div>
+          <div class="v" id="ov-pw-auth">-</div>
+          <div class="muted" id="ov-pw-src">—</div>
+        </article>
+        <article class="stat">
+          <div class="k">Root 登录策略</div>
+          <div class="v" id="ov-root-login">-</div>
+          <div class="muted" id="ov-root-src">—</div>
+        </article>
+      </div>
+
+      <section id="ov-override-banner" class="banner warn" hidden>
+        <strong>检测到 SSHD 配置覆盖警告：</strong>
+        <span id="ov-override-text"></span>
+      </section>
+
+      <section id="ov-saga-banner" class="banner info" hidden>
+        <div>
+          <strong>存在进行中的 SSH 双端口切换事务：</strong>
+          <span id="ov-saga-text"></span>
+        </div>
+        <button id="btn-jump-saga" class="btn" type="button">前往处理向导</button>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>共存防火墙与防爆破管理器检测</h2>
+            <div class="muted">检测到 ufw / firewalld 活跃时建议避免规则冲突；检测到 fail2ban 活跃时本插件自动切入只读旁观模式。</div>
+          </div>
+          <span id="ov-conflict-badge" class="badge ok">检测中</span>
+        </div>
+        <div id="conflicts-grid" class="mgr-grid"></div>
+      </section>
     </section>
 
-    <section class="card">
-      <h2>浏览器本地生成 Ed25519 SSH 密钥</h2>
-      <div class="muted">私钥仅在浏览器本地生成并触发下载，绝不上传至服务器；仅自动提交 OpenSSH 公钥（不支持 WebCrypto Ed25519 时将提示回退路径）。</div>
-      <div class="row">
-        <label for="key-user">目标用户</label>
-        <input id="key-user" type="text" value="root" placeholder="root" autocomplete="off">
-        <label for="key-comment">公钥备注</label>
-        <input id="key-comment" type="text" value="qwq-browser" placeholder="qwq-browser" autocomplete="off">
-        <button id="gen-ed25519" class="primary" type="button">本地生成并下载私钥</button>
-        <button id="copy-pubkey" type="button" hidden>复制公钥</button>
+    <!-- Tab 2: 防火墙规则 -->
+    <section data-pane="firewall" class="pane" hidden>
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>宿主强制保留端口（只读）</h2>
+            <div class="muted">由宿主实时核验并强制放行（含 SSH 与管理面端口），应用规则时将自动保留，防止失联。</div>
+          </div>
+          <div class="meta-pills">
+            <span class="chip" id="fw-rev-chip">修订号：—</span>
+            <span class="badge warn" id="fw-persist-badge" hidden>存在未持久化变更</span>
+          </div>
+        </div>
+        <div id="fw-preserved-chips" class="chip-list"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>新增入站规则（table inet qwq / chain input）</h2>
+            <div class="muted">提交将原子替换 inet qwq 规则集并携带 expected_revision；修改后请点击「应用规则集」。</div>
+          </div>
+          <div class="row compact">
+            <label class="inline-label">默认策略
+              <select id="fw-policy">
+                <option value="accept">accept（默认放行）</option>
+                <option value="drop">drop（默认拒绝，仅放行白名单）</option>
+              </select>
+            </label>
+            <button id="fw-apply-btn" class="btn" type="button">应用规则集</button>
+            <button id="fw-reset-btn" class="btn danger" type="button">重置为默认基线</button>
+          </div>
+        </div>
+        <div class="form-grid">
+          <label>协议
+            <select id="fw-proto">
+              <option value="tcp">TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </label>
+          <label>目标端口 (1-65535)
+            <input id="fw-port" type="number" min="1" max="65535" placeholder="例如 443" />
+          </label>
+          <label>来源 IP / CIDR（留空表示全部）
+            <input id="fw-saddr" type="text" placeholder="例如 203.0.113.0/24 或 留空" autocomplete="off" />
+          </label>
+          <label>动作
+            <select id="fw-action">
+              <option value="accept">放行 (accept)</option>
+              <option value="drop">丢弃 (drop)</option>
+            </select>
+          </label>
+          <label>备注（选填，不可用 qwq: 开头）
+            <input id="fw-comment" type="text" maxlength="100" placeholder="如 Web HTTPS" autocomplete="off" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="fw-add-rule" class="btn ghost" type="button">+ 添加到待应用列表</button>
+          <span id="fw-dirty-hint" class="muted" hidden>有未提交的本地规则修改，请点击上方「应用规则集」生效。</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>协议</th>
+                <th>端口</th>
+                <th>来源 CIDR</th>
+                <th>动作</th>
+                <th>备注 / 类型</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="fw-rules-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <!-- Tab 3: SSH 安全与零断连改端口向导 -->
+    <section data-pane="sshd" class="pane" hidden>
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>SSH 登录策略（防锁死保护）</h2>
+            <div class="muted">收紧密码或 Root 登录前，宿主会强制核验恢复用户具备可用公钥登录路径。</div>
+          </div>
+          <span class="chip" id="sshd-rev-chip">修订号：—</span>
+        </div>
+        <div id="sshd-override-warn" class="banner warn" hidden></div>
+        <div class="form-grid">
+          <label>密码登录（PasswordAuthentication）
+            <select id="sshd-pw-auth">
+              <option value="true">允许密码登录</option>
+              <option value="false">禁用密码登录（仅公钥）</option>
+            </select>
+          </label>
+          <label>Root 登录策略（PermitRootLogin）
+            <select id="sshd-root-mode">
+              <option value="allow">allow（允许密码与公钥）</option>
+              <option value="keys_only">keys_only（仅允许公钥）</option>
+              <option value="deny">deny（完全禁止 root 登录）</option>
+            </select>
+          </label>
+          <label>恢复验证用户名（收紧策略必填）
+            <input id="sshd-recovery-user" type="text" value="root" placeholder="root 或已配公钥的普通用户" autocomplete="off" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="sshd-save-policy" class="btn" type="button">保存 SSH 登录策略</button>
+        </div>
+
+        <details class="details-block">
+          <summary>查看当前 sshd -T 生效配置与来源文件</summary>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>配置键</th>
+                  <th>生效值</th>
+                  <th>来源文件</th>
+                  <th>覆盖状态</th>
+                </tr>
+              </thead>
+              <tbody id="sshd-settings-tbody"></tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+
+      <section class="card">
+        <h2>零断连 SSH 改端口向导</h2>
+        <div class="stepper" id="saga-stepper">
+          <div class="step active" data-step="1"><span class="step-num">1</span>准备双端口监听</div>
+          <div class="step" data-step="2"><span class="step-num">2</span>验证新端口连通性</div>
+          <div class="step" data-step="3"><span class="step-num">3</span>确认切换或回滚</div>
+        </div>
+
+        <div id="saga-prepare-panel">
+          <div class="muted">准备阶段会同时保留旧端口与开启新端口监听并自动放行防火墙；若超时未确认，后台守护会自动回滚至旧端口。</div>
+          <div class="form-grid">
+            <label>新 SSH 端口（1024 - 65535）
+              <input id="saga-new-port" type="number" min="1024" max="65535" placeholder="例如 2222" />
+            </label>
+            <label>超时自动回滚（秒）
+              <input id="saga-timeout" type="number" min="30" max="3600" value="600" />
+            </label>
+            <label class="checkbox-field">
+              <input id="saga-skip-fw" type="checkbox" />
+              <span>跳过防火墙管理（使用外部防火墙时勾选）</span>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="saga-prepare-btn" class="btn" type="button">① 准备双端口监听</button>
+          </div>
+        </div>
+
+        <div id="saga-active-panel" hidden>
+          <div class="saga-box">
+            <div class="saga-meta">
+              <div><span class="muted">端口切换：</span><strong id="saga-ports-text">—</strong></div>
+              <div><span class="muted">事务引用：</span><code id="saga-ref-text">—</code></div>
+              <div><span class="muted">剩余回滚倒计时：</span><strong id="saga-countdown" class="countdown">—</strong></div>
+              <div><span class="muted">外部连接探测：</span><span id="saga-ext-badge" class="badge warn">检测中</span></div>
+            </div>
+
+            <div class="cmd-box">
+              <div class="muted">② 请另开新终端执行以下命令测试新端口连通性（确保云安全组已放行新端口）：</div>
+              <div class="cmd-row">
+                <code id="saga-test-cmd">ssh -p 2222 root@服务器IP</code>
+                <button id="saga-copy-cmd" class="btn ghost" type="button">复制测试命令</button>
+                <button id="saga-probe-btn" class="btn ghost" type="button">重新探测外部连接</button>
+              </div>
+            </div>
+
+            <label class="checkbox-field">
+              <input id="saga-confirm-ext" type="checkbox" />
+              <span>我已在外部终端确认新 SSH 端口可正常登录（未自动检测到外部连接时需勾选此二次确认）</span>
+            </label>
+
+            <div class="actions">
+              <button id="saga-commit-btn" class="btn" type="button">③ 确认切换并关闭旧端口</button>
+              <button id="saga-rollback-btn" class="btn danger" type="button">立即回滚至旧端口</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <!-- Tab 4: SSH 密钥与系统密码 -->
+    <section data-pane="keys" class="pane" hidden>
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>系统用户 SSH 公钥管理</h2>
+            <div class="muted">管理目标用户 authorized_keys；私钥优先在浏览器本地生成并导出标准 OpenSSH 格式，全程不触网。</div>
+          </div>
+          <div class="row compact">
+            <label class="inline-label">目标用户
+              <input id="key-user" type="text" value="root" placeholder="root" autocomplete="off" />
+            </label>
+            <button id="btn-load-keys" class="btn ghost" type="button">加载公钥列表</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>类型</th>
+                <th>位数</th>
+                <th>SHA-256 指纹</th>
+                <th>备注</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="keys-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <div class="two-col">
+        <section class="card">
+          <h2>浏览器本地生成 Ed25519 密钥对</h2>
+          <div class="muted">使用 WebCrypto 在浏览器本地生成 Ed25519 密钥对，直接导出 OpenSSH 兼容私钥文件并自动导入公钥。</div>
+          <div class="form-grid single">
+            <label>公钥备注
+              <input id="key-comment" type="text" value="qwq-browser" placeholder="qwq-browser" autocomplete="off" />
+            </label>
+          </div>
+          <div class="actions">
+            <button id="gen-ed25519" class="btn" type="button">本地生成并下载私钥</button>
+            <button id="gen-fallback" class="btn ghost" type="button">服务端回退生成</button>
+            <button id="copy-pubkey" class="btn ghost" type="button" hidden>复制公钥</button>
+          </div>
+          <div id="key-feedback" class="muted feedback" aria-live="polite"></div>
+          <pre id="key-pubkey" class="code-preview" hidden></pre>
+        </section>
+
+        <section class="card">
+          <h2>手动导入已有 SSH 公钥</h2>
+          <div class="muted">粘贴单行 OpenSSH 公钥（如 ssh-ed25519 AAAA... user@host），提交至目标用户 authorized_keys。</div>
+          <div class="form-grid single">
+            <label>OpenSSH 公钥内容
+              <textarea id="import-pubkey-input" rows="4" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@host"></textarea>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="btn-import-pubkey" class="btn" type="button">导入公钥</button>
+          </div>
+        </section>
       </div>
-      <div id="key-feedback" class="muted" aria-live="polite"></div>
-      <pre id="key-pubkey" hidden></pre>
+
+      <section class="card">
+        <h2>修改系统账户密码</h2>
+        <div class="muted">口令字段由宿主边界直接替换为密文引用后执行，插件进程与日志全程不接触明文口令。</div>
+        <div class="form-grid">
+          <label>系统用户名
+            <input id="pwd-user" type="text" value="root" placeholder="root" autocomplete="username" />
+          </label>
+          <label>新密码
+            <input id="pwd-new" type="password" placeholder="输入新登录密码" autocomplete="new-password" />
+          </label>
+          <label>确认新密码
+            <input id="pwd-confirm" type="password" placeholder="再次输入新密码" autocomplete="new-password" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="btn-set-password" class="btn danger" type="button">更新账户密码</button>
+        </div>
+      </section>
+    </section>
+
+    <!-- Tab 5: 防爆破封禁池 -->
+    <section data-pane="bans" class="pane" hidden>
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>手动封禁 IP（inet qwq 封禁集合）</h2>
+            <div class="muted" id="ban-mode-desc">正在读取防爆破状态…</div>
+          </div>
+          <div class="meta-pills">
+            <span id="ban-mode-badge" class="badge ok">巡检运行中</span>
+            <span class="chip" id="ban-rev-chip">修订号：—</span>
+          </div>
+        </div>
+        <div class="form-grid">
+          <label>待封禁来源 IP（IPv4 或 IPv6）
+            <input id="ban-ip-input" type="text" placeholder="例如 198.51.100.25" autocomplete="off" />
+          </label>
+          <label>封禁时长 TTL（秒）
+            <input id="ban-ttl-input" type="number" min="60" max="604800" value="3600" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="btn-ban-add" class="btn danger" type="button">封禁该 IP</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>当前活跃封禁池</h2>
+            <div class="muted">展示封禁 IP、到期时间与实时剩余解封倒计时，支持一键解封。</div>
+          </div>
+          <span class="chip" id="ban-count-chip">0 条封禁</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>封禁 IP</th>
+                <th>到期时间</th>
+                <th>剩余解封倒计时</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="bans-tbody"></tbody>
+          </table>
+        </div>
+      </section>
     </section>
   </main>
-  <script src="security.js"></script>
+  <script src="./security.js"></script>
 </body>
 </html>

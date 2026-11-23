@@ -83,6 +83,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if serveSharedKit(w, req) {
+		return
+	}
 	pluginID, version, rel, ok := splitPath(req.URL.Path)
 	if !ok {
 		http.NotFound(w, req)

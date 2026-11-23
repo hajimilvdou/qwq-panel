@@ -5,6 +5,7 @@ package metrics
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"strings"
 	"sync"
@@ -14,6 +15,9 @@ import (
 
 	"github.com/qwq-panel/qwq/internal/platform/clock"
 	"github.com/qwq-panel/qwq/internal/pluginhost/hostsvc"
+	metricsv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/metrics/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func procFixture() fstest.MapFS {
@@ -152,5 +156,87 @@ func TestCollectorRejectsInvalidCapacityWithoutFakeDisk(t *testing.T) {
 	snapshot, err := collector.Collect(t.Context())
 	if err != nil || len(snapshot.Disks) != 0 || snapshot.Cpu == nil {
 		t.Fatal("无效容量制造了假磁盘零值或破坏其他指标")
+	}
+}
+
+func TestForwarderCustomDiskMountsValidationAndMultiMountStatfs(t *testing.T) {
+	proc := procFixture()
+	proc["diskstats"] = &fstest.MapFile{Data: []byte("8 1 vda1 10 0 20 0 30 0 40 0 0 50 0\n8 17 vdb1 5 0 12 0 7 0 18 0 0 25 0\n")}
+	proc["self/mountinfo"] = &fstest.MapFile{Data: []byte("36 25 8:1 / / rw,relatime - ext4 /dev/vda1 rw\n37 25 8:17 / /data rw,relatime - ext4 /dev/vdb1 rw\n")}
+
+	collector, err := New(Options{
+		Proc:  proc,
+		Clock: clock.NewFake(time.UnixMilli(4242000)),
+		StatFS: func(_ context.Context, mount string) (DiskUsage, error) {
+			switch mount {
+			case "/":
+				return DiskUsage{TotalBytes: 100 << 30, UsedBytes: 40 << 30}, nil
+			case "/data":
+				return DiskUsage{TotalBytes: 500 << 30, UsedBytes: 350 << 30}, nil
+			default:
+				return DiskUsage{}, errors.New("missing")
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	forwarder := Forwarder{Collector: collector}
+	res, err := forwarder.Forward(t.Context(), hostsvc.CapabilityCall{
+		Service: "metrics", Method: "ReadMetrics", Verb: "metrics.read",
+		Request: &metricsv1.ReadMetricsRequest{DiskMounts: []string{"/", "/data", "/data"}},
+	})
+	if err != nil {
+		t.Fatalf("expected multi-mount ReadMetrics to succeed: %v", err)
+	}
+	resp := res.Response.(*metricsv1.ReadMetricsResponse)
+	if len(resp.Snapshot.Disks) != 2 {
+		t.Fatalf("expected 2 deduplicated mounts, got %d", len(resp.Snapshot.Disks))
+	}
+	if resp.Snapshot.Disks[1].Mount != "/data" || resp.Snapshot.Disks[1].Device != "vdb1" || resp.Snapshot.Disks[1].UsedBytes != 350<<30 {
+		t.Fatalf("unexpected /data disk metrics: %+v", resp.Snapshot.Disks[1])
+	}
+
+	tooMany := make([]string, MaxMounts+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("/mnt/d%d", i)
+	}
+	for _, invalid := range [][]string{
+		{"relative/path"},
+		{"/data/../etc"},
+		{"/data\x00bad"},
+		{"/data/"},
+		tooMany,
+	} {
+		_, err := forwarder.Forward(t.Context(), hostsvc.CapabilityCall{
+			Service: "metrics", Method: "ReadMetrics", Verb: "metrics.read",
+			Request: &metricsv1.ReadMetricsRequest{DiskMounts: invalid},
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("invalid disk_mounts %v expected InvalidArgument, got %v", invalid, err)
+		}
+	}
+}
+
+func TestDiskUsageFromStatfsUsesBavailLikeDF(t *testing.T) {
+	// 100 blocks of 4096 bytes: 5 blocks reserved for root (Bfree=25, Bavail=20 -> non-root used=80 blocks)
+	usage, err := diskUsageFromStatfs(100, 25, 20, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.TotalBytes != 100*4096 || usage.UsedBytes != 80*4096 {
+		t.Fatalf("expected Bavail-based usage (used=80*4096), got %+v", usage)
+	}
+	// Disk full for unprivileged user (Bfree=5, Bavail=0 -> 100% used)
+	full, err := diskUsageFromStatfs(100, 5, 0, 4096)
+	if err != nil || full.UsedBytes != full.TotalBytes {
+		t.Fatalf("expected Bavail=0 to report full usage, got %+v err=%v", full, err)
+	}
+	if _, err := diskUsageFromStatfs(100, 10, 101, 4096); err == nil {
+		t.Fatal("expected bavail > blocks to fail")
+	}
+	if _, err := diskUsageFromStatfs(100, 10, 10, 0); err == nil {
+		t.Fatal("expected bsize <= 0 to fail")
 	}
 }

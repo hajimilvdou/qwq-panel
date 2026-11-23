@@ -42,6 +42,8 @@ type userConnState struct {
 }
 
 // connLimiter 提供有界内存、线程安全的单用户并发 TCP 连接数与同时在线 IP 数实时准入控制。
+// 说明：实时活跃连接/在线 IP 统计适用于内建托管守护协议（如 AnyTLS / Brutal 透明接管）；
+// Xray 原生协议连接上限由 renderConnLimitNftables 生成的内核 nftables ct count 规则承接。
 type connLimiter struct {
 	mu    sync.Mutex
 	users map[string]*userConnState

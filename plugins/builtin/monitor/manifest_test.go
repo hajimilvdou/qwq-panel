@@ -16,8 +16,19 @@ func TestMonitorManifestAndPackageFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.ID != "monitor.basic" || len(parsed.Operations) != 7 || parsed.Resources.MemoryMaxMB != 24 || len(parsed.Capabilities) != 1 || parsed.Capabilities[0].Name != "metrics.read" {
+	if parsed.ID != "monitor.basic" || len(parsed.Operations) != 7 || parsed.Resources.MemoryMaxMB != 24 || len(parsed.Capabilities) != 4 {
 		t.Fatal("monitor manifest does not match approved capabilities")
+	}
+	wantCaps := map[string]string{
+		"metrics.read":   "self",
+		"state.kv.read":  "self",
+		"state.kv.write": "self",
+		"events.publish": "monitor.alert",
+	}
+	for _, cap := range parsed.Capabilities {
+		if wantCaps[cap.Name] != cap.Scope {
+			t.Fatalf("unexpected monitor capability: %s:%s", cap.Name, cap.Scope)
+		}
 	}
 	for name := range parsed.Files {
 		if name != parsed.Entrypoint {

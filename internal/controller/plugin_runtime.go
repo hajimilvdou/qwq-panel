@@ -23,6 +23,7 @@ import (
 	"github.com/qwq-panel/qwq/internal/capability"
 	"github.com/qwq-panel/qwq/internal/capability/account"
 	"github.com/qwq-panel/qwq/internal/capability/ban"
+	"github.com/qwq-panel/qwq/internal/capability/docker"
 	"github.com/qwq-panel/qwq/internal/capability/firewall"
 	"github.com/qwq-panel/qwq/internal/capability/metrics"
 	"github.com/qwq-panel/qwq/internal/capability/pluginconfig"
@@ -366,10 +367,13 @@ type HostDeps struct {
 	Catalog *catalog.Catalog
 	// Lossy routes high-frequency realtime plugin telemetry samples in memory
 	// without writing to SQLite event_journal (OPT-08).
-	Lossy  *events.Lossy
-	IDs    *ids.Generator
-	Clock  clock.Clock
-	Logger *slog.Logger
+	Lossy *events.Lossy
+	// OnEventPublished notifies host event bridges (such as AlertEventRelay)
+	// after a plugin event has been persisted.
+	OnEventPublished func(pluginID string, draft *platformv1.EventDraft, assignedEventID string)
+	IDs              *ids.Generator
+	Clock            clock.Clock
+	Logger           *slog.Logger
 	// NodeID scopes resource subjects and the operation target check; "local"
 	// when empty.
 	NodeID string
@@ -508,6 +512,7 @@ func NewPluginRuntime(opts PluginRuntimeOptions) (*PluginRuntime, error) {
 		router.Services["account"] = account.Forwarder{Helper: capClient, RevealSecret: rt.capabilityRevealOperationSecret}
 		router.Services["ban"] = ban.Forwarder{Helper: capClient, Protected: rt.capabilityBanProtectedAddresses}
 		router.Services["traffic"] = traffic.Forwarder{Helper: capClient}
+		router.Services["docker"] = docker.Forwarder{Helper: capClient}
 		router.Services["pluginconfig"] = pluginconfig.Forwarder{Backend: &runtimePluginConfigBackend{rt: rt}}
 	}
 	rt.hostFactory = opts.Host
@@ -1034,7 +1039,9 @@ func (rt *PluginRuntime) newHostService(pluginID string) (*hostsvc.Server, error
 		},
 		Limits:              hostsvc.DefaultLimits(),
 		GrantedCapabilities: rt.hostCapabilityGrants(deps, pluginID),
+		AutonomousChecker:   rt,
 		CapabilityForwarder: rt.opts.CapabilityForwarder,
+		OnEventPublished:    deps.OnEventPublished,
 	}
 	if deps.DB != nil {
 		// Every host call must present the token issued at install time

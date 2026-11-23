@@ -246,10 +246,53 @@ func (i *instance) handleChainsPreview(ctx context.Context, _ pluginsdk.Request)
 
 // ======================== TCP Brutal + Brutal Custom 端口透明接管 ========================
 
-func (i *instance) availableTCPInbounds() []map[string]any {
+func isBrutalEligibleTCPProtocol(proto string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(proto)) {
+	case "vless":
+		return "vless", true
+	case "trojan":
+		return "trojan", true
+	case "shadowsocks", "shadowsocks2022":
+		return "shadowsocks", true
+	case "vmess":
+		return "tcp", true
+	default:
+		return "", false
+	}
+}
+
+func (i *instance) availableTCPInbounds(ctx context.Context) []map[string]any {
 	cfg := i.configSnapshot()
-	out := make([]map[string]any, 0, 2)
-	if cfg.VLESSPort > 0 {
+	out := make([]map[string]any, 0, 8)
+	seenPorts := make(map[int]bool)
+
+	if i.store != nil {
+		if nodes, err := i.store.ListNodes(ctx, "managed", "", "", "", false); err == nil {
+			for _, n := range nodes {
+				if n.Port < 1 || n.Port > 65535 || seenPorts[n.Port] {
+					continue
+				}
+				mappedProto, ok := isBrutalEligibleTCPProtocol(n.Protocol)
+				if !ok {
+					continue
+				}
+				seenPorts[n.Port] = true
+				labelName := strings.TrimSpace(n.Name)
+				if labelName == "" {
+					labelName = n.ID
+				}
+				out = append(out, map[string]any{
+					"inbound_tag": n.ID,
+					"protocol":    mappedProto,
+					"target_port": n.Port,
+					"label":       fmt.Sprintf("%s (%s TCP :%d)", labelName, strings.ToUpper(n.Protocol), n.Port),
+				})
+			}
+		}
+	}
+
+	if cfg.VLESSPort > 0 && !seenPorts[int(cfg.VLESSPort)] {
+		seenPorts[int(cfg.VLESSPort)] = true
 		out = append(out, map[string]any{
 			"inbound_tag": "vless-tcp",
 			"protocol":    "vless",
@@ -257,7 +300,8 @@ func (i *instance) availableTCPInbounds() []map[string]any {
 			"label":       fmt.Sprintf("VLESS Vision+REALITY (TCP :%d)", cfg.VLESSPort),
 		})
 	}
-	if cfg.SSPort > 0 {
+	if cfg.SSPort > 0 && !seenPorts[int(cfg.SSPort)] {
+		seenPorts[int(cfg.SSPort)] = true
 		out = append(out, map[string]any{
 			"inbound_tag": "ss2022-tcp",
 			"protocol":    "shadowsocks",
@@ -275,7 +319,7 @@ func (i *instance) handleBrutalStatus(ctx context.Context, _ pluginsdk.Request) 
 	}
 	return marshalResponse(map[string]any{
 		"env":               detectBrutalEnv(),
-		"tcp_inbounds":      i.availableTCPInbounds(),
+		"tcp_inbounds":      i.availableTCPInbounds(ctx),
 		"bindings":          bindings,
 		"live_listeners":    i.brutalMgr.Metrics(),
 		"default_oversend":  defaultOversendPct,
@@ -335,8 +379,17 @@ func (i *instance) allowedBrutalTargetPorts(ctx context.Context) []uint16 {
 	}
 	add(int(cfg.VLESSPort))
 	add(int(cfg.SSPort))
+	if i.store != nil {
+		if nodes, err := i.store.ListNodes(ctx, "managed", "", "", "", false); err == nil {
+			for _, n := range nodes {
+				if _, ok := isBrutalEligibleTCPProtocol(n.Protocol); ok {
+					add(n.Port)
+				}
+			}
+		}
+	}
 	for _, inb := range i.discoverCoreXrayInboundPorts(ctx, nil) {
-		if inb.Protocol == "vless" || inb.Protocol == "shadowsocks2022" {
+		if _, ok := isBrutalEligibleTCPProtocol(inb.Protocol); ok {
 			add(inb.Port)
 		}
 	}

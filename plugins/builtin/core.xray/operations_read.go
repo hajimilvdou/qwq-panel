@@ -160,10 +160,40 @@ func (i *instance) capabilities(ctx context.Context, request pluginsdk.Request) 
 	if err != nil {
 		return pluginsdk.Response{}, err
 	}
-	result := capabilitiesResult{DriverVersion: version, CoreVersion: snapshot.coreVersion, SchemaVersion: "1",
-		Declared:    []string{"vless_reality_vision_raw", "direct_outbound", "private_uds", "stats_service", "connection_forwarding", "per_user_mark"},
-		Verified:    []string{"native_render", "native_preflight", "private_uds", "stats_service", "missing_series_detection"},
-		Unavailable: []capabilityUnavailable{{"connection_forwarding", "REAL_CONNECTION_NOT_VERIFIED"}, {"per_user_mark", "MARK_SPIKE_NOT_VERIFIED"}}}
+	result := capabilitiesResult{
+		DriverVersion: version,
+		CoreVersion:   snapshot.coreVersion,
+		SchemaVersion: "2",
+		Declared: []string{
+			"vless_reality_vision_raw",
+			"vless_ws_grpc_xhttp",
+			"vmess",
+			"trojan",
+			"shadowsocks",
+			"shadowsocks2022",
+			"hysteria2",
+			"anytls_v2",
+			"socks5",
+			"http",
+			"warp_outbound",
+			"direct_outbound",
+			"private_uds",
+			"stats_service",
+			"per_user_mark",
+			"tls_hot_reload",
+		},
+		Verified: []string{
+			"native_render",
+			"native_preflight",
+			"private_uds",
+			"stats_service",
+			"missing_series_detection",
+			"anytls_v2",
+			"tls_hot_reload",
+			"epoch_aligned_anytls_counters",
+		},
+		Unavailable: []capabilityUnavailable{},
+	}
 	if i.driver == nil {
 		result.Unavailable = append(result.Unavailable, capabilityUnavailable{"observe", "UNIMPLEMENTED"})
 	}

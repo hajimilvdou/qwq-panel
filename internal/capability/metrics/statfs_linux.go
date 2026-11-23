@@ -5,8 +5,6 @@ package metrics
 
 import (
 	"context"
-	"errors"
-	"math"
 
 	"golang.org/x/sys/unix"
 )
@@ -19,8 +17,5 @@ func defaultStatFS(ctx context.Context, path string) (DiskUsage, error) {
 	if err := unix.Statfs(path, &stat); err != nil {
 		return DiskUsage{}, err
 	}
-	if stat.Bsize <= 0 || stat.Bfree > stat.Blocks || stat.Blocks > math.MaxUint64/uint64(stat.Bsize) {
-		return DiskUsage{}, errors.New("metrics: statfs 数据无效或溢出")
-	}
-	return DiskUsage{TotalBytes: stat.Blocks * uint64(stat.Bsize), UsedBytes: (stat.Blocks - stat.Bfree) * uint64(stat.Bsize)}, nil
+	return diskUsageFromStatfs(stat.Blocks, stat.Bfree, stat.Bavail, int64(stat.Bsize))
 }

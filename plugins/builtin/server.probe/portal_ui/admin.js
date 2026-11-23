@@ -230,10 +230,21 @@
 
   function renderNodes() {
     const nodes = Array.isArray(state.nodes) ? state.nodes : [];
-    $('adm-nodes-list').innerHTML = nodes.map((n) => `<div class="node-item">
-      <strong>[${esc(n.RegionCode || 'UN')}] ${esc(n.Name)}</strong>
-      <div class="muted small">ID: <code>${esc(n.ID)}</code> · 状态: ${esc(n.OnlineState || 'pending')}</div>
-    </div>`).join('') || '<p class="muted">暂无节点</p>';
+    $('adm-nodes-list').innerHTML = nodes.map((n) => {
+      const quotaGB = n.QuotaBytes ? `${Math.round(Number(n.QuotaBytes) / (1024 ** 3))} GB` : '不限';
+      const expStr = n.ExpiresAt ? new Date(Number(n.ExpiresAt) * 1000).toISOString().slice(0, 10) : '长期';
+      return `<div class="node-item">
+        <div>
+          <strong>[${esc(n.RegionCode || 'UN')}] ${esc(n.Name)}</strong>
+          <div class="muted small">ID: <code>${esc(n.ID)}</code> · 状态: ${esc(n.OnlineState || 'pending')}</div>
+          <div class="muted small">配额: ${esc(quotaGB)} (${esc(n.QuotaMode || 'both')}) · 重置日: ${Number(n.ResetDay || 1)} · 到期: ${esc(expStr)}</div>
+        </div>
+        <div class="row-gap">
+          <button type="button" class="btn ghost" data-adm-edit-node="${esc(n.ID)}">编辑</button>
+          ${n.IsLocal ? '' : `<button type="button" class="btn danger" data-adm-del-node="${esc(n.ID)}">删除</button>`}
+        </div>
+      </div>`;
+    }).join('') || '<p class="muted">暂无节点</p>';
   }
 
   function renderSiteAndDomain() {
@@ -716,28 +727,87 @@
     }
   });
 
+  function resetAdminNodeForm() {
+    $('adm-node-id').value = '';
+    $('adm-node-name').value = '';
+    $('adm-node-region').value = 'HK';
+    $('adm-node-quota-mode').value = 'both';
+    $('adm-node-quota-gb').value = '0';
+    $('adm-node-reset-day').value = '1';
+    $('adm-node-expires-at').value = '';
+    $('adm-node-form-title').textContent = '新增监控服务器 & 生成单向 Agent 安装命令';
+    $('adm-add-node').textContent = '生成单向安全探针命令';
+    $('adm-cancel-edit-node').hidden = true;
+  }
+
+  $('adm-cancel-edit-node').addEventListener('click', resetAdminNodeForm);
+
+  $('adm-nodes-list').addEventListener('click', async (e) => {
+    const editBtn = e.target.closest('[data-adm-edit-node]');
+    if (editBtn) {
+      const nodeId = editBtn.dataset.admEditNode;
+      const node = (state.nodes || []).find((x) => x.ID === nodeId);
+      if (!node) return;
+      $('adm-node-id').value = node.ID;
+      $('adm-node-name').value = node.Name || '';
+      $('adm-node-region').value = node.RegionCode || 'HK';
+      $('adm-node-quota-mode').value = node.QuotaMode || 'both';
+      $('adm-node-quota-gb').value = node.QuotaBytes ? String(Math.round(Number(node.QuotaBytes) / (1024 ** 3))) : '0';
+      $('adm-node-reset-day').value = String(node.ResetDay || 1);
+      $('adm-node-expires-at').value = node.ExpiresAt ? new Date(Number(node.ExpiresAt) * 1000).toISOString().slice(0, 10) : '';
+      $('adm-node-form-title').textContent = `编辑节点：${node.Name} (${node.ID})`;
+      $('adm-add-node').textContent = '保存节点配置';
+      $('adm-cancel-edit-node').hidden = false;
+      $('adm-node-name').focus();
+      return;
+    }
+    const delBtn = e.target.closest('[data-adm-del-node]');
+    if (delBtn) {
+      const nodeId = delBtn.dataset.admDelNode;
+      try {
+        await apiFetch(`/api/admin/nodes/${encodeURIComponent(nodeId)}`, { method: 'DELETE' });
+        showToast(`已移除节点 ${nodeId}`);
+        if ($('adm-node-id').value === nodeId) resetAdminNodeForm();
+        void loadAdminState();
+      } catch (err) {
+        showToast(err.message || '删除节点失败', true);
+      }
+    }
+  });
+
   $('adm-add-node').addEventListener('click', async () => {
+    const id = $('adm-node-id').value.trim();
     const name = $('adm-node-name').value.trim();
     if (!name) return;
+    const quotaGB = Math.max(0, Number($('adm-node-quota-gb').value || 0));
+    const resetDay = Math.min(31, Math.max(1, Math.floor(Number($('adm-node-reset-day').value || 1))));
+    const expStr = $('adm-node-expires-at').value.trim();
+    const expiresAt = expStr ? Math.floor(new Date(expStr + 'T00:00:00Z').getTime() / 1000) : 0;
+    const payload = {
+      name,
+      region_code: $('adm-node-region').value.trim() || 'HK',
+      quota_mode: $('adm-node-quota-mode').value,
+      quota_bytes: Math.floor(quotaGB * (1024 ** 3)),
+      reset_day: resetDay,
+      expires_at: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : 0,
+      public_origin: window.location.origin
+    };
+    if (id) payload.id = id;
     try {
       const res = await apiFetch('/api/admin/nodes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name,
-          region_code: $('adm-node-region').value.trim() || 'HK',
-          quota_mode: $('adm-node-quota-mode').value
-        })
+        body: JSON.stringify(payload)
       });
       if (res.linux_install) {
         $('adm-install-cmd').hidden = false;
         $('adm-install-cmd').textContent = res.linux_install;
       }
-      $('adm-node-name').value = '';
-      showToast(`已创建节点「${name}」`);
+      showToast(id ? `已更新节点「${name}」` : `已创建节点「${name}」`);
+      resetAdminNodeForm();
       void loadAdminState();
     } catch (err) {
-      showToast(err.message || '创建节点失败', true);
+      showToast(err.message || '保存节点失败', true);
     }
   });
 

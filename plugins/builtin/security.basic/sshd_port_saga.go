@@ -3,14 +3,10 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/netip"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +14,7 @@ import (
 
 	firewallv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/firewall/v1"
 	sshdv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/sshd/v1"
+	platformv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
 
@@ -178,7 +175,7 @@ func (i *instance) handleSSHDChangePortPrepare(ctx context.Context, req pluginsd
 	sshdWrite, sshdWriteMeta, err := sshdClientWrite(ctx, host)
 	if err != nil {
 		if fwManaged {
-			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort)
+			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort, "")
 		}
 		return pluginsdk.Result{}, err
 	}
@@ -190,13 +187,13 @@ func (i *instance) handleSSHDChangePortPrepare(ctx context.Context, req pluginsd
 	})
 	if err != nil {
 		if fwManaged {
-			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort)
+			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort, "")
 		}
 		return pluginsdk.Result{}, err
 	}
 	if err := protoError(setResp.GetError()); err != nil {
 		if fwManaged {
-			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort)
+			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort, "")
 		}
 		return pluginsdk.Result{}, err
 	}
@@ -220,7 +217,7 @@ func (i *instance) handleSSHDChangePortPrepare(ctx context.Context, req pluginsd
 			TransactionRef:   txRef,
 		})
 		if fwManaged {
-			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort)
+			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort, "")
 		}
 		if verifyErr != nil {
 			return pluginsdk.Result{}, verifyErr
@@ -259,7 +256,7 @@ func (i *instance) handleSSHDChangePortPrepare(ctx context.Context, req pluginsd
 			TransactionRef:   txRef,
 		})
 		if fwManaged {
-			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort)
+			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort, "")
 		}
 		return pluginsdk.Result{}, err
 	}
@@ -334,8 +331,9 @@ func (i *instance) handleSSHDChangePortCommit(ctx context.Context, req pluginsdk
 		banner = verifyResp.GetBanner()
 
 		// 云安全组防自锁检查：仅回环可达不能证明公网/云安全组已放行新端口；
-		// 若未检测到来自非回环外部客户端的 ESTABLISHED 连接，需显式二次确认。
-		if !hasExternalEstablishedTCP(saga.NewPort) && !in.ConfirmExternalReachable {
+		// 依赖宿主真实网络命名空间 VerifyPort 探测到的非回环外部 ESTABLISHED 会话，
+		// 未检测到时需显式二次确认。
+		if !verifyResp.GetHasExternalConnection() && !in.ConfirmExternalReachable {
 			return pluginsdk.Result{}, pluginsdk.Errorf("PRECONDITION_FAILED",
 				"未检测到新 SSH 端口 %d 的外部 ESTABLISHED 连接；请先使用新终端从外部登录验证云安全组已放行，或携带 confirm_external_reachable=true 二次确认后再提交",
 				saga.NewPort)
@@ -376,7 +374,7 @@ func (i *instance) handleSSHDChangePortCommit(ctx context.Context, req pluginsdk
 
 	// 若准备阶段托管了防火墙，则提交完成后移除所有旧端口放行并保留新端口。
 	if saga.FirewallManaged {
-		if err := i.commitFirewallPorts(ctx, host, saga.allOldPorts(), saga.NewPort); err != nil {
+		if err := i.commitFirewallPorts(ctx, host, saga.allOldPorts(), saga.NewPort, ""); err != nil {
 			return pluginsdk.Result{}, err
 		}
 	}
@@ -424,19 +422,28 @@ func (i *instance) handleSSHDChangePortRollback(ctx context.Context, req plugins
 	}
 
 	expectedRev := resolveRevision(in.ExpectedRevision, req, "sshd/config")
-	out, err := i.executePortRollbackLocked(ctx, host, saga, expectedRev)
+	out, err := i.executePortRollbackLocked(ctx, host, saga, expectedRev, "")
 	if err != nil {
 		return pluginsdk.Result{}, err
 	}
 	return marshalResult(out)
 }
 
-func (i *instance) executePortRollbackLocked(ctx context.Context, host *pluginsdk.Host, saga portSagaState, explicitRev string) (sshdPortSagaResponse, error) {
+func (i *instance) executePortRollbackLocked(ctx context.Context, host *pluginsdk.Host, saga portSagaState, explicitRev, autonReason string) (sshdPortSagaResponse, error) {
 	expectedRev := explicitRev
 	if expectedRev == "" {
 		expectedRev = saga.SSHDRevision
 	}
-	sshdWrite, sshdWriteMeta, err := sshdClientWrite(ctx, host)
+	var (
+		sshdWrite     sshdv1.SshdServiceClient
+		sshdWriteMeta *platformv1.HostCallContext
+		err           error
+	)
+	if autonReason != "" {
+		sshdWrite, sshdWriteMeta, err = sshdClientWriteAutonomous(ctx, host, autonReason)
+	} else {
+		sshdWrite, sshdWriteMeta, err = sshdClientWrite(ctx, host)
+	}
 	if err != nil {
 		return sshdPortSagaResponse{}, err
 	}
@@ -454,7 +461,7 @@ func (i *instance) executePortRollbackLocked(ctx context.Context, host *pluginsd
 		return sshdPortSagaResponse{}, err
 	}
 	if saga.FirewallManaged {
-		if err := i.restoreFirewallPorts(ctx, host, saga.allOldPorts(), saga.NewPort); err != nil {
+		if err := i.restoreFirewallPorts(ctx, host, saga.allOldPorts(), saga.NewPort, autonReason); err != nil {
 			return sshdPortSagaResponse{}, err
 		}
 	}
@@ -517,7 +524,7 @@ func (i *instance) checkExpiredPortSaga(ctx context.Context) {
 	if saga.Stage == sagaStageSSHDCommitted {
 		// sshd 已完成 COMMIT_NEW，仅重试防火墙收敛与清理 KV，绝不再发 ROLLBACK 形成死循环。
 		if saga.FirewallManaged {
-			if err := i.commitFirewallPorts(ctx, host, saga.allOldPorts(), saga.NewPort); err != nil {
+			if err := i.commitFirewallPorts(ctx, host, saga.allOldPorts(), saga.NewPort, "sshd_saga_rollback"); err != nil {
 				i.Logger().Warn("SSH 改端口已提交，重试防火墙收敛失败", "transaction_ref", saga.TransactionRef, "error", err.Error())
 				return
 			}
@@ -532,11 +539,26 @@ func (i *instance) checkExpiredPortSaga(ctx context.Context) {
 	if saga.Stage != sagaStageSSHDCommitted && i.nowTime().Unix() < saga.DeadlineUnix {
 		return
 	}
-	if _, err := i.executePortRollbackLocked(ctx, host, saga, ""); err != nil {
+	if _, err := i.executePortRollbackLocked(ctx, host, saga, "", "sshd_saga_rollback"); err != nil {
 		i.Logger().Warn("SSH 改端口事务超时自动回滚失败", "transaction_ref", saga.TransactionRef, "error", err.Error())
 		return
 	}
 	i.Logger().Info("SSH 改端口事务超时未确认，已自动回滚", "transaction_ref", saga.TransactionRef, "old_port", saga.OldPort, "new_port", saga.NewPort)
+	i.publishSecurityAlert(
+		ctx,
+		host,
+		"warn",
+		"sshd/port_saga",
+		fmt.Sprintf("SSH 端口切换超时已自动回滚（%d -> %d）", saga.NewPort, saga.OldPort),
+		fmt.Sprintf("SSH 端口切换事务 %s 在超时前未收到确认，后台守护已自动回滚至原端口 %d 并恢复防火墙保留端口。", saga.TransactionRef, saga.OldPort),
+		"security.sshd.saga.rollback:"+saga.TransactionRef,
+		map[string]string{
+			"event":           "sshd_port_saga_timeout_rollback",
+			"old_port":        strconv.FormatUint(uint64(saga.OldPort), 10),
+			"new_port":        strconv.FormatUint(uint64(saga.NewPort), 10),
+			"transaction_ref": saga.TransactionRef,
+		},
+	)
 }
 
 // ======================== Saga KV 与防火墙/端口辅助 ========================
@@ -568,7 +590,7 @@ func (i *instance) savePortSaga(ctx context.Context, host *pluginsdk.Host, saga 
 	return err
 }
 
-func (i *instance) commitFirewallPorts(ctx context.Context, host *pluginsdk.Host, oldPorts []uint32, newPort uint32) error {
+func (i *instance) commitFirewallPorts(ctx context.Context, host *pluginsdk.Host, oldPorts []uint32, newPort uint32, autonReason string) error {
 	fwRead, fwReadMeta, err := firewallClientReadOnly(ctx, host)
 	if err != nil {
 		return err
@@ -580,7 +602,15 @@ func (i *instance) commitFirewallPorts(ctx context.Context, host *pluginsdk.Host
 	if err := protoError(snap.GetError()); err != nil {
 		return err
 	}
-	fwWrite, fwWriteMeta, err := firewallClientWrite(ctx, host)
+	var (
+		fwWrite     firewallv1.FirewallServiceClient
+		fwWriteMeta *platformv1.HostCallContext
+	)
+	if autonReason != "" {
+		fwWrite, fwWriteMeta, err = firewallClientWriteAutonomous(ctx, host, autonReason)
+	} else {
+		fwWrite, fwWriteMeta, err = firewallClientWrite(ctx, host)
+	}
 	if err != nil {
 		return err
 	}
@@ -603,7 +633,7 @@ func (i *instance) commitFirewallPorts(ctx context.Context, host *pluginsdk.Host
 	return protoError(resp.GetError())
 }
 
-func (i *instance) restoreFirewallPorts(ctx context.Context, host *pluginsdk.Host, oldPorts []uint32, newPort uint32) error {
+func (i *instance) restoreFirewallPorts(ctx context.Context, host *pluginsdk.Host, oldPorts []uint32, newPort uint32, autonReason string) error {
 	fwRead, fwReadMeta, err := firewallClientReadOnly(ctx, host)
 	if err != nil {
 		return err
@@ -615,7 +645,15 @@ func (i *instance) restoreFirewallPorts(ctx context.Context, host *pluginsdk.Hos
 	if err := protoError(snap.GetError()); err != nil {
 		return err
 	}
-	fwWrite, fwWriteMeta, err := firewallClientWrite(ctx, host)
+	var (
+		fwWrite     firewallv1.FirewallServiceClient
+		fwWriteMeta *platformv1.HostCallContext
+	)
+	if autonReason != "" {
+		fwWrite, fwWriteMeta, err = firewallClientWriteAutonomous(ctx, host, autonReason)
+	} else {
+		fwWrite, fwWriteMeta, err = firewallClientWrite(ctx, host)
+	}
 	if err != nil {
 		return err
 	}
@@ -630,92 +668,6 @@ func (i *instance) restoreFirewallPorts(ctx context.Context, host *pluginsdk.Hos
 		return err
 	}
 	return protoError(resp.GetError())
-}
-
-// hasExternalEstablishedTCP 检查 Linux /proc/net/tcp{,6} 是否在目标端口存在非回环外部 ESTABLISHED 连接。
-func hasExternalEstablishedTCP(port uint32) bool {
-	if port == 0 || port > 65535 {
-		return false
-	}
-	for _, spec := range []struct {
-		path string
-		ipv6 bool
-	}{
-		{path: "/proc/net/tcp", ipv6: false},
-		{path: "/proc/net/tcp6", ipv6: true},
-	} {
-		if scanProcNetTCPForExternal(spec.path, port, spec.ipv6) {
-			return true
-		}
-	}
-	return false
-}
-
-func scanProcNetTCPForExternal(path string, port uint32, ipv6 bool) bool {
-	f, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	first := true
-	for sc.Scan() {
-		if first {
-			first = false
-			continue
-		}
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 4 || fields[3] != "01" { // 01 = TCP_ESTABLISHED
-			continue
-		}
-		_, localPortHex, ok := strings.Cut(fields[1], ":")
-		if !ok {
-			continue
-		}
-		lp, err := strconv.ParseUint(localPortHex, 16, 32)
-		if err != nil || uint32(lp) != port {
-			continue
-		}
-		remIPHex, _, ok := strings.Cut(fields[2], ":")
-		if !ok {
-			continue
-		}
-		addr, ok := parseProcNetHexIP(remIPHex, ipv6)
-		if !ok {
-			continue
-		}
-		u := addr.Unmap()
-		if !u.IsLoopback() && !u.IsUnspecified() {
-			return true
-		}
-	}
-	return false
-}
-
-func parseProcNetHexIP(hexStr string, ipv6 bool) (netip.Addr, bool) {
-	raw, err := hex.DecodeString(hexStr)
-	if err != nil {
-		return netip.Addr{}, false
-	}
-	if !ipv6 {
-		if len(raw) != 4 {
-			return netip.Addr{}, false
-		}
-		return netip.AddrFrom4([4]byte{raw[3], raw[2], raw[1], raw[0]}), true
-	}
-	if len(raw) != 16 {
-		return netip.Addr{}, false
-	}
-	var b [16]byte
-	for w := 0; w < 4; w++ {
-		off := w * 4
-		b[off+0] = raw[off+3]
-		b[off+1] = raw[off+2]
-		b[off+2] = raw[off+1]
-		b[off+3] = raw[off+0]
-	}
-	return netip.AddrFrom16(b), true
 }
 
 func extractListeningPorts(settings []*sshdv1.Setting) []uint32 {

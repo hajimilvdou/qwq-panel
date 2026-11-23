@@ -23,14 +23,14 @@
     "schemas/config.schema.json": "sha256:9d743670f8ccdf8779f9e457fc2597ed6db78ed218fe41d6a51959738b720f3c",
     "schemas/empty.request.json": "sha256:8491177ce18b8c2860389a81e3022162f5ba7d98024abf04251bf0eb8d16bd57",
     "schemas/history.request.json": "sha256:e49f982b3886681fa98e791dff2a04b58a1c8d7f0c041118daba73fcfc921b90",
-    "schemas/history.response.json": "sha256:a8d4774ffbcd5c1a9d4fc131900f5c2dbef9363d18f1c39990dd7f88c21eb99f",
+    "schemas/history.response.json": "sha256:b7c8ffb08b65f211bced4cfa43701ceb30375e8e85e5599e96ecafb23db64c13",
     "schemas/series.response.json": "sha256:2dedeb6cd2638ddd70ad26d4aa5ea00e4227ccf23222c9d85d491468399372ed",
-    "schemas/snapshot.response.json": "sha256:d73dc8fc6ba84124bb0d372675c9772e193d679475d98cc55dad5c2060a28072",
+    "schemas/snapshot.response.json": "sha256:0fff6cb853241f6693fd00df63435975bc2fcc5b34951c2db7992805134c1850",
     "schemas/stat.response.json": "sha256:605e5bdfd16b5b8977ac464f513acbfbb513469c367afab246f093fd8833af45",
     "ui/LICENSE.tokens.txt": "sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-    "ui/index.html": "sha256:7138cf306a1f7842765b28e40ac97990806186102649eea1377b7999df78bcd7",
-    "ui/monitor.css": "sha256:341011a9c14da75eaa89b82e6bc46124002c08e37f76cebb36528cb50c4d4256",
-    "ui/monitor.js": "sha256:65bc890b8278558ddfb5d8ab8a163217367382b7327463d36a620c03b2e73ac0",
+    "ui/index.html": "sha256:724c3fb118d83eb38f400c1a9be0efb28add1e34281ae972c9eff10037aef5f4",
+    "ui/monitor.css": "sha256:aa6a350b2f05b364d23e1864731083192754e716605d86e1b34d8667e9cdd951",
+    "ui/monitor.js": "sha256:ef683ef1e28b5dda31deb111f59a26220374b10b788dad7892019e79060ce098",
     "ui/tokens.css": "sha256:757918310e30a806d3ab03efc6026cc46ee44c3d7978b429a9ceba1c1d684124"
   },
   "provenance": {
@@ -181,7 +181,22 @@
     {
       "name": "metrics.read",
       "scope": "self",
-      "reason": "读取本节点 CPU、内存、磁盘、网络与负载"
+      "reason": "读取本节点 CPU、内存、Swap、磁盘、网络与负载"
+    },
+    {
+      "name": "state.kv.read",
+      "scope": "self",
+      "reason": "启动时从宿主 KV 恢复最近 1 小时粗粒度监控历史环"
+    },
+    {
+      "name": "state.kv.write",
+      "scope": "self",
+      "reason": "停机或去激活时将最近 1 小时粗粒度监控历史快照写入宿主 KV"
+    },
+    {
+      "name": "events.publish",
+      "scope": "monitor.alert",
+      "reason": "CPU、内存、Swap 或磁盘连续超载时发出边沿告警事件"
     }
   ],
   "dependencies": [],

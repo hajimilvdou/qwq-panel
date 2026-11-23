@@ -87,6 +87,18 @@ func TestServeUIAndIcon(t *testing.T) {
 	if got := rec.Header().Get("Content-Security-Policy"); got != want {
 		t.Fatalf("csp = %q, want %q", got, want)
 	}
+	// Verify host-embedded shared @qwq/kit assets under /plugin-ui/_kit/v1/
+	kitJS := do(t, h, http.MethodGet, "/plugin-ui/_kit/v1/kit.js")
+	if kitJS.Code != http.StatusOK || !strings.Contains(kitJS.Header().Get("Content-Type"), "text/javascript") || kitJS.Body.Len() == 0 {
+		t.Fatalf("shared kit.js: %d ct=%q len=%d", kitJS.Code, kitJS.Header().Get("Content-Type"), kitJS.Body.Len())
+	}
+	kitCSS := do(t, h, http.MethodGet, "/plugin-ui/_kit/v1/kit-base.css")
+	if kitCSS.Code != http.StatusOK || !strings.Contains(kitCSS.Header().Get("Content-Type"), "text/css") || !strings.Contains(kitCSS.Body.String(), "--surface") {
+		t.Fatalf("shared kit-base.css: %d ct=%q", kitCSS.Code, kitCSS.Header().Get("Content-Type"))
+	}
+	if badKit := do(t, h, http.MethodGet, "/plugin-ui/_kit/v1/other.js"); badKit.Code != http.StatusNotFound {
+		t.Fatalf("unexpected shared kit path: %d, want 404", badKit.Code)
+	}
 
 	rec = do(t, h, http.MethodGet, "/plugin-ui/acme.plugin/1.2.3/ui/app.js")
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/javascript; charset=utf-8" {

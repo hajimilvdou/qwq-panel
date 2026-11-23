@@ -25,8 +25,10 @@ const (
 )
 
 type ReadMetricsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Context       *v1.HostCallContext    `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Context *v1.HostCallContext    `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	// Optional canonical absolute mount points to query via statfs (max 32).
+	DiskMounts    []string `protobuf:"bytes,2,rep,name=disk_mounts,json=diskMounts,proto3" json:"disk_mounts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -64,6 +66,13 @@ func (*ReadMetricsRequest) Descriptor() ([]byte, []int) {
 func (x *ReadMetricsRequest) GetContext() *v1.HostCallContext {
 	if x != nil {
 		return x.Context
+	}
+	return nil
+}
+
+func (x *ReadMetricsRequest) GetDiskMounts() []string {
+	if x != nil {
+		return x.DiskMounts
 	}
 	return nil
 }
@@ -644,9 +653,11 @@ var File_qwq_capability_metrics_v1_metrics_proto protoreflect.FileDescriptor
 
 const file_qwq_capability_metrics_v1_metrics_proto_rawDesc = "" +
 	"\n" +
-	"'qwq/capability/metrics/v1/metrics.proto\x12\x19qwq.capability.metrics.v1\x1a\x1eqwq/platform/v1/platform.proto\"P\n" +
+	"'qwq/capability/metrics/v1/metrics.proto\x12\x19qwq.capability.metrics.v1\x1a\x1eqwq/platform/v1/platform.proto\"q\n" +
 	"\x12ReadMetricsRequest\x12:\n" +
-	"\acontext\x18\x01 \x01(\v2 .qwq.platform.v1.HostCallContextR\acontext\"\x91\x01\n" +
+	"\acontext\x18\x01 \x01(\v2 .qwq.platform.v1.HostCallContextR\acontext\x12\x1f\n" +
+	"\vdisk_mounts\x18\x02 \x03(\tR\n" +
+	"diskMounts\"\x91\x01\n" +
 	"\x13ReadMetricsResponse\x12F\n" +
 	"\bsnapshot\x18\x01 \x01(\v2*.qwq.capability.metrics.v1.MetricsSnapshotR\bsnapshot\x122\n" +
 	"\x05error\x18\x02 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error\"\xf8\x02\n" +

@@ -74,6 +74,9 @@ func (x *eventsService) PublishEvent(ctx context.Context, req *platformv1.Publis
 	if err != nil {
 		return nil, x.s.sinkError("publish event", err)
 	}
+	if x.s.cfg.OnEventPublished != nil {
+		x.s.cfg.OnEventPublished(x.s.cfg.PluginID, draft, ref.EventID)
+	}
 	return &platformv1.PublishEventResponse{EventId: ref.EventID, Sequence: ref.Sequence}, nil
 }
 

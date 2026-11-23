@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS ingress_sites (
     id                 TEXT PRIMARY KEY,
-    domain             TEXT NOT NULL UNIQUE,
+    domain             TEXT NOT NULL,
     enabled            INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
     upstream_url       TEXT NOT NULL,
     path_prefix        TEXT NOT NULL DEFAULT '/',
@@ -19,8 +19,11 @@ CREATE TABLE IF NOT EXISTS ingress_sites (
     notes              TEXT NOT NULL DEFAULT '',
     revision           INTEGER NOT NULL DEFAULT 1,
     created_at         INTEGER NOT NULL,
-    updated_at         INTEGER NOT NULL
+    updated_at         INTEGER NOT NULL,
+    UNIQUE (domain, path_prefix)
 ) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_ingress_sites_domain ON ingress_sites(domain);
 
 CREATE TABLE IF NOT EXISTS ingress_snapshots (
     id         TEXT PRIMARY KEY,

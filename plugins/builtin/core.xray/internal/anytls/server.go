@@ -155,14 +155,20 @@ type ProfileSpec struct {
 	PaddingScheme      []string
 	Users              map[string][]byte   // userID -> raw password
 	UserDigests        map[string][32]byte // userID -> sha256(password)
+	UserMarks          map[string]uint32   // userID -> optional SO_MARK (0x5100..0x51FF)
+	UserUpKbps         map[string]uint32   // userID -> optional uplink Kbps limit
+	UserDownKbps       map[string]uint32   // userID -> optional downlink Kbps limit
 	AllowPrivateTarget bool                // 仅限单测显式置 true；生产环境恒为 false
 }
 
 type userEntry struct {
-	id     string
-	digest [32]byte
-	up     *atomic.Int64
-	down   *atomic.Int64
+	id          string
+	digest      [32]byte
+	trafficMark uint32
+	upShaper    *TokenBucketShaper
+	downShaper  *TokenBucketShaper
+	up          *atomic.Int64
+	down        *atomic.Int64
 }
 
 type serverAuthSnapshot struct {
@@ -210,9 +216,11 @@ func buildAuthSnapshot(spec ProfileSpec, prev *serverAuthSnapshot) (*serverAuthS
 	sum := md5.Sum([]byte(paddingText))
 
 	prevCounters := make(map[string][2]*atomic.Int64)
+	prevShapers := make(map[string][2]*TokenBucketShaper)
 	if prev != nil {
 		for _, u := range prev.users {
 			prevCounters[u.id] = [2]*atomic.Int64{u.up, u.down}
+			prevShapers[u.id] = [2]*TokenBucketShaper{u.upShaper, u.downShaper}
 		}
 	}
 
@@ -224,14 +232,47 @@ func buildAuthSnapshot(spec ProfileSpec, prev *serverAuthSnapshot) (*serverAuthS
 		}
 		return &atomic.Int64{}, &atomic.Int64{}
 	}
+	allocShapers := func(uid string) (*TokenBucketShaper, *TokenBucketShaper) {
+		upKbps := spec.UserUpKbps[uid]
+		downKbps := spec.UserDownKbps[uid]
+		var upS, downS *TokenBucketShaper
+		if prevPair, ok := prevShapers[uid]; ok {
+			upS, downS = prevPair[0], prevPair[1]
+		}
+		if upKbps > 0 {
+			if upS == nil {
+				upS = NewTokenBucketShaper(upKbps)
+			} else {
+				upS.SetLimitKbps(upKbps)
+			}
+		} else if upS != nil {
+			upS.SetLimitKbps(0)
+			upS = nil
+		}
+		if downKbps > 0 {
+			if downS == nil {
+				downS = NewTokenBucketShaper(downKbps)
+			} else {
+				downS.SetLimitKbps(downKbps)
+			}
+		} else if downS != nil {
+			downS.SetLimitKbps(0)
+			downS = nil
+		}
+		return upS, downS
+	}
 	for uid, pwd := range spec.Users {
 		seen[uid] = struct{}{}
 		up, down := allocCounters(uid)
+		upS, downS := allocShapers(uid)
 		entries = append(entries, userEntry{
-			id:     uid,
-			digest: sha256.Sum256(pwd),
-			up:     up,
-			down:   down,
+			id:          uid,
+			digest:      sha256.Sum256(pwd),
+			trafficMark: spec.UserMarks[uid],
+			upShaper:    upS,
+			downShaper:  downS,
+			up:          up,
+			down:        down,
 		})
 	}
 	for uid, digest := range spec.UserDigests {
@@ -239,11 +280,15 @@ func buildAuthSnapshot(spec ProfileSpec, prev *serverAuthSnapshot) (*serverAuthS
 			continue
 		}
 		up, down := allocCounters(uid)
+		upS, downS := allocShapers(uid)
 		entries = append(entries, userEntry{
-			id:     uid,
-			digest: digest,
-			up:     up,
-			down:   down,
+			id:          uid,
+			digest:      digest,
+			trafficMark: spec.UserMarks[uid],
+			upShaper:    upS,
+			downShaper:  downS,
+			up:          up,
+			down:        down,
 		})
 	}
 	return &serverAuthSnapshot{
@@ -567,10 +612,11 @@ func (s *Server) handleConn(conn net.Conn) {
 		return
 	}
 
-	// 鉴权通过！释放预鉴权名额并从 sync.Pool 借用 32KiB 会话缓冲
+	// 鉴权通过！释放预鉴权名额，并按需挂载每用户共享令牌桶限速包装器
 	releasePreAuth()
+	sessionConn := WrapConnWithUserShaper(s.ctx, conn, user.upShaper, user.downShaper)
 	br := sessionReaderPool.Get().(*bufio.Reader)
-	br.Reset(conn)
+	br.Reset(sessionConn)
 	defer func() {
 		br.Reset(strings.NewReader(""))
 		sessionReaderPool.Put(br)
@@ -588,7 +634,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		user:          user,
 		paddingText:   snap.paddingText,
 		paddingMD5:    snap.paddingMD5,
-		conn:          conn,
+		conn:          sessionConn,
 		br:            br,
 		clientVersion: 1,
 		streams:       make(map[uint32]*anytlsStream),
@@ -1006,7 +1052,17 @@ func (st *anytlsStream) dialAndRelay(targetAddr string) {
 	}
 
 	ctx, cancel := context.WithTimeout(st.sess.server.ctx, dialTimeout)
-	conn, err := st.sess.server.dialTarget(ctx, "tcp", targetAddr)
+	var conn net.Conn
+	var err error
+	if st.sess.user != nil && st.sess.user.trafficMark >= 0x5100 && st.sess.user.trafficMark <= 0x51FF {
+		if st.sess.server.allowPrivateTarget {
+			conn, err = DialOutboundWithMark(ctx, "tcp", targetAddr, st.sess.user.trafficMark, dialTimeout)
+		} else {
+			conn, err = dialOutboundWithPolicyAndMark(ctx, "tcp", targetAddr, st.sess.user.trafficMark, dialTimeout, true)
+		}
+	} else {
+		conn, err = st.sess.server.dialTarget(ctx, "tcp", targetAddr)
+	}
 	cancel()
 	if err != nil {
 		st.failDial(err)

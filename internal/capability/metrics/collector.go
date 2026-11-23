@@ -8,8 +8,9 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/qwq-panel/qwq/internal/platform/clock"
@@ -27,11 +28,45 @@ const (
 // ErrUnavailable 表示没有任何有效采集源，不把读取失败伪装成零值。
 var ErrUnavailable = errors.New("metrics: 没有可用的宿主指标")
 
+// ErrInvalidMounts 表示请求传入的磁盘挂载点列表无效或超过上限。
+var ErrInvalidMounts = errors.New("metrics: 挂载配置无效")
+
 // Mount 是宿主受控的挂载配置；Device 为空时按 mountinfo 的设备号匹配。
 type Mount struct{ Path, Device string }
 
 // DiskUsage 是容量字节数，和 diskstats 的累计 IO 计数器分离。
 type DiskUsage struct{ TotalBytes, UsedBytes uint64 }
+
+// diskUsageFromStatfs 按非特权可用块 Bavail（与 df -h 对齐）计算已用与总字节数。
+func diskUsageFromStatfs(blocks, bfree, bavail uint64, bsize int64) (DiskUsage, error) {
+	if bsize <= 0 || bfree > blocks || bavail > blocks || blocks > math.MaxUint64/uint64(bsize) {
+		return DiskUsage{}, errors.New("metrics: statfs 数据无效或溢出")
+	}
+	unit := uint64(bsize)
+	return DiskUsage{
+		TotalBytes: blocks * unit,
+		UsedBytes:  (blocks - bavail) * unit,
+	}, nil
+}
+
+// validMountPath 仅接受规范 POSIX 绝对路径，拒绝 ..、NUL、换行及反斜杠。
+func validMountPath(p string) bool {
+	if len(p) == 0 || len(p) > 512 || !strings.HasPrefix(p, "/") {
+		return false
+	}
+	if strings.ContainsAny(p, "\x00\r\n\\") {
+		return false
+	}
+	if path.Clean(p) != p {
+		return false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
+}
 
 // Options 的 Proc/StatFS/Clock 均可替换；默认只读 /proc、statfs(/) 和系统时钟。
 type Options struct {
@@ -68,8 +103,8 @@ func New(options Options) (*Collector, error) {
 	}
 	seen := make(map[string]bool, len(options.Mounts))
 	for _, mount := range options.Mounts {
-		if !filepath.IsAbs(mount.Path) || filepath.Clean(mount.Path) != mount.Path || strings.ContainsAny(mount.Path, "\x00\r\n") || seen[mount.Path] || (mount.Device != "" && !validDeviceName(mount.Device)) {
-			return nil, errors.New("metrics: 挂载配置无效")
+		if !validMountPath(mount.Path) || seen[mount.Path] || (mount.Device != "" && !validDeviceName(mount.Device)) {
+			return nil, ErrInvalidMounts
 		}
 		seen[mount.Path] = true
 	}
@@ -78,10 +113,19 @@ func New(options Options) (*Collector, error) {
 
 // Collect 返回单次采样的原始计数器；局部故障只使该字段缺省，不生成伪造零值。
 func (c *Collector) Collect(ctx context.Context) (*metricsv1.MetricsSnapshot, error) {
+	return c.CollectMounts(ctx, nil)
+}
+
+// CollectMounts 按调用方请求的受控挂载点列表执行单次采集；requestedMounts 为空时回退默认挂载点。
+func (c *Collector) CollectMounts(ctx context.Context, requestedMounts []string) (*metricsv1.MetricsSnapshot, error) {
 	if ctx == nil {
 		return nil, errors.New("metrics: context 不能为空")
 	}
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	mounts, err := c.resolveMounts(requestedMounts)
+	if err != nil {
 		return nil, err
 	}
 	snapshot := &metricsv1.MetricsSnapshot{CollectedAtUnixMs: c.clock.Now().UnixMilli()}
@@ -116,7 +160,7 @@ func (c *Collector) Collect(ctx context.Context) (*metricsv1.MetricsSnapshot, er
 	if data, err := c.read(ctx, "self/mountinfo"); err == nil {
 		mountInfo = parseMountInfo(data)
 	}
-	for _, mount := range c.mounts {
+	for _, mount := range mounts {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -153,6 +197,34 @@ func (c *Collector) Collect(ctx context.Context) (*metricsv1.MetricsSnapshot, er
 		return nil, ErrUnavailable
 	}
 	return snapshot, nil
+}
+
+func (c *Collector) resolveMounts(requested []string) ([]Mount, error) {
+	if len(requested) == 0 {
+		return c.mounts, nil
+	}
+	if len(requested) > MaxMounts {
+		return nil, ErrInvalidMounts
+	}
+	defaultDevices := make(map[string]string, len(c.mounts))
+	for _, m := range c.mounts {
+		if m.Device != "" {
+			defaultDevices[m.Path] = m.Device
+		}
+	}
+	seen := make(map[string]bool, len(requested))
+	resolved := make([]Mount, 0, len(requested))
+	for _, raw := range requested {
+		if !validMountPath(raw) {
+			return nil, ErrInvalidMounts
+		}
+		if seen[raw] {
+			continue
+		}
+		seen[raw] = true
+		resolved = append(resolved, Mount{Path: raw, Device: defaultDevices[raw]})
+	}
+	return resolved, nil
 }
 
 func (c *Collector) read(ctx context.Context, name string) ([]byte, error) {

@@ -89,6 +89,30 @@ func (s *fakeHostState) rawValue(key string) ([]byte, bool) {
 	return append([]byte(nil), val...), true
 }
 
+type fakeHostEvents struct {
+	pb.UnimplementedHostEventsServiceServer
+	mu        sync.Mutex
+	published []*pb.EventDraft
+}
+
+func (e *fakeHostEvents) PublishEvent(_ context.Context, req *pb.PublishEventRequest) (*pb.PublishEventResponse, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if req.GetEvent() != nil {
+		e.published = append(e.published, req.GetEvent())
+	}
+	return &pb.PublishEventResponse{
+		EventId:  fmt.Sprintf("evt_%d", len(e.published)),
+		Sequence: uint64(len(e.published)),
+	}, nil
+}
+
+func (e *fakeHostEvents) snapshot() []*pb.EventDraft {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]*pb.EventDraft(nil), e.published...)
+}
+
 type fakeFirewallService struct {
 	firewallv1.UnimplementedFirewallServiceServer
 	mu             sync.Mutex
@@ -98,6 +122,7 @@ type fakeFirewallService struct {
 	managers       []*firewallv1.Manager
 	appliedHistory [][]uint32
 	lastExpected   string
+	lastApplyOpID  string
 	resetCalls     int
 	failErr        *pb.ErrorDetail
 }
@@ -141,6 +166,7 @@ func (s *fakeFirewallService) ApplyRuleset(_ context.Context, req *firewallv1.Ap
 		return &firewallv1.ApplyRulesetResponse{Error: err}, nil
 	}
 	s.lastExpected = req.GetExpectedRevision()
+	s.lastApplyOpID = req.GetContext().GetOperationId()
 	s.ruleset = append([]byte(nil), req.GetRulesetJson()...)
 	s.preservedPorts = append([]uint32(nil), req.GetPreservedPorts()...)
 	s.appliedHistory = append(s.appliedHistory, append([]uint32(nil), req.GetPreservedPorts()...))
@@ -179,7 +205,9 @@ type fakeSSHDService struct {
 	listeningPorts  []uint32
 	revision        string
 	verifyReachable bool
+	hasExternalConn bool
 	stages          []sshdv1.PortChangeStage
+	lastSetPortOpID string
 	lastPolicyReq   *sshdv1.SetLoginPolicyRequest
 	txSeq           int
 	activeTxRef     string
@@ -239,6 +267,7 @@ func (s *fakeSSHDService) SetPort(_ context.Context, req *sshdv1.SetPortRequest)
 		return &sshdv1.SetPortResponse{Error: err}, nil
 	}
 	s.stages = append(s.stages, req.GetStage())
+	s.lastSetPortOpID = req.GetContext().GetOperationId()
 	switch req.GetStage() {
 	case sshdv1.PortChangeStage_PORT_CHANGE_STAGE_ADD_NEW:
 		s.txSeq++
@@ -273,7 +302,11 @@ func (s *fakeSSHDService) VerifyPort(_ context.Context, req *sshdv1.VerifyPortRe
 	if !s.verifyReachable || !slices.Contains(s.listeningPorts, req.GetPort()) {
 		return &sshdv1.VerifyPortResponse{Reachable: false}, nil
 	}
-	return &sshdv1.VerifyPortResponse{Reachable: true, Banner: "SSH-2.0-OpenSSH_9.6"}, nil
+	return &sshdv1.VerifyPortResponse{
+		Reachable:             true,
+		Banner:                "SSH-2.0-OpenSSH_9.6",
+		HasExternalConnection: s.hasExternalConn,
+	}, nil
 }
 
 func (s *fakeSSHDService) SetLoginPolicy(_ context.Context, req *sshdv1.SetLoginPolicyRequest) (*sshdv1.SetLoginPolicyResponse, error) {
@@ -391,17 +424,18 @@ func (s *fakeAccountService) SetPassword(_ context.Context, req *accountv1.SetPa
 
 type fakeBanService struct {
 	banv1.UnimplementedBanServiceServer
-	mu          sync.Mutex
-	bans        map[string]int64
-	revision    string
-	failures    []*banv1.AuthFailure
-	nextCursor  string
-	scanCalls   int
-	applyCalls  int
-	removedIPs  []string
-	appliedIPs  []string
-	failErr     *pb.ErrorDetail
-	revSequence int
+	mu            sync.Mutex
+	bans          map[string]int64
+	revision      string
+	failures      []*banv1.AuthFailure
+	nextCursor    string
+	scanCalls     int
+	applyCalls    int
+	lastApplyOpID string
+	removedIPs    []string
+	appliedIPs    []string
+	failErr       *pb.ErrorDetail
+	revSequence   int
 }
 
 func newFakeBanService() *fakeBanService {
@@ -436,6 +470,7 @@ func (s *fakeBanService) ApplyBans(_ context.Context, req *banv1.ApplyBansReques
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.applyCalls++
+	s.lastApplyOpID = req.GetContext().GetOperationId()
 	if err := s.nextErrLocked(); err != nil {
 		return &banv1.ApplyBansResponse{Error: err}, nil
 	}
@@ -500,6 +535,7 @@ type testHarness struct {
 	account  *fakeAccountService
 	ban      *fakeBanService
 	kv       *fakeHostState
+	events   *fakeHostEvents
 	clockSec *atomic.Int64
 }
 
@@ -513,6 +549,7 @@ func newSecurityTestHarness(t *testing.T, configJSON string, banInterval, sagaIn
 		account:  &fakeAccountService{},
 		ban:      newFakeBanService(),
 		kv:       &fakeHostState{},
+		events:   &fakeHostEvents{},
 		clockSec: &atomic.Int64{},
 	}
 	h.clockSec.Store(time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC).Unix())
@@ -522,6 +559,7 @@ func newSecurityTestHarness(t *testing.T, configJSON string, banInterval, sagaIn
 	accountv1.RegisterAccountServiceServer(hostServer, h.account)
 	banv1.RegisterBanServiceServer(hostServer, h.ban)
 	pb.RegisterHostStateServiceServer(hostServer, h.kv)
+	pb.RegisterHostEventsServiceServer(hostServer, h.events)
 
 	go func() { _ = hostServer.Serve(listener) }()
 	t.Cleanup(func() { hostServer.Stop(); _ = listener.Close() })
@@ -938,9 +976,63 @@ func TestSSHDPortSagaTimeoutAutoRollback(t *testing.T) {
 
 	h.fw.mu.Lock()
 	fwPorts := append([]uint32(nil), h.fw.preservedPorts...)
+	fwOpID := h.fw.lastApplyOpID
 	h.fw.mu.Unlock()
 	if !slices.Equal(fwPorts, []uint32{22, 8443}) {
 		t.Fatalf("超时自动回滚后防火墙应恢复旧端口集合，实际: %v", fwPorts)
+	}
+	h.sshd.mu.Lock()
+	sshdOpID := h.sshd.lastSetPortOpID
+	h.sshd.mu.Unlock()
+	if sshdOpID != "auton:sshd_saga_rollback" || fwOpID != "auton:sshd_saga_rollback" {
+		t.Fatalf("超时自动回滚应使用自治上下文 auton:sshd_saga_rollback，实际 sshd=%q fw=%q", sshdOpID, fwOpID)
+	}
+	waitUntil(t, 2*time.Second, "超时自动回滚发布 security.alert 事件", func() bool {
+		for _, ev := range h.events.snapshot() {
+			if ev.GetType() == "security.alert" && ev.GetSubject() == "sshd/port_saga" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestSSHDPortSagaCommitAcceptsHostExternalConnectionProbe(t *testing.T) {
+	h := newSecurityTestHarness(t, `{}`, 0, 0)
+	prep := runSecurityJob(t, h.srv, "security.sshd.change_port_prepare", map[string]any{
+		"new_port":        2288,
+		"timeout_seconds": 300,
+	}, nil)
+	if prep.GetError() != nil {
+		t.Fatalf("prepare 失败: %+v", prep.GetError())
+	}
+	var prepOut sshdPortSagaResponse
+	if err := json.Unmarshal(prep.GetResultJson(), &prepOut); err != nil {
+		t.Fatal(err)
+	}
+
+	// 宿主 VerifyPort 报告检测到非回环外部连接时，sshd.status 应回显且无需手动 confirm_external_reachable 即可提交。
+	h.sshd.mu.Lock()
+	h.sshd.hasExternalConn = true
+	h.sshd.mu.Unlock()
+
+	stResp := invokeSecurity(t, h.srv, "security.sshd.status", map[string]any{})
+	var st sshdStatusResponse
+	if err := json.Unmarshal(stResp.GetPayloadJson(), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.PortSaga == nil || !st.PortSaga.ExternalConnectionDetected {
+		t.Fatalf("sshd.status 应回显 port_saga.external_connection_detected=true，实际: %+v", st.PortSaga)
+	}
+
+	commit := runSecurityJob(t, h.srv, "security.sshd.change_port_commit", map[string]any{
+		"transaction_ref": prepOut.TransactionRef,
+	}, nil)
+	if commit.GetError() != nil {
+		t.Fatalf("宿主探测到外部连接后应允许直接提交，实际错误: %+v", commit.GetError())
+	}
+	if h.kv.hasKey(kvKeyPortSaga) {
+		t.Fatal("commit 完成后 KV 事务应已清理")
 	}
 }
 
@@ -1022,6 +1114,7 @@ func TestBanLoopIncrementalScanApplyAndEviction(t *testing.T) {
 	h.ban.mu.Lock()
 	applied := append([]string(nil), h.ban.appliedIPs...)
 	removed := append([]string(nil), h.ban.removedIPs...)
+	banOpID := h.ban.lastApplyOpID
 	h.ban.mu.Unlock()
 
 	if !slices.Equal(applied, []string{"198.51.100.10"}) {
@@ -1030,9 +1123,21 @@ func TestBanLoopIncrementalScanApplyAndEviction(t *testing.T) {
 	if !slices.Equal(removed, []string{"192.0.2.1"}) {
 		t.Fatalf("超 4096 上限应先淘汰最早过期条目 192.0.2.1，实际: %v", removed)
 	}
+	if banOpID != "auton:ban_loop" {
+		t.Fatalf("后台防爆破封禁应使用自治上下文 auton:ban_loop，实际: %q", banOpID)
+	}
 
 	rawCur, ok := h.kv.rawValue(kvKeyBanCursor)
 	if !ok || !strings.Contains(string(rawCur), "cursor-seq-42") {
 		t.Fatalf("KV ban/cursor 未更新: %s", string(rawCur))
 	}
+
+	waitUntil(t, 2*time.Second, "自动封禁发布 security.alert 事件", func() bool {
+		for _, ev := range h.events.snapshot() {
+			if ev.GetType() == "security.alert" && ev.GetSubject() == "bans/auto" && strings.Contains(string(ev.GetPayloadJson()), "198.51.100.10") {
+				return true
+			}
+		}
+		return false
+	})
 }

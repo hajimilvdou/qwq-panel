@@ -85,6 +85,8 @@ type Controller struct {
 	// plugins is the optional plugin runtime; Close stops it before the
 	// database closes because its sinks write to the database.
 	plugins *PluginRuntime
+	// alertRelay forwards "*.alert" plugin events asynchronously to notify.hub.
+	alertRelay *AlertEventRelay
 
 	// updater is the optional install/update/configuration service. It is an
 	// atomic pointer because serve.go installs it after New, and a reader must
@@ -310,6 +312,8 @@ func New(ctx context.Context, opts Options) (*Controller, error) {
 	}
 	c.gw = gw
 	c.handler = gw
+	c.alertRelay = NewAlertEventRelay(c, opts.Logger)
+	c.alertRelay.Start(context.Background())
 	return c, nil
 }
 
@@ -416,12 +420,13 @@ func (c *Controller) HostDeps() HostDeps {
 				u.SyncActiveConfig(pluginID, rev, raw)
 			}
 		},
-		Catalog: c.cat,
-		Lossy:   c.lossy,
-		IDs:     c.ids,
-		Clock:   c.clk,
-		Logger:  c.log,
-		NodeID:  "local",
+		Catalog:          c.cat,
+		Lossy:            c.lossy,
+		OnEventPublished: c.alertRelay.OnPluginEvent,
+		IDs:              c.ids,
+		Clock:            c.clk,
+		Logger:           c.log,
+		NodeID:           "local",
 	}
 }
 
@@ -489,6 +494,9 @@ func (c *Controller) Close() error {
 		// Operations stop before the plugin runtime: a job whose stream the
 		// runtime cut while the worker context is still live would be
 		// recorded FAILED instead of staying RUNNING for the next recovery.
+		if c.alertRelay != nil {
+			c.alertRelay.Stop()
+		}
 		if c.ops != nil {
 			c.ops.Stop()
 		}

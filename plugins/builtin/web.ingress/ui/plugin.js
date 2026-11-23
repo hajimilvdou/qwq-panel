@@ -9,6 +9,7 @@
   const statusEl = document.getElementById('bridge-status');
   let port = null;
   let seq = 0;
+  let editingSiteID = '';
   const pending = new Map();
   const pendingConfirm = new Map();
   const pendingCopy = new Map();
@@ -42,7 +43,7 @@
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error('宿主响应超时'));
-    }, 15000);
+    }, 20000);
     pending.set(id, { resolve, reject, timer });
     send({ t: 'api.invoke', id, operation, payload });
   });
@@ -69,6 +70,43 @@
     if (label) msg.label = label;
     send(msg);
   });
+
+  function resetSiteForm() {
+    editingSiteID = '';
+    document.getElementById('site-form-title').textContent = '新增 / 更新反向代理站点';
+    document.getElementById('btn-cancel-edit').hidden = true;
+    document.getElementById('s-domain').value = '';
+    document.getElementById('s-upstream').value = '';
+    document.getElementById('s-prefix').value = '/';
+    document.getElementById('s-tls').value = 'managed';
+    document.getElementById('s-cert').value = '';
+    document.getElementById('s-rps').value = '0';
+    document.getElementById('s-user').value = '';
+    document.getElementById('s-pass').value = '';
+    document.getElementById('s-enabled').checked = true;
+    document.getElementById('s-ws').checked = true;
+    document.getElementById('s-force-https').checked = true;
+    document.getElementById('s-clear-auth').checked = false;
+  }
+
+  function fillSiteForm(s) {
+    editingSiteID = s.id || '';
+    document.getElementById('site-form-title').textContent = `编辑站点：${s.domain}${s.path_prefix && s.path_prefix !== '/' ? s.path_prefix : ''}`;
+    document.getElementById('btn-cancel-edit').hidden = false;
+    document.getElementById('s-domain').value = s.domain || '';
+    document.getElementById('s-upstream').value = s.upstream_url || '';
+    document.getElementById('s-prefix').value = s.path_prefix || '/';
+    document.getElementById('s-tls').value = s.tls_mode || 'managed';
+    document.getElementById('s-cert').value = s.cert_id || '';
+    document.getElementById('s-rps').value = String(s.rate_limit_rps ?? 0);
+    document.getElementById('s-user').value = s.basic_auth_user || '';
+    document.getElementById('s-pass').value = '';
+    document.getElementById('s-enabled').checked = s.enabled !== false;
+    document.getElementById('s-ws').checked = s.websocket !== false;
+    document.getElementById('s-force-https').checked = s.force_https !== false;
+    document.getElementById('s-clear-auth').checked = false;
+    setStatus(`已回填站点 ${s.domain} (${s.path_prefix || '/'}) 到编辑表单`);
+  }
 
   document.getElementById('nav-tabs').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-tab]');
@@ -98,35 +136,54 @@
       st.replaceChildren();
       for (const s of sites) {
         const tr = document.createElement('tr');
-        const flags = [s.tls_mode, s.websocket ? 'WS' : '', s.has_basic_auth ? 'BasicAuth' : ''].filter(Boolean).join(' · ');
-        for (const txt of [s.domain + (s.path_prefix !== '/' ? s.path_prefix : ''), s.upstream_url, flags, s.rate_limit_rps > 0 ? `${s.rate_limit_rps} rps` : '不限']) {
+        const flags = [
+          s.enabled === false ? '已停用' : '',
+          s.tls_mode,
+          s.force_https && s.tls_mode !== 'off' ? 'HSTS' : '',
+          s.cert_id ? `cert:${s.cert_id}` : '',
+          s.websocket ? 'WS' : '',
+          s.has_basic_auth ? 'BasicAuth' : '',
+        ].filter(Boolean).join(' · ');
+        const hostLabel = s.domain + (s.path_prefix && s.path_prefix !== '/' ? s.path_prefix : '');
+        for (const txt of [hostLabel, s.upstream_url, flags, s.rate_limit_rps > 0 ? `${s.rate_limit_rps} rps` : '不限']) {
           const td = document.createElement('td');
           td.textContent = txt;
           tr.appendChild(td);
         }
         const act = document.createElement('td');
+        act.className = 'row-actions';
+
+        const eBtn = document.createElement('button');
+        eBtn.className = 'btn ghost btn-sm';
+        eBtn.type = 'button';
+        eBtn.textContent = '编辑';
+        eBtn.addEventListener('click', () => fillSiteForm(s));
+
         const pBtn = document.createElement('button');
-        pBtn.className = 'btn ghost';
+        pBtn.className = 'btn ghost btn-sm';
         pBtn.type = 'button';
         pBtn.textContent = '探测上游';
         pBtn.addEventListener('click', () => void runAction(async () => {
           const r = await invoke('ingress.upstream.probe', { id: s.id });
           setStatus(r.reachable ? `${s.domain} 上游可达 (HTTP ${r.status_code}, ${r.latency_ms}ms)` : `${s.domain} 上游不可达: ${r.error}`);
         }));
+
         const dBtn = document.createElement('button');
-        dBtn.className = 'btn danger btn-gap';
+        dBtn.className = 'btn danger btn-sm';
         dBtn.type = 'button';
         dBtn.textContent = '删除';
         dBtn.addEventListener('click', () => {
           void runAction(async () => {
-            const ok = await hostConfirm('删除反代站点', `确认删除反代站点「${s.domain}」？（变更前将自动保留回滚快照）`, { danger: true, confirmLabel: '确认删除' });
+            const ok = await hostConfirm('删除反代站点', `确认删除反代站点「${hostLabel}」？（变更前将自动保留回滚快照）`, { danger: true, confirmLabel: '确认删除' });
             if (!ok) return;
             await invoke('ingress.site.delete', { id: s.id });
+            if (editingSiteID === s.id) resetSiteForm();
             await refresh();
-            setStatus(`已删除站点 ${s.domain}`);
+            setStatus(`已删除站点 ${hostLabel}`);
           });
         });
-        act.append(pBtn, dBtn);
+
+        act.append(eBtn, pBtn, dBtn);
         tr.appendChild(act);
         st.appendChild(tr);
       }
@@ -142,7 +199,7 @@
         }
         const act = document.createElement('td');
         const rBtn = document.createElement('button');
-        rBtn.className = 'btn ghost';
+        rBtn.className = 'btn ghost btn-sm';
         rBtn.type = 'button';
         rBtn.textContent = '回滚至此版本';
         rBtn.addEventListener('click', () => {
@@ -164,8 +221,13 @@
     }
   }
 
+  document.getElementById('btn-cancel-edit').addEventListener('click', () => {
+    resetSiteForm();
+    setStatus('已取消编辑');
+  });
+
   document.getElementById('btn-save-site').addEventListener('click', () => void runAction(async () => {
-    await invoke('ingress.site.upsert', {
+    const payload = {
       domain: document.getElementById('s-domain').value.trim(),
       upstream_url: document.getElementById('s-upstream').value.trim(),
       path_prefix: document.getElementById('s-prefix').value.trim() || '/',
@@ -174,12 +236,16 @@
       rate_limit_rps: Number(document.getElementById('s-rps').value || 0),
       basic_auth_user: document.getElementById('s-user').value.trim(),
       basic_auth_pass: document.getElementById('s-pass').value,
-      websocket: true,
-      enabled: true,
-    });
-    document.getElementById('s-pass').value = '';
+      clear_basic_auth: document.getElementById('s-clear-auth').checked,
+      websocket: document.getElementById('s-ws').checked,
+      force_https: document.getElementById('s-force-https').checked,
+      enabled: document.getElementById('s-enabled').checked,
+    };
+    if (editingSiteID) payload.id = editingSiteID;
+    await invoke('ingress.site.upsert', payload);
+    resetSiteForm();
     await refresh();
-  }, '站点已保存并生成新快照'));
+  }, '站点已保存并同步热重载生效'));
 
   const doApply = () => void runAction(async () => {
     const res = await invoke('ingress.apply', {});

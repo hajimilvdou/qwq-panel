@@ -5,11 +5,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -36,9 +38,11 @@ func Manifest() []byte {
 }
 
 type pluginConfig struct {
-	PreferredEngine  string `json:"preferred_engine"`
-	ListenAddr       string `json:"listen_addr"`
-	ExportConfigPath string `json:"export_config_path"`
+	PreferredEngine  string   `json:"preferred_engine"`
+	ListenAddr       string   `json:"listen_addr"`
+	HTTPSListenAddr  string   `json:"https_listen_addr"`
+	TrustedProxies   []string `json:"trusted_proxies"`
+	ExportConfigPath string   `json:"export_config_path"`
 }
 
 func validateExportPath(raw, dataDir string) error {
@@ -65,21 +69,25 @@ func validateExportPath(raw, dataDir string) error {
 	return pluginsdk.Errorf("INVALID_ARGUMENT", "export_config_path 仅允许写入 /etc/caddy、/etc/nginx、/var/lib/qwq 或插件数据目录")
 }
 
-func parseConfig(raw []byte, dataDir string) (pluginConfig, error) {
+func parseConfig(raw []byte, dataDir string) (pluginConfig, []netip.Prefix, error) {
 	cfg := pluginConfig{PreferredEngine: "builtin-go"}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return cfg, nil
+		return cfg, nil, nil
 	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return cfg, pluginsdk.Errorf("INVALID_ARGUMENT", "解析 web.ingress 配置失败: %s", err.Error())
+		return cfg, nil, pluginsdk.Errorf("INVALID_ARGUMENT", "解析 web.ingress 配置失败: %s", err.Error())
 	}
 	if cfg.PreferredEngine == "" {
 		cfg.PreferredEngine = "builtin-go"
 	}
 	if err := validateExportPath(cfg.ExportConfigPath, dataDir); err != nil {
-		return cfg, err
+		return cfg, nil, err
 	}
-	return cfg, nil
+	trusted, err := parseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return cfg, nil, pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
+	}
+	return cfg, trusted, nil
 }
 
 // Plugin 实现轻量反向代理与站点托管插件。
@@ -91,7 +99,7 @@ type Plugin struct {
 func New() *Plugin { return &Plugin{} }
 
 func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (pluginsdk.Instance, error) {
-	cfg, err := parseConfig(info.Config, info.DataDir)
+	cfg, trusted, err := parseConfig(info.Config, info.DataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -103,9 +111,12 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 	if err != nil {
 		return nil, pluginsdk.Errorf("INTERNAL", "初始化反代数据库失败: %s", err.Error())
 	}
-	proxy := newBuiltinProxy(nowFn)
+	sni := NewSNICertStore(info.DataDir)
+	proxy := newBuiltinProxy(nowFn, sni)
+	proxy.SetTrustedProxies(trusted)
 	if sites, err := st.listSites(ctx); err == nil {
 		proxy.Reload(sites)
+		syncSiteBindingsToSNI(sni, sites)
 	}
 	inst := &instance{
 		InstanceBase: pluginsdk.NewInstanceBase(info),
@@ -113,6 +124,7 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 		dataDir:      info.DataDir,
 		store:        st,
 		proxy:        proxy,
+		sni:          sni,
 		now:          nowFn,
 	}
 	if addr := strings.TrimSpace(cfg.ListenAddr); addr != "" {
@@ -130,6 +142,26 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 		inst.boundAddr = ln.Addr().String()
 		go func() { _ = srv.Serve(ln) }()
 	}
+	if httpsAddr := strings.TrimSpace(cfg.HTTPSListenAddr); httpsAddr != "" {
+		rawLn, err := net.Listen("tcp", httpsAddr)
+		if err != nil {
+			if inst.server != nil {
+				_ = inst.server.Close()
+			}
+			_ = st.Close()
+			return nil, pluginsdk.Errorf("FAILED_PRECONDITION", "内置反代 HTTPS 监听 %s 失败: %s", httpsAddr, err.Error())
+		}
+		tlsLn := tls.NewListener(rawLn, sni.TLSConfig())
+		httpsSrv := &http.Server{
+			Handler:           proxy,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		inst.httpsServer = httpsSrv
+		inst.httpsBoundAddr = rawLn.Addr().String()
+		sni.SetHTTPSListenerActive(true)
+		go func() { _ = httpsSrv.Serve(tlsLn) }()
+	}
 	for _, op := range []string{
 		"ingress.stat.sites",
 		"ingress.checks.upstreams",
@@ -141,6 +173,8 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 		"ingress.apply",
 		"ingress.rollback",
 		"ingress.upstream.probe",
+		"ingress.tls.reload",
+		"ingress.tls.inspect",
 	} {
 		opName := op
 		inst.HandleInvoke(opName, func(c context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
@@ -197,14 +231,18 @@ func (i *instance) planSiteUpsert(_ context.Context, req pluginsdk.Request) (plu
 
 type instance struct {
 	*pluginsdk.InstanceBase
-	cfgMu     sync.RWMutex
-	cfg       pluginConfig
-	dataDir   string
-	store     *ingressStore
-	proxy     *BuiltinProxy
-	server    *http.Server
-	boundAddr string
-	now       func() time.Time
+	cfgMu          sync.RWMutex
+	applyMu        sync.Mutex
+	cfg            pluginConfig
+	dataDir        string
+	store          *ingressStore
+	proxy          *BuiltinProxy
+	sni            *SNICertStore
+	server         *http.Server
+	boundAddr      string
+	httpsServer    *http.Server
+	httpsBoundAddr string
+	now            func() time.Time
 }
 
 func (i *instance) currentConfig() pluginConfig {
@@ -219,15 +257,32 @@ func (i *instance) currentBoundAddr() string {
 	return i.boundAddr
 }
 
+func (i *instance) currentHTTPSBoundAddr() string {
+	i.cfgMu.RLock()
+	defer i.cfgMu.RUnlock()
+	return i.httpsBoundAddr
+}
+
 func (i *instance) Deactivate(ctx context.Context) error {
 	i.cfgMu.Lock()
 	srv := i.server
+	httpsSrv := i.httpsServer
 	i.server = nil
 	i.boundAddr = ""
+	i.httpsServer = nil
+	i.httpsBoundAddr = ""
 	i.cfgMu.Unlock()
+	if i.sni != nil {
+		i.sni.SetHTTPSListenerActive(false)
+	}
 	if srv != nil {
 		sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		_ = srv.Shutdown(sctx)
+		cancel()
+	}
+	if httpsSrv != nil {
+		sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_ = httpsSrv.Shutdown(sctx)
 		cancel()
 	}
 	i.proxy.Close()
@@ -235,54 +290,93 @@ func (i *instance) Deactivate(ctx context.Context) error {
 }
 
 func (i *instance) ValidateConfig(_ context.Context, cand pluginsdk.Config) (pluginsdk.ConfigValidation, error) {
-	if _, err := parseConfig(cand.JSON, i.dataDir); err != nil {
+	if _, _, err := parseConfig(cand.JSON, i.dataDir); err != nil {
 		return pluginsdk.ConfigValidation{}, err
 	}
 	return pluginsdk.ConfigValidation{}, nil
 }
 
 func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error {
-	cfg, err := parseConfig(cand.JSON, i.dataDir)
+	cfg, trusted, err := parseConfig(cand.JSON, i.dataDir)
 	if err != nil {
 		return err
 	}
 	newAddr := strings.TrimSpace(cfg.ListenAddr)
+	newHTTPSAddr := strings.TrimSpace(cfg.HTTPSListenAddr)
 
 	i.cfgMu.Lock()
 	oldAddr := strings.TrimSpace(i.cfg.ListenAddr)
-	oldSrv := i.server
-	if newAddr == oldAddr {
-		i.cfg = cfg
-		i.cfgMu.Unlock()
-		return nil
+	oldHTTPSAddr := strings.TrimSpace(i.cfg.HTTPSListenAddr)
+	var oldSrv, oldHTTPSSrv *http.Server
+	var newSrv, newHTTPSSrv *http.Server
+	var ln, httpsLn net.Listener
+
+	if newAddr != oldAddr {
+		oldSrv = i.server
+		newBound := ""
+		if newAddr != "" {
+			ln, err = net.Listen("tcp", newAddr)
+			if err != nil {
+				i.cfgMu.Unlock()
+				return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代监听 %s 失败: %s", newAddr, err.Error())
+			}
+			newSrv = &http.Server{
+				Handler:           i.proxy,
+				ReadHeaderTimeout: 10 * time.Second,
+				IdleTimeout:       60 * time.Second,
+			}
+			newBound = ln.Addr().String()
+		}
+		i.server = newSrv
+		i.boundAddr = newBound
 	}
-	var newSrv *http.Server
-	var newBound string
-	var ln net.Listener
-	if newAddr != "" {
-		ln, err = net.Listen("tcp", newAddr)
-		if err != nil {
-			i.cfgMu.Unlock()
-			return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代监听 %s 失败: %s", newAddr, err.Error())
+	if newHTTPSAddr != oldHTTPSAddr {
+		oldHTTPSSrv = i.httpsServer
+		newHTTPSBound := ""
+		if newHTTPSAddr != "" {
+			rawLn, lerr := net.Listen("tcp", newHTTPSAddr)
+			if lerr != nil {
+				if ln != nil {
+					_ = ln.Close()
+					i.server = oldSrv
+					i.boundAddr = oldAddr
+				}
+				i.cfgMu.Unlock()
+				return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代 HTTPS 监听 %s 失败: %s", newHTTPSAddr, lerr.Error())
+			}
+			httpsLn = tls.NewListener(rawLn, i.sni.TLSConfig())
+			newHTTPSSrv = &http.Server{
+				Handler:           i.proxy,
+				ReadHeaderTimeout: 10 * time.Second,
+				IdleTimeout:       60 * time.Second,
+			}
+			newHTTPSBound = rawLn.Addr().String()
 		}
-		newSrv = &http.Server{
-			Handler:           i.proxy,
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       60 * time.Second,
+		i.httpsServer = newHTTPSSrv
+		i.httpsBoundAddr = newHTTPSBound
+		if i.sni != nil {
+			i.sni.SetHTTPSListenerActive(newHTTPSSrv != nil)
 		}
-		newBound = ln.Addr().String()
 	}
 	i.cfg = cfg
-	i.server = newSrv
-	i.boundAddr = newBound
 	i.cfgMu.Unlock()
+
+	i.proxy.SetTrustedProxies(trusted)
 
 	if newSrv != nil && ln != nil {
 		go func() { _ = newSrv.Serve(ln) }()
 	}
+	if newHTTPSSrv != nil && httpsLn != nil {
+		go func() { _ = newHTTPSSrv.Serve(httpsLn) }()
+	}
 	if oldSrv != nil {
 		sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		_ = oldSrv.Shutdown(sctx)
+		cancel()
+	}
+	if oldHTTPSSrv != nil {
+		sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_ = oldHTTPSSrv.Shutdown(sctx)
 		cancel()
 	}
 	return nil
@@ -314,6 +408,10 @@ func (i *instance) Invoke(ctx context.Context, req pluginsdk.Request) (pluginsdk
 		return i.handleRollback(ctx, req.Payload)
 	case "ingress.upstream.probe":
 		return i.handleUpstreamProbe(ctx, req.Payload)
+	case "ingress.tls.reload":
+		return i.handleTLSReload(ctx, req.Payload)
+	case "ingress.tls.inspect":
+		return i.handleTLSInspect(ctx, req.Payload)
 	default:
 		return pluginsdk.Response{}, pluginsdk.Errorf("NOT_FOUND", "未知操作: %s", req.Operation)
 	}
@@ -395,11 +493,12 @@ func (i *instance) handleOverview(ctx context.Context) (pluginsdk.Response, erro
 		return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
 	}
 	return jsonResp(map[string]any{
-		"backend":       detectBackends(i.currentConfig().PreferredEngine),
-		"bound_addr":    i.currentBoundAddr(),
-		"active_routes": i.proxy.ActiveCount(),
-		"sites":         sites,
-		"snapshots":     snaps,
+		"backend":          detectBackends(i.currentConfig().PreferredEngine),
+		"bound_addr":       i.currentBoundAddr(),
+		"https_bound_addr": i.currentHTTPSBoundAddr(),
+		"active_routes":    i.proxy.ActiveCount(),
+		"sites":            sites,
+		"snapshots":        snaps,
 	})
 }
 
@@ -481,6 +580,9 @@ func (i *instance) handleSiteUpsert(ctx context.Context, payload []byte) (plugin
 	if err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
 	}
+	if _, _, err := i.reloadAndRenderLocked(ctx); err != nil {
+		return pluginsdk.Response{}, err
+	}
 	return jsonResp(map[string]any{"site": site})
 }
 
@@ -495,6 +597,11 @@ func (i *instance) handleSiteDelete(ctx context.Context, payload []byte) (plugin
 	if err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
 	}
+	if deleted {
+		if _, _, err := i.reloadAndRenderLocked(ctx); err != nil {
+			return pluginsdk.Response{}, err
+		}
+	}
 	return jsonResp(map[string]any{"deleted": deleted, "id": strings.TrimSpace(req.ID)})
 }
 
@@ -505,38 +612,69 @@ func (i *instance) handleConfigPreview(ctx context.Context) (pluginsdk.Response,
 	}
 	return jsonResp(map[string]any{
 		"backend":   detectBackends(i.currentConfig().PreferredEngine),
-		"caddyfile": renderCaddyfile(sites),
-		"nginx":     renderNginxConfig(sites),
+		"caddyfile": renderCaddyfile(sites, i.dataDir),
+		"nginx":     renderNginxConfig(sites, i.dataDir),
 	})
 }
 
-func (i *instance) handleApply(ctx context.Context) (pluginsdk.Response, error) {
+func syncSiteBindingsToSNI(sni *SNICertStore, sites []SiteRecord) {
+	if sni == nil {
+		return
+	}
+	bindings := make(map[string]string)
+	for _, s := range sites {
+		if s.Enabled && s.TLSMode != "off" && strings.TrimSpace(s.CertID) != "" {
+			bindings[s.Domain] = s.CertID
+		}
+	}
+	if len(bindings) > 0 {
+		_, _ = sni.ReloadFromBindings(bindings)
+	}
+}
+
+func (i *instance) reloadAndRenderLocked(ctx context.Context) (int, []string, error) {
+	i.applyMu.Lock()
+	defer i.applyMu.Unlock()
+
 	sites, err := i.store.listSites(ctx)
 	if err != nil {
-		return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
+		return 0, nil, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
 	}
 	cfg := i.currentConfig()
 	active := i.proxy.Reload(sites)
-	writtenFiles := make([]string, 0, 2)
+	syncSiteBindingsToSNI(i.sni, sites)
+
+	writtenFiles := make([]string, 0, 3)
 	caddyOut := filepath.Join(i.dataDir, "rendered", "Caddyfile")
 	nginxOut := filepath.Join(i.dataDir, "rendered", "nginx-ingress.conf")
-	if err := atomicWriteFile(caddyOut, []byte(renderCaddyfile(sites))); err != nil {
-		return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "写入 Caddyfile 失败: %s", err.Error())
+	caddyText := renderCaddyfile(sites, i.dataDir)
+	nginxText := renderNginxConfig(sites, i.dataDir)
+	if err := atomicWriteFile(caddyOut, []byte(caddyText)); err != nil {
+		return active, nil, pluginsdk.Errorf("INTERNAL", "写入 Caddyfile 失败: %s", err.Error())
 	}
 	writtenFiles = append(writtenFiles, caddyOut)
-	if err := atomicWriteFile(nginxOut, []byte(renderNginxConfig(sites))); err != nil {
-		return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "写入 Nginx 配置失败: %s", err.Error())
+	if err := atomicWriteFile(nginxOut, []byte(nginxText)); err != nil {
+		return active, nil, pluginsdk.Errorf("INTERNAL", "写入 Nginx 配置失败: %s", err.Error())
 	}
 	writtenFiles = append(writtenFiles, nginxOut)
 	if exp := strings.TrimSpace(cfg.ExportConfigPath); exp != "" {
-		content := renderCaddyfile(sites)
+		content := caddyText
 		if strings.EqualFold(cfg.PreferredEngine, "nginx") {
-			content = renderNginxConfig(sites)
+			content = nginxText
 		}
 		if err := atomicWriteFile(exp, []byte(content)); err != nil {
-			return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "同步外部配置失败: %s", err.Error())
+			return active, nil, pluginsdk.Errorf("INTERNAL", "同步外部配置失败: %s", err.Error())
 		}
 		writtenFiles = append(writtenFiles, exp)
+	}
+	return active, writtenFiles, nil
+}
+
+func (i *instance) handleApply(ctx context.Context) (pluginsdk.Response, error) {
+	cfg := i.currentConfig()
+	active, writtenFiles, err := i.reloadAndRenderLocked(ctx)
+	if err != nil {
+		return pluginsdk.Response{}, err
 	}
 	return jsonResp(map[string]any{
 		"applied":       true,
@@ -557,16 +695,62 @@ func (i *instance) handleRollback(ctx context.Context, payload []byte) (pluginsd
 	if strings.TrimSpace(req.SnapshotID) == "" && req.Revision <= 0 {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "必须提供 snapshot_id 或 revision")
 	}
-	snap, sites, err := i.store.rollbackToSnapshot(ctx, strings.TrimSpace(req.SnapshotID), req.Revision)
+	snap, _, err := i.store.rollbackToSnapshot(ctx, strings.TrimSpace(req.SnapshotID), req.Revision)
 	if err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("NOT_FOUND", "%s", err.Error())
 	}
-	active := i.proxy.Reload(sites)
+	active, _, err := i.reloadAndRenderLocked(ctx)
+	if err != nil {
+		return pluginsdk.Response{}, err
+	}
 	return jsonResp(map[string]any{
 		"rolled_back":   true,
 		"snapshot":      snap,
 		"active_routes": active,
 	})
+}
+
+func (i *instance) handleTLSReload(_ context.Context, payload []byte) (pluginsdk.Response, error) {
+	var req struct {
+		BindingRef       string `json:"binding_ref"`
+		ProfileID        string `json:"profile_id"`
+		Generation       uint64 `json:"generation"`
+		PolicyRevision   string `json:"policy_revision"`
+		FullchainSHA256  string `json:"fullchain_sha256"`
+		PrivateKeySHA256 string `json:"private_key_sha256"`
+		SNI              string `json:"sni"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "TLS 热重载请求格式无效: %s", err.Error())
+	}
+	if strings.TrimSpace(req.BindingRef) == "" || strings.TrimSpace(req.SNI) == "" || req.Generation == 0 {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "缺少 binding_ref / sni / generation")
+	}
+	obs, err := i.sni.LoadBinding(
+		req.BindingRef,
+		req.Generation,
+		req.PolicyRevision,
+		req.FullchainSHA256,
+		req.PrivateKeySHA256,
+		req.SNI,
+		i.currentHTTPSBoundAddr(),
+	)
+	if err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("FAILED_PRECONDITION", "加载宿主物化 TLS 证书失败: %s", err.Error())
+	}
+	return jsonResp(obs)
+}
+
+func (i *instance) handleTLSInspect(_ context.Context, payload []byte) (pluginsdk.Response, error) {
+	var req struct {
+		BindingRef string `json:"binding_ref"`
+		ProfileID  string `json:"profile_id"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil || strings.TrimSpace(req.BindingRef) == "" {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "缺少 binding_ref")
+	}
+	obs := i.sni.InspectBinding(req.BindingRef, i.currentHTTPSBoundAddr())
+	return jsonResp(obs)
 }
 
 func (i *instance) handleUpstreamProbe(ctx context.Context, payload []byte) (pluginsdk.Response, error) {

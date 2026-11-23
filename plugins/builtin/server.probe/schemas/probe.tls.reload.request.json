@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "binding_ref",
+    "generation",
+    "sni"
+  ],
+  "properties": {
+    "binding_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "profile_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "policy_revision": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "fullchain_sha256": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "private_key_sha256": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "sni": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    }
+  }
+}

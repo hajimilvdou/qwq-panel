@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -13,9 +14,13 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
 
 func TestAgentOneWayReportAndAntiReplay(t *testing.T) {
@@ -492,5 +497,134 @@ func TestSecurityHardeningAuthGuardRollbackAndPersistence(t *testing.T) {
 	snips := BuildReverseProxySnippets("status.example.com", "127.0.0.1:8443")
 	if !strings.Contains(snips.NginxBaotaConf, "/p/server.probe/portal/") || !strings.Contains(snips.CaddyfileConf, "/p/server.probe/portal") {
 		t.Fatalf("reverse proxy snippets must target /p/server.probe/portal/: %+v", snips)
+	}
+}
+
+func TestSealingSecretPersistenceOfflineSLALatencyAndAdminStatus(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. Sealing secret is 32-byte CSPRNG, persisted at probe_domain.seal, stable across reloads
+	sec1, err := LoadOrCreateProbeSealingSecret(dir)
+	if err != nil || len(sec1) != 32 {
+		t.Fatalf("LoadOrCreateProbeSealingSecret first call failed: len=%d err=%v", len(sec1), err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "probe_domain.seal")); err != nil {
+		t.Fatalf("probe_domain.seal not created: %v", err)
+	}
+	sec2, err := LoadOrCreateProbeSealingSecret(dir)
+	if err != nil || !bytes.Equal(sec1, sec2) {
+		t.Fatalf("sealing secret changed across reload: err=%v", err)
+	}
+
+	// 2. Offline transition + DowntimeSeconds deduction + edge-triggered probe.alert emission
+	store, err := OpenProbeStore(dir)
+	if err != nil {
+		t.Fatalf("OpenProbeStore: %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 11, 23, 15, 0, 0, 0, time.UTC)
+	store.mu.Lock()
+	store.nodes["hk-edge"] = &NodeRecord{
+		ID:             "hk-edge",
+		Name:           "Hong Kong Edge",
+		RegionCode:     "HK",
+		ReportInterval: 2,
+		LastSeenAt:     now.Add(-30 * time.Second).Unix(),
+		OnlineState:    "online",
+		Revision:       "r1",
+	}
+	store.mu.Unlock()
+	_ = store.PersistNode(context.Background(), store.nodes["hk-edge"])
+
+	var alerts []pluginsdk.EventDraft
+	inst := &instance{
+		store: store,
+		publishAlert: func(_ context.Context, draft pluginsdk.EventDraft) error {
+			alerts = append(alerts, draft)
+			return nil
+		},
+	}
+	transitions := inst.evaluateLivenessAndPublishAlerts(context.Background(), now, 10)
+	if len(transitions) != 1 || transitions[0].NodeID != "hk-edge" || transitions[0].BecameOnline {
+		t.Fatalf("expected 1 offline transition for hk-edge, got %+v", transitions)
+	}
+	if len(alerts) != 1 || alerts[0].Type != "probe.alert" || alerts[0].Subject != "nodes/hk-edge" {
+		t.Fatalf("expected 1 probe.alert event, got %+v", alerts)
+	}
+	// Second tick while still offline deducts more downtime but MUST NOT re-emit duplicate offline alert
+	inst.evaluateLivenessAndPublishAlerts(context.Background(), now.Add(10*time.Second), 10)
+	if len(alerts) != 1 {
+		t.Fatalf("expected edge-triggered alert without duplicate spam, got %d alerts", len(alerts))
+	}
+	store.mu.RLock()
+	nodeState := store.nodes["hk-edge"].OnlineState
+	slaBuckets := store.sla90d["hk-edge"]
+	store.mu.RUnlock()
+	if nodeState != "offline" || len(slaBuckets) == 0 || slaBuckets[0].DowntimeSeconds != 20 {
+		t.Fatalf("expected offline state with 20s downtime deducted, got state=%q buckets=%+v", nodeState, slaBuckets)
+	}
+
+	// 3. QueryRealCarrierLatencySeries returns empty when no rows, real averages when rollups exist (never hardcoded 34/41/48)
+	emptyRaw, err := QueryRealCarrierLatencySeries(context.Background(), store.db.Reader, now, 60)
+	if err != nil {
+		t.Fatalf("QueryRealCarrierLatencySeries empty: %v", err)
+	}
+	var emptyParsed struct {
+		Series []struct {
+			Name   string  `json:"name"`
+			Points [][]any `json:"points"`
+		} `json:"series"`
+	}
+	if err := json.Unmarshal(emptyRaw, &emptyParsed); err != nil || len(emptyParsed.Series) != 3 || len(emptyParsed.Series[0].Points) != 0 {
+		t.Fatalf("expected empty points when no rollups exist, got %s", string(emptyRaw))
+	}
+
+	store.mu.Lock()
+	store.live["hk-edge"] = LiveSample{
+		SampledAtUnix: now.Unix(),
+		CPUPercent:    12.5,
+		CarrierPingMs: map[string]int32{"ct": 19, "cu": 27, "cm": 53},
+	}
+	store.mu.Unlock()
+	if err := store.FlushPeriodic(context.Background(), now); err != nil {
+		t.Fatalf("FlushPeriodic: %v", err)
+	}
+	realRaw, err := QueryRealCarrierLatencySeries(context.Background(), store.db.Reader, now, 60)
+	if err != nil {
+		t.Fatalf("QueryRealCarrierLatencySeries real: %v", err)
+	}
+	var realParsed struct {
+		Series []struct {
+			Name   string      `json:"name"`
+			Points [][]float64 `json:"points"`
+		} `json:"series"`
+	}
+	if err := json.Unmarshal(realRaw, &realParsed); err != nil ||
+		len(realParsed.Series) != 3 ||
+		len(realParsed.Series[0].Points) != 1 || realParsed.Series[0].Points[0][1] != 19 ||
+		realParsed.Series[1].Points[0][1] != 27 ||
+		realParsed.Series[2].Points[0][1] != 53 {
+		t.Fatalf("expected real carrier latencies 19/27/53, got %s", string(realRaw))
+	}
+
+	// 4. CheckStandaloneAdminStatus propagates HTTP errors instead of swallowing them
+	if err := CheckStandaloneAdminStatus(http.StatusCreated, []byte(`{"ok":true}`)); err != nil {
+		t.Fatalf("201 must succeed, got %v", err)
+	}
+	if err := CheckStandaloneAdminStatus(http.StatusBadRequest, []byte(`{"error":"INVALID_NODE_ID"}`)); err == nil || !strings.Contains(err.Error(), "VALIDATION_FAILED") {
+		t.Fatalf("400 must map to VALIDATION_FAILED, got %v", err)
+	}
+	if err := CheckStandaloneAdminStatus(http.StatusConflict, []byte(`{"error":"REVISION_CONFLICT"}`)); err == nil || !strings.Contains(err.Error(), "PRECONDITION_FAILED") {
+		t.Fatalf("409 must map to PRECONDITION_FAILED, got %v", err)
+	}
+	if err := CheckStandaloneAdminStatus(http.StatusInternalServerError, []byte(`{}`)); err == nil {
+		t.Fatal("500 must return an error")
+	}
+
+	// 5. BuildAgentInstallCommand derives reachable script URL from public_origin/reportURL (never get.qwq.panel)
+	installCmd := BuildAgentInstallCommand("linux", "https://status.example.com/api/probe/v1/report", "hk-edge", "prb_agt_123")
+	if strings.Contains(installCmd, "get.qwq.panel") || !strings.Contains(installCmd, "https://status.example.com/install-probe-agent.sh") {
+		t.Fatalf("expected derived reachable script URL, got %s", installCmd)
 	}
 }

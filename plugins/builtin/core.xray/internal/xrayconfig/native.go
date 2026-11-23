@@ -129,6 +129,7 @@ type nativeStream struct {
 	GRPC      *nativeGRPC              `json:"grpcSettings,omitempty"`
 	XHTTP     *nativeXHTTP             `json:"xhttpSettings,omitempty"`
 	FinalMask *nativeFinalMask         `json:"finalmask,omitempty"`
+	Sockopt   *nativeSockopt           `json:"sockopt,omitempty"`
 }
 
 type nativeWS struct {
@@ -231,7 +232,8 @@ type nativeOutboundStream struct {
 }
 
 type nativeSockopt struct {
-	Mark uint32 `json:"mark,omitempty"`
+	Mark                uint32 `json:"mark,omitempty"`
+	AcceptProxyProtocol bool   `json:"acceptProxyProtocol,omitempty"`
 }
 
 type nativeFreedomSettings struct {

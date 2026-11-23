@@ -3,13 +3,18 @@
 package main
 
 import (
+	"bufio"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -265,5 +270,301 @@ func TestNotifyHubSSRFBlocksLoopbackByDefault(t *testing.T) {
 	ovRaw, _ := json.Marshal(invokeNotify(t, srv, "notify.overview", map[string]any{}))
 	if strings.Contains(string(ovRaw), sensitiveToken) {
 		t.Fatalf("P1 secret leak: Telegram bot token persisted in overview/deliveries: %s", ovRaw)
+	}
+}
+
+func startNotifyTestServerAtDir(t *testing.T, p *Plugin, dataDir string, cfgJSON []byte) *pluginsdk.Server {
+	t.Helper()
+	srv, err := pluginsdk.Serve(t.Context(), pluginsdk.Options{
+		Plugin:             p,
+		Manifest:           Manifest(),
+		Registrar:          grpc.NewServer(),
+		DefaultGracePeriod: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("pluginsdk.Serve: %v", err)
+	}
+	rc := &pb.RequestContext{InstanceId: "default", NodeId: "local", Locale: "zh-CN"}
+	if _, err := srv.Initialize(t.Context(), &pb.InitializeRequest{
+		Context:        rc,
+		InstanceHandle: "notify-hub-test",
+		DataDir:        dataDir,
+		ConfigJson:     cfgJSON,
+		ConfigRevision: "1",
+	}); err != nil {
+		srv.Close()
+		t.Fatalf("Initialize: %v", err)
+	}
+	if _, err := srv.Start(t.Context(), &pb.StartRequest{Context: rc}); err != nil {
+		srv.Close()
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := srv.Activate(t.Context(), &pb.ActivateRequest{Context: rc}); err != nil {
+		srv.Close()
+		t.Fatalf("Activate: %v", err)
+	}
+	return srv
+}
+
+func TestNotifyHubMultiRuleCooldownDoesNotBlockOtherRule(t *testing.T) {
+	var hits atomic.Int32
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer httpSrv.Close()
+
+	var clockMu sync.Mutex
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	p := &Plugin{now: func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}}
+	srv := startNotifyTestServer(t, p, []byte(`{"allow_private_endpoints":true,"http_timeout_seconds":5}`))
+
+	chRes := invokeNotify(t, srv, "notify.channel.upsert", map[string]any{
+		"name": "shared-wh", "kind": "webhook",
+		"config": map[string]any{"webhook_url": httpSrv.URL + "/hook"},
+	})
+	chID := chRes["channel"].(map[string]any)["id"].(string)
+
+	// 规则 B（无冷却，仅匹配 critical），先创建（ORDER BY created_at DESC 排在后）
+	invokeNotify(t, srv, "notify.rule.upsert", map[string]any{
+		"name": "crit-direct", "source_pattern": "*", "min_severity": "critical",
+		"channel_ids": []string{chID}, "cooldown_sec": 0,
+	})
+	clockMu.Lock()
+	now = now.Add(2 * time.Second)
+	clockMu.Unlock()
+	// 规则 A（带 300s 冷却，匹配 warn 及以上），后创建（ORDER BY created_at DESC 排在前）
+	invokeNotify(t, srv, "notify.rule.upsert", map[string]any{
+		"name": "warn-cooldown", "source_pattern": "*", "min_severity": "warn",
+		"channel_ids": []string{chID}, "cooldown_sec": 300,
+	})
+
+	// 首次 warn 告警命中规则 A 并进入 300s 冷却。
+	d1 := invokeNotify(t, srv, "notify.dispatch", map[string]any{
+		"source": "security.basic", "severity": "warn",
+		"title": "SSH 异常", "dedup_key": "ssh-evt",
+	})
+	if int(d1["sent"].(float64)) != 1 || hits.Load() != 1 {
+		t.Fatalf("expected initial warn send=1, got %+v hits=%d", d1, hits.Load())
+	}
+
+	// 10s 后升级为 critical 告警且同 dedup_key：
+	// 规则 A 处于冷却抑制，但绝不能通过 seenCh 误杀排在后面的无冷却规则 B！
+	clockMu.Lock()
+	now = now.Add(10 * time.Second)
+	clockMu.Unlock()
+	d2 := invokeNotify(t, srv, "notify.dispatch", map[string]any{
+		"source": "security.basic", "severity": "critical",
+		"title": "SSH 严重入侵", "dedup_key": "ssh-evt",
+	})
+	if int(d2["sent"].(float64)) != 1 || hits.Load() != 2 {
+		t.Fatalf("suppressed rule A must not block rule B delivery, got %+v hits=%d", d2, hits.Load())
+	}
+}
+
+func TestNotifyHubPersistentCooldownSurvivesRestart(t *testing.T) {
+	var hits atomic.Int32
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer httpSrv.Close()
+
+	dataDir := t.TempDir()
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+
+	// 实例 1：创建渠道、规则并派发首次事件，写入 SQLite 冷却记录。
+	p1 := &Plugin{now: func() time.Time { return now }}
+	srv1 := startNotifyTestServerAtDir(t, p1, dataDir, []byte(`{"allow_private_endpoints":true,"http_timeout_seconds":5}`))
+	chRes := invokeNotify(t, srv1, "notify.channel.upsert", map[string]any{
+		"name": "persist-wh", "kind": "webhook",
+		"config": map[string]any{"webhook_url": httpSrv.URL + "/hook"},
+	})
+	chID := chRes["channel"].(map[string]any)["id"].(string)
+	invokeNotify(t, srv1, "notify.rule.upsert", map[string]any{
+		"name": "persist-rule", "source_pattern": "*", "min_severity": "warn",
+		"channel_ids": []string{chID}, "cooldown_sec": 600,
+	})
+	d1 := invokeNotify(t, srv1, "notify.dispatch", map[string]any{
+		"source": "monitor.basic", "severity": "warn", "title": "CPU 高", "dedup_key": "cpu-high",
+	})
+	if int(d1["sent"].(float64)) != 1 {
+		t.Fatalf("first dispatch expected sent=1, got %+v", d1)
+	}
+	_, _ = srv1.Deactivate(t.Context(), &pb.DeactivateRequest{Context: &pb.RequestContext{InstanceId: "default", NodeId: "local", Locale: "zh-CN"}})
+	srv1.Close() // 模拟 180s on_demand 空闲休眠进程退出
+
+	// 实例 2：200 秒后重新唤醒并打开同一 DataDir，冷却窗口（600s）必须依然生效。
+	now2 := now.Add(200 * time.Second)
+	p2 := &Plugin{now: func() time.Time { return now2 }}
+	srv2 := startNotifyTestServerAtDir(t, p2, dataDir, []byte(`{"allow_private_endpoints":true,"http_timeout_seconds":5}`))
+	defer srv2.Close()
+
+	d2 := invokeNotify(t, srv2, "notify.dispatch", map[string]any{
+		"source": "monitor.basic", "severity": "warn", "title": "CPU 高", "dedup_key": "cpu-high",
+	})
+	if int(d2["sent"].(float64)) != 0 || int(d2["suppressed"].(float64)) != 1 || hits.Load() != 1 {
+		t.Fatalf("expected persisted cooldown suppression after restart, got %+v hits=%d", d2, hits.Load())
+	}
+}
+
+func TestNotifyHubMetadataSSRFBlockedEvenWithAllowPrivate(t *testing.T) {
+	for _, rawIP := range []string{"169.254.169.254", "169.254.0.1", "100.100.100.200", "fe80::1", "fd00:ec2::254"} {
+		addr := netip.MustParseAddr(rawIP)
+		if !isAlwaysBlockedMetadataIP(addr) {
+			t.Fatalf("expected metadata/link-local IP %s to be unconditionally blocked", rawIP)
+		}
+	}
+	// 普通企业内网地址不应被元数据守卫误杀
+	for _, rawIP := range []string{"10.0.0.5", "192.168.1.10", "172.16.0.2"} {
+		addr := netip.MustParseAddr(rawIP)
+		if isAlwaysBlockedMetadataIP(addr) {
+			t.Fatalf("private LAN IP %s must not be blocked by metadata guard when allowPrivate=true", rawIP)
+		}
+	}
+
+	// 验证 allow_private_endpoints=true 时 HTTP 客户端与 SMTP 拨号器均硬拒绝云元数据地址。
+	client := newSafeHTTPClient(true, 2*time.Second)
+	for _, target := range []string{"http://169.254.169.254/latest/meta-data/", "http://100.100.100.200/latest/meta-data/"} {
+		out := postJSON(t.Context(), client, target, map[string]string{"k": "v"}, nil)
+		if out.Err == nil || !strings.Contains(out.Err.Error(), "cloud metadata or link-local") {
+			t.Fatalf("expected HTTP metadata SSRF block for %s, got %+v", target, out)
+		}
+	}
+
+	for _, smtpHost := range []string{"169.254.169.254", "100.100.100.200", "fd00:ec2::254"} {
+		out := sendSMTP(t.Context(), true, 2*time.Second, ChannelConfig{
+			SMTPHost: smtpHost,
+			SMTPPort: 25,
+			SMTPFrom: "ops@example.com",
+			SMTPTo:   []string{"admin@example.com"},
+		}, NotifyEvent{Title: "test", Severity: "warn", Source: "notify.hub", Timestamp: time.Now()})
+		if out.Err == nil || !strings.Contains(out.Err.Error(), "cloud metadata or link-local") {
+			t.Fatalf("expected SMTP metadata SSRF block for %s, got %+v", smtpHost, out)
+		}
+	}
+}
+
+func TestNotifyHubSMTPRFC2047SubjectAndDeadline(t *testing.T) {
+	// 1. 单元测试 RFC 2047 UTF-8 Base64 编码
+	encoded := encodeRFC2047Subject("[WARN] 磁盘空间告警\r\n注入防御")
+	if !strings.HasPrefix(encoded, "=?UTF-8?B?") || !strings.HasSuffix(encoded, "?=") || strings.ContainsAny(encoded, "\r\n") {
+		t.Fatalf("invalid RFC 2047 subject: %q", encoded)
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(encoded, "=?UTF-8?B?"), "?=")
+	decoded, err := base64.StdEncoding.DecodeString(inner)
+	if err != nil || string(decoded) != "[WARN] 磁盘空间告警 注入防御" {
+		t.Fatalf("unexpected decoded subject: %q err=%v", string(decoded), err)
+	}
+
+	// 2. 真实回环最小 SMTP 服务器验证发送出的 Subject 为 RFC 2047 编码
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	var receivedData strings.Builder
+	var dataMu sync.Mutex
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		conn, aErr := ln.Accept()
+		if aErr != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.WriteString(conn, "220 mock.local ESMTP\r\n")
+		sc := bufio.NewScanner(conn)
+		inData := false
+		for sc.Scan() {
+			line := sc.Text()
+			if inData {
+				if line == "." {
+					inData = false
+					_, _ = io.WriteString(conn, "250 OK\r\n")
+					continue
+				}
+				dataMu.Lock()
+				receivedData.WriteString(line + "\n")
+				dataMu.Unlock()
+				continue
+			}
+			upper := strings.ToUpper(line)
+			switch {
+			case strings.HasPrefix(upper, "EHLO"), strings.HasPrefix(upper, "HELO"):
+				_, _ = io.WriteString(conn, "250 mock.local\r\n")
+			case strings.HasPrefix(upper, "MAIL FROM:"), strings.HasPrefix(upper, "RCPT TO:"):
+				_, _ = io.WriteString(conn, "250 OK\r\n")
+			case upper == "DATA":
+				inData = true
+				_, _ = io.WriteString(conn, "354 End data with <CR><LF>.<CR><LF>\r\n")
+			case upper == "QUIT":
+				_, _ = io.WriteString(conn, "221 Bye\r\n")
+				return
+			default:
+				_, _ = io.WriteString(conn, "250 OK\r\n")
+			}
+		}
+	}()
+
+	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	portNum, _ := strconv.Atoi(portStr)
+	out := sendSMTP(t.Context(), true, 3*time.Second, ChannelConfig{
+		SMTPHost: "127.0.0.1",
+		SMTPPort: portNum,
+		SMTPFrom: "alerts@example.com",
+		SMTPTo:   []string{"ops@example.com"},
+	}, NotifyEvent{
+		Source:    "security.basic",
+		Severity:  "critical",
+		Title:     "SSH 暴力破解自动封禁通知",
+		Message:   "已封禁来源 IP 198.51.100.10",
+		Timestamp: time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC),
+	})
+	if out.Err != nil || out.HTTPStatus != 250 {
+		t.Fatalf("mock SMTP send failed: %+v", out)
+	}
+	<-doneCh
+	dataMu.Lock()
+	body := receivedData.String()
+	dataMu.Unlock()
+	wantSubj := "Subject: " + encodeRFC2047Subject("[CRITICAL] SSH 暴力破解自动封禁通知")
+	if !strings.Contains(body, wantSubj) {
+		t.Fatalf("SMTP payload missing RFC 2047 subject %q, got:\n%s", wantSubj, body)
+	}
+
+	// 3. 验证挂起无响应的 SMTP 服务器会因 conn.SetDeadline 在有界时间内退出而不是永久阻塞
+	stallLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stallLn.Close()
+	stallStop := make(chan struct{})
+	defer close(stallStop)
+	go func() {
+		if c, err := stallLn.Accept(); err == nil {
+			defer c.Close()
+			select {
+			case <-stallStop:
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}()
+	_, stallPortStr, _ := net.SplitHostPort(stallLn.Addr().String())
+	stallPort, _ := strconv.Atoi(stallPortStr)
+	start := time.Now()
+	stallOut := sendSMTP(t.Context(), true, 250*time.Millisecond, ChannelConfig{
+		SMTPHost: "127.0.0.1",
+		SMTPPort: stallPort,
+		SMTPFrom: "alerts@example.com",
+		SMTPTo:   []string{"ops@example.com"},
+	}, NotifyEvent{Title: "timeout-check", Severity: "info", Source: "notify.hub", Timestamp: time.Now()})
+	if stallOut.Err == nil || time.Since(start) > 1500*time.Millisecond {
+		t.Fatalf("expected bounded SMTP deadline error, got err=%v elapsed=%v", stallOut.Err, time.Since(start))
 	}
 }

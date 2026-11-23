@@ -39,6 +39,18 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 31
+    },
+    "expires_at": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "provider_name": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "public_origin": {
+      "type": "string",
+      "maxLength": 256
     }
   }
 }

@@ -88,7 +88,14 @@ document.getElementById('btn-linuxdo-oauth').onclick = () => {
   window.location.href = `${basePath}/api/oauth/linuxdo/start`;
 };
 
-document.getElementById('btn-logout').onclick = () => {
+document.getElementById('btn-logout').onclick = async () => {
+  if (sessionToken) {
+    try {
+      await portalFetch('/api/auth/logout', { method: 'POST', body: '{}' });
+    } catch (_) {
+      // 忽略网络错误，始终清理本地会话。
+    }
+  }
   sessionToken = '';
   sessionStorage.removeItem(SESSION_KEY);
   toggleViews(false);
@@ -182,11 +189,31 @@ async function loadDashboard() {
       tr.appendChild(td);
     }
     const btnTd = document.createElement('td');
+    const actionWrap = document.createElement('div');
+    actionWrap.className = 'row';
     const cfgBtn = document.createElement('button');
+    cfgBtn.type = 'button';
     cfgBtn.className = 'btn outline';
     cfgBtn.textContent = '生成接入脚本';
-    cfgBtn.onclick = () => renderClientSnippet(t.plain_key || t.key_masked);
-    btnTd.appendChild(cfgBtn);
+    cfgBtn.onclick = () => renderClientSnippet(t.key_masked);
+    actionWrap.appendChild(cfgBtn);
+
+    const revokeBtn = document.createElement('button');
+    revokeBtn.type = 'button';
+    revokeBtn.className = 'btn danger';
+    revokeBtn.textContent = '吊销';
+    revokeBtn.onclick = async () => {
+      if (!window.confirm(`确认永久吊销子令牌「${t.name}」(${t.key_masked})？`)) return;
+      try {
+        await portalFetch(`/api/tokens/${encodeURIComponent(t.id)}`, { method: 'DELETE' });
+        showNotice(`子令牌「${t.name}」已吊销`);
+        await loadDashboard();
+      } catch (e) {
+        showNotice(e.message);
+      }
+    };
+    actionWrap.appendChild(revokeBtn);
+    btnTd.appendChild(actionWrap);
     tr.appendChild(btnTd);
     tokBody.appendChild(tr);
   }

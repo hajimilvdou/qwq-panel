@@ -5,48 +5,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AI API 聚合分发门户</title>
-  <style>
-    :root {
-      color-scheme: light dark;
-      --bg: #f4f7fb; --surface: #ffffff; --fg: #0f172a; --muted: #64748b; --border: #e2e8f0;
-      --primary: #2563eb; --primary-soft: rgba(37, 99, 235, 0.09); --ok: #10b981;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #090d16; --surface: #111827; --fg: #f8fafc; --muted: #94a3b8; --border: #1e293b;
-        --primary: #3b82f6; --primary-soft: rgba(59, 130, 246, 0.15);
-      }
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--fg); font-variant-numeric: tabular-nums; }
-    .container { max-width: 1080px; margin: 0 auto; padding: 24px 16px 64px; }
-    .auth-box { max-width: 420px; margin: 56px auto; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06); }
-    .header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
-    .stat-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin-bottom: 20px; }
-    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 16px; }
-    .stat-val { font-size: 26px; font-weight: 700; margin-top: 6px; letter-spacing: -0.02em; }
-    .muted { color: var(--muted); font-size: 13px; }
-    .seg { display: flex; gap: 4px; background: var(--bg); padding: 4px; border-radius: 10px; margin-bottom: 16px; }
-    .seg button { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 8px; border-radius: 7px; font-size: 13px; font-weight: 500; cursor: pointer; }
-    .seg button.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-    .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; font-size: 13px; }
-    input, select { padding: 9px 12px; border-radius: 9px; border: 1px solid var(--border); background: transparent; color: inherit; font-size: 13px; }
-    .btn { padding: 9px 16px; border-radius: 9px; border: 0; background: var(--primary); color: #fff; font-weight: 600; font-size: 13px; cursor: pointer; }
-    .btn.outline { background: transparent; border: 1px solid var(--border); color: var(--fg); font-weight: 500; }
-    .btn.linuxdo { width: 100%; background: #1e293b; color: #f8fafc; margin-top: 10px; }
-    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--primary-soft); padding: 2px 6px; border-radius: 5px; }
-    pre { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px; overflow-x: auto; font-size: 12px; }
-    .notice { padding: 10px 14px; border-radius: 10px; background: var(--primary-soft); font-size: 13px; margin-bottom: 16px; }
-  </style>
+  <link rel="stylesheet" href="./portal.css" />
 </head>
 <body>
   <main id="auth-view" class="auth-box">
-    <h2 id="portal-title" style="margin:0 0 6px">QWQ AI Relay Hub</h2>
-    <p id="portal-desc" class="muted" style="margin:0 0 18px">个人与团体 AI API 聚合分发门户 · 纯统计配额零商业收费</p>
+    <h2 id="portal-title" class="portal-title">QWQ AI Relay Hub</h2>
+    <p id="portal-desc" class="muted portal-desc">个人与团体 AI API 聚合分发门户 · 纯统计配额零商业收费</p>
 
     <div class="seg" id="auth-tabs">
       <button type="button" data-mode="login" class="active">密码登录</button>
@@ -62,7 +26,7 @@
       <div class="field" id="wrap-email" hidden>
         <span>电子邮箱</span>
         <div class="row">
-          <input id="f-email" type="email" style="flex:1" placeholder="name@domain.com" />
+          <input id="f-email" type="email" class="input-grow" placeholder="name@domain.com" />
           <button type="button" class="btn outline" id="btn-send-otp">发送验证码</button>
         </div>
       </div>
@@ -78,17 +42,17 @@
         <span>注册邀请码（支持管理员码或成员专属邀请码）</span>
         <input id="f-invite" placeholder="INV..." />
       </div>
-      <button type="submit" class="btn" style="width:100%" id="btn-auth-submit">进入门户</button>
+      <button type="submit" class="btn full" id="btn-auth-submit">进入门户</button>
     </form>
 
     <button type="button" class="btn linuxdo" id="btn-linuxdo-oauth">使用 LinuxDo 社区账号一键登录 / 注册</button>
-    <div id="auth-msg" class="muted" style="margin-top:12px;text-align:center"></div>
+    <div id="auth-msg" class="muted auth-msg"></div>
   </main>
 
   <div id="app-view" class="container" hidden>
     <header class="header">
       <div>
-        <h2 style="margin:0">AI 分发自服务工作台</h2>
+        <h2 class="app-title">AI 分发自服务工作台</h2>
         <span class="muted" id="user-badge"></span>
       </div>
       <div class="row">
@@ -100,63 +64,63 @@
     <div id="app-banner" class="notice" hidden></div>
 
     <section class="stat-grid">
-      <div class="card" style="margin:0">
+      <div class="card card-compact">
         <div class="muted">当前可用统计额度</div>
         <div class="stat-val" id="st-balance">$0.00</div>
         <div class="muted" id="st-refill-hint">按模型倍率统计扣减</div>
       </div>
-      <div class="card" style="margin:0">
+      <div class="card card-compact">
         <div class="muted">累计已用统计额度</div>
         <div class="stat-val" id="st-used">$0.00</div>
         <div class="muted" id="st-reqs">共 0 次调用</div>
       </div>
-      <div class="card" style="margin:0">
+      <div class="card card-compact">
         <div class="muted">我的专属邀请码</div>
-        <div class="stat-val"><code id="st-my-invite" style="font-size:18px">-</code></div>
+        <div class="stat-val"><code id="st-my-invite" class="invite-code">-</code></div>
         <div class="muted">好友凭此码注册双方获赠统计额度</div>
       </div>
     </section>
 
-    <section class="card" style="margin-top:16px">
-      <div class="row" style="justify-content:space-between">
+    <section class="card card-spaced">
+      <div class="row row-between">
         <div>
           <strong>核销福利兑换码 / 群口令码</strong>
           <div class="muted">输入管理员发布的单次 CDK 或群共享口令码即可即时增加统计额度</div>
         </div>
         <div class="row">
-          <input id="cdk-input" placeholder="输入兑换码或口令..." style="min-width:220px" />
+          <input id="cdk-input" placeholder="输入兑换码或口令..." class="input-cdk" />
           <button type="button" class="btn" id="btn-redeem">立即核销</button>
         </div>
       </div>
     </section>
 
     <section class="card">
-      <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <div class="row row-between mb-12">
         <div>
-          <h3 style="margin:0 0 4px;font-size:16px">我的分发令牌（Sub-API Keys）</h3>
+          <h3 class="section-title">我的分发令牌（Sub-API Keys）</h3>
           <span class="muted">兼容 OpenAI Chat / Responses / Anthropic Claude Code / Google Gemini 四大协议</span>
         </div>
       </div>
-      <div class="row" style="margin-bottom:14px">
+      <div class="row mb-14">
         <input id="tok-name" placeholder="令牌备注 (如 ClaudeCode-Mac)" />
         <input id="tok-limit" type="number" step="1" placeholder="子额度上限 $ (留空共享)" />
-        <input id="tok-models" placeholder="模型白名单 (逗号分隔, 留空不限)" style="min-width:210px" />
+        <input id="tok-models" placeholder="模型白名单 (逗号分隔, 留空不限)" class="input-wide" />
         <input id="tok-ips" placeholder="IP/CIDR 白名单 (留空不限)" />
         <button type="button" class="btn" id="btn-create-tok">创建新 sk-qwq- 令牌</button>
       </div>
       <table>
-        <thead><tr><th>备注</th><th>掩码 Key</th><th>已用 / 上限</th><th>限制条件</th><th>一键接入配置</th></tr></thead>
+        <thead><tr><th>备注</th><th>掩码 Key</th><th>已用 / 上限</th><th>限制条件</th><th>操作</th></tr></thead>
         <tbody id="tokens-tbody"></tbody>
       </table>
-      <div id="snippet-box" hidden style="margin-top:14px">
-        <div class="muted" style="margin-bottom:6px">复制以下配置粘贴至 Claude Code / Codex / Cherry Studio：</div>
+      <div id="snippet-box" hidden class="mt-14">
+        <div class="muted mb-6">复制以下配置粘贴至 Claude Code / Codex / Cherry Studio：</div>
         <pre id="snippet-code"></pre>
       </div>
     </section>
 
-    <div style="display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+    <div class="two-col-grid">
       <section class="card">
-        <h3 style="margin:0 0 10px;font-size:15px">可用模型与统计倍率表（支持缓存 1 折）</h3>
+        <h3 class="sub-title">可用模型与统计倍率表（支持缓存 1 折）</h3>
         <table>
           <thead><tr><th>模型标识</th><th>输入/1M</th><th>输出/1M</th><th>缓存读</th></tr></thead>
           <tbody id="models-tbody"></tbody>
@@ -164,7 +128,7 @@
       </section>
 
       <section class="card">
-        <h3 style="margin:0 0 10px;font-size:15px">最近调用统计明细</h3>
+        <h3 class="sub-title">最近调用统计明细</h3>
         <table>
           <thead><tr><th>时间</th><th>模型 / 协议</th><th>In(Cache)/Out</th><th>折算消耗</th><th>TTFT</th></tr></thead>
           <tbody id="logs-tbody"></tbody>
