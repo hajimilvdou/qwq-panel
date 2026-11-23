@@ -5,59 +5,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>轻量容器与 Compose 管理</title>
-  <style>
-    :root, [data-theme="light"] {
-      color-scheme: light;
-      --bg: #f6f3ed; --surface: #fdfbf8; --surface-2: #f1ece3;
-      --line: #e8e1d6; --line-strong: #d5cbbe;
-      --text: #2a211b; --text-2: #685a50; --text-3: #96887d;
-      --cocoa: #6b4c3b; --on-cocoa: #fdfbf8;
-      --jade: #1e9c8b; --jade-soft: #e2f5f2;
-      --amber: #d99422; --amber-soft: #fbf0db;
-      --brick: #b5352b; --brick-soft: #fae5e3;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    }
-    [data-theme="dark"] {
-      color-scheme: dark;
-      --bg: #151210; --surface: #1e1a17; --surface-2: #28221e;
-      --line: #312923; --line-strong: #463b32;
-      --text: #f3ede6; --text-2: #b5a89d; --text-3: #83766c;
-      --cocoa: #9d755d; --on-cocoa: #17120e;
-      --jade: #32c2ae; --jade-soft: rgba(50, 194, 174, 0.16);
-      --amber: #ebb044; --amber-soft: rgba(235, 176, 68, 0.16);
-      --brick: #ef6b61; --brick-soft: rgba(239, 107, 97, 0.18);
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 20px; background: var(--bg); color: var(--text); font-variant-numeric: tabular-nums; }
-    .topbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
-    .title { margin: 0; font-size: 18px; font-weight: 650; }
-    .sub { font-size: 12px; color: var(--text-2); margin-top: 3px; }
-    .tabs { display: flex; gap: 6px; background: var(--surface); padding: 4px; border: 1px solid var(--line); border-radius: 10px; }
-    .tabs button { background: transparent; color: var(--text-2); border: 0; padding: 7px 14px; border-radius: 7px; font-weight: 550; cursor: pointer; font-size: 13px; }
-    .tabs button.active { background: var(--cocoa); color: var(--on-cocoa); }
-    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
-    .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
-    .stat .k { font-size: 12px; color: var(--text-2); }
-    .stat .v { font-size: 20px; font-weight: 700; margin-top: 4px; }
-    .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
-    .card h3 { margin: 0 0 6px; font-size: 15px; }
-    .form-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 12px; }
-    label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-2); }
-    input, textarea, pre { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--bg); color: var(--text); font-size: 13px; }
-    textarea, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-    pre { overflow-x: auto; max-height: 260px; white-space: pre-wrap; word-break: break-all; }
-    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-    .btn { padding: 8px 14px; border-radius: 8px; border: 0; background: var(--cocoa); color: var(--on-cocoa); font-weight: 550; cursor: pointer; font-size: 13px; }
-    .btn.ghost { background: transparent; border: 1px solid var(--line-strong); color: var(--text); }
-    .btn.danger { background: var(--brick-soft); color: var(--brick); }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
-    .badge.ok { background: var(--jade-soft); color: var(--jade); }
-    .badge.warn { background: var(--amber-soft); color: var(--amber); }
-    .badge.err { background: var(--brick-soft); color: var(--brick); }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
-    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); }
-    th { font-size: 12px; color: var(--text-2); font-weight: 600; }
-  </style>
+  <link rel="stylesheet" href="./plugin.css" />
 </head>
 <body>
   <main id="docker-root">
@@ -89,7 +37,7 @@
         <thead><tr><th>名称 / ID</th><th>镜像</th><th>状态</th><th>端口映射</th><th>操作</th></tr></thead>
         <tbody id="containers-tbody"></tbody>
       </table>
-      <div class="form-grid" style="margin-top:16px">
+      <div class="form-grid mt-16">
         <label>目标容器 ID / 名称 <input id="lim-id" placeholder="点击表格或手动填入" /></label>
         <label>内存上限 (MiB) <input id="lim-mem" type="number" value="256" min="16" max="65536" /></label>
         <label>CPU 核数上限（可选） <input id="lim-cpu" type="number" step="0.25" value="1" min="0" max="64" /></label>
@@ -104,7 +52,7 @@
       <div class="form-grid">
         <label>栈名称 <input id="cp-name" placeholder="如 blog-stack" /></label>
       </div>
-      <label style="margin-top:10px">compose.yml 内容
+      <label class="mt-10">compose.yml 内容
         <textarea id="cp-yaml" rows="8" placeholder="services:&#10;  web:&#10;    image: nginx:alpine&#10;    restart: unless-stopped"></textarea>
       </label>
       <div class="actions">
@@ -121,178 +69,16 @@
       <h3>本地镜像清理与容器有界日志查看（上限 500 行 / 64 KiB）</h3>
       <div class="actions">
         <button class="btn danger" id="btn-prune" type="button">清理悬空无用镜像</button>
+        <button class="btn ghost" id="btn-copy-logs" type="button">复制日志</button>
       </div>
       <table>
         <thead><tr><th>镜像 ID</th><th>标签</th><th>体积 (MiB)</th></tr></thead>
         <tbody id="images-tbody"></tbody>
       </table>
-      <h4 style="margin:16px 0 6px;font-size:13px">容器日志输出</h4>
+      <h4 class="section-subhead">容器日志输出</h4>
       <pre id="logs-pre">在容器列表点击“日志”后在此显示最新 100 行日志。</pre>
     </section>
   </main>
-
-  <script>
-    (() => {
-      const root = document.documentElement;
-      const statusEl = document.getElementById('bridge-status');
-      let port = null;
-      let seq = 0;
-      const pending = new Map();
-
-      const setStatus = (t) => { statusEl.textContent = t; };
-      const runAction = async (fn, okMsg) => {
-        try {
-          await fn();
-          if (okMsg) setStatus(okMsg);
-        } catch (err) {
-          setStatus('操作失败：' + (err?.message || '未知错误'));
-        }
-      };
-      const send = (msg) => { if (port) port.postMessage(msg); };
-      const invoke = (operation, payload = {}) => new Promise((resolve, reject) => {
-        if (!port) return reject(new Error('宿主桥尚未就绪'));
-        const id = `dk_${++seq}`;
-        pending.set(id, { resolve, reject });
-        send({ t: 'api.invoke', id, operation, payload });
-      });
-
-      function switchTab(tab) {
-        for (const b of document.querySelectorAll('#nav-tabs button')) b.classList.toggle('active', b.dataset.tab === tab);
-        for (const p of document.querySelectorAll('[data-pane]')) p.hidden = p.dataset.pane !== tab;
-      }
-
-      document.getElementById('nav-tabs').addEventListener('click', (e) => {
-        const btn = e.target.closest('button[data-tab]');
-        if (btn) switchTab(btn.dataset.tab);
-      });
-
-      function badge(state) {
-        const span = document.createElement('span');
-        span.className = 'badge ' + (state === 'running' ? 'ok' : (state === 'error' ? 'err' : 'warn'));
-        span.textContent = state;
-        return span;
-      }
-
-      async function refresh() {
-        try {
-          const data = await invoke('docker.overview', {});
-          const d = data.daemon || {};
-          document.getElementById('st-daemon').textContent = d.available ? `v${d.server_version || 'ok'}` : '未连接';
-          document.getElementById('st-ct').textContent = d.available ? `${d.containers_running || 0} / ${d.containers_total || 0}` : '-';
-          document.getElementById('st-img').textContent = String((data.images || []).length);
-          document.getElementById('st-st').textContent = String((data.stacks || []).length);
-
-          const ct = document.getElementById('containers-tbody');
-          ct.replaceChildren();
-          for (const c of data.containers || []) {
-            const tr = document.createElement('tr');
-            for (const txt of [`${c.name} (${c.short_id})`, c.image]) {
-              const td = document.createElement('td'); td.textContent = txt; tr.appendChild(td);
-            }
-            const stTd = document.createElement('td'); stTd.appendChild(badge(c.state)); tr.appendChild(stTd);
-            const pTd = document.createElement('td'); pTd.textContent = (c.ports || []).join(', ') || '-'; tr.appendChild(pTd);
-            const act = document.createElement('td');
-            const rBtn = document.createElement('button'); rBtn.className = 'btn ghost'; rBtn.type = 'button'; rBtn.textContent = '重启';
-            rBtn.addEventListener('click', () => void runAction(async () => {
-              await invoke('docker.container.action', { id: c.id, action: 'restart' });
-              await refresh();
-            }, `已重启容器 ${c.name}`));
-            const lBtn = document.createElement('button'); lBtn.className = 'btn ghost'; lBtn.type = 'button'; lBtn.textContent = '日志'; lBtn.style.marginLeft = '6px';
-            lBtn.addEventListener('click', () => void runAction(async () => {
-              document.getElementById('lim-id').value = c.short_id;
-              const res = await invoke('docker.container.logs', { id: c.id, tail: 100 });
-              document.getElementById('logs-pre').textContent = res.logs || '(无日志输出)';
-              switchTab('images');
-            }, `已加载容器 ${c.name} 最新日志`));
-            act.append(rBtn, lBtn);
-            tr.appendChild(act);
-            ct.appendChild(tr);
-          }
-
-          const st = document.getElementById('stacks-tbody');
-          st.replaceChildren();
-          for (const s of data.stacks || []) {
-            const tr = document.createElement('tr');
-            for (const txt of [s.name, s.status, `v${s.revision}`, (s.warnings || []).join('；') || '无高危提示']) {
-              const td = document.createElement('td'); td.textContent = txt; tr.appendChild(td);
-            }
-            const act = document.createElement('td');
-            const dBtn = document.createElement('button'); dBtn.className = 'btn danger'; dBtn.type = 'button'; dBtn.textContent = '移除';
-            dBtn.addEventListener('click', () => {
-              if (!window.confirm(`确认停止并移除 Compose 编排栈「${s.name}」？`)) return;
-              void runAction(async () => { await invoke('docker.compose.remove', { name: s.name }); await refresh(); }, `已移除栈 ${s.name}`);
-            });
-            act.appendChild(dBtn); tr.appendChild(act);
-            st.appendChild(tr);
-          }
-
-          const it = document.getElementById('images-tbody');
-          it.replaceChildren();
-          for (const im of data.images || []) {
-            const tr = document.createElement('tr');
-            for (const txt of [im.id, (im.tags || []).join(', ') || '<none>', (im.size_mb || 0).toFixed(1)]) {
-              const td = document.createElement('td'); td.textContent = txt; tr.appendChild(td);
-            }
-            it.appendChild(tr);
-          }
-          setStatus(d.available ? '已连接 Docker' : (d.reason || '未检测到 Docker'));
-        } catch (err) {
-          setStatus('加载失败：' + (err.message || '未知错误'));
-        }
-      }
-
-      document.getElementById('btn-refresh').addEventListener('click', () => void refresh());
-      document.getElementById('btn-limits').addEventListener('click', () => void runAction(async () => {
-        await invoke('docker.container.limits', {
-          id: document.getElementById('lim-id').value.trim(),
-          memory_mb: Number(document.getElementById('lim-mem').value || 0),
-          cpus: Number(document.getElementById('lim-cpu').value || 0),
-        });
-        await refresh();
-      }, '容器资源限额已更新'));
-      const deployStack = (dryRun) => void runAction(async () => {
-        await invoke('docker.compose.deploy', {
-          name: document.getElementById('cp-name').value.trim(),
-          compose_yaml: document.getElementById('cp-yaml').value,
-          dry_run: dryRun,
-        });
-        await refresh();
-      }, dryRun ? 'Compose 编排已通过安全扫描并暂存' : 'Compose 编排栈部署完成');
-      document.getElementById('btn-deploy').addEventListener('click', () => deployStack(false));
-      document.getElementById('btn-dryrun').addEventListener('click', () => deployStack(true));
-      document.getElementById('btn-prune').addEventListener('click', () => {
-        if (!window.confirm('确认清理所有未被容器引用的悬空 Docker 镜像？')) return;
-        void runAction(async () => {
-          const res = await invoke('docker.images.prune', { all: false });
-          await refresh();
-          setStatus(`已清理 ${res.deleted_count} 个镜像，释放 ${(res.space_reclaimed_mb || 0).toFixed(1)} MiB`);
-        });
-      });
-
-      function accept(data) {
-        if (!data || typeof data !== 'object') return;
-        if (data.t === 'api.result' && pending.has(data.id)) {
-          const p = pending.get(data.id); pending.delete(data.id);
-          if (data.ok) p.resolve(data.payload); else p.reject(new Error(data.error?.detail || data.error?.code || 'invoke failed'));
-        } else if (data.t === 'ui.settings' && (data.theme === 'light' || data.theme === 'dark')) {
-          root.dataset.theme = data.theme;
-        }
-      }
-
-      new ResizeObserver(() => {
-        send({ t: 'ui.resize', height: Math.ceil(document.getElementById('docker-root').getBoundingClientRect().height) + 24 });
-      }).observe(document.getElementById('docker-root'));
-
-      window.addEventListener('message', (event) => {
-        if (event.source !== window.parent || event.data?.t !== 'plugin.port' || !event.ports[0] || port) return;
-        port = event.ports[0];
-        port.onmessage = (m) => accept(m.data);
-        send({ t: 'ui.ready' });
-        void refresh();
-      });
-
-      window.parent.postMessage({ t: 'plugin.hello', kit_major: 1 }, '*');
-    })();
-  </script>
+  <script src="./plugin.js"></script>
 </body>
 </html>

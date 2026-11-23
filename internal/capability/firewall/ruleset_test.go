@@ -30,13 +30,16 @@ func TestRulesetGuardsAndDeterminism(t *testing.T) {
 	if err := json.Unmarshal(a, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if len(doc.Nftables) != 6 {
-		t.Fatalf("objects=%d, want table, chain, three guards, user rule", len(doc.Nftables))
+	if len(doc.Nftables) != 7 {
+		t.Fatalf("objects=%d, want table, chain, four guards, user rule", len(doc.Nftables))
 	}
-	for i, name := range []string{"qwq:preserve", "qwq:loopback", "qwq:established"} {
+	for i, name := range []string{"qwq:preserve", "qwq:preserve-icmpv6", "qwq:loopback", "qwq:established"} {
 		if !bytes.Contains(doc.Nftables[i+2]["rule"], []byte(name)) {
-			t.Fatal("host protection did not precede user rules")
+			t.Fatalf("host protection %q did not precede user rules", name)
 		}
+	}
+	if !bytes.Contains(doc.Nftables[3]["rule"], []byte("nd-neighbor-solicit")) {
+		t.Fatal("ICMPv6 NDP guard is missing nd-neighbor-solicit")
 	}
 	second, err := Normalize(a, []uint32{22, 8443}, []uint32{22, 8443})
 	if err != nil {

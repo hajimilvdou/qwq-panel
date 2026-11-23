@@ -23,6 +23,7 @@ import (
 	"github.com/qwq-panel/qwq/internal/platform/config"
 	"github.com/qwq-panel/qwq/internal/platform/ids"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
+	"github.com/qwq-panel/qwq/internal/pluginhost/trust"
 	"github.com/qwq-panel/qwq/internal/privateexport"
 	"github.com/qwq-panel/qwq/internal/routingrules"
 	"github.com/qwq-panel/qwq/internal/secrets"
@@ -62,6 +63,13 @@ type Deps struct {
 	// required for the upload, install and update routes; nil disables them
 	// with 503.
 	PluginUploads *PluginUploads
+	// PluginTrust manages official + custom trusted publisher Ed25519 keys.
+	// Nil disables mutating trust-key routes with 503 while GET returns an empty list.
+	PluginTrust *trust.CompositeTrustStore
+	// PackageFetchTransport optionally overrides the HTTP transport used by
+	// POST /api/v1/plugin-packages/fetch (tests only). Nil uses the production
+	// SSRF-blocking HTTPS transport.
+	PackageFetchTransport http.RoundTripper
 	// NodeID is the node this host manages; a standalone installation uses
 	// "local".
 	NodeID string
@@ -246,7 +254,11 @@ func (a *api) routes() []gateway.Route {
 		{Method: http.MethodGet, Pattern: "/api/v1/plugins/{plugin_id}/config-schema", Access: sessionOrService, Handler: http.HandlerFunc(a.getPluginConfigSchema)},
 		{Method: http.MethodGet, Pattern: "/api/v1/plugins/{plugin_id}/logs", Access: sessionOrService, Handler: http.HandlerFunc(a.getPluginLogs)},
 		{Method: http.MethodPost, Pattern: "/api/v1/plugin-packages", Access: sessionOrService, Body: gateway.BodyPackage, Handler: http.HandlerFunc(a.uploadPluginPackage)},
+		{Method: http.MethodPost, Pattern: "/api/v1/plugin-packages/fetch", Access: sessionOrService, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.fetchPluginPackage)},
 		{Method: http.MethodGet, Pattern: "/api/v1/plugin-packages/{upload_id}", Access: sessionOrService, Handler: http.HandlerFunc(a.inspectPluginPackage)},
+		{Method: http.MethodGet, Pattern: "/api/v1/plugin-trust-keys", Access: sessionOrService, Handler: http.HandlerFunc(a.listPluginTrustKeys)},
+		{Method: http.MethodPost, Pattern: "/api/v1/plugin-trust-keys", Access: gateway.AccessSession, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.addPluginTrustKey)},
+		{Method: http.MethodDelete, Pattern: "/api/v1/plugin-trust-keys/{key_id}", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.deletePluginTrustKey)},
 		{Method: http.MethodPost, Pattern: "/api/v1/plugins/{plugin_id}/operations/{operation}", Access: sessionOrService, Body: gateway.BodyPluginJSON, Handler: http.HandlerFunc(a.invokeControllerPlugin)},
 		{Method: http.MethodPost, Pattern: "/api/v1/nodes/{node_id}/plugins/{plugin_id}/instances/{instance_id}/operations/{operation}", Access: sessionOrService, Body: gateway.BodyPluginJSON, Handler: http.HandlerFunc(a.invokeNodePlugin)},
 		// operations

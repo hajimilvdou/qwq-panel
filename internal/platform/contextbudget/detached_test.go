@@ -58,6 +58,18 @@ func TestDetachedDoesNotRenewExpiredOrInvalidBudgets(t *testing.T) {
 	}
 }
 
+func TestDetachedFreshGrantsBoundedCleanupBudgetWhenParentExpired(t *testing.T) {
+	parent, cancelParent := context.WithDeadline(context.WithValue(context.Background(), scopeKey{}, "original"), time.Now().Add(-time.Second))
+	cancelParent()
+	before := time.Now()
+	ctx, cancel := DetachedFresh(parent, time.Second)
+	defer cancel()
+	deadline, found := ctx.Deadline()
+	if !found || ctx.Err() != nil || deadline.Before(before) || deadline.After(time.Now().Add(time.Second)) || ctx.Value(scopeKey{}) != "original" {
+		t.Fatal("DetachedFresh 未授予独立善后窗口或丢失作用域")
+	}
+}
+
 func TestDetachedCancellationWithoutAParentDeadlineRemainsLocallyCancelable(t *testing.T) {
 	parent, cancelParent := context.WithCancel(context.Background())
 	cancelParent()

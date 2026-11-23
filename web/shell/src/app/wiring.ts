@@ -1,43 +1,32 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /* ==========================================================================
- * 运行时接线：会话 ↔ 事件流 ↔ 缓存 ↔ 审批队列
+ * 运行时接线：会话 ↔ 登录后事件流（按需加载） ↔ 崩溃兜底
  * --------------------------------------------------------------------------
- * 登录后：先开 SSE，再由各页面拉快照（先流后快照，ENG §4）。
- * 登出后：关流，清空所有内存态（不留上一个用户的数据）。
+ * 未登录或启动阶段不加载 SSE / 审批队列 / 操作流，登录后异步接线。
  * ========================================================================== */
-import { approvals } from '$lib/ai/approvals.svelte';
-import { dock } from '$lib/ai/dock.svelte';
-import { events } from '$lib/events.svelte';
-import { liveOps } from '$lib/operations.svelte';
 import { resources } from '$lib/resource.svelte';
 import { session } from '$lib/session.svelte';
 import { toasts } from '$lib/toast.svelte';
 
-/* 这些事件类型会让订阅了对应 subject / events 的缓存失效 */
-const INVALIDATING = ['resource.changed', 'operation.updated', 'plugin.*', 'agent.session.*'];
-
 export function wire(): void {
-  events.configure({ onUnauthenticated: () => session.expire() });
-
-  let offs: (() => void)[] = [];
+  let gen = 0;
+  let modPromise: Promise<typeof import('./signed-in-wiring')> | null = null;
+  const loadSignedIn = () => (modPromise ??= import('./signed-in-wiring'));
 
   session.onSignedIn(() => {
-    events.start();
-    offs = [
-      liveOps.connect(events),
-      approvals.connect(events),
-      ...INVALIDATING.map((t) => events.on(t, (e) => resources.handle(e))),
-      events.onResync(() => resources.invalidateAll()),
-    ];
+    const cur = ++gen;
+    void loadSignedIn().then((m) => {
+      if (cur === gen) m.startSignedInRuntime();
+    });
   });
 
   session.onSignedOut(() => {
-    offs.forEach((f) => f());
-    offs = [];
-    events.stop();
-    resources.clear();
-    liveOps.clear();
-    dock.close();
+    gen++;
+    if (modPromise) {
+      void modPromise.then((m) => m.stopSignedInRuntime());
+    } else {
+      resources.clear();
+    }
   });
 
   /* 页面隐藏：保持连接，暂停循环动画；重新可见时补取期间标脏的快照 */

@@ -202,17 +202,18 @@ type Config struct {
 // Gateway serves the public API. It implements http.Handler; register routes
 // with Handle before serving.
 type Gateway struct {
-	shell   http.Handler
-	cfg     Config
-	limits  Limits
-	stream  StreamConfig
-	log     *slog.Logger
-	clock   clock.Clock
-	ids     *ids.Generator
-	trusted []netip.Prefix
-	hostMu  sync.RWMutex
-	origins map[string]struct{} // normalized scheme://host[:port]
-	hosts   map[string]struct{} // normalized host[:port]
+	shell            http.Handler
+	cfg              Config
+	limits           Limits
+	stream           StreamConfig
+	log              *slog.Logger
+	clock            clock.Clock
+	ids              *ids.Generator
+	trusted          []netip.Prefix
+	hostMu           sync.RWMutex
+	origins          map[string]struct{} // normalized scheme://host[:port]
+	hosts            map[string]struct{} // normalized host[:port]
+	dynamicPanelHost string              // live panel_domain configured via PUT /api/v1/system/access
 
 	mux   *http.ServeMux
 	chain http.Handler
@@ -332,21 +333,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.chain.ServeHTTP(rw, r)
 }
 
-// AllowHost dynamically adds a reverse-proxy domain to the Host/Origin allowlist
-// (only needed when PublicOrigins was non-empty; an empty allowlist already accepts
-// same-origin hosts).
-func (g *Gateway) AllowHost(domain string) {
+// SetDynamicPanelHost updates the live reverse-proxy panel domain (even when
+// static PublicOrigins is empty). Passing an empty string clears it.
+func (g *Gateway) SetDynamicPanelHost(domain string) {
 	d := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
-	if d == "" {
-		return
-	}
 	g.hostMu.Lock()
 	defer g.hostMu.Unlock()
-	if len(g.hosts) == 0 {
-		return
-	}
-	g.hosts[d] = struct{}{}
-	g.origins["https://"+d] = struct{}{}
+	g.dynamicPanelHost = d
+}
+
+// AllowHost dynamically sets the live reverse-proxy domain in the Host/Origin allowlist.
+func (g *Gateway) AllowHost(domain string) {
+	g.SetDynamicPanelHost(domain)
 }
 
 // Close ends every open event stream. The HTTP server must still be shut down

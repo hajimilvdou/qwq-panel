@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /* ==========================================================================
- * 宿主侧接线：把 PluginBridge 的抽象依赖接到真实的 api / events / dock / prefs
+ * 宿主侧接线：把 PluginBridge 的抽象依赖接到真实的 api / events / dock / prefs / clipboard
  * --------------------------------------------------------------------------
- *   hostSettings()             当前主题 / 动效 / 密度 / token 白名单 / 可见性
+ *   hostSettings()             当前主题 / 动效 / 密度 / token 白名单 / 可见性 / public_origin
  *   pluginFrameSrc(entry, s)   entry_url + #theme=…&motion=…&density=…&path=…
- *   bridgeDeps(plugin, hooks)  BridgeDeps（invoke 走 endpoints，审批交悬浮窗）
+ *   bridgeDeps(plugin, hooks)  BridgeDeps（invoke 走 endpoints，审批交悬浮窗，复制走宿主剪贴板）
  * ========================================================================== */
 import { ApiError, newIdempotencyKey, NetworkError } from '$api/client';
 import { plugins as pluginsApi } from '$api/endpoints';
@@ -12,6 +12,7 @@ import type { Plugin } from '$api/types';
 import { dock } from '../ai/dock.svelte';
 import { events } from '../events.svelte';
 import { prefs } from '../prefs.svelte';
+import { toasts } from '../toast.svelte';
 import type { BridgeDeps, BridgeProblem, HostSettings } from './index';
 
 /** 下发给插件的设计 token（只读值，不含任何会话信息） */
@@ -62,6 +63,7 @@ export function hostSettings(): HostSettings {
     density: prefs.density,
     tokens,
     visible: typeof document === 'undefined' || document.visibilityState === 'visible',
+    public_origin: typeof window !== 'undefined' ? window.location.origin : '',
   };
 }
 
@@ -80,7 +82,7 @@ export function toProblem(err: unknown): BridgeProblem {
   return { code: 'INTERNAL' };
 }
 
-type Hooks = Pick<BridgeDeps, 'onReady' | 'onResize' | 'onToast' | 'onNavigate' | 'onTimeout'>;
+type Hooks = Pick<BridgeDeps, 'onReady' | 'onResize' | 'onToast' | 'onNavigate' | 'onTimeout' | 'onConfirm' | 'onCopy'>;
 
 export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
   return {
@@ -92,7 +94,7 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
       const r = await pluginsApi.invoke(
         { pluginId: plugin.plugin_id, operation: name, placement: plugin.placement },
         payload,
-        { key, subject: meta?.subject, expectedRevision: meta?.expectedRevision },
+        { key, subject: meta?.subject, expectedRevision: meta?.expectedRevision, signal: meta?.signal },
       );
       /* 需要批准：交给悬浮窗，插件只知道"在等批准"，拿不到批准能力 */
       if (r.status === 'AWAITING_APPROVAL') dock.open({ approvalId: r.approvalId });
@@ -106,6 +108,10 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
       return () => offs.forEach((off) => off());
     },
     newKey: newIdempotencyKey,
+    onCopy: async ({ text, label }) => {
+      await navigator.clipboard.writeText(text);
+      toasts.success(label || '已复制到剪贴板');
+    },
     ...hooks,
   };
 }

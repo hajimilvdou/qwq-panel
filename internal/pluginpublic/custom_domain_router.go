@@ -13,6 +13,7 @@
 package pluginpublic
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -39,10 +40,18 @@ type DomainBinding struct {
 // CustomDomainRouter 在宿主 HTTP 入口按 Host 分流插件独占域名与主面板域名。
 type CustomDomainRouter struct {
 	panelHosts     map[string]struct{}
+	isPanelHost    func(host string) bool
 	trustedProxies []netip.Prefix
 	publicGW       http.Handler
 	panelNext      http.Handler
 	bindings       atomic.Pointer[map[string]DomainBinding]
+}
+
+// SetPanelDomainChecker registers a dynamic check for the live panel domain
+// (e.g. panelaccess.Manager.Snapshot().PanelDomain) so plugins can never hijack
+// the live management domain even if updated at runtime.
+func (r *CustomDomainRouter) SetPanelDomainChecker(fn func(host string) bool) {
+	r.isPanelHost = fn
 }
 
 // NewCustomDomainRouter 创建独立域名分流器。
@@ -72,7 +81,7 @@ func (r *CustomDomainRouter) ValidateAndReplace(items []DomainBinding) error {
 		if !isValidPublicFQDN(dom) {
 			return ErrInvalidCustomDomain
 		}
-		if _, conflict := r.panelHosts[dom]; conflict {
+		if _, conflict := r.panelHosts[dom]; conflict || (r.isPanelHost != nil && r.isPanelHost(dom)) {
 			return ErrDomainConflictsPanelOrigin
 		}
 		if item.PortalRoute == "" {
@@ -101,6 +110,10 @@ func (r *CustomDomainRouter) Lookup(serverName string) (DomainBinding, bool) {
 
 func (r *CustomDomainRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	host := r.effectiveHost(req)
+	if r.isPanelHost != nil && host != "" && r.isPanelHost(host) {
+		r.panelNext.ServeHTTP(w, req)
+		return
+	}
 	table := *r.bindings.Load()
 	binding, matched := table[host]
 	if !matched {
@@ -126,11 +139,12 @@ func (r *CustomDomainRouter) ServeHTTP(w http.ResponseWriter, req *http.Request)
 	}
 
 	// 2. 彻底剥离浏览器可能携带的任何 Cookie 及宿主管理令牌，仅保留探针专属头
-	cloned := req.Clone(req.Context())
+	cloned := req.Clone(context.WithValue(req.Context(), ctxFromCustomDomainKey{}, true))
 	cloned.Header.Del("Cookie")
 	cloned.Header.Del("Proxy-Authorization")
 	cloned.Header.Del("X-QWQ-CSRF")
-	if auth := strings.TrimSpace(cloned.Header.Get("Authorization")); strings.HasPrefix(auth, "Bearer qwq_") {
+	cloned.Header.Del("X-CSRF-Token")
+	if auth := strings.TrimSpace(cloned.Header.Get("Authorization")); strings.HasPrefix(strings.ToLower(auth), "bearer qwq_") {
 		cloned.Header.Del("Authorization")
 	}
 

@@ -82,7 +82,8 @@ func CapabilityVerbAllowed(op string) bool {
 		"sshd.get-effective", "sshd.get-dropin", "sshd.write-dropin", "sshd.remove-dropin", "sshd.recover-dropin", "sshd.validate", "sshd.reload-socket", "sshd.verify-port",
 		"account.list-keys", "account.import-key", "account.remove-key", "account.generate-key", "account.set-password",
 		"ban.scan", "ban.apply", "ban.remove", "ban.list",
-		"traffic.status", "traffic.apply", "traffic.clear":
+		"traffic.status", "traffic.apply", "traffic.clear",
+		"sysctl.apply", "sysctl.rollback":
 		return true
 	default:
 		return false

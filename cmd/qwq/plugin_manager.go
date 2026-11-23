@@ -56,6 +56,7 @@ type pluginUpdater interface {
 	Remove(ctx context.Context, req updater.RemoveRequest) error
 	Dependents(pluginID string) ([]string, error)
 	SetEnabled(ctx context.Context, pluginID string, enabled bool) error
+	EnsureActive(ctx context.Context, pluginID string) error
 	Logs(ctx context.Context, pluginID, cursor, stream string, limit int) (sandbox.LogResult, error)
 }
 
@@ -376,6 +377,9 @@ func (m *pluginManager) Restart(ctx context.Context, pluginID, reason string) (a
 		return api.Plugin{}, problem.New(problem.NotFound, "The plugin is not installed.")
 	}
 	if err := m.control.Stop(ctx, pluginID); err != nil {
+		return api.Plugin{}, err
+	}
+	if err := m.updater.EnsureActive(ctx, pluginID); err != nil {
 		return api.Plugin{}, err
 	}
 	if _, err := m.control.Ensure(ctx, pluginID); err != nil {

@@ -174,17 +174,28 @@ func TestOpenCodeServeHTTPAndPermissionCeiling(t *testing.T) {
 	defer srv.Close()
 
 	core := NewOpenCodeCore(OpenCodeOptions{
-		Client: srv.Client(),
-		Minter: &fakeMinter{},
-		Bridge: adapterFakeBridge{decision: DecisionApprove},
+		Client:    srv.Client(),
+		ServerURL: srv.URL,
+		Minter:    &fakeMinter{},
+		Bridge:    adapterFakeBridge{decision: DecisionApprove},
 	})
+
+	// Untrusted per-session server_url must be rejected to prevent SSRF.
+	if err := core.Run(context.Background(), Turn{
+		SessionID:      "sess_oc_ssrf",
+		PermissionMode: operations.PermissionReadOnly,
+		Config:         json.RawMessage(`{"server_url":"http://169.254.169.254"}`),
+		Messages:       []Message{{Role: RoleUser, Content: "Check firewall"}},
+	}, func(Event) error { return nil }); err == nil {
+		t.Fatal("expected untrusted server_url in session config to be rejected")
+	}
 
 	// Under read_only, even with an approving bridge, host MUST decline bash mutation!
 	var gotText string
 	err := core.Run(context.Background(), Turn{
 		SessionID:      "sess_oc",
 		PermissionMode: operations.PermissionReadOnly,
-		Config:         json.RawMessage(fmt.Sprintf(`{"server_url":%q}`, srv.URL)),
+		Config:         json.RawMessage(`{"transport":"serve-http"}`),
 		Messages:       []Message{{Role: RoleUser, Content: "Check firewall"}},
 	}, func(e Event) error {
 		if e.Type == EventMessageDelta {

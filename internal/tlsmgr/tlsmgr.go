@@ -264,6 +264,20 @@ func (m *Manager) Maintain(ctx context.Context) {
 			if err := m.ensureSelfSigned(); err != nil {
 				m.log.ErrorContext(ctx, "tls: self-signed certificate check failed", "error", err)
 			}
+		} else if m.mode == config.TLSACME && m.acme != nil {
+			for _, domain := range m.acmeDomains {
+				leaf, _, err := m.cachedLeaf(ctx, domain)
+				if err != nil {
+					continue
+				}
+				if leaf.NotAfter.Sub(m.clock.Now()) < 30*24*time.Hour {
+					go func(dom string) {
+						if _, rErr := m.acme.GetCertificate(&tls.ClientHelloInfo{ServerName: dom}); rErr != nil {
+							m.log.WarnContext(ctx, "tls: proactive ACME pre-renewal failed", "domain", dom, "error", rErr)
+						}
+					}(domain)
+				}
+			}
 		}
 		if st := m.Status(ctx); st.Warn {
 			m.log.WarnContext(ctx, "tls: certificate expires soon", "mode", st.Mode,

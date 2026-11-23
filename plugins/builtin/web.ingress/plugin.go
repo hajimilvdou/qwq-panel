@@ -213,10 +213,21 @@ func (i *instance) currentConfig() pluginConfig {
 	return i.cfg
 }
 
+func (i *instance) currentBoundAddr() string {
+	i.cfgMu.RLock()
+	defer i.cfgMu.RUnlock()
+	return i.boundAddr
+}
+
 func (i *instance) Deactivate(ctx context.Context) error {
-	if i.server != nil {
+	i.cfgMu.Lock()
+	srv := i.server
+	i.server = nil
+	i.boundAddr = ""
+	i.cfgMu.Unlock()
+	if srv != nil {
 		sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		_ = i.server.Shutdown(sctx)
+		_ = srv.Shutdown(sctx)
 		cancel()
 	}
 	i.proxy.Close()
@@ -230,14 +241,50 @@ func (i *instance) ValidateConfig(_ context.Context, cand pluginsdk.Config) (plu
 	return pluginsdk.ConfigValidation{}, nil
 }
 
-func (i *instance) ApplyConfig(_ context.Context, cand pluginsdk.Config) error {
+func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error {
 	cfg, err := parseConfig(cand.JSON, i.dataDir)
 	if err != nil {
 		return err
 	}
+	newAddr := strings.TrimSpace(cfg.ListenAddr)
+
 	i.cfgMu.Lock()
+	oldAddr := strings.TrimSpace(i.cfg.ListenAddr)
+	oldSrv := i.server
+	if newAddr == oldAddr {
+		i.cfg = cfg
+		i.cfgMu.Unlock()
+		return nil
+	}
+	var newSrv *http.Server
+	var newBound string
+	var ln net.Listener
+	if newAddr != "" {
+		ln, err = net.Listen("tcp", newAddr)
+		if err != nil {
+			i.cfgMu.Unlock()
+			return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代监听 %s 失败: %s", newAddr, err.Error())
+		}
+		newSrv = &http.Server{
+			Handler:           i.proxy,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		newBound = ln.Addr().String()
+	}
 	i.cfg = cfg
+	i.server = newSrv
+	i.boundAddr = newBound
 	i.cfgMu.Unlock()
+
+	if newSrv != nil && ln != nil {
+		go func() { _ = newSrv.Serve(ln) }()
+	}
+	if oldSrv != nil {
+		sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_ = oldSrv.Shutdown(sctx)
+		cancel()
+	}
 	return nil
 }
 
@@ -349,7 +396,7 @@ func (i *instance) handleOverview(ctx context.Context) (pluginsdk.Response, erro
 	}
 	return jsonResp(map[string]any{
 		"backend":       detectBackends(i.currentConfig().PreferredEngine),
-		"bound_addr":    i.boundAddr,
+		"bound_addr":    i.currentBoundAddr(),
 		"active_routes": i.proxy.ActiveCount(),
 		"sites":         sites,
 		"snapshots":     snaps,

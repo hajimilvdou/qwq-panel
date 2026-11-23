@@ -34,7 +34,7 @@ func TestValidateRules(t *testing.T) {
 		{"非法监听地址", "/inbound/listen", func(i *Intent) { i.Inbound.Listen = "999.1.1.1" }},
 		{"监听不接受 DNS", "/inbound/listen", func(i *Intent) { i.Inbound.Listen = "example.com" }},
 		{"监听不接受 zone", "/inbound/listen", func(i *Intent) { i.Inbound.Listen = "fe80::1%eth0" }},
-		{"特权端口", "/inbound/port", func(i *Intent) { i.Inbound.Port = 1023 }},
+		{"端口为 0", "/inbound/port", func(i *Intent) { i.Inbound.Port = 0 }},
 		{"端口超界", "/inbound/port", func(i *Intent) { i.Inbound.Port = 65536 }},
 		{"协议", "/inbound/protocol", func(i *Intent) { i.Inbound.Protocol = "vmess" }},
 		{"传输", "/inbound/transport", func(i *Intent) { i.Inbound.Transport = "tcp" }},
@@ -56,7 +56,7 @@ func TestValidateRules(t *testing.T) {
 		{"目标不在 SNI", "/inbound/security/server_names", func(i *Intent) { i.Inbound.Security.ServerNames[0] = "other.example" }},
 		{"空 short IDs", "/inbound/security/short_ids", func(i *Intent) { i.Inbound.Security.ShortIDs = nil }},
 		{"short IDs 上限", "/inbound/security/short_ids", func(i *Intent) { i.Inbound.Security.ShortIDs = make([]string, 9) }},
-		{"short ID 非空", "/inbound/security/short_ids/0", func(i *Intent) { i.Inbound.Security.ShortIDs[0] = "" }},
+		{"重复空 short ID", "/inbound/security/short_ids/1", func(i *Intent) { i.Inbound.Security.ShortIDs = []string{"", ""} }},
 		{"short ID 奇数", "/inbound/security/short_ids/0", func(i *Intent) { i.Inbound.Security.ShortIDs[0] = "abc" }},
 		{"short ID 非 hex", "/inbound/security/short_ids/0", func(i *Intent) { i.Inbound.Security.ShortIDs[0] = "zz" }},
 		{"short ID 过长", "/inbound/security/short_ids/0", func(i *Intent) { i.Inbound.Security.ShortIDs[0] = strings.Repeat("a", 18) }},
@@ -113,6 +113,15 @@ func TestValidateMinimumMaximumAndDisabled(t *testing.T) {
 	intent.Inbound.Security.Target = "EXAMPLE.COM.:443"
 	if err := Validate(intent); err != nil {
 		t.Fatal(err)
+	}
+	// 验证解锁 1..1023（含 443）端口与空 REALITY short_id ""
+	for _, port := range []int{1, 443} {
+		pIntent := validIntent(t)
+		pIntent.Inbound.Port = port
+		pIntent.Inbound.Security.ShortIDs = []string{"", "ab"}
+		if err := Validate(pIntent); err != nil {
+			t.Fatalf("端口 %d 与空 short_id 应合法: %v", port, err)
+		}
 	}
 }
 

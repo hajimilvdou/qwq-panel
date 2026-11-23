@@ -33,6 +33,8 @@ import (
 type reportFrame struct {
 	NodeID        string           `json:"node_id"`
 	TimestampUnix int64            `json:"timestamp_unix"`
+	TimestampNano int64            `json:"timestamp_nano"`
+	SessionEpoch  int64            `json:"session_epoch"`
 	Sequence      uint64           `json:"seq"`
 	BootEpoch     uint64           `json:"boot_epoch"`
 	OSName        string           `json:"os_name"`
@@ -54,6 +56,8 @@ type reportFrame struct {
 	Load1         float64          `json:"load1"`
 	Load5         float64          `json:"load5"`
 	Load15        float64          `json:"load15"`
+	TCPConns      uint32           `json:"tcp_conns"`
+	UDPConns      uint32           `json:"udp_conns"`
 	UptimeSeconds uint64           `json:"uptime_seconds"`
 	HasIPv4       bool             `json:"has_ipv4"`
 	HasIPv6       bool             `json:"has_ipv6"`
@@ -98,6 +102,7 @@ func main() {
 	defer stop()
 
 	bootEpoch := readBootEpoch()
+	sessionEpoch := time.Now().UnixNano()
 	var (
 		seq          uint64
 		prevCPU      cpuSample
@@ -144,6 +149,8 @@ func main() {
 		prevRx, prevTx = rawRx, rawTx
 
 		memTotal, memAvail, swapTotal, swapFree := readProcMeminfo()
+		diskTotal, diskUsed := readRootDiskUsage()
+		tcpConns, udpConns := readProcNetConns()
 		l1, l5, l15 := readProcLoadavg()
 		uptime := readProcUptime()
 
@@ -157,6 +164,8 @@ func main() {
 		frame := reportFrame{
 			NodeID:        *nodeID,
 			TimestampUnix: now.Unix(),
+			TimestampNano: now.UnixNano(),
+			SessionEpoch:  sessionEpoch,
 			Sequence:      seq,
 			BootEpoch:     bootEpoch,
 			OSName:        readOSRelease(),
@@ -166,6 +175,8 @@ func main() {
 			MemUsed:       memTotal - min(memTotal, memAvail),
 			SwapTotal:     swapTotal,
 			SwapUsed:      swapTotal - min(swapTotal, swapFree),
+			DiskTotal:     diskTotal,
+			DiskUsed:      diskUsed,
 			RawRxBytes:    rawRx,
 			RawTxBytes:    rawTx,
 			NetRxBps:      rxBps,
@@ -174,6 +185,8 @@ func main() {
 			Load1:         l1,
 			Load5:         l5,
 			Load15:        l15,
+			TCPConns:      tcpConns,
+			UDPConns:      udpConns,
 			UptimeSeconds: uptime,
 			HasIPv4:       true,
 			CarrierPingMs: pings,

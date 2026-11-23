@@ -69,6 +69,10 @@ func (m *exportTestObfsManager) Status() (bool, string) {
 	return true, ""
 }
 
+func (m *exportTestObfsManager) OwnedPIDs() []int {
+	return nil
+}
+
 type exportFakeHost struct {
 	*v2TestHost
 }
@@ -335,6 +339,26 @@ func TestCoreExportClientV2RunningSnapshotAndObfsApply(t *testing.T) {
 	}
 	if draftResp.GetError() == nil || draftResp.GetError().GetCode() != "PENDING_APPLY_EXPORT_DENIED" {
 		t.Fatalf("expected PENDING_APPLY_EXPORT_DENIED for unapplied draft, got %+v", draftResp.GetError())
+	}
+
+	// 5. URI 注入型 host 必须被 ResolveExportHostStrict 严格拦截
+	for _, badHost := range []string{
+		"evil.com?allowInsecure=1#",
+		"evil.com#frag",
+		"user@evil.com",
+		"evil.com/path",
+		"0.0.0.0",
+		"not a host",
+	} {
+		if _, err := ResolveExportHostStrict(badHost, "127.0.0.1"); err == nil {
+			t.Fatalf("expected ResolveExportHostStrict to reject %q", badHost)
+		}
+	}
+	if got, err := ResolveExportHostStrict("Edge.Example.COM", "0.0.0.0"); err != nil || got != "edge.example.com" {
+		t.Fatalf("expected canonical host, got %q err=%v", got, err)
+	}
+	if got, err := ResolveExportHostStrict("[2001:db8::1]", "0.0.0.0"); err != nil || got != "2001:db8::1" {
+		t.Fatalf("expected valid IPv6 host, got %q err=%v", got, err)
 	}
 }
 

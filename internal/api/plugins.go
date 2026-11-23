@@ -5,10 +5,15 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/actor"
@@ -320,6 +325,17 @@ func newPluginDTO(p Plugin, actions []pluginActionDTO) pluginDTO {
 	return d
 }
 
+// pluginDTO decorates plugin UI entry URLs with the stateless HMAC capability
+// prefix when a panel secret entry path is active (preventing sandboxed iframe
+// sub-resource 404/timeout when SameSite=Lax _g cookies are stripped).
+func (a *api) pluginDTO(p Plugin) pluginDTO {
+	d := newPluginDTO(p, pluginActionsOf(a.d.Catalog, p.PluginID))
+	if a.d.Access != nil && d.UI != nil && d.UI.EntryURL != "" {
+		d.UI.EntryURL = a.d.Access.Snapshot().DecoratePluginUIEntryURL(d.UI.EntryURL)
+	}
+	return d
+}
+
 // pluginUIURL composes a URL under the versioned plugin static prefix
 // (ADR-0018). path comes from the signed manifest, never from a request.
 func pluginUIURL(pluginID, version, path string) string {
@@ -458,7 +474,7 @@ func (a *api) listPlugins(w http.ResponseWriter, r *http.Request) {
 		var page []Plugin
 		page, next = pagePlugins(plugins, q.Cursor, q.Limit)
 		for _, p := range page {
-			items = append(items, newPluginDTO(p, pluginActionsOf(a.d.Catalog, p.PluginID)))
+			items = append(items, a.pluginDTO(p))
 		}
 	}
 	a.writeList(w, r, listResponse{Items: items, NextCursor: next, Revision: a.watermark()}, q.Fields)
@@ -489,7 +505,7 @@ func (a *api) getPlugin(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.writeResource(w, r, http.StatusOK, newPluginDTO(p, pluginActionsOf(a.d.Catalog, p.PluginID)), fields)
+	a.writeResource(w, r, http.StatusOK, a.pluginDTO(p), fields)
 }
 
 // installPlugin installs a staged package. The version comes from the signed
@@ -718,7 +734,7 @@ func (a *api) restartPlugin(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		a.d.Logger.WarnContext(r.Context(), "api: audit plugin restart", "error", err)
 	}
-	a.writePluginResult(w, r, slot, http.StatusOK, newPluginDTO(p, pluginActionsOf(a.d.Catalog, p.PluginID)))
+	a.writePluginResult(w, r, slot, http.StatusOK, a.pluginDTO(p))
 }
 
 // getPluginLogs reads one page of a plugin's journal (GAPS gap 7). The text is
@@ -1169,10 +1185,28 @@ func (a *api) invokeControllerPlugin(w http.ResponseWriter, r *http.Request) {
 
 // invokeNodePlugin calls an operation of a plugin instance on a node.
 func (a *api) invokeNodePlugin(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.PathValue("node_id")
-	if nodeID != a.d.NodeID {
+	nodeID := strings.TrimSpace(r.PathValue("node_id"))
+	if nodeID == "" {
 		a.fail(w, r, problem.New(problem.NotFound, "The node does not exist."))
 		return
+	}
+	if nodeID != a.d.NodeID {
+		var state string
+		err := a.d.DB.Reader().QueryRowContext(r.Context(),
+			`SELECT enrollment_state FROM nodes WHERE id = ?`, nodeID,
+		).Scan(&state)
+		if errors.Is(err, sql.ErrNoRows) {
+			a.fail(w, r, problem.New(problem.NotFound, "The node does not exist."))
+			return
+		}
+		if err != nil {
+			a.fail(w, r, problem.Wrap(err))
+			return
+		}
+		if state != "active" {
+			a.fail(w, r, problem.New(problem.PreconditionFailed, "The target node is not active."))
+			return
+		}
 	}
 	pluginID := r.PathValue("plugin_id")
 	operation := r.PathValue("operation")
@@ -1229,6 +1263,10 @@ func (a *api) invokePlugin(w http.ResponseWriter, r *http.Request, target operat
 		}))
 		return
 	}
+	runNodeID := target.NodeID
+	if runNodeID == "" {
+		runNodeID = a.d.NodeID
+	}
 	// 同步 read+invoke widget 才进入轮询限额，不为轮询创建 operation。
 	// 显式 read+job 使用持久任务和幂等预算，不借 widget 通道重复派发。
 	if entry != nil && entry.Effect == operations.EffectRead && entry.Mode == operations.ModeInvoke && entry.WidgetRefreshSeconds > 0 {
@@ -1242,13 +1280,19 @@ func (a *api) invokePlugin(w http.ResponseWriter, r *http.Request, target operat
 			return
 		}
 		defer a.widgets.end(scope)
+
+		// 对于处于休眠（stopped）状态的 on_demand 插件，直接读取其宿主持久 KV 中的
+		// summary/* 快照返回，绝不因打开首页概览而唤醒全部闲置插件。
+		if a.tryServeStoppedOnDemandWidgetSnapshot(w, r, act, entry, runNodeID, pluginID, operation) {
+			return
+		}
 	}
 	target.Subject = req.Subject
 	resp, err := a.d.Ops.Run(r.Context(), operations.RunRequest{
 		Actor:            act,
 		TraceID:          gateway.TraceID(r.Context()),
 		RequestID:        gateway.RequestID(r.Context()),
-		NodeID:           a.d.NodeID,
+		NodeID:           runNodeID,
 		Action:           actionID,
 		Target:           target,
 		Args:             req.Payload,
@@ -1262,6 +1306,85 @@ func (a *api) invokePlugin(w http.ResponseWriter, r *http.Request, target operat
 		return
 	}
 	a.writeOperationResponse(w, resp)
+}
+
+// tryServeStoppedOnDemandWidgetSnapshot checks whether pluginID is a stopped
+// on_demand plugin with a cached summary/* snapshot in host plugin-state KV.
+// Returning true means the HTTP response has already been written without
+// waking the hibernated plugin process.
+func (a *api) tryServeStoppedOnDemandWidgetSnapshot(
+	w http.ResponseWriter,
+	r *http.Request,
+	act actor.Actor,
+	entry *catalog.Entry,
+	nodeID, pluginID, operation string,
+) bool {
+	if nodeID != a.d.NodeID {
+		return false
+	}
+	if a.d.Plugins == nil || a.d.DB == nil || a.d.Config.DataDir == "" {
+		return false
+	}
+	if pluginID == "" || filepath.Base(pluginID) != pluginID || strings.Contains(pluginID, "..") {
+		return false
+	}
+	p, err := a.d.Plugins.Get(r.Context(), pluginID)
+	if err != nil || p.ActiveStatus != "active" || p.ActiveVersion == "" || p.Runtime == nil || p.Runtime.State != "stopped" {
+		return false
+	}
+	var manifestRaw string
+	if err := a.d.DB.Reader().QueryRowContext(r.Context(),
+		`SELECT manifest_json FROM plugin_versions WHERE plugin_id = ? AND active = 1`, pluginID,
+	).Scan(&manifestRaw); err != nil {
+		return false
+	}
+	var mf struct {
+		Lifecycle struct {
+			Startup string `json:"startup"`
+		} `json:"lifecycle"`
+	}
+	if json.Unmarshal([]byte(manifestRaw), &mf) != nil || mf.Lifecycle.Startup != "on_demand" {
+		return false
+	}
+	if entry.Permission != "" {
+		if err := a.authorize(r.Context(), act, entry.Permission, nodeID); err != nil {
+			a.fail(w, r, err)
+			return true
+		}
+	}
+	statePath := filepath.Join(a.d.Config.DataDir, "plugin-state", pluginID, "state.json")
+	raw, err := os.ReadFile(statePath)
+	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
+		return false
+	}
+	var doc struct {
+		Entries map[string]struct {
+			Value json.RawMessage `json:"value"`
+		} `json:"entries"`
+	}
+	if json.Unmarshal(raw, &doc) != nil || len(doc.Entries) == 0 {
+		return false
+	}
+	keys := []string{
+		"summary/" + operation,
+		"summary/" + strings.TrimPrefix(operation, pluginID+"."),
+	}
+	for _, k := range keys {
+		rec, ok := doc.Entries[k]
+		if ok && len(rec.Value) > 0 && json.Valid(rec.Value) {
+			out := operations.Outcome{
+				Action:        entry.ID,
+				Status:        operations.Succeeded,
+				EffectiveRisk: entry.Risk,
+				Result:        rec.Value,
+			}
+			if err := gateway.WriteJSON(w, http.StatusOK, out); err != nil {
+				a.d.Logger.Warn("api: write cached widget snapshot", "plugin", pluginID, "operation", operation, "error", err)
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // --- helpers ----------------------------------------------------------------

@@ -28,6 +28,14 @@ describe('createSseParser', () => {
     createSseParser(() => {}, retry).feed('retry: 5000\n\n');
     expect(retry).toHaveBeenCalledWith(5000);
   });
+
+  it('空 id 心跳帧产出 id: undefined，不会清空断点水位', () => {
+    const out: SseFrame[] = [];
+    const p = createSseParser((f) => out.push(f));
+    p.feed('event: heartbeat\nid:\ndata: {}\n\nid: 12\ndata: {"ok":true}\n\n');
+    expect(out[0]).toEqual({ event: 'heartbeat', id: undefined, data: '{}' });
+    expect(out[1]).toEqual({ event: undefined, id: '12', data: '{"ok":true}' });
+  });
 });
 
 /* ------------------------------------------------------------------ 重连 */

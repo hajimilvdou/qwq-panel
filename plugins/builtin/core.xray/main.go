@@ -31,15 +31,12 @@ func run(ctx context.Context) error {
 
 var errRuntimeFailure = errors.New("core.xray: managed runtime requires recovery")
 
-// superviseDriver 保留规范故障原因，让 systemd 将核心与驱动作为同一故障域重启。
+// superviseDriver 保持插件 RPC 通道存活；核心进程在耗尽 coreproc 有界退避重启后仅记录规范降级原因，
+// 不再调用 os.Exit(1) 自杀，确保管理员仍可通过 core.status / core.apply 下发修复配置。
 func superviseDriver(ctx context.Context, serve func(context.Context, *Plugin) error) error {
-	child, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
 	plugin := New()
-	plugin.onFailure = func(error) { cancel(errRuntimeFailure) }
-	err := serve(child, plugin)
-	if ctx.Err() == nil && context.Cause(child) != nil {
-		return context.Cause(child)
+	plugin.onFailure = func(error) {
+		fmt.Fprintln(os.Stderr, errRuntimeFailure.Error())
 	}
-	return err
+	return serve(ctx, plugin)
 }

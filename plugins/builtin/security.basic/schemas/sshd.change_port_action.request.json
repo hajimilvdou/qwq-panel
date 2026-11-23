@@ -15,6 +15,10 @@
       "type": "string",
       "maxLength": 128,
       "description": "可选 sshd/config 期望修订号。"
+    },
+    "confirm_external_reachable": {
+      "type": "boolean",
+      "description": "当主机未检测到新端口外部 ESTABLISHED 连接时，显式二次确认云安全组已放行新端口。"
     }
   }
 }

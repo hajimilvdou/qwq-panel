@@ -120,7 +120,8 @@ type ChildProcess struct {
 	stderr       *boundedBuffer
 	isolatedHome string
 	releaseSem   func()
-	waitCh       chan error
+	doneCh       chan struct{}
+	waitErr      error
 	closeOnce    sync.Once
 }
 
@@ -258,11 +259,11 @@ func (l OSProcessLauncher) Start(ctx context.Context, path string, args, env []s
 		stderr:       stderrBuf,
 		isolatedHome: isolatedHome,
 		releaseSem:   releaseSem,
-		waitCh:       make(chan error, 1),
+		doneCh:       make(chan struct{}),
 	}
 	go func() {
-		cp.waitCh <- cmd.Wait()
-		close(cp.waitCh)
+		cp.waitErr = cmd.Wait()
+		close(cp.doneCh)
 	}()
 
 	// Propagate context cancellation directly to the entire process group.
@@ -270,7 +271,7 @@ func (l OSProcessLauncher) Start(ctx context.Context, path string, args, env []s
 		select {
 		case <-ctx.Done():
 			_ = cp.Close(l.GracePeriod)
-		case <-cp.waitCh:
+		case <-cp.doneCh:
 		}
 	}()
 
@@ -306,15 +307,14 @@ func createIsolatedCLIHome() (string, error) {
 
 // NewPipeProcess wraps an in-memory pipe pair for deterministic tests.
 func NewPipeProcess(stdin io.WriteCloser, stdout io.ReadCloser) *ChildProcess {
-	ch := make(chan error, 1)
-	ch <- nil
-	close(ch)
+	doneCh := make(chan struct{})
+	close(doneCh)
 	return &ChildProcess{
 		stdin:      stdin,
 		stdout:     stdout,
 		stderr:     &boundedBuffer{limit: maxStderrCaptureBytes},
 		releaseSem: func() {},
-		waitCh:     ch,
+		doneCh:     doneCh,
 	}
 }
 
@@ -352,7 +352,8 @@ func (p *ChildProcess) Close(grace time.Duration) error {
 		}
 		if p.cmd == nil || p.cmd.Process == nil {
 			select {
-			case waitErr = <-p.waitCh:
+			case <-p.doneCh:
+				waitErr = p.waitErr
 			default:
 			}
 			return
@@ -363,7 +364,8 @@ func (p *ChildProcess) Close(grace time.Duration) error {
 		_ = signalProcessGroup(pid, false)
 
 		select {
-		case waitErr = <-p.waitCh:
+		case <-p.doneCh:
+			waitErr = p.waitErr
 		case <-time.After(grace):
 			// Phase 2: SIGKILL the entire process group and break pipe holds.
 			_ = signalProcessGroup(pid, true)
@@ -375,7 +377,8 @@ func (p *ChildProcess) Close(grace time.Duration) error {
 				_ = p.stdout.Close()
 			}
 			select {
-			case waitErr = <-p.waitCh:
+			case <-p.doneCh:
+				waitErr = p.waitErr
 			case <-time.After(hardReapTimeout):
 				waitErr = errors.New("child process group reap timed out")
 			}

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/anytls"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/coreproc"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/secretmap"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
@@ -87,6 +88,17 @@ type ObfsManager interface {
 	StartAll(context.Context, []xrayconfig.ObfsPlan) error
 	StopAll(time.Duration)
 	Status() (healthy bool, errText string)
+	OwnedPIDs() []int
+}
+
+// AnyTLSManager 管理内建纯 Go AnyTLS v1/v2 服务端监听组，与核心进程同事务启停、热换证与流量汇总。
+type AnyTLSManager interface {
+	StartAll(context.Context, []anytls.ProfileSpec) error
+	StopAll(time.Duration)
+	ReloadCertificate(profileID, bindingRef string, certPEM, keyPEM []byte) (bool, error)
+	Counters() map[string]int64
+	Status() (healthy bool, errText string)
+	IsRunning(profileID string) bool
 }
 
 // Options 默认复用生产 Render；Before 只用于有界进度或故障注入。
@@ -95,6 +107,7 @@ type Options struct {
 	Process                Process
 	Binary                 Binary
 	Obfs                   ObfsManager
+	AnyTLS                 AnyTLSManager
 	OutboundPolicy         func() *xrayconfig.OutboundPolicy
 	Socket                 string
 	DataDir                string
@@ -168,6 +181,7 @@ type Engine struct {
 	serial      uint64
 	tlsBindings map[string]TLSBindingStatus
 	obfsPlans   []xrayconfig.ObfsPlan
+	anytlsSpecs []anytls.ProfileSpec
 }
 
 // Observation 供状态源检验读取期间是否发生过事务或生命周期切换。

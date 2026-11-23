@@ -51,9 +51,14 @@ umask 0077
 printf 'QWQ_PROBE_ENDPOINT=%s\nQWQ_PROBE_NODE=%s\nQWQ_PROBE_TOKEN=%s\n' "$ENDPOINT" "$NODE_ID" "$TOKEN" > /etc/qwq-probe-agent/agent.env
 
 echo "[qwq-probe-agent] 正在拉取单文件只读探针二进制 (linux/${BIN_ARCH})..."
-# 实际发布时从主控静态托管路径或签名 Release 下载并校验 SHA-256
-# curl -fsSL "${ENDPOINT%/api/probe/v1/report}/static/qwq-probe-agent-linux-${BIN_ARCH}" -o /usr/local/bin/qwq-probe-agent
-# chmod 0755 /usr/local/bin/qwq-probe-agent
+BASE_URL="${ENDPOINT%/api/probe/v1/report}"
+BASE_URL="${BASE_URL%/v1/report}"
+TMP_BIN="$(mktemp /tmp/qwq-probe-agent.XXXXXX)"
+trap 'rm -f "$TMP_BIN"' EXIT
+curl -fsSL "${BASE_URL}/static/qwq-probe-agent-linux-${BIN_ARCH}" -o "$TMP_BIN"
+install -m 0755 "$TMP_BIN" /usr/local/bin/qwq-probe-agent
+rm -f "$TMP_BIN"
+chmod 0755 /usr/local/bin/qwq-probe-agent
 
 if command -v systemctl >/dev/null 2>&1; then
   cat > /etc/systemd/system/qwq-probe-agent.service <<'EOF'
@@ -80,5 +85,34 @@ CPUQuota=5%
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  echo "[qwq-probe-agent] systemd 沙箱服务已就绪 (DynamicUser=yes, MemoryMax=16M, 零入站监听)。"
+  systemctl enable --now qwq-probe-agent.service
+  echo "[qwq-probe-agent] systemd 沙箱服务已启动 (DynamicUser=yes, MemoryMax=16M, 零入站监听)。"
+elif command -v rc-service >/dev/null 2>&1 || command -v openrc-run >/dev/null 2>&1; then
+  cat > /etc/init.d/qwq-probe-agent <<'EOF'
+#!/sbin/openrc-run
+name="qwq-probe-agent"
+description="qwq One-Way Read-Only Server Probe Agent"
+command="/usr/local/bin/qwq-probe-agent"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  if [ -f /etc/qwq-probe-agent/agent.env ]; then
+    set -a
+    . /etc/qwq-probe-agent/agent.env
+    set +a
+  fi
+}
+EOF
+  chmod 0755 /etc/init.d/qwq-probe-agent
+  rc-update add qwq-probe-agent default 2>/dev/null || true
+  rc-service qwq-probe-agent restart
+  echo "[qwq-probe-agent] Alpine OpenRC 服务已启动。"
+else
+  echo "[qwq-probe-agent] 未检测到 systemd 或 OpenRC，二进制已安装至 /usr/local/bin/qwq-probe-agent，请手动配置守护进程。"
 fi

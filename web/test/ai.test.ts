@@ -9,7 +9,7 @@ import { addLocalUser, fromMessages, reduce, settleLocalUser, turnProgress, type
 import { parseSessionFrame, byteLength } from '../shell/src/lib/ai/session-stream.svelte';
 import { decideApproval, nextFocus, requesterOf, reachText } from '../shell/src/lib/ai/decide';
 import { clampSize, loadSize, saveSize, sizeFromPointer } from '../shell/src/lib/ai/dock-layout';
-import { parseInline, parseMarkdown, safeHref } from '../shell/src/ui/markdown';
+import { createMarkdownCache, parseInline, parseInlineLinear, parseMarkdown, safeHref } from '../shell/src/ui/markdown';
 
 const ev = (seq: number, e: Partial<AgentSessionEvent>): AgentSessionEvent => ({ seq, type: 'message.delta', ...e }) as AgentSessionEvent;
 const empty = (): TranscriptState => ({ items: [], seq: 0, status: 'idle' });
@@ -180,6 +180,22 @@ describe('markdown 子集', () => {
   });
   it('下划线在单词中间不算斜体', () => {
     expect(parseInline('snake_case_name')).toEqual([{ t: 'text', v: 'snake_case_name' }]);
+  });
+  it('O(N) 线性行内解析：64 KiB 未闭合定界符不卡顿', () => {
+    const evil = '*a '.repeat(8000) + '_b '.repeat(8000) + '[c'.repeat(8000) + '`d'.repeat(4000);
+    const t0 = performance.now();
+    const out = parseInlineLinear(evil);
+    const dt = performance.now() - t0;
+    expect(out.length).toBeGreaterThan(0);
+    expect(dt).toBeLessThan(150);
+  });
+  it('增量缓存：流式追加时已闭合段落直接复用 AST', () => {
+    const cache = createMarkdownCache();
+    const b1 = cache.parse('# 标题\n\n第一段内容\n\n第二段');
+    const b2 = cache.parse('# 标题\n\n第一段内容\n\n第二段继续流式吐字');
+    expect(b2[0]).toBe(b1[0]);
+    expect(b2[1]).toBe(b1[1]);
+    expect(b2[2]).toEqual({ t: 'p', c: [{ t: 'text', v: '第二段继续流式吐字' }] });
   });
 });
 

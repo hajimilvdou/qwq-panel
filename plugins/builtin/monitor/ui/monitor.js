@@ -25,18 +25,35 @@
     });
   }
 
+  function extractErrorMessage(errObj, fallback) {
+    if (!errObj) return fallback;
+    if (typeof errObj === 'string') return errObj;
+    return errObj.detail || errObj.message || errObj.code || fallback;
+  }
+
   function accept(data) {
     if (!data || typeof data !== 'object') return;
-    if (data.t === 'api.result' && typeof data.id === 'string') {
+    if (data.t === 'api.result' && pending.has(data.id)) {
       const request = pending.get(data.id);
-      if (!request) return;
       clearTimeout(request.deadline);
       pending.delete(data.id);
       if (data.ok === true) {
-        const result = data.data?.result ?? data.data;
-        if (!result || typeof result !== 'object' || data.data?.error) request.reject(new Error('指标暂不可用'));
+        const env = data.data;
+        if (env && typeof env === 'object' && (env.status === 'AWAITING_APPROVAL' || env.approval_id)) {
+          const err = new Error('等待审批确认');
+          err.awaitingApproval = true;
+          err.approvalId = env.approval_id;
+          request.reject(err);
+          return;
+        }
+        if (env && typeof env === 'object' && (env.error || env.status === 'FAILED' || env.status === 'REJECTED' || env.status === 'CANCELED' || env.status === 'EXPIRED')) {
+          request.reject(new Error(extractErrorMessage(env.error, '指标暂不可用')));
+          return;
+        }
+        const result = env && typeof env === 'object' && 'result' in env && env.result !== undefined ? env.result : env;
+        if (!result || typeof result !== 'object') request.reject(new Error('指标暂不可用'));
         else request.resolve(result);
-      } else request.reject(new Error('宿主指标暂不可用'));
+      } else request.reject(new Error(extractErrorMessage(data.problem || data.error, '宿主指标暂不可用')));
     }
     if (data.t === 'ui.settings') {
       root.dataset.theme = pick(data.theme, ['light', 'dark'], root.dataset.theme);

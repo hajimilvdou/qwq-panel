@@ -7,11 +7,12 @@
   外链新窗口打开并带 noopener noreferrer；站内链接走路由拦截。
 -->
 <script lang="ts">
-  import { parseMarkdown, type Inline } from './markdown';
+  import { createMarkdownCache, type Inline } from './markdown';
 
   let { source }: { source: string } = $props();
 
-  const blocks = $derived(parseMarkdown(source));
+  const cache = createMarkdownCache();
+  const blocks = $derived(cache.parse(source));
 </script>
 
 {#snippet inline(nodes: Inline[])}

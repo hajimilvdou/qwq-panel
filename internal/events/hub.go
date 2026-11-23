@@ -584,9 +584,12 @@ func (h *Hub) dispatch(e Event) {
 }
 
 // replayPending feeds journal events to subscriptions that resumed from an
-// older sequence.
+// older sequence, capping each round at 1024 scanned rows so live drain is
+// never starved by a catching-up subscriber.
 func (h *Hub) replayPending(ctx context.Context) {
-	for {
+	const maxReplayRowsPerRound = 1024
+	scanned := 0
+	for scanned < maxReplayRowsPerRound {
 		s, from, to, ok := h.replayState()
 		if !ok {
 			return
@@ -594,7 +597,8 @@ func (h *Hub) replayPending(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		batch, err := h.cfg.Journal.EventsAfter(ctx, from-1, h.cfg.Batch)
+		limit := min(h.cfg.Batch, maxReplayRowsPerRound-scanned)
+		batch, err := h.cfg.Journal.EventsAfter(ctx, from-1, limit)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -603,6 +607,7 @@ func (h *Hub) replayPending(ctx context.Context) {
 			h.failReplay(s, err)
 			continue
 		}
+		scanned += len(batch)
 		if !h.applyReplay(s, from, to, batch) {
 			h.failReplay(s, errors.New("events: journal no longer holds the replay range"))
 			continue

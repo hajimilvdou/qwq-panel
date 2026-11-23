@@ -31,8 +31,13 @@ const (
 )
 
 var (
-	domainRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
-	headerRe = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+	domainRe        = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+	headerRe        = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+	certIDRe        = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+	basicAuthUserRe = regexp.MustCompile(`^[a-zA-Z0-9._@-]{1,64}$`)
+	cgnatPrefix     = netip.MustParsePrefix("100.64.0.0/10")
+	linkLocalV4     = netip.MustParsePrefix("169.254.0.0/16")
+	ec2MetadataV6   = netip.MustParseAddr("fd00:ec2::254")
 )
 
 // SiteRecord 表示一个反向代理虚拟主机配置（BasicAuthHash 仅用于内部与快照，不对外暴露明文口令）。
@@ -156,9 +161,9 @@ func validateUpstreamURL(raw string) (string, error) {
 	host := u.Hostname()
 	if ip, err := netip.ParseAddr(host); err == nil {
 		ip = ip.Unmap()
-		// 显式禁止云元数据地址，避免反代配置变成云主机 IMDS 泄露跳板。
-		if ip.IsLinkLocalUnicast() || ip == netip.MustParseAddr("169.254.169.254") || ip == netip.MustParseAddr("fd00:ec2::254") {
-			return "", errors.New("禁止将云元数据链路本地地址配置为反向代理上游")
+		// 显式禁止云元数据链路本地地址与 100.64.0.0/10（含阿里云 100.100.100.200），避免反代配置变成云主机 IMDS 泄露跳板。
+		if ip.IsLinkLocalUnicast() || linkLocalV4.Contains(ip) || cgnatPrefix.Contains(ip) || ip == ec2MetadataV6 {
+			return "", errors.New("禁止将云元数据链路本地或 100.64.0.0/10 地址配置为反向代理上游")
 		}
 	} else if strings.EqualFold(host, "metadata.google.internal") {
 		return "", errors.New("禁止将云元数据主机配置为反向代理上游")
@@ -232,12 +237,16 @@ func (s *ingressStore) upsertSite(ctx context.Context, p siteUpsertParams) (Site
 	if p.TLSMode != "off" && p.TLSMode != "managed" && p.TLSMode != "custom" {
 		return SiteRecord{}, errors.New("tls_mode 仅支持 off / managed / custom")
 	}
-	if p.CertID != "" && hasInjectionChars(p.CertID) {
-		return SiteRecord{}, errors.New("cert_id 包含非法字符")
+	certID := strings.TrimSpace(p.CertID)
+	if certID != "" && (!certIDRe.MatchString(certID) || strings.Contains(certID, "..")) {
+		return SiteRecord{}, errors.New("cert_id 格式非法（仅允许字母、数字、点、下划线与连字符，且不得含 ..）")
 	}
-	if p.BasicAuthUser != "" && (hasInjectionChars(p.BasicAuthUser) || strings.Contains(p.BasicAuthUser, ":")) {
-		return SiteRecord{}, errors.New("basic_auth_user 包含非法字符")
+	p.CertID = certID
+	authUserTrim := strings.TrimSpace(p.BasicAuthUser)
+	if authUserTrim != "" && !basicAuthUserRe.MatchString(authUserTrim) {
+		return SiteRecord{}, errors.New("basic_auth_user 格式非法（仅允许 1-64 位字母、数字、._@-）")
 	}
+	p.BasicAuthUser = authUserTrim
 	if p.RateLimitRPS < 0 || p.RateLimitRPS > 10000 || p.RateLimitBurst < 0 || p.RateLimitBurst > 20000 {
 		return SiteRecord{}, errors.New("限流参数超出允许范围")
 	}

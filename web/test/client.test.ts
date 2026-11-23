@@ -11,6 +11,7 @@ import {
   setCsrfToken,
   setUnauthenticatedHandler,
 } from '$api/client';
+import { upload } from '$api/upload';
 
 type Call = { url: string; init: RequestInit };
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
@@ -138,5 +139,51 @@ describe('request', () => {
     expect(err.code).toBe('VALIDATION_FAILED');
     expect(err.fieldErrors()).toEqual({ '/name': '必填' });
     expect(err.requestId).toBe('req_1');
+  });
+});
+
+describe('upload', () => {
+  it('403 CSRF_FAILED 自动刷新 CSRF 令牌并单次重试', async () => {
+    const sentTokens: string[] = [];
+    let attempt = 0;
+    class FakeXHR {
+      status = 0;
+      statusText = '';
+      responseText = '';
+      withCredentials = false;
+      upload: { onprogress: ((e: ProgressEvent) => void) | null } = { onprogress: null };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      #headers: Record<string, string> = {};
+      open() {}
+      setRequestHeader(k: string, v: string) {
+        this.#headers[k] = v;
+      }
+      getResponseHeader(k: string) {
+        return k.toLowerCase() === 'content-type' ? 'application/json' : null;
+      }
+      abort() {}
+      send() {
+        sentTokens.push(this.#headers['X-CSRF-Token'] ?? '');
+        attempt++;
+        if (attempt === 1) {
+          this.status = 403;
+          this.responseText = JSON.stringify({ code: 'CSRF_FAILED', title: 'csrf', status: 403 });
+        } else {
+          this.status = 201;
+          this.responseText = JSON.stringify({ upload_id: 'up_1' });
+        }
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', FakeXHR);
+    setCsrfToken('old-csrf');
+    setCsrfRefresher(async () => setCsrfToken('fresh-csrf'));
+
+    const res = await upload<{ upload_id: string }>('/api/v1/plugin-packages', new FormData());
+    expect(res.status).toBe(201);
+    expect(res.data).toEqual({ upload_id: 'up_1' });
+    expect(sentTokens).toEqual(['old-csrf', 'fresh-csrf']);
   });
 });

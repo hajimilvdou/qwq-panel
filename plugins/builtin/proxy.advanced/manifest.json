@@ -39,6 +39,20 @@
     "schemas/chains.upsert.request.json": "sha256:66f249b396345414286bd284074e23d12a1a6b8e7553afd619d40776738b9ebf",
     "schemas/chains.upsert.response.json": "sha256:78fef37747b34575d439619f75418bc1a226833135379675713e5fb209f0f9d9",
     "schemas/config.schema.json": "sha256:36649ce8a22fbbf147ff65ef2162971581157b1c4dd8fe5380ecf6d7d4467043",
+    "schemas/nodes.delete.request.json": "sha256:f69fce7b936b284d82f1a31351ae5ea03bc87a1d5a02f1a8a083006a44e20ca1",
+    "schemas/nodes.delete.response.json": "sha256:13cdf446df05cb1e15019cf20cb4daf3093bb8ea2fde55325fa7db210db9c5db",
+    "schemas/nodes.import_uri.request.json": "sha256:f9bc73100f14e8ec3de8d163e14e0f7cbf5adb45924b1f1ea4a09eb68e889c4f",
+    "schemas/nodes.import_uri.response.json": "sha256:4d34b5a58724afe212cbfce5f812c37a8a2db3e4dc21873e804ce90b9ddb029e",
+    "schemas/nodes.list.request.json": "sha256:7316b536f7c5d0be92c2c4d35061ad3b379c66c66aaee4371874059dda53e60a",
+    "schemas/nodes.list.response.json": "sha256:6d273296634182f1d9e1dc6715f78802fbc116fa8c0151e390d57a06876af446",
+    "schemas/nodes.preview_json.request.json": "sha256:7a2c5bdbbab425bbed25e3a601d61242001aeb1c9015917c8d0af072dd439d90",
+    "schemas/nodes.preview_json.response.json": "sha256:baf5d554a7b487c0df001b5a22b0bf718b041fd1ebddf22421de0a09f67b491d",
+    "schemas/nodes.probe_sni.request.json": "sha256:56d2dfe737d223fdc1240664bc8c7e64f09672173cd4f3a295532aade1ac72bb",
+    "schemas/nodes.probe_sni.response.json": "sha256:7f78b13333cfeeed83056592473308eeed9d0acf562c15dc8b25faf1cec6db09",
+    "schemas/nodes.test.request.json": "sha256:cddc7d85f180d93c7be93105d10119ad4795e49e86088824e06152ee66f6dd13",
+    "schemas/nodes.test.response.json": "sha256:5d75408c7c03682d6d6e2640720807625cf2714a6de4717e72d6d8709620c9ba",
+    "schemas/nodes.upsert.request.json": "sha256:5edc41ace4a7ec1317ef3d04d7b91519f92c0cdda65c2faddd1f4eb7b0817ddf",
+    "schemas/nodes.upsert.response.json": "sha256:112caa4af890c317147445576164b783fb769b9242526a0debb411ea00e0c0ab",
     "schemas/plans.list.request.json": "sha256:d94e23cf74b60b53e680ad06c808fba1fc9a6e39889a2bd115c41da455ada3ce",
     "schemas/plans.list.response.json": "sha256:97a15d7f1ae256d46b89e0c59b21824152b041e29d8645e7f152ef65e6f0876d",
     "schemas/plans.upsert.request.json": "sha256:fb448ec813273eeb7a12316d485ddf8589c4b5244e4dd58f690053bf451e5a9b",
@@ -81,8 +95,9 @@
     "schemas/warp.register.response.json": "sha256:ec31d645d6e618aaf280202fcef84c2807a6eb089a0cf01f2fd4ad4f990281fe",
     "schemas/warp.status.request.json": "sha256:9fecaf0be57870533738379f6bd1dab1d8303d91d77ad4e88731cdc2cb7e7665",
     "schemas/warp.status.response.json": "sha256:ca1da9258a97ab1f47ea5f48657025b16fc3582cf49699b713b36115aa78857b",
-    "ui/index.html": "sha256:994e77bff378996e372f06eb5a0e4e2b55fbc150bb8d07d7fecdb3a8ef20b8cf",
-    "ui/proxy.js": "sha256:89426b1732fb96702c6e148d61cdb6643f7964e5b516199c6c3eb4e72a72b8fc"
+    "ui/index.html": "sha256:a2abd582728b44236cf81e99daec4ab3083ac43805724ba7bf4f0f5b383c5243",
+    "ui/proxy.css": "sha256:86927c2142f3976264c407ffb9a735e5e3046a32ff140bc2feee409c76d91fca",
+    "ui/proxy.js": "sha256:6d66b708a2750ded739efd68e5a829741b6a8f110d3b7ee9da96808d3c770706"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -107,10 +122,10 @@
     "hot_apply": true
   },
   "resources": {
-    "memory_max_mb": 32,
+    "memory_max_mb": 64,
     "cpu_quota_percent": 25,
     "pids_max": 16,
-    "fds_max": 512,
+    "fds_max": 4096,
     "disk_max_mb": 32,
     "kv_max_kb": 128
   },
@@ -909,6 +924,184 @@
       "approval": "confirm",
       "approval_summary": "将删除本地保存的 Cloudflare WARP 凭据并从 core.xray 移除 WARP 出口路由",
       "ui_route": "/proxy/chains"
+    },
+    {
+      "name": "nodes.list",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "列举全部托管入站节点与外部导入节点（支持按来源/协议/标签/关键字筛选与监听状态）",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "plugin.config.read",
+          "scope": "core.xray"
+        }
+      ],
+      "request_schema": "schemas/nodes.list.request.json",
+      "response_schema": "schemas/nodes.list.response.json",
+      "ui_route": "/proxy"
+    },
+    {
+      "name": "nodes.upsert",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 20000,
+      "summary": "以极简模式或专家模式创建/更新全协议代理节点并同步至 core.xray",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "plugin.config.read",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.config.write",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "core.xray/core.apply"
+        }
+      ],
+      "request_schema": "schemas/nodes.upsert.request.json",
+      "response_schema": "schemas/nodes.upsert.response.json",
+      "approval": "confirm",
+      "approval_summary": "将保存代理节点配置并在宿主就绪时同步下发至 core.xray 监听端口",
+      "ui_route": "/proxy"
+    },
+    {
+      "name": "nodes.delete",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "summary": "删除指定托管或外部代理节点并重新同步 core.xray",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "plugin.config.read",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.config.write",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "core.xray/core.apply"
+        }
+      ],
+      "request_schema": "schemas/nodes.delete.request.json",
+      "response_schema": "schemas/nodes.delete.response.json",
+      "approval": "confirm",
+      "approval_summary": "将移除指定代理节点并在托管节点变更时重新同步 core.xray",
+      "ui_route": "/proxy"
+    },
+    {
+      "name": "nodes.probe_sni",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "summary": "并发探测 Reality 伪装域名的 TLS 1.3 支持与往返延迟并返回排序推荐",
+      "capabilities": [
+        {
+          "name": "network.egress",
+          "scope": "chain"
+        }
+      ],
+      "request_schema": "schemas/nodes.probe_sni.request.json",
+      "response_schema": "schemas/nodes.probe_sni.response.json",
+      "ui_route": "/proxy"
+    },
+    {
+      "name": "nodes.preview_json",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "无副作用实时预览节点对应的 Xray v26.11.9 / AnyTLS 原生入站 JSON 与客户端分享链接",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/nodes.preview_json.request.json",
+      "response_schema": "schemas/nodes.preview_json.response.json",
+      "ui_route": "/proxy"
+    },
+    {
+      "name": "nodes.import_uri",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": false,
+      "timeout_ms": 15000,
+      "summary": "批量解析多行或 Base64 外部代理节点 URI 并保存纳入多协议订阅汇总",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/nodes.import_uri.request.json",
+      "response_schema": "schemas/nodes.import_uri.response.json",
+      "approval": "confirm",
+      "approval_summary": "将解析并保存导入的外部代理节点链接用于连通性测试与订阅汇总",
+      "ui_route": "/proxy"
+    },
+    {
+      "name": "nodes.test",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "summary": "对指定代理节点执行真实 TCP/TLS/UDP 连通性与延迟测试并更新延迟记录",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.egress",
+          "scope": "chain"
+        }
+      ],
+      "request_schema": "schemas/nodes.test.request.json",
+      "response_schema": "schemas/nodes.test.response.json",
+      "ui_route": "/proxy"
     }
   ],
   "ui": {
@@ -919,6 +1112,12 @@
       {
         "path": "/proxy",
         "title": "高级代理",
+        "nav": true,
+        "permission": "proxy.advanced:read"
+      },
+      {
+        "path": "/proxy/nodes",
+        "title": "节点管理",
         "nav": true,
         "permission": "proxy.advanced:read"
       },

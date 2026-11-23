@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "删除代理节点请求",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "sync_core": {
+      "type": "boolean"
+    }
+  },
+  "required": ["id"]
+}

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "预览节点原生 Xray/AnyTLS 配置与客户端链接请求",
+  "description": "无副作用纯函数，按当前协议/传输/安全层草稿生成 Xray v26.11.9 或 AnyTLS 原生入站 JSON 与客户端分享链接预览。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["simplified", "expert"]
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 96
+    },
+    "protocol": {
+      "type": "string",
+      "enum": [
+        "vless",
+        "vmess",
+        "trojan",
+        "shadowsocks",
+        "shadowsocks2022",
+        "hysteria2",
+        "anytls",
+        "socks5",
+        "http"
+      ]
+    },
+    "transport": {
+      "type": "string",
+      "enum": ["", "raw", "tcp", "ws", "grpc", "xhttp", "udp"]
+    },
+    "security_mode": {
+      "type": "string",
+      "enum": ["", "reality", "tls", "none"]
+    },
+    "listen": {
+      "type": "string",
+      "maxLength": 45
+    },
+    "server": {
+      "type": "string",
+      "maxLength": 253
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "tags": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "maxLength": 32
+      }
+    },
+    "config": {
+      "type": "object"
+    },
+    "sync_core": {
+      "type": "boolean"
+    }
+  },
+  "required": ["protocol"]
+}

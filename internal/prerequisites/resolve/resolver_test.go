@@ -67,7 +67,7 @@ func TestObserveIncludesAuthoritativeAndRecursiveTXTFragments(t *testing.T) {
 		t.Fatal(err)
 	}
 	observations, err := r.Observe(context.Background(), fixtureScope(), "_acme-challenge.proxy.example.com", dns.TXT)
-	if err != nil || len(observations) != 3 || queries != 3 {
+	if err != nil || len(observations) != 6 || queries != 6 {
 		t.Fatalf("sources = %v %v", observations, err)
 	}
 	if observations[0].Kind != dns.Authoritative || observations[1].Kind != dns.Recursive {

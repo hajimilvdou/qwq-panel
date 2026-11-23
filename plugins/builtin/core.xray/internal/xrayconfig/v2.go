@@ -131,32 +131,43 @@ func RenderV2(intent *corev2.Intent, materials V2Materials, options V2Options) (
 		}
 		var inbound nativeInbound
 		var err error
+		emitToXray := true
+		if !profileMaterialsMatchProtocol(profile.Protocol, material) {
+			return nil, ErrV2Materials
+		}
 		switch profile.Protocol {
 		case corev2.ProtocolVLESS:
-			if material.VLESS == nil || material.Hysteria2 != nil || material.Shadowsocks2022 != nil {
-				return nil, ErrV2Materials
-			}
-			inbound, err = vlessInbound(projectVLESS(profile, intent.Outbound), *material.VLESS)
+			inbound, err = vlessV2Inbound(profile, *material.VLESS, material.VLESSTLS, material.VLESSDecryption, options)
+		case corev2.ProtocolVMess:
+			inbound, err = vmessInbound(profile, *material.VMess, options)
+		case corev2.ProtocolTrojan:
+			inbound, err = trojanInbound(profile, *material.Trojan, options)
+		case corev2.ProtocolShadowsocks:
+			inbound, err = ssAEADInbound(profile, *material.Shadowsocks)
 		case corev2.ProtocolHysteria2:
-			if material.Hysteria2 == nil || material.VLESS != nil || material.Shadowsocks2022 != nil {
-				return nil, ErrV2Materials
-			}
 			inbound, err = hysteriaInbound(profile, *material.Hysteria2, options)
 		case corev2.ProtocolShadowsocks2022:
-			if material.Shadowsocks2022 == nil || material.VLESS != nil || material.Hysteria2 != nil {
-				return nil, ErrV2Materials
-			}
 			inbound, err = ss2022Inbound(profile, *material.Shadowsocks2022, options)
+		case corev2.ProtocolAnyTLS:
+			// AnyTLS 由内建纯 Go AnyTLSSupervisor 承载，不写入 Xray 原生 inbounds，但仍严格核验材料与 TLS 绑定。
+			emitToXray = false
+			err = validateAnyTLSMaterials(profile, *material.AnyTLS, options)
+		case corev2.ProtocolSOCKS5:
+			inbound, err = socks5Inbound(profile, *material.SOCKS5)
+		case corev2.ProtocolHTTP:
+			inbound, err = httpInbound(profile, *material.HTTP)
+		default:
+			return nil, ErrV2Materials
 		}
 		if err != nil {
 			return nil, err
 		}
-		if *profile.Enabled {
-			if needSniff {
+		if *profile.Enabled && emitToXray {
+			if needSniff || profileWantsSniffing(profile) {
 				inbound.Sniffing = &nativeSniffing{
 					Enabled:      true,
 					DestOverride: []string{"http", "tls", "quic"},
-					RouteOnly:    true,
+					RouteOnly:    needSniff && !profileWantsSniffing(profile),
 				}
 			}
 			inbounds = append(inbounds, inbound)
@@ -368,14 +379,45 @@ func ensureCIDR(addr, suffix string) string {
 	return addr + suffix
 }
 
-func projectVLESS(profile corev2.Profile, outbound *corev2.Outbound) *corev1.Intent {
-	enabled := *profile.Enabled
-	users := make([]corev1.User, len(profile.Users))
-	for index, user := range profile.Users {
-		users[index] = corev1.User{ID: user.ID, UUID: *user.UUID}
+func profileMaterialsMatchProtocol(protocol string, m ProfileMaterials) bool {
+	present := func(b bool) int {
+		if b {
+			return 1
+		}
+		return 0
 	}
-	return &corev1.Intent{SchemaVersion: "1", Enabled: &enabled, Outbound: outbound, Inbound: &corev1.Inbound{
-		ID: profile.ID, Listen: profile.Listen, Port: profile.Port, Protocol: "vless", Transport: profile.VLESS.Transport, Flow: profile.VLESS.Flow, Security: profile.VLESS.Security, Users: users}}
+	count := present(m.VLESS != nil) + present(m.VMess != nil) + present(m.Trojan != nil) +
+		present(m.Shadowsocks != nil) + present(m.Shadowsocks2022 != nil) +
+		present(m.Hysteria2 != nil) + present(m.AnyTLS != nil) +
+		present(m.SOCKS5 != nil) + present(m.HTTP != nil)
+	if count != 1 {
+		return false
+	}
+	if protocol != corev2.ProtocolVLESS && (m.VLESSTLS != nil || len(m.VLESSDecryption) != 0) {
+		return false
+	}
+	switch protocol {
+	case corev2.ProtocolVLESS:
+		return m.VLESS != nil
+	case corev2.ProtocolVMess:
+		return m.VMess != nil
+	case corev2.ProtocolTrojan:
+		return m.Trojan != nil
+	case corev2.ProtocolShadowsocks:
+		return m.Shadowsocks != nil
+	case corev2.ProtocolShadowsocks2022:
+		return m.Shadowsocks2022 != nil
+	case corev2.ProtocolHysteria2:
+		return m.Hysteria2 != nil
+	case corev2.ProtocolAnyTLS:
+		return m.AnyTLS != nil
+	case corev2.ProtocolSOCKS5:
+		return m.SOCKS5 != nil
+	case corev2.ProtocolHTTP:
+		return m.HTTP != nil
+	default:
+		return false
+	}
 }
 
 func ss2022Inbound(profile corev2.Profile, materials SS2022Materials, options V2Options) (nativeInbound, error) {
@@ -396,6 +438,26 @@ func ss2022Inbound(profile corev2.Profile, materials SS2022Materials, options V2
 	network := "tcp"
 	if profile.Shadowsocks2022.UDP {
 		network = "tcp,udp"
+	}
+	// Xray-core v26 中 2022-blake3-chacha20-poly1305 为单用户服务端模式（不含 users 字段）。
+	if profile.Shadowsocks2022.Method == corev2.MethodChaCha20 {
+		email := ""
+		if len(users) > 0 {
+			email = users[0].Email
+		}
+		return nativeInbound{
+			Tag:      tag,
+			Listen:   listen,
+			Port:     &port,
+			Protocol: "shadowsocks",
+			Settings: ss2022SingleSettings{
+				Method:   profile.Shadowsocks2022.Method,
+				Password: string(materials.ServerKey),
+				Email:    email,
+				Level:    0,
+				Network:  network,
+			},
+		}, nil
 	}
 	return nativeInbound{Tag: tag, Listen: listen, Port: &port, Protocol: "shadowsocks", Settings: ss2022Settings{Method: profile.Shadowsocks2022.Method, Password: string(materials.ServerKey), Users: users, Network: network}}, nil
 }

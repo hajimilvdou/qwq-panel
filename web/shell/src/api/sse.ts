@@ -204,7 +204,7 @@ export function createSseParser(emit: (f: SseFrame) => void, onRetry: (ms: numbe
         data.push(val);
         break;
       case 'id':
-        if (!val.includes('\0')) id = val;
+        if (val && !val.includes('\0')) id = val;
         break;
       case 'retry':
         if (/^\d+$/.test(val)) onRetry(Number(val));

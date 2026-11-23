@@ -75,6 +75,10 @@ export function setUnauthenticatedHandler(fn: (() => void) | null): void {
 export function setCsrfRefresher(fn: (() => Promise<void>) | null): void {
   refreshCsrf = fn;
 }
+/** 供 upload.ts 读取当前会话钩子（不泄露给业务层） */
+export function getAuthHooks() {
+  return { csrfToken, onUnauthenticated, refreshCsrf };
+}
 
 /** 这些路由的 401 是正常业务结果（口令错、令牌错），不触发全局登出 */
 const SILENT_401: ReadonlySet<string> = new Set([
@@ -273,48 +277,7 @@ export const http = {
   del: <T>(path: string, opts?: RequestOptions) => request<T>('DELETE', path, opts),
 };
 
-/* ------------------------------------------------------------------ 上传（需要进度时用 XHR） */
-
-export function upload<T>(
-  path: string,
-  form: FormData,
-  onProgress?: (loaded: number, total: number) => void,
-  signal?: AbortSignal,
-): Promise<ApiResponse<T>> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', path);
-    xhr.setRequestHeader('Accept', 'application/json');
-    if (csrfToken) xhr.setRequestHeader('X-CSRF-Token', csrfToken);
-    xhr.withCredentials = true;
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onProgress?.(e.loaded, e.total);
-    };
-    xhr.onerror = () => reject(new NetworkError(new Error('upload failed')));
-    xhr.onabort = () => reject(new DOMException('aborted', 'AbortError'));
-    xhr.onload = () => {
-      let parsed: unknown = null;
-      try {
-        parsed = xhr.responseText ? JSON.parse(xhr.responseText) : null;
-      } catch {
-        parsed = null;
-      }
-      const headers = new Headers();
-      const ct = xhr.getResponseHeader('content-type');
-      if (ct) headers.set('content-type', ct);
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve({ status: xhr.status, data: parsed as T, headers });
-        return;
-      }
-      if (xhr.status === 401) onUnauthenticated?.();
-      reject(
-        new ApiError(xhr.status, parsed as Problem | null, xhr.statusText, parseRetryAfter(xhr.getResponseHeader('retry-after'))),
-      );
-    };
-    signal?.addEventListener('abort', () => xhr.abort(), { once: true });
-    xhr.send(form);
-  });
-}
+/* 上传（XHR 进度 + CSRF 重试）见 ./upload.ts，避免进入首屏包 */
 
 /* ------------------------------------------------------------------ Operation 结果归一 */
 

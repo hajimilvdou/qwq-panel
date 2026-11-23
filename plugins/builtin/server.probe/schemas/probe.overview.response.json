@@ -12,6 +12,24 @@
     "settings": {
       "type": "object"
     },
+    "active_theme_id": {
+      "type": "string"
+    },
+    "appearance": {
+      "type": "object"
+    },
+    "theme_settings": {
+      "type": "object"
+    },
+    "bg_url": {
+      "type": "string"
+    },
+    "themes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
     "dnc_capabilities": {
       "type": "object"
     },

@@ -192,6 +192,11 @@ func redactJSONDocument(raw []byte) []byte {
 	return append(out, '\n')
 }
 
+// authHeaderPattern redacts the full credential value following
+// `Authorization: Bearer <token>` or `Authorization: Basic <token>` before
+// generic kvPair matching runs (which would otherwise stop at the space).
+var authHeaderPattern = regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*(?:bearer|basic)\s+)([^\s"',}&#]+)`)
+
 // kvPair matches key=value and "key": "value" pairs in text log lines.
 var kvPair = regexp.MustCompile(`("?)([A-Za-z0-9_.-]+)("?\s*[=:]\s*)("[^"]*"|[^\s,}&#]+)`)
 
@@ -213,7 +218,8 @@ func redactLog(s string) string {
 				continue
 			}
 		}
-		b.WriteString(kvPair.ReplaceAllStringFunc(line, func(m string) string {
+		redactedLine := authHeaderPattern.ReplaceAllString(line, "${1}"+redactedValue)
+		b.WriteString(kvPair.ReplaceAllStringFunc(redactedLine, func(m string) string {
 			p := kvPair.FindStringSubmatch(m)
 			if !sensitiveField(p[2]) {
 				return m

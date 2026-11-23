@@ -164,6 +164,11 @@ CREATE TABLE IF NOT EXISTS probe_portal_settings (
     trust_cloudflare_ips        INTEGER NOT NULL DEFAULT 0 CHECK (trust_cloudflare_ips IN (0, 1)),
     trusted_proxies_json        TEXT NOT NULL DEFAULT '["127.0.0.1/32","::1/128"]',
 
+    -- 可插拔前台主题与动态水玻璃外观配置（后台 /admin 永久隔离不受影响）
+    active_theme_id             TEXT NOT NULL DEFAULT 'builtin:classic',
+    appearance_json             TEXT NOT NULL DEFAULT '{}',
+    theme_settings_json         TEXT NOT NULL DEFAULT '{}',
+
     revision                    TEXT NOT NULL,
     updated_at                  INTEGER NOT NULL
 ) STRICT;

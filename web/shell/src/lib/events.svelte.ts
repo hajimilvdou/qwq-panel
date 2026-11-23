@@ -18,6 +18,7 @@ import { ApiError } from '$api/client';
 import { events as eventsApi } from '$api/endpoints';
 import { openStream, type SseFrame, type SseHandle, type SseOptions, type SseState } from '$api/sse';
 import type { Event as DomainEvent, StreamReady, StreamResync } from '$api/types';
+import { health } from './page.svelte';
 
 export const TOPICS = ['resource.changed', 'operation.updated', 'plugin.*', 'agent.session.*'] as const;
 const DEDUPE = 1024;
@@ -188,6 +189,7 @@ export class EventBus {
     if (this.#offlineTimer) clearTimeout(this.#offlineTimer);
     this.#offlineTimer = null;
     this.offline = v;
+    health.offline = v;
   }
 }
 

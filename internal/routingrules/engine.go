@@ -6,7 +6,6 @@ package routingrules
 import (
 	"bufio"
 	"bytes"
-	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -58,15 +57,15 @@ type CustomRule struct {
 	Action Action `json:"action"`
 }
 
-// CompiledBundle 是已校验并编译到内存的不可变规则包快照。
+// CompiledBundle 是已校验并编译到内存的不可变规则包快照（零指针域名池 + O(log N) 合并 IP 区间）。
 type CompiledBundle struct {
 	Version      string
 	SHA256       string
-	CNDomains    map[string]struct{}
-	NonCNDomains map[string]struct{}
-	AdDomains    map[string]struct{}
-	CNPrefixesV4 []netip.Prefix
-	CNPrefixesV6 []netip.Prefix
+	CNDomains    CompactDomainSet
+	NonCNDomains CompactDomainSet
+	AdDomains    CompactDomainSet
+	CNRangesV4   []AddrRange
+	CNRangesV6   []AddrRange
 }
 
 // MatchDecision 描述单个目标经过五级分流引擎后的确定性决策与 DNS 通道。
@@ -157,11 +156,11 @@ func (e *Engine) BundleInfo() (version string, sha256Hex string, ruleCount int) 
 	if b == nil {
 		return "", "", 0
 	}
-	count := len(b.CNDomains) + len(b.NonCNDomains) + len(b.AdDomains) + len(b.CNPrefixesV4) + len(b.CNPrefixesV6)
+	count := b.CNDomains.Len() + b.NonCNDomains.Len() + b.AdDomains.Len() + len(b.CNRangesV4) + len(b.CNRangesV6)
 	return b.Version, b.SHA256, count
 }
 
-// ParseBundleBytes 校验上限（16 MiB）、SHA-256 摘要并编译文本规则包，对 CIDR 排序加速查询。
+// ParseBundleBytes 校验上限（16 MiB）、SHA-256 摘要并编译文本规则包为紧凑域名池与无重叠合并 IP 区间。
 func ParseBundleBytes(version string, raw []byte, expectedSHA256 string) (*CompiledBundle, error) {
 	if len(raw) == 0 {
 		return nil, errors.New("routingrules: bundle content is empty")
@@ -179,18 +178,13 @@ func ParseBundleBytes(version string, raw []byte, expectedSHA256 string) (*Compi
 		return nil, errors.New("routingrules: bundle sha256 mismatch")
 	}
 
-	b := &CompiledBundle{
-		Version:      strings.TrimSpace(version),
-		SHA256:       "sha256:" + actualHex,
-		CNDomains:    make(map[string]struct{}),
-		NonCNDomains: make(map[string]struct{}),
-		AdDomains:    make(map[string]struct{}),
-		CNPrefixesV4: make([]netip.Prefix, 0),
-		CNPrefixesV6: make([]netip.Prefix, 0),
-	}
-	if b.Version == "" {
-		b.Version = actualHex[:12]
-	}
+	var (
+		cnDomains    []string
+		nonCNDomains []string
+		adDomains    []string
+		v4Prefixes   []netip.Prefix
+		v6Prefixes   []netip.Prefix
+	)
 
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
@@ -211,11 +205,11 @@ func ParseBundleBytes(version string, raw []byte, expectedSHA256 string) (*Compi
 		}
 		switch strings.TrimSpace(prefix) {
 		case "cn_domain":
-			b.CNDomains[normalizeDomain(val)] = struct{}{}
+			cnDomains = append(cnDomains, normalizeDomain(val))
 		case "proxy_domain":
-			b.NonCNDomains[normalizeDomain(val)] = struct{}{}
+			nonCNDomains = append(nonCNDomains, normalizeDomain(val))
 		case "ad_domain":
-			b.AdDomains[normalizeDomain(val)] = struct{}{}
+			adDomains = append(adDomains, normalizeDomain(val))
 		case "cn_cidr":
 			pfx, err := netip.ParsePrefix(val)
 			if err != nil {
@@ -223,9 +217,9 @@ func ParseBundleBytes(version string, raw []byte, expectedSHA256 string) (*Compi
 			}
 			masked := pfx.Masked()
 			if masked.Addr().Is4() {
-				b.CNPrefixesV4 = append(b.CNPrefixesV4, masked)
+				v4Prefixes = append(v4Prefixes, masked)
 			} else {
-				b.CNPrefixesV6 = append(b.CNPrefixesV6, masked)
+				v6Prefixes = append(v6Prefixes, masked)
 			}
 		default:
 			return nil, fmt.Errorf("routingrules: unknown rule prefix %q at line %d", prefix, lineNo)
@@ -234,13 +228,23 @@ func ParseBundleBytes(version string, raw []byte, expectedSHA256 string) (*Compi
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	total := len(b.CNDomains) + len(b.NonCNDomains) + len(b.AdDomains) + len(b.CNPrefixesV4) + len(b.CNPrefixesV6)
+
+	b := &CompiledBundle{
+		Version:      strings.TrimSpace(version),
+		SHA256:       "sha256:" + actualHex,
+		CNDomains:    NewCompactDomainSet(cnDomains),
+		NonCNDomains: NewCompactDomainSet(nonCNDomains),
+		AdDomains:    NewCompactDomainSet(adDomains),
+		CNRangesV4:   BuildMergedRanges(v4Prefixes),
+		CNRangesV6:   BuildMergedRanges(v6Prefixes),
+	}
+	if b.Version == "" {
+		b.Version = actualHex[:12]
+	}
+	total := b.CNDomains.Len() + b.NonCNDomains.Len() + b.AdDomains.Len() + len(b.CNRangesV4) + len(b.CNRangesV6)
 	if total == 0 {
 		return nil, errors.New("routingrules: bundle contains no valid rules")
 	}
-
-	sortPrefixes(b.CNPrefixesV4)
-	sortPrefixes(b.CNPrefixesV6)
 	return b, nil
 }
 
@@ -328,7 +332,7 @@ func (e *Engine) Evaluate(target string, mode ProfileMode, blockAds bool, custom
 	b := e.bundle.Load()
 
 	// 第 3 级：广告域名拦截（仅域名，零 DNS 解析）。
-	if blockAds && !isIP && b != nil && matchDomainSet(host, b.AdDomains) {
+	if blockAds && !isIP && b != nil && b.AdDomains.MatchDomainOrParent(host) {
 		decision.Action = ActionBlock
 		decision.MatchedRule = "geosite:category-ads"
 		decision.DNSChannel = "blocked"
@@ -351,13 +355,13 @@ func (e *Engine) Evaluate(target string, mode ProfileMode, blockAds bool, custom
 
 	// 第 4 级：rule_cn_split 域名优先匹配（geolocation-!cn 优先级高于 cn，绝不触发公网 DNS）。
 	if !isIP {
-		if b != nil && matchDomainSet(host, b.NonCNDomains) {
+		if b != nil && b.NonCNDomains.MatchDomainOrParent(host) {
 			decision.Action = ActionProxy
 			decision.MatchedRule = "geosite:geolocation-!cn"
 			decision.DNSChannel = "remote_doh"
 			return decision
 		}
-		if b != nil && matchDomainSet(host, b.CNDomains) {
+		if b != nil && b.CNDomains.MatchDomainOrParent(host) {
 			decision.Action = ActionDirect
 			decision.MatchedRule = "geosite:cn"
 			decision.DNSChannel = "domestic_doh"
@@ -369,15 +373,15 @@ func (e *Engine) Evaluate(target string, mode ProfileMode, blockAds bool, custom
 		return decision
 	}
 
-	// 第 5 级：IP 字面量匹配排序后的 CN CIDR 前缀表 + 默认代理兜底。
+	// 第 5 级：IP 字面量 O(log N) 匹配无重叠合并 CN 区间表 + 默认代理兜底。
 	if b != nil {
-		if addr.Is4() && matchSortedPrefixes(addr, b.CNPrefixesV4) {
+		if addr.Is4() && MatchMergedRanges(addr, b.CNRangesV4) {
 			decision.Action = ActionDirect
 			decision.MatchedRule = "geoip:cn"
 			decision.DNSChannel = "domestic_doh"
 			return decision
 		}
-		if addr.Is6() && matchSortedPrefixes(addr, b.CNPrefixesV6) {
+		if addr.Is6() && MatchMergedRanges(addr, b.CNRangesV6) {
 			decision.Action = ActionDirect
 			decision.MatchedRule = "geoip:cn"
 			decision.DNSChannel = "domestic_doh"
@@ -627,55 +631,6 @@ func matchCustomRule(r CustomRule, host string, addr netip.Addr, isIP bool) bool
 	default:
 		return false
 	}
-}
-
-func matchDomainSet(host string, set map[string]struct{}) bool {
-	if len(set) == 0 {
-		return false
-	}
-	cur := host
-	for {
-		if _, ok := set[cur]; ok {
-			return true
-		}
-		idx := strings.IndexByte(cur, '.')
-		if idx < 0 || idx+1 >= len(cur) {
-			return false
-		}
-		cur = cur[idx+1:]
-	}
-}
-
-func sortPrefixes(prefixes []netip.Prefix) {
-	slices.SortFunc(prefixes, func(a, b netip.Prefix) int {
-		if c := a.Addr().Compare(b.Addr()); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.Bits(), b.Bits())
-	})
-}
-
-func matchSortedPrefixes(addr netip.Addr, prefixes []netip.Prefix) bool {
-	if len(prefixes) == 0 {
-		return false
-	}
-	// 利用已排序前缀表二分定位不大于 addr 的最后一个起始网络，再向前回溯包含该地址的聚合网段。
-	idx, _ := slices.BinarySearchFunc(prefixes, addr, func(p netip.Prefix, target netip.Addr) int {
-		return p.Addr().Compare(target)
-	})
-	if idx < len(prefixes) && prefixes[idx].Contains(addr) {
-		return true
-	}
-	for i := idx - 1; i >= 0; i-- {
-		if prefixes[i].Contains(addr) {
-			return true
-		}
-		// 若遇到更短公共前缀都已严格小于当前地址首字节，停止回溯。
-		if prefixes[i].Bits() == 0 {
-			break
-		}
-	}
-	return false
 }
 
 func dnsChannelForAction(act Action) string {

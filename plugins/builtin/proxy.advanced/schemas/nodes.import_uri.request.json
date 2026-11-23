@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "批量导入外部代理节点 URI 请求",
+  "description": "解析多行或 Base64 订阅格式的 vless/vmess/trojan/ss/hysteria2/anytls/socks5/http/tuic/wireguard 链接并保存为外部节点。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "uris": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 262144
+    },
+    "tags": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "maxLength": 32
+      }
+    },
+    "enabled": {
+      "type": "boolean"
+    }
+  },
+  "required": ["uris"]
+}

@@ -83,7 +83,7 @@ const (
 // Valid reports whether c is a known core name.
 func (c CoreName) Valid() bool {
 	switch c {
-	case CoreNative, CoreClaudeCode, CoreCodex, CoreOpencode:
+	case CoreNative, CoreClaudeCode, CoreCodex, CoreOpencode, CoreDSH, CoreACP:
 		return true
 	}
 	return false

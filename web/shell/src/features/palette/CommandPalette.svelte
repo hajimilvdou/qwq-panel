@@ -20,8 +20,10 @@
   import { session } from '$lib/session.svelte';
   import { APP_CENTER, PRIMARY, SETTINGS, pluginNav, pluginsResource } from '../../app/nav';
   import { SETTINGS_SECTIONS } from '../settings/sections';
-  import ActionRunner from './ActionRunner.svelte';
   import { buildGroups, loadRecent, moveCursor, pushRecent, saveRecent, type PaletteItem } from './items';
+
+  let runnerMod: Promise<typeof import('./ActionRunner.svelte')> | null = null;
+  const loadRunner = () => (runnerMod ??= import('./ActionRunner.svelte'));
 
   const plugins = useResource(pluginsResource);
 
@@ -164,7 +166,11 @@
 >
   {#if palette.opened}
     {#if running}
-      <ActionRunner actionId={running} onback={back} ondone={() => palette.close()} />
+      {#await loadRunner()}
+        <div class="search"><Spinner size={16} label="加载操作表单" /></div>
+      {:then mod}
+        <mod.default actionId={running} onback={back} ondone={() => palette.close()} />
+      {/await}
     {:else}
       <div class="search">
         <Icon name="search" size={20} />

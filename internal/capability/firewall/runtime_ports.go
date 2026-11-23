@@ -5,7 +5,6 @@ package firewall
 import (
 	"context"
 	"errors"
-	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -112,14 +111,24 @@ func (g SystemGuard) RuntimeSSHPorts(ctx context.Context) ([]uint32, error) {
 }
 
 // ListenerPort 解析 ss/systemd 的监听端点，不推测默认端口。
+// 改用 LastIndexByte(':') 截取末尾端口号，兼容 127.0.0.53%lo:53 与 [fe80::1]%eth0:22。
 func ListenerPort(endpoint string) (uint32, error) {
+	if endpoint == "" || strings.HasSuffix(endpoint, "]") {
+		return 0, errors.New("firewall: listener endpoint is invalid")
+	}
 	text := endpoint
-	if strings.Contains(endpoint, ":") {
-		_, port, err := net.SplitHostPort(endpoint)
-		if err != nil {
+	if idx := strings.LastIndexByte(endpoint, ':'); idx >= 0 {
+		host := endpoint[:idx]
+		if host == "" {
 			return 0, errors.New("firewall: listener endpoint is invalid")
 		}
-		text = port
+		if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+			return 0, errors.New("firewall: listener endpoint is invalid")
+		}
+		if strings.HasPrefix(host, "[") && !strings.Contains(host, "]") {
+			return 0, errors.New("firewall: listener endpoint is invalid")
+		}
+		text = endpoint[idx+1:]
 	}
 	port, err := strconv.ParseUint(text, 10, 16)
 	if err != nil || port == 0 {

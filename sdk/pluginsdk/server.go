@@ -34,6 +34,7 @@ type Server struct {
 	grace      time.Duration
 	relGrace   time.Duration
 	memory     MemoryLimit
+	drainer    *IdleDrainer
 
 	// crashOnPanic mirrors Options.CrashOnPanic.
 	crashOnPanic bool

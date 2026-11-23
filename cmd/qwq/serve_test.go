@@ -46,8 +46,8 @@ func TestRegisterPublicRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("registerPublicRoutes: %v", err)
 	}
-	if count != 113 {
-		t.Fatalf("route count = %d, want 113", count)
+	if count != 117 {
+		t.Fatalf("route count = %d, want 117", count)
 	}
 	routes := c.Gateway().Routes()
 	if len(routes) != count {

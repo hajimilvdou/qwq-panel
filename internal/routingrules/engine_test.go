@@ -5,6 +5,7 @@ package routingrules
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,5 +220,27 @@ func TestEngineConcurrentEvaluateAndSwap(t *testing.T) {
 	close(errCh)
 	for err := range errCh {
 		t.Fatalf("并发原子替换失败: %v", err)
+	}
+}
+
+func TestBuildMergedRangesIPv4MappedIPv6Prefix(t *testing.T) {
+	p := netip.MustParsePrefix("::ffff:192.0.2.0/120")
+	ranges := BuildMergedRanges([]netip.Prefix{p})
+	if len(ranges) != 1 {
+		t.Fatalf("ranges len = %d, want 1", len(ranges))
+	}
+	wantStart := netip.MustParseAddr("192.0.2.0")
+	wantEnd := netip.MustParseAddr("192.0.2.255")
+	if ranges[0].Start != wantStart || ranges[0].End != wantEnd {
+		t.Fatalf("range = [%s, %s], want [%s, %s]", ranges[0].Start, ranges[0].End, wantStart, wantEnd)
+	}
+	if !MatchMergedRanges(netip.MustParseAddr("192.0.2.123"), ranges) {
+		t.Fatal("expected 192.0.2.123 to match ::ffff:192.0.2.0/120")
+	}
+	if !MatchMergedRanges(netip.MustParseAddr("::ffff:192.0.2.255"), ranges) {
+		t.Fatal("expected ::ffff:192.0.2.255 to match ::ffff:192.0.2.0/120")
+	}
+	if MatchMergedRanges(netip.MustParseAddr("192.0.3.1"), ranges) {
+		t.Fatal("unexpected match for 192.0.3.1")
 	}
 }

@@ -39,10 +39,15 @@ func profileListeners(profile *Profile) []Listener {
 	}
 	var networks []string
 	switch profile.Protocol {
-	case ProtocolVLESS:
+	case ProtocolVLESS, ProtocolVMess, ProtocolTrojan, ProtocolAnyTLS, ProtocolSOCKS5, ProtocolHTTP:
 		networks = []string{"tcp"}
 	case ProtocolHysteria2:
 		networks = []string{"udp"}
+	case ProtocolShadowsocks:
+		networks = []string{"tcp"}
+		if profile.Shadowsocks != nil && profile.Shadowsocks.UDP {
+			networks = append(networks, "udp")
+		}
 	case ProtocolShadowsocks2022:
 		networks = []string{"tcp"}
 		if profile.Shadowsocks2022 != nil && profile.Shadowsocks2022.UDP {
@@ -82,8 +87,8 @@ func CheckListenerConflicts(listeners []Listener) error {
 		if !valid {
 			return invalid(path+"/listen", "IP", "监听地址必须是无 zone 的 IPv4 或 IPv6")
 		}
-		if listener.Port < 1024 || listener.Port > 65535 {
-			return invalid(path+"/port", "RANGE", "监听端口必须在 1024 至 65535 之间")
+		if listener.Port < 1 || listener.Port > 65535 {
+			return invalid(path+"/port", "RANGE", "监听端口必须在 1 至 65535 之间")
 		}
 		next := listenerClaim{network: listener.Network, addr: addr, port: listener.Port}
 		if conflicts(claims, next) {
@@ -105,7 +110,7 @@ func conflicts(claims []listenerClaim, next listenerClaim) bool {
 
 func (v *validator) claim(profile *Profile, path string) {
 	addr, ok := validListen(profile.Listen)
-	if !ok || profile.Port < 1024 || profile.Port > 65535 {
+	if !ok || profile.Port < 1 || profile.Port > 65535 {
 		return
 	}
 	conflict := false

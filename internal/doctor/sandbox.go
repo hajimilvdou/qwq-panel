@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -309,7 +310,18 @@ func sandboxPolkit(ctx context.Context, env Env) Result {
 	// ========================================================================
 	if kv["LoadState"] == "loaded" {
 		info, err := env.Stat(PluginPolkitRulePath)
-		if err != nil || (info != nil && (!info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0)) {
+		if err != nil {
+			if os.Geteuid() != 0 && errors.Is(err, os.ErrPermission) {
+				// On Debian 12 / Rocky 9, /etc/polkit-1/rules.d is 0750 root:polkitd;
+				// EACCES for the unprivileged qwq user is expected isolation, not a missing rule.
+			} else {
+				if compatPolkitActive(ctx, env) {
+					return compatOK()
+				}
+				return Result{ID: SandboxPolkitID, Status: Fail, Detail: "the plugin unit authorization rule is missing or unsafe",
+					Fix: "reinstall " + PluginPolkitRulePath + " from deployments/polkit/qwq-plugin.rules as root:root 0644"}
+			}
+		} else if info != nil && (!info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0) {
 			if compatPolkitActive(ctx, env) {
 				return compatOK()
 			}

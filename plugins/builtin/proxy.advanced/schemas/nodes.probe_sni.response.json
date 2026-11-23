@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "探测 Reality 伪装域名 SNI 响应",
+  "type": "object",
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "recommended": {
+      "type": "string"
+    }
+  },
+  "required": ["results", "recommended"]
+}

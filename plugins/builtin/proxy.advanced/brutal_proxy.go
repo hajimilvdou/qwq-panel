@@ -5,10 +5,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,29 +24,53 @@ import (
 
 const (
 	maxBrutalBindings         = 16
-	maxBrutalConnsPerListener = 256
+	maxBrutalConnsPerListener = 2048
+	defaultBrutalIdleTimeout  = 5 * time.Minute
+	relayCopyBufSize          = 32 * 1024
 	defaultOversendPct        = 125
 	defaultBrutalGain         = 20
 	defaultBrutalRateMbs      = 100
 )
 
+var relayBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, relayCopyBufSize)
+		return &b
+	},
+}
+
+// ValidateTargetPortAllowed 确保透明接管只能指向已由 core.xray 托管的代理 TCP 入站端口，
+// 严禁转发至本机内部管理接口或数据库端口。
+func ValidateTargetPortAllowed(targetPort int, allowedPorts []uint16) bool {
+	if targetPort < 1 || targetPort > 65535 {
+		return false
+	}
+	for _, p := range allowedPorts {
+		if p > 0 && int(p) == targetPort {
+			return true
+		}
+	}
+	return false
+}
+
 // brutalBindingRecord 描述一个 TCP 入站端口的 Brutal Custom 透明接管绑定。
 type brutalBindingRecord struct {
-	ID            string  `json:"id"`
-	InboundTag    string  `json:"inbound_tag"`
-	Protocol      string  `json:"protocol"` // vless | shadowsocks | trojan | tcp
-	Enabled       bool    `json:"enabled"`
-	ListenPort    int     `json:"listen_port"`    // 透明接管对外监听端口（0 = 由测试动态分配或暂未启用）
-	TargetPort    int     `json:"target_port"`    // 本机后端代理入站端口（如 Xray VLESS 443 / SS 8388）
-	BandwidthMbps int     `json:"bandwidth_mbps"` // 基准带宽 (Mbps)
-	OversendPct   int     `json:"oversend_pct"`   // 超发包倍率 (%)，原始默认 125，允许 100..250 手调
-	CwndGain      int     `json:"cwnd_gain"`      // 拥塞窗口增益 (单位 0.1x，20 = 2.0x，允许 10..50)
-	EffectiveMbps float64 `json:"effective_mbps"` // 折算有效发包速率 = bandwidth_mbps * oversend_pct / 100
-	EnableInSub   bool    `json:"enable_in_sub"`  // 是否自动将对应 TCP 订阅节点端口切换为此接管端口
-	Notes         string  `json:"notes,omitempty"`
-	Revision      int64   `json:"revision"`
-	CreatedAt     int64   `json:"created_at"`
-	UpdatedAt     int64   `json:"updated_at"`
+	ID              string  `json:"id"`
+	InboundTag      string  `json:"inbound_tag"`
+	Protocol        string  `json:"protocol"` // vless | shadowsocks | trojan | tcp
+	Enabled         bool    `json:"enabled"`
+	ListenPort      int     `json:"listen_port"`                 // 透明接管对外监听端口（0 = 由测试动态分配或暂未启用）
+	TargetPort      int     `json:"target_port"`                 // 本机后端代理入站端口（如 Xray VLESS 443 / SS 8388）
+	BandwidthMbps   int     `json:"bandwidth_mbps"`              // 基准带宽 (Mbps)
+	OversendPct     int     `json:"oversend_pct"`                // 超发包倍率 (%)，原始默认 125，允许 100..250 手调
+	CwndGain        int     `json:"cwnd_gain"`                   // 拥塞窗口增益 (单位 0.1x，20 = 2.0x，允许 10..50)
+	EffectiveMbps   float64 `json:"effective_mbps"`              // 折算有效发包速率 = bandwidth_mbps * oversend_pct / 100
+	EnableInSub     bool    `json:"enable_in_sub"`               // 是否自动将对应 TCP 订阅节点端口切换为此接管端口
+	ProxyProtocolV2 bool    `json:"proxy_protocol_v2,omitempty"` // 可选向后端注入 PROXY protocol v2 头保留真实源 IP
+	Notes           string  `json:"notes,omitempty"`
+	Revision        int64   `json:"revision"`
+	CreatedAt       int64   `json:"created_at"`
+	UpdatedAt       int64   `json:"updated_at"`
 }
 
 type brutalBindingUpsertRequest struct {
@@ -57,6 +84,7 @@ type brutalBindingUpsertRequest struct {
 	OversendPct      *int   `json:"oversend_pct"`
 	CwndGain         *int   `json:"cwnd_gain"`
 	EnableInSub      *bool  `json:"enable_in_sub"`
+	ProxyProtocolV2  *bool  `json:"proxy_protocol_v2,omitempty"`
 	Notes            string `json:"notes"`
 	ExpectedRevision string `json:"expected_revision"`
 }
@@ -147,19 +175,24 @@ func validateBrutalBindingInput(in brutalBindingUpsertRequest) (brutalBindingRec
 	if in.EnableInSub != nil {
 		enableInSub = *in.EnableInSub
 	}
+	ppv2 := false
+	if in.ProxyProtocolV2 != nil {
+		ppv2 = *in.ProxyProtocolV2
+	}
 	return brutalBindingRecord{
-		ID:            id,
-		InboundTag:    tag,
-		Protocol:      proto,
-		Enabled:       enabled,
-		ListenPort:    in.ListenPort,
-		TargetPort:    in.TargetPort,
-		BandwidthMbps: bw,
-		OversendPct:   oversend,
-		CwndGain:      gain,
-		EffectiveMbps: computeEffectiveMbps(bw, oversend),
-		EnableInSub:   enableInSub,
-		Notes:         strings.TrimSpace(in.Notes),
+		ID:              id,
+		InboundTag:      tag,
+		Protocol:        proto,
+		Enabled:         enabled,
+		ListenPort:      in.ListenPort,
+		TargetPort:      in.TargetPort,
+		BandwidthMbps:   bw,
+		OversendPct:     oversend,
+		CwndGain:        gain,
+		EffectiveMbps:   computeEffectiveMbps(bw, oversend),
+		EnableInSub:     enableInSub,
+		ProxyProtocolV2: ppv2,
+		Notes:           strings.TrimSpace(in.Notes),
 	}, nil
 }
 
@@ -202,10 +235,10 @@ func (s *proxyStore) UpsertBrutalBinding(ctx context.Context, in brutalBindingUp
 		rec.UpdatedAt = nowMs
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO brutal_bindings(id, inbound_tag, protocol, enabled, listen_port, target_port,
-			                            bandwidth_mbps, oversend_pct, cwnd_gain, enable_in_sub, notes, revision, created_at, updated_at)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+			                            bandwidth_mbps, oversend_pct, cwnd_gain, enable_in_sub, proxy_protocol_v2, notes, revision, created_at, updated_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
 			rec.ID, rec.InboundTag, rec.Protocol, boolToInt(rec.Enabled), rec.ListenPort, rec.TargetPort,
-			rec.BandwidthMbps, rec.OversendPct, rec.CwndGain, boolToInt(rec.EnableInSub), rec.Notes, nowMs, nowMs)
+			rec.BandwidthMbps, rec.OversendPct, rec.CwndGain, boolToInt(rec.EnableInSub), boolToInt(rec.ProxyProtocolV2), rec.Notes, nowMs, nowMs)
 	} else {
 		if in.ExpectedRevision != "" && in.ExpectedRevision != strconv.FormatInt(existingRev, 10) {
 			return brutalBindingRecord{}, false, pluginsdk.PreconditionFailed("brutal/"+rec.ID, strconv.FormatInt(existingRev, 10))
@@ -216,10 +249,10 @@ func (s *proxyStore) UpsertBrutalBinding(ctx context.Context, in brutalBindingUp
 		_, err = tx.ExecContext(ctx, `
 			UPDATE brutal_bindings
 			SET inbound_tag = ?, protocol = ?, enabled = ?, listen_port = ?, target_port = ?,
-			    bandwidth_mbps = ?, oversend_pct = ?, cwnd_gain = ?, enable_in_sub = ?, notes = ?, revision = ?, updated_at = ?
+			    bandwidth_mbps = ?, oversend_pct = ?, cwnd_gain = ?, enable_in_sub = ?, proxy_protocol_v2 = ?, notes = ?, revision = ?, updated_at = ?
 			WHERE id = ?`,
 			rec.InboundTag, rec.Protocol, boolToInt(rec.Enabled), rec.ListenPort, rec.TargetPort,
-			rec.BandwidthMbps, rec.OversendPct, rec.CwndGain, boolToInt(rec.EnableInSub), rec.Notes, rec.Revision, nowMs, rec.ID)
+			rec.BandwidthMbps, rec.OversendPct, rec.CwndGain, boolToInt(rec.EnableInSub), boolToInt(rec.ProxyProtocolV2), rec.Notes, rec.Revision, nowMs, rec.ID)
 	}
 	if err != nil {
 		return brutalBindingRecord{}, false, err
@@ -231,9 +264,9 @@ func (s *proxyStore) UpsertBrutalBinding(ctx context.Context, in brutalBindingUp
 }
 
 func (s *proxyStore) ListBrutalBindings(ctx context.Context) ([]brutalBindingRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB().QueryContext(ctx, `
 		SELECT id, inbound_tag, protocol, enabled, listen_port, target_port,
-		       bandwidth_mbps, oversend_pct, cwnd_gain, enable_in_sub, notes, revision, created_at, updated_at
+		       bandwidth_mbps, oversend_pct, cwnd_gain, enable_in_sub, proxy_protocol_v2, notes, revision, created_at, updated_at
 		FROM brutal_bindings ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
@@ -242,13 +275,14 @@ func (s *proxyStore) ListBrutalBindings(ctx context.Context) ([]brutalBindingRec
 	out := make([]brutalBindingRecord, 0)
 	for rows.Next() {
 		var r brutalBindingRecord
-		var en, sub int
+		var en, sub, ppv2 int
 		if err := rows.Scan(&r.ID, &r.InboundTag, &r.Protocol, &en, &r.ListenPort, &r.TargetPort,
-			&r.BandwidthMbps, &r.OversendPct, &r.CwndGain, &sub, &r.Notes, &r.Revision, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			&r.BandwidthMbps, &r.OversendPct, &r.CwndGain, &sub, &ppv2, &r.Notes, &r.Revision, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		r.Enabled = en == 1
 		r.EnableInSub = sub == 1
+		r.ProxyProtocolV2 = ppv2 == 1
 		r.EffectiveMbps = computeEffectiveMbps(r.BandwidthMbps, r.OversendPct)
 		out = append(out, r)
 	}
@@ -324,6 +358,14 @@ func (l *brutalListener) serve(ctx context.Context) {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return
 			}
+			// 遇到 EMFILE/ENFILE 等临时句柄耗尽错误时退避 50ms，避免空转打满 CPU。
+			timer := time.NewTimer(50 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 			continue
 		}
 		if l.activeConns.Load() >= maxBrutalConnsPerListener {
@@ -372,16 +414,21 @@ func (l *brutalListener) handleConn(ctx context.Context, client net.Conn) {
 	if bt, ok := backend.(*net.TCPConn); ok {
 		_ = bt.SetNoDelay(true)
 	}
+	if b.ProxyProtocolV2 {
+		if err := writeProxyProtocolV2(backend, client.RemoteAddr(), client.LocalAddr()); err != nil {
+			return
+		}
+	}
+
+	var lastActiveNano atomic.Int64
+	lastActiveNano.Store(time.Now().UnixNano())
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	// 客户端 -> 后端代理入站 (RX)
+	// 客户端 -> 后端代理入站 (RX，32KiB 池化缓冲 + 实时原子计数 + 300s 空闲回收)
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(backend, client)
-		if n > 0 {
-			l.bytesRX.Add(uint64(n))
-		}
+		_, _ = copyWithIdleAndLiveStats(backend, client, &l.bytesRX, defaultBrutalIdleTimeout, &lastActiveNano)
 		if cw, ok := backend.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
@@ -389,15 +436,118 @@ func (l *brutalListener) handleConn(ctx context.Context, client net.Conn) {
 	// 后端代理入站 -> 客户端 (TX，受 Brutal 拥塞控制加速)
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(client, backend)
-		if n > 0 {
-			l.bytesTX.Add(uint64(n))
-		}
+		_, _ = copyWithIdleAndLiveStats(client, backend, &l.bytesTX, defaultBrutalIdleTimeout, &lastActiveNano)
 		if cw, ok := client.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
 	}()
 	wg.Wait()
+}
+
+// copyWithIdleAndLiveStats 使用 32KiB sync.Pool 缓冲双向转发，实时更新 TX/RX 原子计数并在双端长期静默时回收半开死连接。
+func copyWithIdleAndLiveStats(dst net.Conn, src net.Conn, counter *atomic.Uint64, idleTimeout time.Duration, lastActiveNano *atomic.Int64) (int64, error) {
+	bufPtr := relayBufPool.Get().(*[]byte)
+	buf := *bufPtr
+	defer relayBufPool.Put(bufPtr)
+
+	var total int64
+	for {
+		if idleTimeout > 0 {
+			_ = src.SetReadDeadline(time.Now().Add(idleTimeout))
+		}
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			lastActiveNano.Store(time.Now().UnixNano())
+			if idleTimeout > 0 {
+				_ = dst.SetWriteDeadline(time.Now().Add(idleTimeout))
+			}
+			nw, ew := dst.Write(buf[0:nr])
+			if nw < 0 || nr < nw {
+				nw = 0
+				if ew == nil {
+					ew = errors.New("invalid write result")
+				}
+			}
+			if nw > 0 {
+				total += int64(nw)
+				counter.Add(uint64(nw))
+			}
+			if ew != nil {
+				return total, ew
+			}
+			if nr != nw {
+				return total, io.ErrShortWrite
+			}
+		}
+		if er != nil {
+			if errors.Is(er, os.ErrDeadlineExceeded) {
+				last := lastActiveNano.Load()
+				if last > 0 && time.Since(time.Unix(0, last)) < idleTimeout {
+					continue
+				}
+			}
+			if er != io.EOF {
+				return total, er
+			}
+			break
+		}
+	}
+	return total, nil
+}
+
+// writeProxyProtocolV2 向后端发送标准 PROXY protocol v2 二进制头，保留真实客户端源 IP 与端口。
+func writeProxyProtocolV2(dst net.Conn, clientAddr, localAddr net.Addr) error {
+	sig := [12]byte{0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A}
+	if clientAddr == nil || localAddr == nil {
+		var hdr [16]byte
+		copy(hdr[:12], sig[:])
+		hdr[12] = 0x20
+		hdr[13] = 0x00
+		binary.BigEndian.PutUint16(hdr[14:16], 0)
+		_, err := dst.Write(hdr[:])
+		return err
+	}
+	srcAP, err1 := netip.ParseAddrPort(clientAddr.String())
+	dstAP, err2 := netip.ParseAddrPort(localAddr.String())
+	if err1 != nil || err2 != nil {
+		var hdr [16]byte
+		copy(hdr[:12], sig[:])
+		hdr[12] = 0x20
+		hdr[13] = 0x00
+		binary.BigEndian.PutUint16(hdr[14:16], 0)
+		_, err := dst.Write(hdr[:])
+		return err
+	}
+	srcIP := srcAP.Addr().Unmap()
+	dstIP := dstAP.Addr().Unmap()
+	if srcIP.Is4() && dstIP.Is4() {
+		var hdr [28]byte
+		copy(hdr[:12], sig[:])
+		hdr[12] = 0x21
+		hdr[13] = 0x11
+		binary.BigEndian.PutUint16(hdr[14:16], 12)
+		s4 := srcIP.As4()
+		d4 := dstIP.As4()
+		copy(hdr[16:20], s4[:])
+		copy(hdr[20:24], d4[:])
+		binary.BigEndian.PutUint16(hdr[24:26], srcAP.Port())
+		binary.BigEndian.PutUint16(hdr[26:28], dstAP.Port())
+		_, err := dst.Write(hdr[:])
+		return err
+	}
+	s16 := srcAP.Addr().As16()
+	d16 := dstAP.Addr().As16()
+	var hdr [52]byte
+	copy(hdr[:12], sig[:])
+	hdr[12] = 0x21
+	hdr[13] = 0x21
+	binary.BigEndian.PutUint16(hdr[14:16], 36)
+	copy(hdr[16:32], s16[:])
+	copy(hdr[32:48], d16[:])
+	binary.BigEndian.PutUint16(hdr[48:50], srcAP.Port())
+	binary.BigEndian.PutUint16(hdr[50:52], dstAP.Port())
+	_, err := dst.Write(hdr[:])
+	return err
 }
 
 // brutalManager 统一管理所有启用中的 Brutal 端口透明接管监听器，支持热改超发倍率与平滑启停。

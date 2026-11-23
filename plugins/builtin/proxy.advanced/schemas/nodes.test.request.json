@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "测试代理节点连通性与延迟请求",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 300,
+      "maximum": 10000
+    }
+  },
+  "required": ["id"]
+}

@@ -137,6 +137,9 @@ type PluginInstaller struct {
 	StagingRoot string
 	// TrustDir holds the trusted publisher public keys (*.pem).
 	TrustDir string
+	// TrustStore, when non-nil, overrides TrustDir so the installer consults a
+	// dynamic composite trust root (official system keys + custom developer keys).
+	TrustStore manifest.TrustStore
 	// HostBinary is the installed host binary the unit's ExecStartPre calls.
 	// The sandbox renderer currently pins sandbox.DefaultHostBinary; a
 	// different value is rejected instead of being silently ignored.
@@ -498,15 +501,23 @@ func unitSpecFor(m *manifest.Manifest, versionDir, dataRoot string) (sandbox.Uni
 		return sandbox.UnitSpec{}, problem.New(problem.Internal,
 			"The manifest of plugin %s does not record the digest of its entrypoint %s.", m.ID, m.Entrypoint)
 	}
-	// Only the exact (network.proxy, direct) capability relaxes the network
-	// sandbox; prefix/scope lookalikes and unrelated capabilities do not. The
-	// manifest is already verified, and the plugin never submits a directive.
+	// Derive host-controlled sandbox relaxations strictly from the verified
+	// manifest capabilities. NetworkProxyDirect stays pinned to the exact
+	// (network.proxy, direct) capability for backwards compatibility, while
+	// Relaxations maps network.egress / network.listen / network.proxy:direct
+	// to PrivateNetwork=no + AF_INET/AF_INET6 and low-port capabilities to
+	// CAP_NET_BIND_SERVICE.
 	networkProxyDirect := false
-	for _, c := range m.Capabilities {
+	caps := make([]sandbox.CapabilityRef, len(m.Capabilities))
+	for idx, c := range m.Capabilities {
+		caps[idx] = sandbox.CapabilityRef{Name: c.Name, Scope: c.Scope}
 		if c.Name == "network.proxy" && c.Scope == "direct" {
 			networkProxyDirect = true
-			break
 		}
+	}
+	relaxations := sandbox.DeriveSandboxRelaxations(caps)
+	if networkProxyDirect && m.ID == "core.xray" {
+		relaxations.BindPrivilegedPorts = true
 	}
 	dataDir, err := derivePluginDataDir(dataRoot, m.ID, m.State.BackupPaths)
 	if err != nil {
@@ -525,6 +536,7 @@ func unitSpecFor(m *manifest.Manifest, versionDir, dataRoot string) (sandbox.Uni
 			FDsMax:          m.Resources.FDsMax,
 		},
 		NetworkProxyDirect: networkProxyDirect,
+		Relaxations:        relaxations,
 		DataDir:            dataDir,
 	}, nil
 }
@@ -829,6 +841,9 @@ func loadTrustPolicy(path string, key *manifest.TrustedKey) error {
 // signature; the error is UNAVAILABLE because the operator has to provision the
 // trust root, not fix the request.
 func (i *PluginInstaller) trustStore() (manifest.TrustStore, error) {
+	if i.TrustStore != nil {
+		return i.TrustStore, nil
+	}
 	dir := i.TrustDir
 	if dir == "" {
 		return nil, problem.New(problem.Unavailable,

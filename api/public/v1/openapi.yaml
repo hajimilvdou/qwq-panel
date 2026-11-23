@@ -1389,6 +1389,149 @@ paths:
         '503': { $ref: '#/components/responses/Unavailable' }
         '507': { $ref: '#/components/responses/InsufficientStorage' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/plugin-packages/fetch:
+    post:
+      operationId: fetchPluginPackage
+      tags: [plugins]
+      summary: Fetch a plugin package from a remote HTTPS URL
+      description: |
+        Downloads a signed `.qwqpkg` package from a public HTTPS URL (such as a GitHub Release
+        asset) and stages it in the host's private staging directory through the same path as
+        `POST /api/v1/plugin-packages`. The downloader enforces `https://` only, blocks loopback,
+        RFC 1918, RFC 4193, link-local, CGNAT, multicast and unspecified IPs on both the initial
+        request and every redirect hop, bounds the transfer to 64 MiB and 60 seconds, and verifies
+        `expected_sha256` when provided.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+        - serviceAccountToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: |
+        Each fetch creates a fresh ephemeral staging file with a random upload id; a replay stages
+        another copy and installs nothing.
+      x-qwq-action-exempt: |
+        Staging a remote package changes no managed resource and is consumable only by the install
+        or update route. Host-wide and per-account staging quotas apply identically to multipart
+        uploads.
+      requestBody:
+        description: Remote HTTPS package URL and optional SHA-256 digest guard.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PluginPackageFetchRequest' }
+      responses:
+        '201':
+          description: The staged package downloaded from the remote HTTPS URL.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PluginPackageUpload' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '504': { $ref: '#/components/responses/Timeout' }
+        '507': { $ref: '#/components/responses/InsufficientStorage' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/plugin-trust-keys:
+    get:
+      operationId: listPluginTrustKeys
+      tags: [plugins]
+      summary: List trusted plugin publisher public keys
+      description: |
+        Returns all currently active Ed25519 publisher public keys trusted by the host, combining
+        read-only official system keys (`/etc/qwq/trust`) and administrator-managed custom
+        developer keys (`<data_dir>/trust/publishers`).
+      security:
+        - sessionCookie: []
+        - serviceAccountToken: []
+      responses:
+        '200':
+          description: The active official and custom trusted publisher keys.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PluginTrustKeyList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: addPluginTrustKey
+      tags: [plugins]
+      summary: Add a custom trusted plugin publisher public key
+      description: |
+        Validates and persists an Ed25519 PKIX public key PEM under the custom trust root so
+        third-party plugins signed by that key pass inspection and installation immediately without
+        restarting the controller. Human browser session only; requires a fresh second factor or
+        `X-QWQ-MFA-Code` when the signed-in administrator has MFA enabled.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: |
+        Publisher keys are uniquely addressed by their SHA-256 key_id; re-submitting the same key
+        is deterministically rejected with `409 STATE_CONFLICT`.
+      x-qwq-action-exempt: |
+        Trust root management is a human administrator security control outside the AI action
+        catalog; every addition is written to the host audit log.
+      parameters:
+        - $ref: '#/components/parameters/MfaCodeHeader'
+      requestBody:
+        description: Human label and Ed25519 PKIX public key PEM to trust.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PluginTrustKeyCreateRequest' }
+      responses:
+        '201':
+          description: The newly trusted custom publisher key.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PluginTrustKey' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/plugin-trust-keys/{key_id}:
+    parameters:
+      - $ref: '#/components/parameters/PluginTrustKeyIdPath'
+    delete:
+      operationId: deletePluginTrustKey
+      tags: [plugins]
+      summary: Remove a custom trusted plugin publisher public key
+      description: |
+        Removes an administrator-added custom publisher key from the dynamic trust root and
+        invalidates cached package inspections immediately. Official system keys cannot be removed
+        (`403 PERMISSION_DENIED`). Human browser session only; requires a fresh second factor or
+        `X-QWQ-MFA-Code` when MFA is enabled.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: |
+        Deleting by immutable cryptographic key_id removes at most one custom key; repeating the
+        call returns `404 NOT_FOUND` with no further side effects.
+      x-qwq-action-exempt: |
+        Trust root management is a human administrator security control outside the AI action
+        catalog; every removal is written to the host audit log.
+      parameters:
+        - $ref: '#/components/parameters/MfaCodeHeader'
+      responses:
+        '204':
+          description: Custom trusted publisher key removed.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/plugin-packages/{upload_id}:
     parameters:
       - $ref: '#/components/parameters/PluginUploadIdPath'
@@ -4185,6 +4328,18 @@ components:
       required: true
       description: Opaque upload handle returned by `POST /api/v1/plugin-packages`.
       schema: { type: string, minLength: 36, maxLength: 36, pattern: '^upl_[0-9a-f]{32}$' }
+    PluginTrustKeyIdPath:
+      name: key_id
+      in: path
+      required: true
+      description: Trusted publisher Ed25519 key identifier (`ed25519:<64 lower-case hex>`).
+      schema: { type: string, minLength: 72, maxLength: 72, pattern: '^ed25519:[a-f0-9]{64}$' }
+    MfaCodeHeader:
+      name: X-QWQ-MFA-Code
+      in: header
+      required: false
+      description: Optional TOTP or recovery code satisfying second-factor checks for sensitive host mutations when the current session is not freshly MFA-verified.
+      schema: { type: string, minLength: 6, maxLength: 32 }
     InstanceIdPath:
       name: instance_id
       in: path
@@ -5899,6 +6054,45 @@ components:
         size: { type: integer, format: int64, minimum: 1, maximum: 67108864, description: Package size in bytes. }
         sha256: { type: string, minLength: 64, maxLength: 64, pattern: '^[a-f0-9]{64}$', description: SHA-256 of the package bytes. }
         expires_at: { $ref: '#/components/schemas/Timestamp' }
+    PluginPackageFetchRequest:
+      type: object
+      additionalProperties: false
+      description: Request body to fetch and stage a signed `.qwqpkg` package from a public HTTPS URL.
+      required: [url]
+      properties:
+        url: { type: string, minLength: 10, maxLength: 2048, pattern: '^https://', description: Public HTTPS URL pointing to a `.qwqpkg` archive. }
+        expected_sha256: { type: string, minLength: 64, maxLength: 71, pattern: '^(sha256:)?[a-f0-9]{64}$', description: Optional expected SHA-256 checksum of the downloaded `.qwqpkg` file. }
+    PluginTrustKeyCreateRequest:
+      type: object
+      additionalProperties: false
+      description: Request body to add a custom Ed25519 publisher public key to the dynamic trust store.
+      required: [label, public_key_pem]
+      properties:
+        label: { type: string, minLength: 1, maxLength: 120, description: Human-readable label identifying the developer or organization. }
+        public_key_pem: { type: string, minLength: 32, maxLength: 4096, description: PKIX `PUBLIC KEY` PEM block of an Ed25519 public key. }
+    PluginTrustKey:
+      type: object
+      additionalProperties: false
+      description: One trusted Ed25519 plugin publisher public key.
+      required: [key_id, label, source, public_key_pem]
+      properties:
+        key_id: { type: string, minLength: 72, maxLength: 72, pattern: '^ed25519:[a-f0-9]{64}$', description: Canonical Ed25519 key identifier (`ed25519:` + SHA-256 of raw 32-byte public key). }
+        label: { type: string, maxLength: 120, description: Display label of the publisher key. }
+        source: { type: string, maxLength: 16, enum: [official, custom], description: Whether the key comes from the read-only system trust root (`official`) or administrator-managed custom keys (`custom`). }
+        public_key_pem: { type: string, maxLength: 4096, description: Canonical PKIX `PUBLIC KEY` PEM encoding. }
+        added_by: { type: string, maxLength: 64, description: Principal ID of the administrator who added a custom key. }
+        added_at: { $ref: '#/components/schemas/Timestamp' }
+    PluginTrustKeyList:
+      type: object
+      additionalProperties: false
+      description: List of all active official and custom trusted publisher public keys.
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 256
+          description: Active trusted publisher keys, official keys first.
+          items: { $ref: '#/components/schemas/PluginTrustKey' }
     PluginPackageInspection:
       type: object
       description: |

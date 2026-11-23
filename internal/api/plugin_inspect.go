@@ -202,6 +202,17 @@ func newInspectionCache(c clock.Clock) *inspectionCache {
 	return &inspectionCache{clock: c, entries: make(map[string]*inspectionEntry)}
 }
 
+// clear drops every cached inspection so a trust-store mutation takes effect on
+// the very next GET /api/v1/plugin-packages/{upload_id}.
+func (c *inspectionCache) clear() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	clear(c.entries)
+	c.mu.Unlock()
+}
+
 // load returns the cached inspection of uploadID or computes it once. The
 // computation runs outside the cache lock; concurrent callers for the same
 // upload wait for the first result instead of unpacking twice.

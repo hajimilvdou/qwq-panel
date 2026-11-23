@@ -16,6 +16,8 @@ import (
 	"errors"
 	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -346,5 +348,47 @@ func TestHelperFileBackendErrorMappingAndNilGuards(t *testing.T) {
 	var nilDirectBackend DirectFileBackend
 	if _, err := nilDirectBackend.Current(t.Context(), "alpha", "bind-01"); fault.Code(err) != "BACKEND_REQUIRED" {
 		t.Fatalf("nil DirectFileBackend Current 未返回 BACKEND_REQUIRED：%v", err)
+	}
+}
+
+func TestHasLocalUDPListenerChecksStateAndZeroRemote(t *testing.T) {
+	dir := t.TempDir()
+	udp4 := filepath.Join(dir, "udp")
+	udp6 := filepath.Join(dir, "udp6")
+
+	// Port 0x20FB = 8443: connected outbound socket (state 01, non-zero remote) must NOT match.
+	// Port 0x20FC = 8444: state 07 but non-zero remote must NOT match.
+	// Port 0x20FD = 8445: state 07 and zero remote MUST match.
+	udp4Content := strings.Join([]string{
+		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops",
+		"   0: 0100007F:20FB 08080808:0035 01 00000000:00000000 00:00000000 00000000     0        0 1001 2 0 0",
+		"   1: 00000000:20FC 01010101:0035 07 00000000:00000000 00:00000000 00000000     0        0 1002 2 0 0",
+		"   2: 00000000:20FD 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1003 2 0 0",
+	}, "\n") + "\n"
+	// Port 0x20FE = 8446 on IPv6: state 07 and zero IPv6 remote MUST match.
+	udp6Content := strings.Join([]string{
+		"  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops",
+		"   0: 00000000000000000000000000000000:20FE 00000000000000000000000000000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1004 2 0 0",
+	}, "\n") + "\n"
+
+	if err := os.WriteFile(udp4, []byte(udp4Content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(udp6, []byte(udp6Content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := []string{udp4, udp6}
+	if hasLocalUDPListenerInFiles(0x20FB, paths) {
+		t.Fatal("connected UDP socket (state 01) must not be treated as local listener")
+	}
+	if hasLocalUDPListenerInFiles(0x20FC, paths) {
+		t.Fatal("UDP socket with non-zero remote address must not be treated as local listener")
+	}
+	if !hasLocalUDPListenerInFiles(0x20FD, paths) {
+		t.Fatal("unbound IPv4 UDP listener (state 07, zero remote) was not detected")
+	}
+	if !hasLocalUDPListenerInFiles(0x20FE, paths) {
+		t.Fatal("unbound IPv6 UDP listener (state 07, zero remote) was not detected")
 	}
 }

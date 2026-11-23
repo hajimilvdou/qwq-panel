@@ -10,10 +10,13 @@
 -->
 <script lang="ts">
   import { tick, type Component } from 'svelte';
-  import { ErrorState, Skeleton } from '$ui';
+  import { Skeleton } from '$ui';
   import { page } from '$lib/page.svelte';
   import { router, type Match } from '$lib/router.svelte';
   import { session } from '$lib/session.svelte';
+
+  let errorMod: Promise<typeof import('$ui/ErrorState.svelte')> | null = null;
+  const loadErrorState = () => (errorMod ??= import('$ui/ErrorState.svelte'));
 
   interface Props {
     match: Match;
@@ -63,15 +66,15 @@
 </script>
 
 {#if !allowed}
-  <ErrorState kind="permission" />
+  {#await loadErrorState() then mod}<mod.default kind="permission" />{/await}
 {:else if loadFailed}
-  <ErrorState message="页面没能加载，可能是网络问题或面板刚升级" onretry={retryLoad} />
+  {#await loadErrorState() then mod}<mod.default message="页面没能加载，可能是网络问题或面板刚升级" onretry={retryLoad} />{/await}
 {:else if Page}
   {#key match.route.pattern}
     <svelte:boundary>
       <Page params={match.params} />
       {#snippet failed(_error, reset)}
-        <ErrorState message="这个页面出错了" onretry={reset} />
+        {#await loadErrorState() then mod}<mod.default message="这个页面出错了" onretry={reset} />{/await}
       {/snippet}
     </svelte:boundary>
   {/key}

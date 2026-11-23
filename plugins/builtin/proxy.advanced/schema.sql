@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS brutal_bindings (
     oversend_pct INTEGER NOT NULL DEFAULT 125 CHECK (oversend_pct >= 100 AND oversend_pct <= 250),
     cwnd_gain INTEGER NOT NULL DEFAULT 20 CHECK (cwnd_gain >= 10 AND cwnd_gain <= 50),
     enable_in_sub INTEGER NOT NULL DEFAULT 1 CHECK (enable_in_sub IN (0, 1)),
+    proxy_protocol_v2 INTEGER NOT NULL DEFAULT 0 CHECK (proxy_protocol_v2 IN (0, 1)),
     notes TEXT NOT NULL DEFAULT '',
     revision INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
@@ -122,6 +123,7 @@ CREATE TABLE IF NOT EXISTS tuning_snapshots (
     rtt_ms INTEGER NOT NULL DEFAULT 0,
     sysctl_json TEXT NOT NULL CHECK (json_valid(sysctl_json)),
     applied INTEGER NOT NULL DEFAULT 0 CHECK (applied IN (0, 1)),
+    pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
     created_at INTEGER NOT NULL
 ) STRICT;
 
@@ -152,3 +154,33 @@ CREATE TABLE IF NOT EXISTS warp_config (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS proxy_nodes (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'managed' CHECK (source IN ('managed', 'external')),
+    name TEXT NOT NULL,
+    protocol TEXT NOT NULL CHECK (protocol IN (
+        'vless', 'vmess', 'trojan', 'shadowsocks', 'shadowsocks2022',
+        'hysteria2', 'anytls', 'socks5', 'http', 'tuic', 'wireguard'
+    )),
+    transport TEXT NOT NULL DEFAULT 'raw',
+    security_mode TEXT NOT NULL DEFAULT 'none',
+    listen TEXT NOT NULL DEFAULT '0.0.0.0',
+    server TEXT NOT NULL DEFAULT '',
+    port INTEGER NOT NULL CHECK (port >= 1 AND port <= 65535),
+    config_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(config_json)),
+    raw_uri TEXT NOT NULL DEFAULT '',
+    tags_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags_json)),
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    last_latency_ms INTEGER NOT NULL DEFAULT -1,
+    last_tested_at INTEGER NOT NULL DEFAULT 0,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_proxy_nodes_source
+    ON proxy_nodes(source, enabled);
+
+CREATE INDEX IF NOT EXISTS idx_proxy_nodes_protocol
+    ON proxy_nodes(protocol);

@@ -14,6 +14,7 @@
   import { page } from '$lib/page.svelte';
   import { normalizePluginPath } from '$lib/plugin-host';
   import { useResource } from '$lib/resource.svelte';
+  import { navigate } from '$lib/router.svelte';
   import { session } from '$lib/session.svelte';
   import { pluginsResource } from '../../app/nav';
   import PluginFrame from './PluginFrame.svelte';
@@ -40,12 +41,23 @@
   const allowed = $derived(!!route && session.can(route.permission));
   const running = $derived(plugin?.runtime?.state === undefined || plugin.runtime.state === 'running');
 
+  const redirectTarget = $derived.by(() => {
+    if (path !== '/' || route || !plugin?.ui?.routes?.length) return null;
+    const first = plugin.ui.routes.find((r) => r.nav) ?? plugin.ui.routes[0];
+    const target = first ? normalizePluginPath(first.path) : null;
+    return target && target !== '/' ? `/plugins/${encodeURIComponent(plugin.plugin_id)}${target}` : null;
+  });
+
+  $effect(() => {
+    if (redirectTarget) navigate(redirectTarget, { replace: true });
+  });
+
   $effect(() => {
     if (plugin) page.setTitle(route && route.title !== plugin.name ? `${plugin.name} · ${route.title}` : plugin.name);
   });
 </script>
 
-{#if list.status === 'loading'}
+{#if list.status === 'loading' || redirectTarget}
   <Skeleton height={480} radius={20} />
 {:else if list.status === 'error' && !list.data}
   <Card><ErrorState message={describeError(list.error).message} onretry={list.refresh} /></Card>

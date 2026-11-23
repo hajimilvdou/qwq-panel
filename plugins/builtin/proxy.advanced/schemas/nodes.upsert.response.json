@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "创建或更新代理节点响应",
+  "type": "object",
+  "properties": {
+    "node": {
+      "type": "object"
+    },
+    "created": {
+      "type": "boolean"
+    },
+    "core_synced": {
+      "type": "boolean"
+    },
+    "core_revision": {
+      "type": "string"
+    },
+    "core_sync_note": {
+      "type": "string"
+    },
+    "xray_json": {
+      "type": "string"
+    },
+    "share_uri": {
+      "type": "string"
+    }
+  },
+  "required": ["node", "created", "core_synced"]
+}

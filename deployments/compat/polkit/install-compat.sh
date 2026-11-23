@@ -55,9 +55,11 @@ for unit_svc in qwq-controller.service qwq-privileged.service qwq-capability.ser
   put_file 0644 "$TMP_SECCOMP" "$UNIT_DIR/${unit_svc}.d/10-compat-seccomp.conf"
 done
 
-# 为 systemd 247 (Debian 11) 准备绑定挂载点 /run/qwq/compat-creds -> /run/credentials
+# 为 systemd 247 (Debian 11) 准备绑定挂载点 /run/credentials -> /run/qwq/compat-creds
+install -d -m0755 -o root -g root /run/credentials
 cat >"$TMP_TMPFILES" <<'EOF'
 # SPDX-License-Identifier: AGPL-3.0-only
+d /run/credentials 0755 root root -
 d /run/qwq/compat-creds 0700 root root -
 EOF
 put_file 0644 "$TMP_TMPFILES" /etc/tmpfiles.d/qwq-compat-polkit.conf

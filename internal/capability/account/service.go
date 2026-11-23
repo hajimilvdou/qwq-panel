@@ -306,15 +306,22 @@ func writeAuthorizedKeys(entry passwdEntry, lines []string) ([]byte, string) {
 	if err := root.Mkdir(".ssh", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		return nil, "UNAVAILABLE"
 	}
-	sshInfo, err := root.Lstat(".ssh")
-	if err != nil || !sshInfo.IsDir() || sshInfo.Mode()&os.ModeSymlink != 0 {
+	sshDir, err := openSSHDirNoFollow(root)
+	if err != nil {
 		return nil, "CONFLICT"
 	}
-	sshFull := filepath.Join(entry.HomeDir, ".ssh")
-	if os.Geteuid() == 0 {
-		_ = os.Chown(sshFull, entry.UID, entry.GID)
+	defer sshDir.Close()
+	if sshInfo, err := sshDir.Stat(); err != nil || !sshInfo.IsDir() {
+		return nil, "CONFLICT"
 	}
-	_ = os.Chmod(sshFull, 0o700)
+	if os.Geteuid() == 0 {
+		if err := sshDir.Chown(entry.UID, entry.GID); err != nil {
+			return nil, "UNAVAILABLE"
+		}
+	}
+	if err := sshDir.Chmod(0o700); err != nil {
+		return nil, "UNAVAILABLE"
+	}
 
 	var buf bytes.Buffer
 	for _, line := range lines {
@@ -357,6 +364,9 @@ func writeAuthorizedKeys(entry passwdEntry, lines []string) ([]byte, string) {
 	if err := root.Rename(tmpRel, ".ssh/authorized_keys"); err != nil {
 		_ = root.Remove(tmpRel)
 		return nil, "UNAVAILABLE"
+	}
+	if _, err := os.Stat("/sbin/restorecon"); err == nil {
+		_ = exec.Command("/sbin/restorecon", "-RF", filepath.Join(entry.HomeDir, ".ssh")).Run()
 	}
 	return content, ""
 }

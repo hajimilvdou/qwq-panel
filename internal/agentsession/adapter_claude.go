@@ -30,14 +30,14 @@ import (
 //     optional `provider_id` key bridge (`ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`).
 
 type ClaudeCodeConfig struct {
-	Binary           string   `json:"binary,omitempty"`             // default "claude"
+	Binary           string   `json:"-"`                            // host-controlled only; never deserialized from session JSON
 	AuthMode         string   `json:"auth_mode,omitempty"`          // oauth | provider | "" (auto)
 	ProviderID       string   `json:"provider_id,omitempty"`        // optional global AIProvider key bridge
 	Model            string   `json:"model,omitempty"`              // optional --model override
 	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`   // none | low | medium | high | xhigh
 	MaxContextTokens int64    `json:"max_context_tokens,omitempty"` // optional context budget override
 	ResumeSessionID  string   `json:"resume_session_id,omitempty"`  // optional --resume <id>
-	WorkDir          string   `json:"work_dir,omitempty"`
+	WorkDir          string   `json:"-"`                            // host-controlled only; isolated temp workspace used
 	PlanMode         bool     `json:"plan_mode,omitempty"`
 	ActiveSkills     []string `json:"active_skills,omitempty"`
 	MaxTurns         int      `json:"max_turns,omitempty"`
@@ -48,14 +48,16 @@ func decodeClaudeCodeConfig(raw json.RawMessage) (ClaudeCodeConfig, error) {
 	if len(raw) == 0 {
 		return cfg, nil
 	}
+	if _, err := ValidateExternalSessionConfig(raw); err != nil {
+		return cfg, err
+	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return cfg, problem.Validation(problem.Violation{
 			Pointer: "/config", Code: "INVALID", Message: "config is not valid claude-code configuration.",
 		})
 	}
-	if cfg.Binary == "" {
-		cfg.Binary = "claude"
-	}
+	cfg.Binary = "claude"
+	cfg.WorkDir = ""
 	return cfg, nil
 }
 
@@ -110,14 +112,10 @@ func (c *ClaudeCodeCore) Name() string { return string(CoreClaudeCode) }
 
 // Preflight verifies the `claude` CLI binary is installed before creating a turn.
 func (c *ClaudeCodeCore) Preflight(ctx context.Context, raw json.RawMessage) error {
-	cfg, err := decodeClaudeCodeConfig(raw)
-	if err != nil {
+	if _, err := decodeClaudeCodeConfig(raw); err != nil {
 		return err
 	}
-	bin := cfg.Binary
-	if bin == "" {
-		bin = c.binary
-	}
+	bin := c.binary
 	if _, err := exec.LookPath(bin); err != nil {
 		return problem.New(problem.Unavailable,
 			"Claude Code CLI (%s) is not installed on this host. Install via `npm i -g @anthropic-ai/claude-code` or switch to the native core.",
@@ -165,10 +163,7 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 	if err != nil {
 		return err
 	}
-	bin := cfg.Binary
-	if bin == "" {
-		bin = c.binary
-	}
+	bin := c.binary
 	prompt := latestUserMessage(turn.Messages)
 	if prompt == "" {
 		return problem.New(problem.ValidationFailed, "No user prompt found in turn.")
@@ -206,7 +201,7 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 	}
 
 	args := []string{
-		"-p", prompt,
+		"-p",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--permission-mode", claudePermissionFlag(turn.PermissionMode, cfg.PlanMode),
@@ -293,7 +288,9 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 		args = append(args, "--mcp-config", mcpCfgPath, "--strict-mcp-config")
 	}
 
-	proc, err := c.launcher.Start(ctx, bin, args, extraEnv, cfg.WorkDir)
+	args = AppendPosixPromptArg(args, prompt)
+
+	proc, err := c.launcher.Start(ctx, bin, args, extraEnv, "")
 	if err != nil {
 		return err
 	}

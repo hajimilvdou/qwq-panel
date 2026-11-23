@@ -424,6 +424,20 @@ func isIgnoredInterface(name string) bool {
 	return false
 }
 
+// isIgnoredRouteInterface 允许 wg* / tun* 作为出站默认路由接口（如 Cloudflare WARP IPv6 隧道），
+// 同时仍排除 lo、docker、veth、网桥等非出站虚拟接口。
+func isIgnoredRouteInterface(name string) bool {
+	if name == "lo" {
+		return true
+	}
+	for _, prefix := range []string{"docker", "veth", "br-", "virbr", "tap", "tailscale", "ifb"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func classifyAddressScope(addr netip.Addr) string {
 	if addr.IsPrivate() {
 		return "private_or_nat"
@@ -484,11 +498,12 @@ func parseProcRouteV4(path string) (string, bool, error) {
 			continue
 		}
 		iface, dest, flagsHex, metricStr, mask := fields[0], fields[1], fields[3], fields[6], fields[7]
-		if dest != "00000000" || mask != "00000000" || isIgnoredInterface(iface) {
+		if dest != "00000000" || mask != "00000000" || isIgnoredRouteInterface(iface) {
 			continue
 		}
 		flags, err := strconv.ParseUint(flagsHex, 16, 32)
-		if err != nil || flags&0x1 == 0 {
+		// 过滤非 RTF_UP 或 RTF_REJECT (0x0200) 路由
+		if err != nil || flags&0x1 == 0 || flags&0x0200 != 0 {
 			continue
 		}
 		metric, err := strconv.ParseInt(metricStr, 10, 64)
@@ -527,11 +542,12 @@ func parseProcRouteV6(path string) (string, bool, error) {
 			continue
 		}
 		dest, prefixHex, metricHex, flagsHex, iface := fields[0], fields[1], fields[5], fields[8], fields[9]
-		if dest != zeroDest || prefixHex != "00" || isIgnoredInterface(iface) {
+		if dest != zeroDest || prefixHex != "00" || isIgnoredRouteInterface(iface) {
 			continue
 		}
 		flags, err := strconv.ParseUint(flagsHex, 16, 32)
-		if err != nil || flags&0x1 == 0 {
+		// 过滤非 RTF_UP 或 RTF_REJECT (0x0200) 不可达默认路由
+		if err != nil || flags&0x1 == 0 || flags&0x0200 != 0 {
 			continue
 		}
 		metric, err := strconv.ParseUint(metricHex, 16, 64)

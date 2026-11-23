@@ -314,6 +314,10 @@ type UnitSpec struct {
 	// host sets it from the verified manifest (controller.unitSpecFor); a plugin
 	// cannot request a systemd directive. Zero keeps the default deny.
 	NetworkProxyDirect bool `json:"network_proxy_direct,omitempty"`
+	// Relaxations carries host-derived minimal sandbox relaxations (host network
+	// for network.egress / network.listen / network.proxy:direct, and
+	// CAP_NET_BIND_SERVICE for ingress/proxy low ports). Zero keeps default deny.
+	Relaxations SandboxRelaxations `json:"relaxations,omitzero"`
 	// DataDir is the host-derived absolute per-instance data directory, e.g.
 	// /var/lib/qwq-plugin-data/<id>/default. Empty means the plugin needs no
 	// persistent directory (noop) and the unit keeps its original behaviour.
@@ -339,6 +343,7 @@ type prepared struct {
 	service            string
 	socket             string
 	networkProxyDirect bool
+	relaxations        SandboxRelaxations
 	stateDirectory     string
 }
 
@@ -423,6 +428,10 @@ func (s UnitSpec) prepare() (prepared, error) {
 	}
 	p.service, p.socket = service, socket
 	p.networkProxyDirect = s.NetworkProxyDirect
+	p.relaxations = s.Relaxations
+	if s.NetworkProxyDirect {
+		p.relaxations.HostNetwork = true
+	}
 	if s.DataDir != "" {
 		dir, err := checkDirPath("data dir", s.DataDir)
 		if err != nil {
@@ -565,16 +574,8 @@ func renderService(p prepared) ([]byte, error) {
 	if out, err = replaceLine(out, "ExecStart=", "ExecStart="+p.executable); err != nil {
 		return nil, err
 	}
-	if p.networkProxyDirect {
-		// The only sandbox relaxation a verified (network.proxy, direct)
-		// capability buys: host network namespace plus the inet address
-		// families. AF_UNIX stays for the Platform ABI and the private API.
-		// Every other directive (dynamic UID, empty capability set, syscall
-		// filter, ...) is untouched.
-		if out, err = replaceLine(out, "PrivateNetwork=", "PrivateNetwork=no"); err != nil {
-			return nil, err
-		}
-		if out, err = replaceLine(out, "RestrictAddressFamilies=", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"); err != nil {
+	if p.relaxations.HostNetwork || p.relaxations.BindPrivilegedPorts {
+		if out, err = ApplySandboxRelaxations(out, p.relaxations); err != nil {
 			return nil, err
 		}
 	}

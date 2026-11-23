@@ -9,6 +9,7 @@ import (
 
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/coreproc"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
+	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayconfig"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
 
@@ -63,6 +64,16 @@ func (e *Engine) Activate(ctx context.Context) (err error) {
 	if observed.State != "RUNNING" || observed.APIState != "READY" || observed.Digest != metadata.Current.Digest {
 		_ = e.stopBounded(ctx)
 		return failure("RECOVERY_FAILED", nil)
+	}
+	if metadata.Current.SummaryV2 != nil {
+		if err := e.restartObfsForSummary(metadata.Current.SummaryV2); err != nil {
+			_ = e.stopBounded(ctx)
+			return failure("RECOVERY_FAILED", err)
+		}
+		if err := e.restartAnyTLSForSummary(ctx, metadata.Current.SummaryV2); err != nil {
+			_ = e.stopBounded(ctx)
+			return failure("RECOVERY_FAILED", err)
+		}
 	}
 	updated := cloneMetadata(metadata)
 	updated.State, updated.LastError, updated.ResetEpoch = "RUNNING", "", observed.Epoch
@@ -173,6 +184,9 @@ func (e *Engine) start(ctx context.Context, generation *state.Generation) error 
 	return nil
 }
 func (e *Engine) stop(ctx context.Context) error {
+	if e.options.AnyTLS != nil {
+		e.options.AnyTLS.StopAll(3 * time.Second)
+	}
 	if e.options.Obfs != nil {
 		e.options.Obfs.StopAll(3 * time.Second)
 	}
@@ -239,11 +253,36 @@ func (tx *transaction) recover(ctx context.Context) (bool, error) {
 				if observed.State != "RUNNING" || observed.APIState != "READY" || observed.Digest != restored.Current.Digest {
 					return false, failure("RECOVERY_FAILED", nil)
 				}
-				if e.options.Obfs != nil && len(tx.oldObfsPlans) > 0 {
+				oldPlans := tx.oldObfsPlans
+				if len(oldPlans) == 0 && restored.Current.SummaryV2 != nil {
+					oldPlans = restored.Current.SummaryV2.ObfsPlans()
+				}
+				if e.options.Obfs != nil && len(oldPlans) > 0 {
 					e.mu.Lock()
 					lifetime := e.lifetime
 					e.mu.Unlock()
-					if err := e.options.Obfs.StartAll(lifetime, tx.oldObfsPlans); err != nil {
+					if err := e.options.Obfs.StartAll(lifetime, oldPlans); err != nil {
+						return false, failure("RECOVERY_FAILED", err)
+					}
+					e.mu.Lock()
+					e.obfsPlans = append([]xrayconfig.ObfsPlan(nil), oldPlans...)
+					e.mu.Unlock()
+				}
+				if e.options.AnyTLS != nil && len(tx.oldAnyTLSSpecs) > 0 {
+					e.mu.Lock()
+					lifetime := e.lifetime
+					e.mu.Unlock()
+					if err := e.options.AnyTLS.StartAll(lifetime, tx.oldAnyTLSSpecs); err != nil {
+						return false, failure("RECOVERY_FAILED", err)
+					}
+					e.mu.Lock()
+					oldStored := e.anytlsSpecs
+					e.anytlsSpecs = cloneAnyTLSSpecs(tx.oldAnyTLSSpecs)
+					e.mu.Unlock()
+					e.persistAnyTLSSpecs(tx.oldAnyTLSSpecs)
+					clearAnyTLSSpecs(oldStored)
+				} else if e.options.AnyTLS != nil && restored.Current.SummaryV2 != nil {
+					if err := e.restartAnyTLSForSummary(ctx, restored.Current.SummaryV2); err != nil {
 						return false, failure("RECOVERY_FAILED", err)
 					}
 				}
@@ -261,6 +300,7 @@ func (tx *transaction) recover(ctx context.Context) (bool, error) {
 			}
 		}
 	} else if tx.stateAttempted {
+		e.persistAnyTLSSpecs(tx.oldAnyTLSSpecs)
 		if err := e.options.Store.Restore(ctx, restored); err != nil {
 			return false, err
 		}

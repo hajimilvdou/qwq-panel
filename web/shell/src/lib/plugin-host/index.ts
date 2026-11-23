@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /* ==========================================================================
- * 插件宿主桥（ENG §9）：握手、消息分发、代理边界、清理
+ * 插件宿主桥（ENG §9 + STEP-16）：握手、消息分发、代理边界、清理
  * --------------------------------------------------------------------------
  *   const bridge = new PluginBridge(deps);
  *   bridge.attach(iframe.contentWindow);         // 每次（重新）加载 iframe 都调用
@@ -14,16 +14,19 @@
  *   2. 每次 attach 只接受一次 hello；之后一切走 MessageChannel port
  *   3. api.invoke 只能调用本插件 operations 清单内的 op；不代理宿主 API、不代理他插件
  *   4. 非 read 的调用由宿主生成幂等键；AWAITING_APPROVAL 交给悬浮窗，插件拿不到批准能力
- *   5. api.subscribe 只投递 plugins/{本插件} 名下的事件
+ *   5. api.subscribe 只投递 plugins/{本插件} 名下的事件；events.unsubscribe 及时释放配额
+ *   6. ui.confirm / ui.copy 由宿主顶层窗口受控代理（沙箱永不开启 allow-modals/allow-same-origin）
  * 本模块不碰 DOM 与 $api：真实调用经 deps 注入，便于单测。
  * ========================================================================== */
 import {
+  MAX_MESSAGE_BYTES,
   OPERATION_RE,
   READY_TIMEOUT_MS,
   RateGate,
   TOAST_INTERVAL_MS,
   clampHeight,
   cleanToast,
+  extractOversizedApiCallId,
   normalizePluginPath,
   parseHello,
   parsePluginMessage,
@@ -62,6 +65,18 @@ export interface BridgeEvent {
   [k: string]: unknown;
 }
 
+export interface BridgeConfirmRequest {
+  title: string;
+  body: string;
+  confirmLabel?: string;
+  danger: boolean;
+}
+
+export interface BridgeCopyRequest {
+  text: string;
+  label?: string;
+}
+
 export interface BridgeDeps {
   pluginId: string;
   operations: readonly BridgeOperation[];
@@ -83,6 +98,10 @@ export interface BridgeDeps {
   onToast: (text: string) => void;
   onNavigate: (path: string) => void;
   onTimeout: () => void;
+  /** 宿主确认弹窗委托（STEP-16） */
+  onConfirm?: (req: BridgeConfirmRequest) => Promise<boolean>;
+  /** 宿主剪贴板写入委托（STEP-16） */
+  onCopy?: (req: BridgeCopyRequest) => Promise<void>;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (h: unknown) => void;
@@ -107,6 +126,7 @@ export class PluginBridge {
   #pendingRoute: string | null = null;
   #subjects = new Set<string>();
   #unsub: (() => void) | null = null;
+  #confirmInflight = false;
   #gate: RateGate;
   #toastGate: () => boolean;
   #setTimer: (fn: () => void, ms: number) => unknown;
@@ -193,7 +213,22 @@ export class PluginBridge {
     if (this.#connGen !== gen || this.#port !== port) return;
     if (this.phase !== 'connected' && this.phase !== 'ready') return;
     const msg = parsePluginMessage(data);
-    if (!msg) return;
+    if (!msg) {
+      const oversizedId = extractOversizedApiCallId(data);
+      if (oversizedId !== null) {
+        this.#send({
+          t: 'api.result',
+          id: oversizedId,
+          ok: false,
+          problem: {
+            code: 'PAYLOAD_TOO_LARGE',
+            status: 413,
+            detail: `消息体超过插件桥接上限 (${Math.round(MAX_MESSAGE_BYTES / (1024 * 1024))} MiB)`,
+          },
+        });
+      }
+      return;
+    }
     switch (msg.t) {
       case 'ui.ready':
         if (this.phase === 'connected') {
@@ -215,11 +250,20 @@ export class PluginBridge {
         if (p !== null && routeAllowed(this.deps.routes, p)) this.deps.onNavigate(p);
         return;
       }
+      case 'ui.confirm':
+        void this.#confirm(msg, gen, port);
+        return;
+      case 'ui.copy':
+        void this.#copy(msg, gen, port);
+        return;
       case 'api.invoke':
         void this.#invoke(msg, gen, port);
         return;
       case 'api.subscribe':
         this.#subscribe(msg.subjects);
+        return;
+      case 'events.unsubscribe':
+        this.#unsubscribe(msg.subjects);
         return;
     }
   }
@@ -229,6 +273,55 @@ export class PluginBridge {
     if (!OPERATION_RE.test(name)) return null;
     const id = `${this.deps.pluginId}/${name}`;
     return this.deps.operations.find((o) => o.id === id) ?? null;
+  }
+
+  async #confirm(msg: Extract<PluginToShell, { t: 'ui.confirm' }>, gen: number, port: MessagePort): Promise<void> {
+    const sendForConn = (out: ShellToPlugin) => {
+      if (this.#connGen !== gen || this.#port !== port) return;
+      this.#send(out);
+    };
+    if (!this.deps.onConfirm) {
+      sendForConn({ t: 'ui.confirm.result', id: msg.id, ok: true, data: { confirmed: false } });
+      return;
+    }
+    if (this.#confirmInflight) {
+      sendForConn({ t: 'ui.confirm.result', id: msg.id, ok: false, problem: { code: 'RATE_LIMITED', status: 429 } });
+      return;
+    }
+    this.#confirmInflight = true;
+    try {
+      const confirmed = await this.deps.onConfirm({
+        title: cleanToast(msg.title, 120) || '确认操作',
+        body: msg.body.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+/g, ' ').trim().slice(0, 1000),
+        confirmLabel: msg.confirm_label ? cleanToast(msg.confirm_label, 40) : undefined,
+        danger: Boolean(msg.danger),
+      });
+      sendForConn({ t: 'ui.confirm.result', id: msg.id, ok: true, data: { confirmed: Boolean(confirmed) } });
+    } catch {
+      sendForConn({ t: 'ui.confirm.result', id: msg.id, ok: false, problem: { code: 'INTERNAL', status: 500 } });
+    } finally {
+      this.#confirmInflight = false;
+    }
+  }
+
+  async #copy(msg: Extract<PluginToShell, { t: 'ui.copy' }>, gen: number, port: MessagePort): Promise<void> {
+    const sendForConn = (out: ShellToPlugin) => {
+      if (this.#connGen !== gen || this.#port !== port) return;
+      this.#send(out);
+    };
+    if (!this.deps.onCopy) {
+      sendForConn({ t: 'ui.copy.result', id: msg.id, ok: false, problem: { code: 'UNAVAILABLE', detail: '剪贴板不可用' } });
+      return;
+    }
+    try {
+      await this.deps.onCopy({
+        text: msg.text,
+        label: msg.label ? cleanToast(msg.label, 80) : undefined,
+      });
+      sendForConn({ t: 'ui.copy.result', id: msg.id, ok: true, data: { copied: true } });
+    } catch {
+      sendForConn({ t: 'ui.copy.result', id: msg.id, ok: false, problem: { code: 'COPY_FAILED', detail: '复制失败' } });
+    }
   }
 
   async #invoke(msg: Extract<PluginToShell, { t: 'api.invoke' }>, gen: number, port: MessagePort): Promise<void> {
@@ -278,6 +371,16 @@ export class PluginBridge {
     });
   }
 
+  #unsubscribe(subjects: readonly string[]): void {
+    for (const s of subjects) {
+      this.#subjects.delete(s);
+    }
+    if (this.#subjects.size === 0 && this.#unsub) {
+      this.#unsub();
+      this.#unsub = null;
+    }
+  }
+
   /* ---------------------------------------------------------------- 内部 */
 
   #send(msg: ShellToPlugin): void {
@@ -298,6 +401,7 @@ export class PluginBridge {
     this.#connGen++;
     this.#connAbort?.abort();
     this.#connAbort = null;
+    this.#confirmInflight = false;
     this.#unsub?.();
     this.#unsub = null;
     this.#subjects.clear();

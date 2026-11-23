@@ -56,10 +56,31 @@
     if (tabs.find((t) => t.id === tab)?.hidden) tab = 'overview';
   });
 
-  /* ---------------------------------------------------------------- 打开 / 重启 */
+  /* ---------------------------------------------------------------- 打开 / 启停 / 重启 */
   const entry = $derived(p?.ui?.routes.find((r) => r.nav) ?? p?.ui?.routes[0]);
   const canUpdate = $derived(session.can('host.plugins:update'));
+  const stopped = $derived(p?.runtime?.state === 'stopped' || p?.active_status === 'STOPPED');
   let restarting = $state(false);
+  let toggling = $state(false);
+
+  async function toggleEnabled() {
+    if (!p || toggling) return;
+    toggling = true;
+    const enable = stopped;
+    try {
+      await runIntent(
+        createIntent(),
+        (key) => (enable ? plugins.enable(p.plugin_id, key) : plugins.disable(p.plugin_id, key)),
+        { label: `${enable ? '启用' : '停用'} ${p.name}` },
+      );
+      void detail.refresh();
+      void all.refresh();
+    } catch (err) {
+      reportError(err, enable ? '启用失败' : '停用失败');
+    } finally {
+      toggling = false;
+    }
+  }
 
   async function restart() {
     if (!p) return;
@@ -128,7 +149,12 @@
       {#if entry && p.runtime?.state === 'running' && session.can(entry.permission)}
         <Button variant="soft" icon="external" href="/plugins/{encodeURIComponent(p.plugin_id)}{entry.path === '/' ? '' : entry.path}">打开</Button>
       {/if}
-      {#if canUpdate}<Button variant="ghost" icon="refresh" loading={restarting} onclick={restart}>重启</Button>{/if}
+      {#if canUpdate}
+        <Button variant={stopped ? 'soft' : 'ghost'} icon={stopped ? 'play' : 'pause'} loading={toggling} onclick={toggleEnabled}>
+          {stopped ? '启用' : '停用'}
+        </Button>
+        <Button variant="ghost" icon="refresh" loading={restarting} onclick={restart}>重启</Button>
+      {/if}
       {#if canUninstall}<Button variant="ghost" icon="trash" onclick={openRemove}>卸载</Button>{/if}
     </div>
   </header>

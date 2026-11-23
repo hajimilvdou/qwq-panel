@@ -33,12 +33,50 @@ const (
 	MinBanTTLSeconds = 60
 	MaxBanTTLSeconds = 30 * 86400
 	maxBatchEntries  = 512
+	maxScanLines     = 10000
 )
 
-var sshFailPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`Failed (?:password|publickey|keyboard-interactive/pam) for (?:invalid user )?([A-Za-z0-9_.-]{1,64}) from ([0-9a-fA-F:.]{3,45})\b`),
-	regexp.MustCompile(`Invalid user ([A-Za-z0-9_.-]{1,64}) from ([0-9a-fA-F:.]{3,45})\b`),
-	regexp.MustCompile(`Connection closed by authenticating user ([A-Za-z0-9_.-]{1,64}) ([0-9a-fA-F:.]{3,45}) port \d+ \[preauth\]`),
+var anchoredSSHFailPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^Failed (?:password|publickey|keyboard-interactive/pam) for (?:invalid user )?(\S+) from ([0-9a-fA-F:.]{3,45}) port \d+(?: ssh2)?$`),
+	regexp.MustCompile(`^Invalid user (\S+) from ([0-9a-fA-F:.]{3,45}) port \d+$`),
+	regexp.MustCompile(`^Connection closed by authenticating user (\S+) ([0-9a-fA-F:.]{3,45}) port \d+ \[preauth\]$`),
+	regexp.MustCompile(`^Disconnected from authenticating user (\S+) ([0-9a-fA-F:.]{3,45}) port \d+ \[preauth\]$`),
+	regexp.MustCompile(`^Unable to negotiate with ([0-9a-fA-F:.]{3,45}) port \d+: .+\[preauth\]$`),
+}
+
+// ExtractVerifiedSSHFailureIP 仅从 UID=0 的真实 sshd journal 记录中提取源 IP，阻断日志注入伪造误封。
+func ExtractVerifiedSSHFailureIP(syslogIdentifier, uid, message string) (netip.Addr, bool) {
+	_, addr, ok := extractVerifiedSSHFailure(syslogIdentifier, uid, message)
+	return addr, ok
+}
+
+func extractVerifiedSSHFailure(syslogIdentifier, uid, message string) (string, netip.Addr, bool) {
+	if (syslogIdentifier != "sshd" && syslogIdentifier != "sshd-session") || (uid != "" && uid != "0") {
+		return "", netip.Addr{}, false
+	}
+	msg := strings.TrimSpace(message)
+	for _, re := range anchoredSSHFailPatterns {
+		m := re.FindStringSubmatch(msg)
+		var user, rawIP string
+		switch len(m) {
+		case 3:
+			user, rawIP = m[1], m[2]
+		case 2:
+			rawIP = m[1]
+		default:
+			continue
+		}
+		addr, err := netip.ParseAddr(rawIP)
+		if err != nil {
+			continue
+		}
+		addr = addr.Unmap()
+		if isAlwaysProtected(addr) {
+			return "", netip.Addr{}, false
+		}
+		return user, addr, true
+	}
+	return "", netip.Addr{}, false
 }
 
 // CommandRunner 封装受控命令执行，生产默认直接调用固定路径的 journalctl / nft。
@@ -157,9 +195,11 @@ func allowedUnitArgs(unit string) ([]string, bool) {
 }
 
 type journalRecord struct {
-	Cursor    string `json:"__CURSOR"`
-	Timestamp string `json:"__REALTIME_TIMESTAMP"`
-	Message   any    `json:"MESSAGE"`
+	Cursor           string `json:"__CURSOR"`
+	Timestamp        string `json:"__REALTIME_TIMESTAMP"`
+	SyslogIdentifier string `json:"SYSLOG_IDENTIFIER"`
+	UID              string `json:"_UID"`
+	Message          any    `json:"MESSAGE"`
 }
 
 func extractJournalMessage(msg any) string {
@@ -191,7 +231,7 @@ func (s *Service) scanAuthFailures(ctx context.Context, p scanParams) sandbox.Ca
 	if since > MaxSinceSeconds {
 		since = MaxSinceSeconds
 	}
-	args := []string{"--no-pager", "-o", "json", "-n", "2000"}
+	args := []string{"--no-pager", "-o", "json"}
 	args = append(args, unitArgs...)
 	if p.Cursor != "" {
 		if len(p.Cursor) > 512 || strings.ContainsAny(p.Cursor, " \t\r\n\x00'") {
@@ -199,7 +239,7 @@ func (s *Service) scanAuthFailures(ctx context.Context, p scanParams) sandbox.Ca
 		}
 		args = append(args, "--after-cursor="+p.Cursor)
 	} else {
-		args = append(args, fmt.Sprintf("--since=-%ds", since))
+		args = append(args, "-n", "2000", fmt.Sprintf("--since=-%ds", since))
 	}
 
 	jpath := s.JournalctlPath
@@ -221,7 +261,12 @@ func (s *Service) scanAuthFailures(ctx context.Context, p scanParams) sandbox.Ca
 
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(make([]byte, 64*1024), 512*1024)
+	scanned := 0
 	for sc.Scan() {
+		if scanned >= maxScanLines {
+			break
+		}
+		scanned++
 		var rec journalRecord
 		if json.Unmarshal(sc.Bytes(), &rec) != nil {
 			continue
@@ -233,21 +278,11 @@ func (s *Service) scanAuthFailures(ctx context.Context, p scanParams) sandbox.Ca
 		if msg == "" {
 			continue
 		}
-		var user, rawIP string
-		for _, re := range sshFailPatterns {
-			if m := re.FindStringSubmatch(msg); len(m) == 3 {
-				user, rawIP = m[1], m[2]
-				break
-			}
-		}
-		if rawIP == "" {
+		user, addr, matched := extractVerifiedSSHFailure(rec.SyslogIdentifier, rec.UID, msg)
+		if !matched {
 			continue
 		}
-		addr, perr := netip.ParseAddr(rawIP)
-		if perr != nil {
-			continue
-		}
-		normIP := addr.Unmap().String()
+		normIP := addr.String()
 		tsMs := s.now().UnixMilli()
 		if rec.Timestamp != "" {
 			if usec, terr := strconv.ParseInt(rec.Timestamp, 10, 64); terr == nil && usec > 0 {
@@ -288,10 +323,10 @@ add set inet qwq ban_v4 { type ipv4_addr; size 4096; flags timeout; }
 add set inet qwq ban_v6 { type ipv6_addr; size 4096; flags timeout; }
 add chain inet qwq ban { type filter hook input priority -1; policy accept; }
 flush chain inet qwq ban
-add rule inet qwq ban ct state established,related accept comment "qwq:ban-established"
 add rule inet qwq ban iifname "lo" accept comment "qwq:ban-loopback"
 add rule inet qwq ban ip saddr @ban_v4 drop comment "qwq:ban-v4"
 add rule inet qwq ban ip6 saddr @ban_v6 drop comment "qwq:ban-v6"
+add rule inet qwq ban ct state established,related accept comment "qwq:ban-established"
 `
 	nft := s.NftPath
 	if nft == "" {
@@ -432,8 +467,10 @@ func (s *Service) applyBans(ctx context.Context, p applyBansParams) sandbox.Capa
 	if p.ExpectedRevision != "" && p.ExpectedRevision != curRev {
 		return bridge.Failure("PRECONDITION_FAILED", "封禁集合版本已变化")
 	}
+	wasExisting := make(map[string]bool, len(current))
 	existing := make(map[string]bool, len(current))
 	for _, b := range current {
+		wasExisting[b.GetIp()] = true
 		existing[b.GetIp()] = true
 	}
 	netNew := 0
@@ -452,12 +489,18 @@ func (s *Service) applyBans(ctx context.Context, p applyBansParams) sandbox.Capa
 	}
 
 	var script bytes.Buffer
+	seenInBatch := make(map[string]bool, len(cleaned))
 	for _, c := range cleaned {
+		ipStr := c.addr.String()
 		setName := "ban_v6"
 		if c.addr.Is4() {
 			setName = "ban_v4"
 		}
-		fmt.Fprintf(&script, "add element inet qwq %s { %s timeout %ds }\n", setName, c.addr.String(), c.ttl)
+		if wasExisting[ipStr] || seenInBatch[ipStr] {
+			fmt.Fprintf(&script, "delete element inet qwq %s { %s }\n", setName, ipStr)
+		}
+		seenInBatch[ipStr] = true
+		fmt.Fprintf(&script, "add element inet qwq %s { %s timeout %ds }\n", setName, ipStr, c.ttl)
 	}
 	nft := s.NftPath
 	if nft == "" {

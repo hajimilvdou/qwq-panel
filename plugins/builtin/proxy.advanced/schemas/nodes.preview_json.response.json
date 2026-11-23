@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "预览节点原生 Xray/AnyTLS 配置与客户端链接响应",
+  "type": "object",
+  "properties": {
+    "engine": {
+      "type": "string"
+    },
+    "protocol": {
+      "type": "string"
+    },
+    "transport": {
+      "type": "string"
+    },
+    "security_mode": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer"
+    },
+    "native_inbound": {
+      "type": "object"
+    },
+    "native_json": {
+      "type": "string"
+    },
+    "share_uri": {
+      "type": "string"
+    },
+    "clash_yaml": {
+      "type": "string"
+    },
+    "singbox_outbound": {
+      "type": "object"
+    }
+  },
+  "required": ["engine", "protocol", "native_inbound", "native_json", "share_uri"]
+}

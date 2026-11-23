@@ -35,7 +35,9 @@
     "schemas/ingress.site.upsert.request.json": "sha256:2e4e22af300e8a5724899959c5f81562614e0dc859cd26c35af246be2a05a177",
     "schemas/ingress.site.upsert.response.json": "sha256:f2c9aa101c91475109f593a3ca606c531c63d5d6c7a304ae45a602c41faa6738",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
-    "ui/index.html": "sha256:3a7a6c6848f57307c21165c42807f516d9457ee5e94f14b70515c8a2613f1396"
+    "ui/index.html": "sha256:001a95fcceb801e873c5efcc237c6e884e33b03411e040b73098f027a94424fc",
+    "ui/plugin.css": "sha256:4061996f5b44cfa5250b771c4b172ddafea3b0c1aa0887f9910be81c2935951f",
+    "ui/plugin.js": "sha256:bf10304e8bbbcfcdbf9bb9679f811d24ba5df76f8a5f194592914ff549ad365c"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

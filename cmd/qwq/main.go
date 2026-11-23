@@ -79,7 +79,7 @@ commands:
   backup            write a consistent backup of data, keys and configuration
   restore           restore a backup (root only, controller stopped)
   firewall-restore  restore the saved qwq firewall through its capability helper
-  plugin            bootstrap signed plugin packages onto the local host (root only)
+  plugin            author, sign, verify, or bootstrap signed plugin packages
   rotate-master-key rotate the AES-256 master key and re-encrypt stored secrets (root only)
   help              show this help
 `)

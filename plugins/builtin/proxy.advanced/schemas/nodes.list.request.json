@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "列举代理节点请求",
+  "description": "按来源、协议、标签与关键字筛选全部托管入站节点与外部导入节点。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "source": {
+      "type": "string",
+      "enum": ["", "managed", "external"]
+    },
+    "protocol": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "tag": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "search": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "enabled_only": {
+      "type": "boolean"
+    }
+  }
+}

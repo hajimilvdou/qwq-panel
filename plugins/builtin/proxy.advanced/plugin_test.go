@@ -430,16 +430,16 @@ func TestProxyAdvancedManifestAndPackageDigests(t *testing.T) {
 		!parsed.Lifecycle.Background || parsed.Lifecycle.UpdateStrategy != "restart" || parsed.Lifecycle.EffectiveOverlapSafe() {
 		t.Fatalf("manifest 生命周期或定位不符: %+v", parsed.Lifecycle)
 	}
-	if parsed.Resources.MemoryMaxMB != 32 || parsed.Resources.CPUQuotaPercent != 25 ||
-		parsed.Resources.PIDsMax != 16 || parsed.Resources.FDsMax != 512 ||
+	if parsed.Resources.MemoryMaxMB != 64 || parsed.Resources.CPUQuotaPercent != 25 ||
+		parsed.Resources.PIDsMax != 16 || parsed.Resources.FDsMax != 4096 ||
 		parsed.Resources.DiskMaxMB != 32 || parsed.Resources.KVMaxKB != 128 {
 		t.Fatalf("资源预算不符: %+v", parsed.Resources)
 	}
-	if len(parsed.Operations) != 30 {
-		t.Fatalf("操作数量=%d，期望=30", len(parsed.Operations))
+	if len(parsed.Operations) != 37 {
+		t.Fatalf("操作数量=%d，期望=37", len(parsed.Operations))
 	}
-	if parsed.UI == nil || len(parsed.UI.Routes) != 3 {
-		t.Fatalf("UI 路由数量应为 3（/proxy, /proxy/chains, /proxy/tuning），实际: %+v", parsed.UI)
+	if parsed.UI == nil || len(parsed.UI.Routes) != 4 {
+		t.Fatalf("UI 路由数量应为 4（/proxy, /proxy/nodes, /proxy/chains, /proxy/tuning），实际: %+v", parsed.UI)
 	}
 	for name, digest := range parsed.Files {
 		if name == parsed.Entrypoint {
@@ -683,16 +683,19 @@ func TestResetEpochUsageQuotaExpiryAndMonthlyReset(t *testing.T) {
 		}
 	}
 
-	// 推进时钟至下月重置日（2026-12-15）：alice 当期用量归零并恢复 active，总历史流量保留！
+	// 推进时钟至下月重置日（2026-12-15），并携带上周期末尾残留增量 (20, 30)：
+	// 应先结算尾量到 total，再执行跨账期清零并恢复 active，新账期从 0/0 起步！
 	curTime = time.Date(2026, 12, 15, 1, 0, 0, 0, time.UTC)
-	syncNeeded, err = st.IngestXrayObservation(t.Context(), "epoch-2", nil)
+	syncNeeded, err = st.IngestXrayObservation(t.Context(), "epoch-2", []usageSample{
+		{UserID: "alice", RawUp: 120, RawDown: 180, HasUp: true, HasDown: true},
+	})
 	if err != nil || !syncNeeded {
 		t.Fatalf("月度重置恢复应触发同步: sync=%v err=%v", syncNeeded, err)
 	}
 	users, _ = st.ListUsers(t.Context(), "", "", 10)
 	for _, u := range users {
 		if u.ID == "alice" {
-			if u.Status != "active" || u.PeriodUpBytes != 0 || u.PeriodDownBytes != 0 || u.TotalUpBytes != 450 || u.TotalDownBytes != 600 {
+			if u.Status != "active" || u.PeriodUpBytes != 0 || u.PeriodDownBytes != 0 || u.TotalUpBytes != 470 || u.TotalDownBytes != 630 {
 				t.Fatalf("月度重置后 alice 状态或流量不符: %+v", u)
 			}
 		}
@@ -754,6 +757,9 @@ func TestPublicSubscriptionRouteFormatsHeadersAndSecurity(t *testing.T) {
 	if userInfo != "upload=0; download=0; total=53687091200; expire=0" {
 		t.Fatalf("Subscription-Userinfo 头不符: %q", userInfo)
 	}
+	if upd := headerValFromProto(v2Resp.GetHeaders(), "Profile-Update-Interval"); upd != "24" {
+		t.Fatalf("Profile-Update-Interval 头应为 24，实际 %q", upd)
+	}
 	decoded, err := base64.StdEncoding.DecodeString(string(v2Resp.GetBody()))
 	if err != nil {
 		t.Fatalf("v2ray Base64 解码失败: %v", err)
@@ -790,10 +796,34 @@ func TestPublicSubscriptionRouteFormatsHeadersAndSecurity(t *testing.T) {
 		t.Fatalf("sing-box 订阅失败: status=%d err=%v", sbResp.GetStatus(), err)
 	}
 	var sbDoc struct {
+		Inbounds  []map[string]any `json:"inbounds"`
+		DNS       map[string]any   `json:"dns"`
 		Outbounds []map[string]any `json:"outbounds"`
 	}
-	if err := json.Unmarshal(sbResp.GetBody(), &sbDoc); err != nil || len(sbDoc.Outbounds) != 5 {
-		t.Fatalf("sing-box JSON 结构不符: len=%d err=%v", len(sbDoc.Outbounds), err)
+	if err := json.Unmarshal(sbResp.GetBody(), &sbDoc); err != nil || len(sbDoc.Outbounds) != 5 || len(sbDoc.Inbounds) != 1 || sbDoc.DNS == nil {
+		t.Fatalf("sing-box JSON 结构不符: inbounds=%d outbounds=%d dns=%v err=%v", len(sbDoc.Inbounds), len(sbDoc.Outbounds), sbDoc.DNS != nil, err)
+	}
+	if sbDoc.Inbounds[0]["type"] != "mixed" || sbDoc.Inbounds[0]["listen"] != "127.0.0.1" {
+		t.Fatalf("sing-box 默认 mixed 入站不符: %+v", sbDoc.Inbounds[0])
+	}
+
+	// 验证 Stash / Clash Verge / SFM User-Agent 自动识别。
+	for ua, wantFmt := range map[string]string{
+		"Stash/2.5.0":       "clash",
+		"clash-verge/1.7.7": "clash",
+		"SFM/1.10.0":        "singbox",
+	} {
+		gotFmt, ok := resolveSubscriptionFormat("", []pluginsdk.HTTPHeader{{Name: "User-Agent", Value: ua}})
+		if !ok || gotFmt != wantFmt {
+			t.Fatalf("UA %q 期望格式 %q，实际 %q (ok=%v)", ua, wantFmt, gotFmt, ok)
+		}
+	}
+
+	// 验证 writeYAMLMap 支持 []string 块列表序列化。
+	var yamlBuf strings.Builder
+	writeYAMLMap(&yamlBuf, map[string]any{"alpn": []string{"h2", "http/1.1"}}, 2)
+	if !strings.Contains(yamlBuf.String(), "  alpn:\n    - h2\n    - http/1.1\n") {
+		t.Fatalf("writeYAMLMap []string 序列化不符:\n%s", yamlBuf.String())
 	}
 
 	// 4. 连续访问超过 20 次后验证日志表裁剪上限严格 <= 20。

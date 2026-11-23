@@ -289,7 +289,14 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 		maxSteps = maxEnhancedSteps
 	}
 
-	_, err = RunLoop(ctx, provider, wrappedTools, gate, nativeEmit(emit, names), LoopOptions{
+	baseLoopEmit := nativeEmit(emit, names)
+	loopEmit := func(e LoopEvent) error {
+		if e.Type == LoopEventDelta && provider.consumeStreamedDelta() {
+			return nil
+		}
+		return baseLoopEmit(e)
+	}
+	_, err = RunLoop(ctx, provider, wrappedTools, gate, loopEmit, LoopOptions{
 		Messages:   messages,
 		MaxSteps:   maxSteps,
 		NextCallID: turn.NextCallID,
@@ -360,15 +367,24 @@ func (t *enhancedTools) Execute(ctx context.Context, call ModelToolCall) (ToolOu
 // streamingOpenAIProvider executes OpenAI-compatible SSE streaming requests,
 // capturing TTFT, TPS, cached tokens, reasoning_content, and tool_call deltas.
 type streamingOpenAIProvider struct {
-	core         *NativeCore
-	cfg          *enhancedNativeConfig
-	providerKind string
-	apiKey       []byte
-	emit         Emit
-	telemetry    *TelemetrySnapshot
-	sysText      string
-	toolDefs     []ToolDef
-	maxCtx       int64
+	core          *NativeCore
+	cfg           *enhancedNativeConfig
+	providerKind  string
+	apiKey        []byte
+	emit          Emit
+	telemetry     *TelemetrySnapshot
+	sysText       string
+	toolDefs      []ToolDef
+	maxCtx        int64
+	streamedDelta bool
+}
+
+func (p *streamingOpenAIProvider) consumeStreamedDelta() bool {
+	if !p.streamedDelta {
+		return false
+	}
+	p.streamedDelta = false
+	return true
 }
 
 type streamChatRequest struct {
@@ -396,6 +412,7 @@ type openAIUsage struct {
 
 func (p *streamingOpenAIProvider) Complete(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
 	p.telemetry.Steps++
+	p.streamedDelta = false
 	stepStart := time.Now()
 
 	if p.providerKind == ProviderKindAnthropic {
@@ -562,6 +579,10 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 				firstTokenAt = time.Now()
 			}
 			contentBuf.WriteString(d.Content)
+			if p.emit != nil {
+				p.streamedDelta = true
+				_ = p.emit(Event{Type: EventMessageDelta, Delta: d.Content})
+			}
 		}
 		for _, tc := range d.ToolCalls {
 			acc, ok := toolAcc[tc.Index]
@@ -710,13 +731,20 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 				msgs = append(msgs, map[string]any{"role": "assistant", "content": blocks})
 			}
 		case LoopRoleTool:
+			block := map[string]any{
+				"type":        "tool_result",
+				"tool_use_id": m.ToolCallID,
+				"content":     m.Content,
+			}
+			if len(msgs) > 0 && msgs[len(msgs)-1]["role"] == "user" {
+				if prevBlocks, ok := msgs[len(msgs)-1]["content"].([]map[string]any); ok {
+					msgs[len(msgs)-1]["content"] = append(prevBlocks, block)
+					continue
+				}
+			}
 			msgs = append(msgs, map[string]any{
-				"role": "user",
-				"content": []map[string]any{{
-					"type":        "tool_result",
-					"tool_use_id": m.ToolCallID,
-					"content":     m.Content,
-				}},
+				"role":    "user",
+				"content": []map[string]any{block},
 			})
 		}
 	}

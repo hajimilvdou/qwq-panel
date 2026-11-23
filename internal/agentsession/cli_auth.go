@@ -488,16 +488,25 @@ func (m *CLIAuthManager) watchLoginProcess(
 	}()
 
 	waitCh := make(chan error, 1)
+	reaped := make(chan struct{})
 	go func() {
 		waitCh <- cmd.Wait()
+		close(reaped)
 	}()
 
 	go func() {
-		<-ctx.Done()
-		if cmd.Process != nil {
-			_ = signalProcessGroup(cmd.Process.Pid, false)
-			time.Sleep(500 * time.Millisecond)
-			_ = signalProcessGroup(cmd.Process.Pid, true)
+		select {
+		case <-ctx.Done():
+			if cmd.Process != nil {
+				_ = signalProcessGroup(cmd.Process.Pid, false)
+				select {
+				case <-reaped:
+					return
+				case <-time.After(500 * time.Millisecond):
+				}
+				_ = signalProcessGroup(cmd.Process.Pid, true)
+			}
+		case <-reaped:
 		}
 	}()
 

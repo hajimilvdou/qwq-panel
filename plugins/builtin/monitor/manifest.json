@@ -27,11 +27,11 @@
     "schemas/series.response.json": "sha256:2dedeb6cd2638ddd70ad26d4aa5ea00e4227ccf23222c9d85d491468399372ed",
     "schemas/snapshot.response.json": "sha256:d73dc8fc6ba84124bb0d372675c9772e193d679475d98cc55dad5c2060a28072",
     "schemas/stat.response.json": "sha256:605e5bdfd16b5b8977ac464f513acbfbb513469c367afab246f093fd8833af45",
+    "ui/LICENSE.tokens.txt": "sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "ui/index.html": "sha256:7138cf306a1f7842765b28e40ac97990806186102649eea1377b7999df78bcd7",
     "ui/monitor.css": "sha256:341011a9c14da75eaa89b82e6bc46124002c08e37f76cebb36528cb50c4d4256",
-    "ui/monitor.js": "sha256:d0f10d25058c55c3bb48402c7bbc336ec99070f064cb71f7e86efa9302454ba4",
-    "ui/tokens.css": "sha256:757918310e30a806d3ab03efc6026cc46ee44c3d7978b429a9ceba1c1d684124",
-    "ui/LICENSE.tokens.txt": "sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    "ui/monitor.js": "sha256:65bc890b8278558ddfb5d8ab8a163217367382b7327463d36a620c03b2e73ac0",
+    "ui/tokens.css": "sha256:757918310e30a806d3ab03efc6026cc46ee44c3d7978b429a9ceba1c1d684124"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

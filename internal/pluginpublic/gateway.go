@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -20,10 +21,36 @@ import (
 
 const (
 	DefaultMaxResponseBytes = 4 << 20  // 4 MiB（与 ADR-0024 / ABI 对齐）
+	MaxThemeUploadBodyBytes = 16 << 20 // 16 MiB（server.probe 主题包上传上限）
 	MaxStreamingBodyBytes   = 32 << 20 // 32 MiB（多模态流式 AI 中转请求体上限）
 	DefaultBufferedTimeout  = 15 * time.Second
 	DefaultStreamTimeout    = 600 * time.Second
+
+	themeSandboxHeader = "X-QWQ-Theme-Sandbox"
+	themeSandboxCSP    = "sandbox allow-scripts; default-src 'none'; script-src https: http: 'unsafe-inline'; style-src 'unsafe-inline' https: http:; img-src data: blob: https: http:; font-src data: https: http:; connect-src 'none'; frame-ancestors 'self'"
+	probePortalCSP     = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; font-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+	defaultPortalCSP   = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 )
+
+type ctxFromCustomDomainKey struct{}
+
+func isCustomDomainRequest(r *http.Request) bool {
+	v, _ := r.Context().Value(ctxFromCustomDomainKey{}).(bool)
+	return v
+}
+
+func isThemeSandboxPath(subpath string) bool {
+	return subpath == "theme-frame" || strings.HasPrefix(subpath, "theme-frame/")
+}
+
+func hasThemeSandboxHeader(headers map[string]string) bool {
+	for k, v := range headers {
+		if strings.EqualFold(k, themeSandboxHeader) && strings.TrimSpace(v) == "1" {
+			return true
+		}
+	}
+	return false
+}
 
 // PublicRequest 是剥离了面板管理会话凭据后传递给插件的受控公开请求。
 type PublicRequest struct {
@@ -82,9 +109,10 @@ type ipBucket struct {
 
 // Gateway 持有原子公开路由表与按源 IP 限流桶。
 type Gateway struct {
-	dispatcher Dispatcher
-	streamer   StreamDispatcher
-	routes     atomic.Pointer[map[routeKey]RouteSpec]
+	dispatcher     Dispatcher
+	streamer       StreamDispatcher
+	routes         atomic.Pointer[map[routeKey]RouteSpec]
+	trustedProxies atomic.Pointer[[]netip.Prefix]
 
 	mu      sync.Mutex
 	buckets map[string]*ipBucket
@@ -112,6 +140,12 @@ func NewGateway(dispatcher Dispatcher, now func() time.Time) *Gateway {
 // SetStreamDispatcher 显式绑定或替换流式公开路由分发器。
 func (g *Gateway) SetStreamDispatcher(sd StreamDispatcher) {
 	g.streamer = sd
+}
+
+// SetTrustedProxies configures trusted reverse-proxy CIDRs for client IP extraction.
+func (g *Gateway) SetTrustedProxies(prefixes []netip.Prefix) {
+	cp := append([]netip.Prefix(nil), prefixes...)
+	g.trustedProxies.Store(&cp)
 }
 
 // ReplaceRoutes 原子替换公开路由表，插件启停/升级期间在途请求零闪断。
@@ -191,7 +225,7 @@ func (g *Gateway) allowClientIP(key string, perMin int) bool {
 		b.tokens -= 1.0
 		return true
 	}
-	// 容量触顶时先清理 5 分钟未活跃的陈旧桶，绝不清空仍在活跃限流中的桶，防止 DDoS 重置限流配额。
+	// 容量触顶时先清理 5 分钟未活跃的陈旧桶；若仍满则按 LRU 淘汰最老非限流桶（避免全局 Fail-Closed 429）。
 	if len(g.buckets) >= 8192 {
 		staleBefore := nowNano - int64(5*time.Minute)
 		for k, b := range g.buckets {
@@ -200,7 +234,25 @@ func (g *Gateway) allowClientIP(key string, perMin int) bool {
 			}
 		}
 		if len(g.buckets) >= 8192 {
-			return false
+			var oldestKey string
+			var oldestNano int64
+			var oldestNonAbuserKey string
+			var oldestNonAbuserNano int64
+			for k, b := range g.buckets {
+				if oldestKey == "" || b.lastNano < oldestNano {
+					oldestKey = k
+					oldestNano = b.lastNano
+				}
+				if b.tokens >= 1.0 && (oldestNonAbuserKey == "" || b.lastNano < oldestNonAbuserNano) {
+					oldestNonAbuserKey = k
+					oldestNonAbuserNano = b.lastNano
+				}
+			}
+			if oldestNonAbuserKey != "" {
+				delete(g.buckets, oldestNonAbuserKey)
+			} else if oldestKey != "" {
+				delete(g.buckets, oldestKey)
+			}
 		}
 	}
 	g.buckets[key] = &ipBucket{tokens: burst - 1, lastNano: nowNano}
@@ -209,6 +261,8 @@ func (g *Gateway) allowClientIP(key string, perMin int) bool {
 
 var allowedPluginResponseHeaders = map[string]struct{}{
 	"Content-Type":            {},
+	"Cache-Control":           {},
+	"ETag":                    {},
 	"Subscription-Userinfo":   {},
 	"Profile-Update-Interval": {},
 	"Content-Disposition":     {},
@@ -222,16 +276,71 @@ var allowedPluginResponseHeaders = map[string]struct{}{
 func extractRemoteIP(remoteAddr string) string {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		return remoteAddr
+		return strings.Trim(remoteAddr, "[]")
 	}
-	return host
+	return strings.Trim(host, "[]")
+}
+
+func (g *Gateway) isTrustedProxyIP(ip netip.Addr) bool {
+	ptr := g.trustedProxies.Load()
+	if ptr == nil {
+		return false
+	}
+	unmapped := ip.Unmap()
+	for _, p := range *ptr {
+		if p.Contains(unmapped) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Gateway) extractClientIP(r *http.Request) string {
+	remote := extractRemoteIP(r.RemoteAddr)
+	remoteAddr, err := netip.ParseAddr(remote)
+	if err != nil || !g.isTrustedProxyIP(remoteAddr) {
+		return remote
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		return remote
+	}
+	parts := strings.Split(xff, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		cand := strings.TrimSpace(parts[i])
+		addr, perr := netip.ParseAddr(cand)
+		if perr != nil {
+			return remote
+		}
+		if !g.isTrustedProxyIP(addr) {
+			return addr.Unmap().String()
+		}
+	}
+	return remote
+}
+
+func rateLimitIPKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	p, _ := addr.Prefix(64)
+	return p.String()
 }
 
 // extractSafePluginToken 仅提取明确属于公开插件业务命名空间（sk-qwq-* / rly_sess_* / prb_*）的令牌；
 // 面板管理凭据（Cookie、qwq_* Token、Basic Auth）100% 过滤丢弃。
 func extractSafePluginToken(r *http.Request) string {
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if len(auth) >= 7 && strings.EqualFold(auth[:7], "bearer ") {
+		auth = strings.TrimSpace(auth[7:])
+	}
 	candidates := []string{
-		strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")),
+		auth,
 		strings.TrimSpace(r.Header.Get("x-api-key")),
 		strings.TrimSpace(r.Header.Get("x-goog-api-key")),
 		strings.TrimSpace(r.Header.Get("X-Relay-Session")),
@@ -283,8 +392,26 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if spec.PortalSPA {
-		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+		subpath == "" && !strings.HasSuffix(r.URL.Path, "/") && !isCustomDomainRequest(r) {
+		target := r.URL.Path + "/"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusPermanentRedirect)
+		return
+	}
+
+	sandboxedTheme := isThemeSandboxPath(subpath)
+	if sandboxedTheme {
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+		h.Set("Content-Security-Policy", themeSandboxCSP)
+	} else if spec.PortalSPA {
+		if pluginID == "server.probe" {
+			h.Set("Content-Security-Policy", probePortalCSP)
+		} else {
+			h.Set("Content-Security-Policy", defaultPortalCSP)
+		}
 	} else {
 		h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	}
@@ -304,8 +431,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP := extractRemoteIP(r.RemoteAddr)
-	if !g.allowClientIP(clientIP+"|"+pluginID+"|"+route, spec.RateLimitPerMin) {
+	clientIP := g.extractClientIP(r)
+	if !g.allowClientIP(rateLimitIPKey(clientIP)+"|"+pluginID+"|"+route, spec.RateLimitPerMin) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		return
 	}
@@ -337,10 +464,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	maxReqBytes := spec.MaxReqBytes
+	if pluginID == "server.probe" && subpath == "api/admin/themes/upload" && maxReqBytes < MaxThemeUploadBodyBytes {
+		maxReqBytes = MaxThemeUploadBodyBytes
+	}
+
 	if spec.Streaming && g.streamer != nil {
+		rc := http.NewResponseController(w)
+		_ = rc.SetReadDeadline(time.Time{})
 		ctx, cancel := context.WithTimeout(r.Context(), DefaultStreamTimeout)
 		defer cancel()
-		limitedBody := http.MaxBytesReader(w, r.Body, spec.MaxReqBytes)
+		limitedBody := http.MaxBytesReader(w, r.Body, maxReqBytes)
 		defer limitedBody.Close()
 		if err := g.streamer.ServePublicStream(ctx, pluginID, pubReq, limitedBody, w); err != nil {
 			http.Error(w, "upstream gateway error", http.StatusBadGateway)
@@ -359,12 +493,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
-		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, spec.MaxReqBytes+1))
+		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxReqBytes+1))
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if int64(len(bodyBytes)) > spec.MaxReqBytes {
+		if int64(len(bodyBytes)) > maxReqBytes {
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -388,6 +522,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !sandboxedTheme && hasThemeSandboxHeader(resp.Headers) {
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+		h.Set("Content-Security-Policy", themeSandboxCSP)
+	}
 	for k, v := range resp.Headers {
 		canon := http.CanonicalHeaderKey(k)
 		if _, ok := allowedPluginResponseHeaders[canon]; ok {

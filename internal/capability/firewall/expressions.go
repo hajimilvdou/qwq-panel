@@ -91,6 +91,9 @@ func normalizeMatch(match *matchObject) (string, error) {
 		} else if (payload.Protocol == "ip" || payload.Protocol == "ip6") && payload.Field == "saddr" {
 			canonicalRight, err = addressExpression(match.Right, payload.Protocol == "ip")
 			class = "address"
+		} else if payload.Protocol == "icmpv6" && payload.Field == "type" {
+			canonicalRight, err = icmpv6TypeExpression(match.Right)
+			class = "icmpv6-type"
 		} else {
 			return "", errInvalidRuleset
 		}
@@ -186,6 +189,40 @@ func stateExpression(raw []byte) (any, error) {
 	}
 	for _, value := range set.Values {
 		if value != "established" && value != "related" {
+			return nil, errInvalidRuleset
+		}
+	}
+	slices.Sort(set.Values)
+	return map[string]any{"set": slices.Compact(set.Values)}, nil
+}
+
+func allowedICMPv6Type(t string) bool {
+	switch t {
+	case "destination-unreachable", "packet-too-big", "time-exceeded",
+		"parameter-problem", "echo-request", "nd-router-advert",
+		"nd-neighbor-solicit", "nd-neighbor-advert":
+		return true
+	default:
+		return false
+	}
+}
+
+func icmpv6TypeExpression(raw []byte) (any, error) {
+	var value string
+	if json.Unmarshal(raw, &value) == nil {
+		if !allowedICMPv6Type(value) {
+			return nil, errInvalidRuleset
+		}
+		return value, nil
+	}
+	var set struct {
+		Values []string `json:"set"`
+	}
+	if decodeObject(raw, &set) != nil || len(set.Values) == 0 || len(set.Values) > 8 {
+		return nil, errInvalidRuleset
+	}
+	for _, v := range set.Values {
+		if !allowedICMPv6Type(v) {
 			return nil, errInvalidRuleset
 		}
 	}

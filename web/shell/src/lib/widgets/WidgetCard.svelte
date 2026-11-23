@@ -16,9 +16,12 @@
   import { describeError } from '$lib/errors';
   import { events } from '$lib/events.svelte';
   import { relativeTime } from '$lib/format';
-  import { Card, EmptyState, ErrorState, Icon, Ring, SeriesChart, Segmented, Skeleton, Sparkline, CATEGORY_COLORS, type CategoryColor } from '$ui';
+  import { Card, EmptyState, ErrorState, Icon, Ring, Segmented, Skeleton, Sparkline, CATEGORY_COLORS, type CategoryColor } from '$ui';
   import { ICONS, type IconName } from '$ui/icons';
   import { levelOf, parseWidget, refreshMs, WidgetShapeError, type WidgetData, type WidgetSlot } from './index';
+
+  let chartMod: Promise<typeof import('$ui/SeriesChart.svelte')> | null = null;
+  const loadSeriesChart = () => (chartMod ??= import('$ui/SeriesChart.svelte'));
 
   interface Props {
     slot: WidgetSlot;
@@ -213,7 +216,11 @@
         </div>
       {/if}
     {:else if data.kind === 'series' && seriesView}
-      <SeriesChart label="{w.title}趋势" unit={data.data.unit} max={data.data.max} series={seriesView.series} height={160} />
+      {#await loadSeriesChart()}
+        <Skeleton lines={4} label="{w.title}图表加载中" />
+      {:then mod}
+        <mod.default label="{w.title}趋势" unit={data.data.unit} max={data.data.max} series={seriesView.series} height={160} />
+      {/await}
     {:else if data.kind === 'checks'}
       {@const d = data.data}
       {@const top = Math.max(1, ...(d.bars ?? []))}

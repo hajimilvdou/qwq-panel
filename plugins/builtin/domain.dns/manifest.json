@@ -37,7 +37,7 @@
     "schemas/records.reconcile.request.json": "sha256:e9d91054fdbb130ada7d9ed124bc6b33413400281f9f078dd18d81c83d3cbf98",
     "schemas/zones.mutate.response.json": "sha256:c10817149ffccb66152d3b5b8a59b70ef2b7bf4a12099e218dfbd8eae35e5114",
     "schemas/zones.target.request.json": "sha256:119bafb85cca5b533a3308cbe0ceb4f95248afa18fb115d9f694a22a3d1dd5f7",
-    "ui/dns.js": "sha256:b1b9761d689bd335a7f9d84688513244055a9ecbb17d2825f8ad98af400fe810",
+    "ui/dns.js": "sha256:3267fc712ec914087225f6ff5329047b967b5930c9c073fc036580f7c24e5a9a",
     "ui/index.html": "sha256:0474fc3e60530bf505454841d42fe455701787474da77db649160099d3887962"
   },
   "provenance": {

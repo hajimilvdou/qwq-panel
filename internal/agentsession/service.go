@@ -1541,6 +1541,10 @@ func normalizeConfig(core CoreName, raw json.RawMessage) (json.RawMessage, error
 		if _, err := decodeNativeConfig(raw); err != nil {
 			return nil, err
 		}
+	} else {
+		if _, err := ValidateExternalSessionConfig(raw); err != nil {
+			return nil, err
+		}
 	}
 	return raw, nil
 }

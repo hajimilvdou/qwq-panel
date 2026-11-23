@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -139,7 +141,8 @@ func TestDisguiseNginx404AndAutoDisableOnDomain(t *testing.T) {
 	}
 
 	// Configuring a reverse-proxy panel_domain automatically disables the secret
-	// entry path & disguise so visiting / goes straight to the panel!
+	// entry path ONLY when accessed via that authorized domain; direct bare-IP
+	// probes MUST remain disguised (BUG-H03)!
 	dom := "panel.example.com"
 	snap, _, err := mgr.Update(context.Background(), UpdateInput{PanelDomain: &dom})
 	if err != nil {
@@ -149,9 +152,106 @@ func TestDisguiseNginx404AndAutoDisableOnDomain(t *testing.T) {
 		t.Fatalf("expected auto-bypass, got reason=%q active=%v", snap.DomainAutoBypassReason(), snap.EntryGateActive())
 	}
 
+	reqDomain := httptest.NewRequest(http.MethodGet, "/", nil)
+	reqDomain.Host = "panel.example.com"
 	rec2 := httptest.NewRecorder()
-	h.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/", nil))
+	h.ServeHTTP(rec2, reqDomain)
 	if rec2.Code != http.StatusOK || rec2.Body.String() != "PANEL:/" {
-		t.Fatalf("after panel_domain bypass: %d %q, want 200 PANEL:/", rec2.Code, rec2.Body.String())
+		t.Fatalf("after panel_domain bypass on authorized host: %d %q, want 200 PANEL:/", rec2.Code, rec2.Body.String())
+	}
+
+	// Bare IP probe must still receive nginx 404 disguise!
+	reqIP := httptest.NewRequest(http.MethodGet, "/", nil)
+	reqIP.Host = "203.0.113.10:41235"
+	recIP := httptest.NewRecorder()
+	h.ServeHTTP(recIP, reqIP)
+	if recIP.Code != http.StatusNotFound || recIP.Header().Get("Server") != "nginx" {
+		t.Fatalf("bare IP probe leaked panel: status=%d server=%q", recIP.Code, recIP.Header().Get("Server"))
+	}
+
+	// Emergency rescue via bare IP + secret path still works and issues _g cookie.
+	reqRescue := httptest.NewRequest(http.MethodGet, "/secretpath1/login", nil)
+	reqRescue.Host = "203.0.113.10:41235"
+	recRescue := httptest.NewRecorder()
+	h.ServeHTTP(recRescue, reqRescue)
+	if recRescue.Code != http.StatusFound || recRescue.Header().Get("Location") != "/login" {
+		t.Fatalf("bare IP emergency rescue = %d %q, want 302 /login", recRescue.Code, recRescue.Header().Get("Location"))
+	}
+
+	// Plugin UI HMAC capability prefix /_u/<tok>/plugin-ui/... works without _g cookie.
+	decorated := snap.DecoratePluginUIEntryURL("/plugin-ui/core.xray/1.0.0/ui/index.html")
+	if !strings.HasPrefix(decorated, "/_u/") {
+		t.Fatalf("DecoratePluginUIEntryURL = %q, want /_u/<tok>/...", decorated)
+	}
+	reqUI := httptest.NewRequest(http.MethodGet, decorated, nil)
+	reqUI.Host = "203.0.113.10:41235"
+	recUI := httptest.NewRecorder()
+	h.ServeHTTP(recUI, reqUI)
+	if recUI.Code != http.StatusOK || recUI.Body.String() != "PANEL:/plugin-ui/core.xray/1.0.0/ui/index.html" {
+		t.Fatalf("plugin UI token route = %d %q", recUI.Code, recUI.Body.String())
+	}
+
+	// Open redirect attempt /secretpath1//evil.com collapses leading slashes to single /evil.com.
+	reqRedir := httptest.NewRequest(http.MethodGet, "/secretpath1//evil.com", nil)
+	reqRedir.Host = "203.0.113.10:41235"
+	recRedir := httptest.NewRecorder()
+	h.ServeHTTP(recRedir, reqRedir)
+	if strings.HasPrefix(recRedir.Header().Get("Location"), "//") {
+		t.Fatalf("open redirect leaked protocol-relative Location: %q", recRedir.Header().Get("Location"))
+	}
+
+	// Public plugin route /p/... is exempt from admin gate.
+	reqPub := httptest.NewRequest(http.MethodGet, "/p/proxy.advanced/sub/token1", nil)
+	reqPub.Host = "203.0.113.10:41235"
+	recPub := httptest.NewRecorder()
+	h.ServeHTTP(recPub, reqPub)
+	if recPub.Code != http.StatusOK || recPub.Body.String() != "PANEL:/p/proxy.advanced/sub/token1" {
+		t.Fatalf("public plugin route blocked: %d %q", recPub.Code, recPub.Body.String())
+	}
+
+	// Custom HTML disguise must carry CSP sandbox header.
+	mode := config.DisguiseCustomHTML
+	html := "<h1>hello</h1>"
+	if _, _, err := mgr.Update(context.Background(), UpdateInput{Disguise: &mode, DisguiseHTML: &html}); err != nil {
+		t.Fatalf("Update custom_html: %v", err)
+	}
+	recHTML := httptest.NewRecorder()
+	h.ServeHTTP(recHTML, reqIP)
+	if !strings.Contains(recHTML.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("custom_html missing CSP sandbox: %q", recHTML.Header().Get("Content-Security-Policy"))
+	}
+}
+
+func TestOnPortChangeWritesCapabilityPanelPortAtomically(t *testing.T) {
+	portFile := filepath.Join(t.TempDir(), "panel-port.json")
+	var observed []int
+	mgr, err := NewManager(context.Background(), Options{
+		Bootstrap: config.HTTP{
+			Listen: "127.0.0.1:41236",
+			TLS:    config.TLS{Mode: config.TLSSelfSigned},
+		},
+		OnPortChange: func(port int) {
+			observed = append(observed, port)
+			if err := WriteCapabilityPanelPort(portFile, port); err != nil {
+				t.Errorf("WriteCapabilityPanelPort(%d): %v", port, err)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if len(observed) != 1 || observed[0] != 41236 {
+		t.Fatalf("initial OnPortChange = %v, want [41236]", observed)
+	}
+	newPort := 41999
+	if _, changed, err := mgr.Update(context.Background(), UpdateInput{Port: &newPort}); err != nil || !changed {
+		t.Fatalf("Update port: changed=%v err=%v", changed, err)
+	}
+	if len(observed) != 2 || observed[1] != 41999 {
+		t.Fatalf("OnPortChange after update = %v, want [41236 41999]", observed)
+	}
+	raw, err := os.ReadFile(portFile)
+	if err != nil || strings.TrimSpace(string(raw)) != `{"port":41999}` {
+		t.Fatalf("panel-port.json = %q (err=%v), want {\"port\":41999}", string(raw), err)
 	}
 }

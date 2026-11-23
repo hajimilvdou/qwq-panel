@@ -4,91 +4,20 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>高级代理管理 · 链式代理 · 网络调优与 Brutal</title>
-  <style>
-    :root, [data-theme="light"] {
-      color-scheme: light;
-      --bg: #f6f3ed; --surface: #fdfbf8; --surface-2: #f1ece3;
-      --line: #e8e1d6; --line-strong: #d5cbbe;
-      --text: #2a211b; --text-2: #685a50; --text-3: #96887d;
-      --cocoa: #6b4c3b; --on-cocoa: #fdfbf8;
-      --jade: #1e9c8b; --jade-soft: #e2f5f2;
-      --amber: #d99422; --amber-soft: #fbf0db;
-      --brick: #b5352b; --brick-soft: #fae5e3;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    }
-    [data-theme="dark"] {
-      color-scheme: dark;
-      --bg: #151210; --surface: #1e1a17; --surface-2: #28221e;
-      --line: #312923; --line-strong: #463b32;
-      --text: #f3ede6; --text-2: #b5a89d; --text-3: #83766c;
-      --cocoa: #9d755d; --on-cocoa: #17120e;
-      --jade: #32c2ae; --jade-soft: rgba(50, 194, 174, 0.16);
-      --amber: #ebb044; --amber-soft: rgba(235, 176, 68, 0.16);
-      --brick: #ef6b61; --brick-soft: rgba(239, 107, 97, 0.18);
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 20px; background: var(--bg); color: var(--text); font-variant-numeric: tabular-nums; }
-    main { max-width: 1180px; margin: 0 auto; }
-    .topbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
-    .title { margin: 0; font-size: 18px; font-weight: 650; }
-    .sub { font-size: 12px; color: var(--text-2); margin-top: 3px; }
-    .tabs { display: flex; gap: 6px; background: var(--surface); padding: 4px; border: 1px solid var(--line); border-radius: 10px; flex-wrap: wrap; }
-    .tabs button { background: transparent; color: var(--text-2); border: 0; padding: 7px 14px; border-radius: 7px; font-weight: 550; cursor: pointer; font-size: 13px; }
-    .tabs button.active { background: var(--cocoa); color: var(--on-cocoa); }
-    .banner { padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-2); font-size: 12px; color: var(--text-2); margin-bottom: 14px; display: none; }
-    .banner.show { display: block; }
-    .banner.ok { border-color: var(--jade); background: var(--jade-soft); color: var(--jade); }
-    .banner.warn { border-color: var(--amber); background: var(--amber-soft); color: var(--amber); }
-    .banner.err { border-color: var(--brick); background: var(--brick-soft); color: var(--brick); }
-    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 12px; margin-bottom: 16px; }
-    .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
-    .stat .k { font-size: 12px; color: var(--text-2); }
-    .stat .v { font-size: 19px; font-weight: 700; margin-top: 4px; }
-    .stat .d { font-size: 11px; color: var(--text-3); margin-top: 4px; }
-    .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
-    .card h3 { margin: 0 0 6px; font-size: 15px; }
-    .card-desc { font-size: 12px; color: var(--text-2); margin: 0 0 12px; line-height: 1.5; }
-    .form-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); margin-top: 10px; }
-    label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-2); }
-    label.check { flex-direction: row; align-items: center; gap: 8px; padding-top: 18px; color: var(--text); }
-    input, select, pre { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--bg); color: var(--text); font-size: 13px; }
-    input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
-    input[type="range"] { padding: 0; border: 0; background: transparent; }
-    pre { overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; max-height: 280px; margin: 10px 0 0; }
-    .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
-    .btn { padding: 7px 14px; border-radius: 8px; border: 0; background: var(--cocoa); color: var(--on-cocoa); font-weight: 550; cursor: pointer; font-size: 13px; }
-    .btn.sm { padding: 4px 10px; font-size: 12px; }
-    .btn.ghost { background: transparent; border: 1px solid var(--line-strong); color: var(--text); }
-    .btn.danger { background: var(--brick-soft); color: var(--brick); }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--surface-2); color: var(--text-2); }
-    .badge.ok, .badge.active { background: var(--jade-soft); color: var(--jade); }
-    .badge.warn, .badge.suspended_quota, .badge.expired { background: var(--amber-soft); color: var(--amber); }
-    .badge.err, .badge.disabled { background: var(--brick-soft); color: var(--brick); }
-    .bar { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; margin-top: 4px; }
-    .bar > span { display: block; height: 100%; background: var(--cocoa); }
-    .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
-    th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-    th { font-size: 12px; color: var(--text-2); font-weight: 600; white-space: nowrap; }
-    .muted { color: var(--text-2); font-size: 12px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-    .hidden { display: none !important; }
-    .oversend-box { display: flex; align-items: center; gap: 8px; }
-    .oversend-box input[type="range"] { flex: 1; }
-    .oversend-box input[type="number"] { width: 78px; }
-  </style>
+  <title>高级代理管理 · 全协议节点构建 · 链式代理 · 网络调优与 Brutal</title>
+  <link rel="stylesheet" href="./proxy.css" />
 </head>
 <body>
   <main id="proxy-root">
     <div class="topbar">
       <div>
         <h2 class="title" id="page-title">高级代理管理</h2>
-        <div class="sub">多用户配额与连接限制 · 链式代理出口 · tcpfit 动态调优与 TCP Brutal 端口透明接管 · <span id="status">连接宿主中…</span></div>
+        <div class="sub">多用户配额与连接限制 · 全协议节点构建 · 链式代理与 WARP · tcpfit 与 TCP Brutal · <span id="status">连接宿主中…</span></div>
       </div>
-      <div class="actions" style="margin-top:0">
+      <div class="actions actions-tight">
         <div class="tabs" id="nav-tabs">
           <button data-route="/proxy" class="active" type="button">用户与限速</button>
+          <button data-route="/proxy/nodes" type="button">节点管理</button>
           <button data-route="/proxy/chains" type="button">链式代理</button>
           <button data-route="/proxy/tuning" type="button">网络调优 &amp; Brutal</button>
         </div>
@@ -143,7 +72,7 @@
             </tbody>
           </table>
         </div>
-        <div class="form-grid" style="margin-top:16px">
+        <div class="form-grid mt-16">
           <label>套餐 ID <input id="p-id" placeholder="如 pro-100g" /></label>
           <label>名称 <input id="p-name" placeholder="专业 100G" /></label>
           <label>配额 (GiB, 0=不限) <input id="p-quota-gb" type="number" min="0" value="100" /></label>
@@ -181,7 +110,7 @@
           </table>
         </div>
 
-        <h3 style="margin-top:18px">单用户连接数 / IP / 链式落地覆盖</h3>
+        <h3 class="section-heading">单用户连接数 / IP / 链式落地覆盖</h3>
         <p class="card-desc">覆盖值说明：<code>-1</code> 继承所属套餐默认上限，<code>0</code> 表示该用户不限制，正整数为显式上限。</p>
         <div class="form-grid">
           <label>目标用户
@@ -201,14 +130,110 @@
       </section>
     </section>
 
-    <!-- ==================== 视图 2: /proxy/chains 链式代理与 Cloudflare WARP 解锁页 ==================== -->
+    <!-- ==================== 视图 2: /proxy/nodes 全协议代理节点管理与双模式构建器 ==================== -->
+    <section data-view="/proxy/nodes" class="hidden">
+      <section class="stats">
+        <div class="stat">
+          <div class="k">节点总数</div>
+          <div class="v" id="n-stat-total">—</div>
+          <div class="d" id="n-stat-split">托管 / 外部导入</div>
+        </div>
+        <div class="stat">
+          <div class="k">已启用 / 监听中</div>
+          <div class="v" id="n-stat-active">—</div>
+          <div class="d" id="n-stat-listen">托管节点实时端口探活</div>
+        </div>
+        <div class="stat">
+          <div class="k">已覆盖协议</div>
+          <div class="v" id="n-stat-protos">—</div>
+          <div class="d" id="n-stat-protos-sub">支持 VLESS / VMess / Trojan / SS / Hy2 / AnyTLS 等</div>
+        </div>
+        <div class="stat">
+          <div class="k">测速概况</div>
+          <div class="v" id="n-stat-latency">—</div>
+          <div class="d" id="n-stat-latency-sub">点击节点「测速」执行真实连通性检测</div>
+        </div>
+      </section>
+
+      <!-- 外部节点批量导入折叠卡片 -->
+      <details class="card import-card" id="nodes-import-details">
+        <summary>
+          <span>外部节点批量导入（多行 URI / Base64 订阅）</span>
+          <span class="summary-hint">支持 vless / vmess / trojan / ss / hysteria2 / hy2 / anytls / socks5 / http / tuic / wireguard</span>
+        </summary>
+        <div class="import-body">
+          <p class="card-desc">直接粘贴单条/多行分享链接，或整段 Base64 订阅内容；导入的外部节点将统一纳入多协议订阅汇总与延迟测速。</p>
+          <textarea id="n-import-uris" class="code-area" rows="4" placeholder="vless://...&#10;hysteria2://...&#10;anytls://...&#10;或粘贴整段 Base64 订阅内容"></textarea>
+          <div class="form-grid mt-10">
+            <label>附加标签（可选，逗号分隔）
+              <input id="n-import-tags" placeholder="如 hk, 落地, 备用" />
+            </label>
+            <label class="check">
+              <input id="n-import-enabled" type="checkbox" checked /> 导入后默认启用
+            </label>
+          </div>
+          <div class="actions">
+            <button id="btn-nodes-import" class="btn" type="button">解析并导入</button>
+            <button id="btn-nodes-import-clear" class="btn ghost" type="button">清空输入</button>
+          </div>
+          <div id="n-import-feedback" class="banner mt-10" role="status" aria-live="polite"></div>
+        </div>
+      </details>
+
+      <!-- 节点列表卡片 -->
+      <section class="card">
+        <div class="card-head">
+          <h3>代理节点列表（托管入站 &amp; 外部导入）</h3>
+          <div class="actions actions-tight">
+            <button id="btn-node-add" class="btn" type="button">+ 添加节点</button>
+            <button id="btn-nodes-refresh" class="btn ghost" type="button">刷新</button>
+          </div>
+        </div>
+
+        <div class="filter-toolbar">
+          <div class="filter-row">
+            <div class="pill-group" id="n-proto-filters" aria-label="按协议筛选"></div>
+            <div class="pill-group" id="n-source-filters" aria-label="按来源筛选">
+              <button type="button" class="pill active" data-source="">全部来源</button>
+              <button type="button" class="pill" data-source="managed">托管入站</button>
+              <button type="button" class="pill" data-source="external">外部导入</button>
+            </div>
+          </div>
+          <div class="filter-row">
+            <div class="pill-group" id="n-tag-filters" aria-label="按标签筛选"></div>
+            <input id="n-search" class="search-box" type="search" placeholder="搜索节点名称、ID、地址、协议或标签…" />
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>协议</th>
+                <th>节点名称 / 标签 / 来源</th>
+                <th>地址与端口</th>
+                <th>传输 / 安全</th>
+                <th>延迟</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="nodes-body">
+              <tr><td colspan="7" class="muted">等待加载节点…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <!-- ==================== 视图 3: /proxy/chains 链式代理与 Cloudflare WARP 解锁页 ==================== -->
     <section data-view="/proxy/chains" class="hidden">
       <!-- Cloudflare WARP 服务端 WireGuard 链式出口解锁 -->
       <section class="card">
         <h3>Cloudflare WARP 出口解锁（服务端 WireGuard 链式代理）</h3>
         <p class="card-desc">当 VPS 原生 IP 较脏（触发 Cloudflare 人机验证、ChatGPT/Claude 拒访或流媒体受限）时，通过 <strong>Xray 内置用户态 WireGuard</strong> 将选定入站端口或解锁域名走 WARP 出口转发：不改宿主机路由表、不影响 SSH/面板、零额外常驻进程，1C1G/LXC 容器原生可用。</p>
 
-        <section class="stats" style="margin-bottom:14px">
+        <section class="stats stats-compact">
           <div class="stat">
             <div class="k">WARP 账号状态</div>
             <div class="v" id="w-state">未注册</div>
@@ -216,12 +241,12 @@
           </div>
           <div class="stat">
             <div class="k">分配内网地址</div>
-            <div class="v mono" id="w-addrs" style="font-size:14px">—</div>
+            <div class="v v-sm mono" id="w-addrs">—</div>
             <div class="d mono" id="w-reserved">reserved: —</div>
           </div>
           <div class="stat">
             <div class="k">当前端点 / 分流模式</div>
-            <div class="v mono" id="w-ep-summary" style="font-size:14px">—</div>
+            <div class="v v-sm mono" id="w-ep-summary">—</div>
             <div class="d" id="w-mode-summary">—</div>
           </div>
           <div class="stat">
@@ -251,24 +276,24 @@
           <label class="check"><input id="w-enabled" type="checkbox" checked /> 启用 WARP 出口并立即同步到 Xray</label>
         </div>
 
-        <div style="margin-top:14px">
-          <div class="muted" style="font-size:12px;margin-bottom:6px">绑定代理入站端口（勾选需要套 WARP 的端口；“仅解锁域名”模式下留空=全部端口生效）：</div>
-          <div id="w-ports-box" class="actions" style="margin-top:0;gap:10px"></div>
+        <div class="mt-14">
+          <div class="muted mb-6">绑定代理入站端口（勾选需要套 WARP 的端口；“仅解锁域名”模式下留空=全部端口生效）：</div>
+          <div id="w-ports-box" class="actions actions-gap-10"></div>
         </div>
 
-        <div id="w-domains-wrap" style="margin-top:14px">
-          <div class="actions" style="margin-top:0;margin-bottom:6px">
-            <span class="muted" style="font-size:12px">解锁域名列表（每行或逗号分隔，支持 <code>openai.com</code> / <code>geosite:netflix</code>）：</span>
+        <div id="w-domains-wrap" class="mt-14">
+          <div class="actions actions-mb-6">
+            <span class="muted">解锁域名列表（每行或逗号分隔，支持 <code>openai.com</code> / <code>geosite:netflix</code>）：</span>
             <button id="btn-w-preset-ai" class="btn sm ghost" type="button">+ AI 全家桶</button>
             <button id="btn-w-preset-stream" class="btn sm ghost" type="button">+ 流媒体解锁</button>
             <button id="btn-w-preset-google" class="btn sm ghost" type="button">+ Google 防验证</button>
           </div>
-          <textarea id="w-domains" rows="3" style="width:100%;font-family:monospace;font-size:12px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)" placeholder="openai.com, chatgpt.com, claude.ai, netflix.com"></textarea>
+          <textarea id="w-domains" class="code-area" rows="3" placeholder="openai.com, chatgpt.com, claude.ai, netflix.com"></textarea>
         </div>
 
-        <details style="margin-top:12px">
-          <summary class="muted" style="cursor:pointer;font-size:12px">手动导入已有 WireGuard / WARP+ / Zero Trust 密钥（若 VPS 无法访问注册接口时使用）</summary>
-          <div class="form-grid" style="margin-top:10px">
+        <details class="mt-12">
+          <summary class="details-summary">手动导入已有 WireGuard / WARP+ / Zero Trust 密钥（若 VPS 无法访问注册接口时使用）</summary>
+          <div class="form-grid mt-10">
             <label>WireGuard PrivateKey <input id="w-manual-priv" type="password" class="mono" placeholder="44 位 Base64 私钥" /></label>
             <label>Peer PublicKey <input id="w-manual-pub" class="mono" value="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=" /></label>
             <label>WARP IPv4 地址 <input id="w-manual-v4" class="mono" value="172.16.0.2/32" /></label>
@@ -353,7 +378,7 @@
       </section>
     </section>
 
-    <!-- ==================== 视图 3: /proxy/tuning tcpfit 调优 + TCP Brutal 接管 ==================== -->
+    <!-- ==================== 视图 4: /proxy/tuning tcpfit 调优 + TCP Brutal 接管 ==================== -->
     <section data-view="/proxy/tuning" class="hidden">
       <section class="stats">
         <div class="stat">
@@ -407,8 +432,8 @@
           <button id="btn-tuning-dry" class="btn ghost" type="button">演练保存基线 (Dry-Run)</button>
           <button id="btn-tuning-apply" class="btn danger" type="button">应用到宿主机内核</button>
         </div>
-        <div id="t-plan-summary" class="muted" style="margin-top:10px"></div>
-        <div id="t-swap-warn" class="banner warn" style="margin-top:10px"></div>
+        <div id="t-plan-summary" class="muted mt-10"></div>
+        <div id="t-swap-warn" class="banner warn mt-10"></div>
         <div class="table-wrap">
           <table>
             <thead>
@@ -426,7 +451,7 @@
         </div>
         <pre id="t-conf-preview" class="hidden"></pre>
 
-        <h3 style="margin-top:18px">iperf3 限速器拐点探测（可选）</h3>
+        <h3 class="section-heading">iperf3 限速器拐点探测（可选）</h3>
         <div class="form-grid">
           <label>对端主机 (IP/域名) <input id="sw-host" placeholder="如 iperf.example.com" /></label>
           <label>端口 <input id="sw-port" type="number" min="1" max="65535" value="5201" /></label>
@@ -437,7 +462,7 @@
         </div>
         <pre id="t-sweep-out" class="hidden"></pre>
 
-        <h3 style="margin-top:18px">调优历史快照与一键回滚</h3>
+        <h3 class="section-heading">调优历史快照与一键回滚</h3>
         <div class="table-wrap">
           <table>
             <thead>
@@ -495,7 +520,7 @@
           <button id="btn-brutal-apply" class="btn ghost" type="button">立即应用 / 热重载所有接管端口</button>
         </div>
 
-        <h3 style="margin-top:16px">已配置的 TCP 接管绑定</h3>
+        <h3 class="section-heading-sm">已配置的 TCP 接管绑定</h3>
         <div class="table-wrap">
           <table>
             <thead>
@@ -514,7 +539,7 @@
           </table>
         </div>
 
-        <h3 style="margin-top:16px">透明接管端口实时遥测</h3>
+        <h3 class="section-heading-sm">透明接管端口实时遥测</h3>
         <div class="table-wrap">
           <table>
             <thead>
@@ -535,6 +560,409 @@
       </section>
     </section>
   </main>
-  <script src="proxy.js"></script>
+
+  <!-- ==================== 弹窗 1: 添加 / 编辑节点（简易/专家双模式分栏工作台） ==================== -->
+  <div id="node-builder-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="nb-modal-title">
+    <div class="modal-dialog modal-builder">
+      <div class="modal-header">
+        <h3 class="modal-title" id="nb-modal-title">添加代理节点</h3>
+        <button id="nb-close" class="modal-close" type="button" aria-label="关闭">×</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="builder-grid">
+          <!-- 左栏：四步配置与表单 -->
+          <div class="builder-left">
+            <!-- Step 1: 协议 -->
+            <div class="step-block">
+              <div class="step-label"><span class="step-num">1</span> 选择协议</div>
+              <div class="pill-group" id="nb-proto-pills"></div>
+            </div>
+
+            <!-- Step 2: 传输协议（动态） -->
+            <div class="step-block" id="nb-transport-step">
+              <div class="step-label"><span class="step-num">2</span> 传输协议</div>
+              <div class="pill-group" id="nb-transport-pills"></div>
+            </div>
+
+            <!-- Step 3: 安全协议（动态） -->
+            <div class="step-block" id="nb-security-step">
+              <div class="step-label"><span class="step-num">3</span> 安全协议</div>
+              <div class="pill-group" id="nb-security-pills"></div>
+            </div>
+
+            <!-- Step 4: 配置模式 -->
+            <div class="step-block">
+              <div class="step-label"><span class="step-num">4</span> 配置模式</div>
+              <div class="segmented" id="nb-mode-seg" role="tablist">
+                <button type="button" data-mode="simplified" class="active" role="tab" aria-selected="true">简易模式</button>
+                <button type="button" data-mode="expert" role="tab" aria-selected="false">专家模式</button>
+              </div>
+            </div>
+
+            <!-- ========== 简易模式表单 ========== -->
+            <div id="nb-simplified-panel" class="builder-group">
+              <div class="builder-group-title">
+                <span>极简参数（其余由服务端安全自动生成）</span>
+                <span class="badge ok">推荐</span>
+              </div>
+              <div class="form-grid-2">
+                <label>节点名称（可选）
+                  <input id="nb-s-name" placeholder="留空自动命名，如 VLESS-raw-端口" maxlength="96" />
+                </label>
+                <label>监听端口（可选）
+                  <input id="nb-s-port" type="number" min="0" max="65535" placeholder="留空自动分配随机高位端口" />
+                </label>
+                <label class="form-span-full">节点标签（可选，逗号分隔）
+                  <input id="nb-s-tags" placeholder="如 hk, reality, 主力" />
+                </label>
+              </div>
+
+              <!-- 简易模式 · REALITY SNI 选择器 -->
+              <div id="nb-s-reality-box" class="mt-12">
+                <label>REALITY 伪装域名（自动探测最低延迟 TLS 1.3 域名）
+                  <div class="input-row">
+                    <select id="nb-s-sni"></select>
+                    <button id="nb-s-probe-sni" class="btn sm ghost" type="button">重新探测</button>
+                  </div>
+                </label>
+                <div id="nb-s-sni-hint" class="muted mt-10">点击「重新探测」并发检测候选域名 TLS 1.3 与 RTT 延迟。</div>
+              </div>
+
+              <!-- 简易模式 · TLS 证书与 SNI -->
+              <div id="nb-s-tls-box" class="mt-12 hidden">
+                <div class="form-grid-2">
+                  <label>TLS 证书绑定引用 (binding_ref)
+                    <input id="nb-s-binding" class="mono" placeholder="如 cert_example_com" />
+                  </label>
+                  <label>SNI 域名
+                    <input id="nb-s-tls-sni" class="mono" placeholder="如 node.example.com" />
+                  </label>
+                </div>
+                <div class="info-note amber mt-10">可在「证书管理」签发并复制证书的 <code>binding_ref</code>，或切换至「专家模式」填写更多参数。留空仍可先保存至本地列表，绑定证书后再同步到核心。</div>
+              </div>
+
+              <!-- 简易模式 · VLESS ENC -->
+              <div id="nb-s-enc-box" class="mt-12 hidden">
+                <div class="form-grid-2">
+                  <label>服务端解密参数 (decryption)
+                    <input id="nb-s-decryption" class="mono" placeholder="none 或 mlkem768x25519plus..." />
+                  </label>
+                  <label>客户端加密参数 (encryption)
+                    <input id="nb-s-encryption" class="mono" placeholder="none 或 mlkem768x25519plus..." />
+                  </label>
+                </div>
+              </div>
+
+              <!-- 简易模式 · Shadowsocks / SS2022 加密方式 -->
+              <div id="nb-s-ss-box" class="mt-12 hidden">
+                <label>加密方式 (method)
+                  <select id="nb-s-method"></select>
+                </label>
+              </div>
+
+              <!-- 简易模式 · AnyTLS 提示 -->
+              <div id="nb-s-anytls-box" class="info-note jade mt-12 hidden">
+                已预填标准 8 段 AnyTLS Padding Scheme，密码将自动安全生成；如需自定义填充规则或监听地址，请切换至「专家模式」。
+              </div>
+
+              <!-- 简易模式 · SOCKS5 / HTTP 可选认证 -->
+              <div id="nb-s-auth-box" class="mt-12 hidden">
+                <div class="form-grid-2">
+                  <label>用户名（可选，留空默认 user）
+                    <input id="nb-s-username" placeholder="user" />
+                  </label>
+                  <label>密码（可选，留空自动生成）
+                    <input id="nb-s-password" class="mono" placeholder="留空自动生成 16 位随机密码" />
+                  </label>
+                </div>
+              </div>
+
+              <div id="nb-s-autofill-note" class="info-note mt-12">
+                UUID、X25519 REALITY 密钥对、ShortID 与高位随机端口均由服务端自动安全生成，并可直接查看右侧实时原生配置预览。
+              </div>
+            </div>
+
+            <!-- ========== 专家模式表单 ========== -->
+            <div id="nb-expert-panel" class="hidden">
+              <!-- Card 1: 基础监听 -->
+              <div class="builder-group">
+                <div class="builder-group-title">基础监听与同步</div>
+                <div class="form-grid-2">
+                  <label>节点 ID（新建留空自动生成）
+                    <input id="nb-e-id" class="mono" maxlength="32" placeholder="小写字母开头，如 vless-hk-1" />
+                  </label>
+                  <label>节点名称
+                    <input id="nb-e-name" maxlength="96" placeholder="如 香港 VLESS Reality" />
+                  </label>
+                  <label>监听地址 (listen)
+                    <input id="nb-e-listen" class="mono" value="0.0.0.0" placeholder="0.0.0.0 / :: / 127.0.0.1" />
+                    <div class="quick-chips" id="nb-listen-chips">
+                      <button type="button" class="btn xs ghost" data-listen="0.0.0.0">0.0.0.0</button>
+                      <button type="button" class="btn xs ghost" data-listen="::">::</button>
+                      <button type="button" class="btn xs ghost" data-listen="127.0.0.1">127.0.0.1</button>
+                    </div>
+                  </label>
+                  <label>监听端口 (1–65535，支持 443；0=自动)
+                    <input id="nb-e-port" type="number" min="0" max="65535" placeholder="留空或 0 自动分配" />
+                  </label>
+                  <label>对外展示地址 (server，留空跟随全局)
+                    <input id="nb-e-server" class="mono" placeholder="域名或公网 IP" />
+                  </label>
+                  <label>标签（逗号分隔）
+                    <input id="nb-e-tags" placeholder="如 hk, reality, 443" />
+                  </label>
+                </div>
+                <div class="actions">
+                  <label class="check-inline"><input id="nb-e-enabled" type="checkbox" checked /> 启用该节点</label>
+                  <label class="check-inline"><input id="nb-e-sniffing" type="checkbox" checked /> 流量嗅探 (sniffing)</label>
+                  <label class="check-inline"><input id="nb-e-sync-core" type="checkbox" checked /> 保存后立即同步至 core.xray</label>
+                </div>
+              </div>
+
+              <!-- Card 2: 协议凭证 -->
+              <div class="builder-group mt-12" id="nb-e-cred-card">
+                <div class="builder-group-title">协议凭证与加密</div>
+                <div class="form-grid-2">
+                  <label id="nb-e-uuid-wrap" class="form-span-full">UUID（留空自动生成）
+                    <div class="input-row">
+                      <input id="nb-e-uuid" class="mono" placeholder="xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx" />
+                      <button id="nb-gen-uuid" class="btn sm ghost" type="button">随机 UUID</button>
+                    </div>
+                  </label>
+
+                  <label id="nb-e-user-wrap" class="hidden">用户名 (username)
+                    <input id="nb-e-username" placeholder="user" />
+                  </label>
+
+                  <label id="nb-e-pass-wrap" class="hidden">密码 (password，留空自动生成)
+                    <div class="input-row">
+                      <input id="nb-e-password" class="mono" placeholder="随机强密码" />
+                      <button id="nb-gen-pass" class="btn sm ghost" type="button">随机密码</button>
+                    </div>
+                  </label>
+
+                  <label id="nb-e-method-wrap" class="hidden">加密方式 (method)
+                    <select id="nb-e-method"></select>
+                  </label>
+
+                  <label id="nb-e-ss22-skey-wrap" class="form-span-full hidden">SS2022 Server Key（留空自动生成）
+                    <div class="input-row">
+                      <input id="nb-e-server-key" class="mono" placeholder="Base64 16/32 字节密钥" />
+                      <button id="nb-gen-skey" class="btn sm ghost" type="button">随机生成</button>
+                    </div>
+                  </label>
+
+                  <label id="nb-e-ss22-ukey-wrap" class="form-span-full hidden">SS2022 User PSK（留空自动生成）
+                    <div class="input-row">
+                      <input id="nb-e-user-key" class="mono" placeholder="Base64 16/32 字节用户密钥" />
+                      <button id="nb-gen-ukey" class="btn sm ghost" type="button">随机生成</button>
+                    </div>
+                  </label>
+
+                  <label id="nb-e-ss22-obfs-wrap" class="hidden">SS2022 混淆模式 (obfs_mode)
+                    <select id="nb-e-obfs-mode">
+                      <option value="none">none（无混淆，支持 UDP）</option>
+                      <option value="http">http</option>
+                      <option value="tls">tls</option>
+                    </select>
+                  </label>
+
+                  <label id="nb-e-ss22-obfshost-wrap" class="hidden">SS2022 混淆 Host (obfs_host)
+                    <input id="nb-e-obfs-host" class="mono" placeholder="如 www.bing.com" />
+                  </label>
+                </div>
+              </div>
+
+              <!-- Card 3: 传输层细节 -->
+              <div class="builder-group mt-12" id="nb-e-transport-card">
+                <div class="builder-group-title">传输层细节</div>
+                <div class="form-grid-2">
+                  <label id="nb-e-flow-wrap" class="hidden">VLESS Flow
+                    <select id="nb-e-flow">
+                      <option value="">（无）</option>
+                      <option value="xtls-rprx-vision">xtls-rprx-vision</option>
+                    </select>
+                  </label>
+                  <label id="nb-e-path-wrap" class="hidden">路径 (path)
+                    <input id="nb-e-path" class="mono" placeholder="/vless 或 /xhttp" />
+                  </label>
+                  <label id="nb-e-host-wrap" class="hidden">伪装 Host (host)
+                    <input id="nb-e-host" class="mono" placeholder="可选，如 cdn.example.com" />
+                  </label>
+                  <label id="nb-e-svc-wrap" class="hidden">gRPC Service Name
+                    <input id="nb-e-service-name" class="mono" placeholder="vless-grpc" />
+                  </label>
+                  <label id="nb-e-xhttp-mode-wrap" class="hidden">XHTTP 模式 (xhttp_mode)
+                    <select id="nb-e-xhttp-mode">
+                      <option value="auto">auto</option>
+                      <option value="packet-up">packet-up</option>
+                      <option value="stream-up">stream-up</option>
+                      <option value="stream-one">stream-one</option>
+                    </select>
+                  </label>
+                  <label id="nb-e-udp-wrap" class="check hidden">
+                    <input id="nb-e-udp" type="checkbox" checked /> 启用 UDP 转发
+                  </label>
+                </div>
+              </div>
+
+              <!-- Card 4: 安全层与协议扩展细节 -->
+              <div class="builder-group mt-12" id="nb-e-security-card">
+                <div class="builder-group-title">安全层与协议扩展</div>
+
+                <!-- REALITY 专家区 -->
+                <div id="nb-e-reality-box">
+                  <div class="form-grid-2">
+                    <label class="form-span-full">快速探测并选择 REALITY 伪装域名
+                      <div class="input-row">
+                        <select id="nb-e-sni-select"></select>
+                        <button id="nb-e-probe-sni" class="btn sm ghost" type="button">重新探测</button>
+                      </div>
+                    </label>
+                    <label>回落目标 (target，格式 domain:443)
+                      <input id="nb-e-target" class="mono" placeholder="www.microsoft.com:443" />
+                    </label>
+                    <label>Server Names（逗号分隔，首项作为主 SNI）
+                      <input id="nb-e-server-names" class="mono" placeholder="www.microsoft.com" />
+                    </label>
+                    <label class="form-span-full">Private Key（留空自动生成 X25519 密钥对）
+                      <input id="nb-e-private-key" class="mono" placeholder="Base64Url 32 字节 X25519 私钥，留空自动生成" />
+                    </label>
+                    <label>Short IDs（支持空串或 2–16 位偶长度 hex）
+                      <div class="input-row">
+                        <input id="nb-e-short-id" class="mono" placeholder="如 01234567，留空自动生成" />
+                        <button id="nb-gen-shortid" class="btn sm ghost" type="button">随机</button>
+                      </div>
+                    </label>
+                    <label>客户端指纹 (fingerprint)
+                      <select id="nb-e-fp">
+                        <option value="chrome">chrome</option>
+                        <option value="firefox">firefox</option>
+                        <option value="safari">safari</option>
+                        <option value="ios">ios</option>
+                        <option value="android">android</option>
+                        <option value="edge">edge</option>
+                        <option value="random">random</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- TLS 专家区 -->
+                <div id="nb-e-tls-box" class="hidden">
+                  <div class="form-grid-2">
+                    <label>TLS 证书绑定引用 (binding_ref)
+                      <input id="nb-e-binding" class="mono" placeholder="如 cert_example_com" />
+                    </label>
+                    <label>SNI 域名 (server_name)
+                      <input id="nb-e-tls-sni" class="mono" placeholder="如 node.example.com" />
+                    </label>
+                    <label class="check-inline form-span-full">
+                      <input id="nb-e-insecure" type="checkbox" /> 客户端链接允许跳过证书校验 (allowInsecure)
+                    </label>
+                  </div>
+                </div>
+
+                <!-- VLESS ENC 专家区 -->
+                <div id="nb-e-enc-box" class="hidden">
+                  <div class="form-grid-2">
+                    <label>服务端解密参数 (decryption)
+                      <input id="nb-e-decryption" class="mono" placeholder="none 或 VLESS Encryption 解密串" />
+                    </label>
+                    <label>客户端加密参数 (encryption)
+                      <input id="nb-e-encryption" class="mono" placeholder="none 或 VLESS Encryption 加密串" />
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Hysteria2 专家扩展 -->
+                <div id="nb-e-hy2-box" class="mt-12 hidden">
+                  <div class="form-grid-2">
+                    <label>Salamander 混淆密码 (obfs_password，可选)
+                      <div class="input-row">
+                        <input id="nb-e-obfs-pass" class="mono" placeholder="留空关闭 Salamander 混淆" />
+                        <button id="nb-gen-obfspass" class="btn sm ghost" type="button">随机</button>
+                      </div>
+                    </label>
+                    <label>端口跳跃范围 (port_hopping，可选)
+                      <input id="nb-e-port-hopping" class="mono" placeholder="如 20000-30000" />
+                    </label>
+                  </div>
+                </div>
+
+                <!-- AnyTLS Padding Scheme 编辑器 -->
+                <div id="nb-e-anytls-box" class="mt-12 hidden">
+                  <div class="builder-group-title">
+                    <span>AnyTLS Padding Scheme（每行一段规则）</span>
+                    <button id="nb-reset-padding" class="btn xs ghost" type="button">恢复默认 8 段方案</button>
+                  </div>
+                  <textarea id="nb-e-padding" class="code-area" rows="6"></textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 右栏：实时原生配置与分享预览（桌面端粘性跟随） -->
+          <aside class="builder-right">
+            <div class="preview-head">
+              <div>
+                <strong>实时配置预览</strong>
+                <span id="nb-preview-engine" class="badge info">xray</span>
+              </div>
+              <button id="nb-preview-copy" class="btn sm ghost" type="button">复制当前内容</button>
+            </div>
+            <div class="preview-tabs" id="nb-preview-tabs">
+              <button type="button" data-tab="json" class="active">JSON 预览</button>
+              <button type="button" data-tab="uri">分享 URI</button>
+              <button type="button" data-tab="clash">Clash</button>
+              <button type="button" data-tab="singbox">Sing-box</button>
+            </div>
+            <pre id="nb-preview-code" class="preview-code">正在生成实时预览…</pre>
+            <div class="preview-meta">
+              <span id="nb-preview-status">已同步草稿</span>
+              <span id="nb-preview-port" class="mono">port: auto</span>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <span id="nb-footer-hint" class="muted">简易模式：保存时将自动生成端口、凭据并同步至核心。</span>
+        <div class="actions actions-tight">
+          <button id="nb-cancel" class="btn ghost" type="button">取消</button>
+          <button id="nb-save" class="btn" type="button">保存并应用节点</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 弹窗 2: 查看节点配置（JSON / URI / Clash / Sing-box） ==================== -->
+  <div id="node-config-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="nc-modal-title">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="nc-modal-title">节点配置详情</h3>
+        <button id="nc-close" class="modal-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="preview-head mb-6">
+          <div class="preview-tabs" id="nc-tabs">
+            <button type="button" data-tab="json" class="active">原生 JSON</button>
+            <button type="button" data-tab="uri">分享 URI</button>
+            <button type="button" data-tab="clash">Clash YAML</button>
+            <button type="button" data-tab="singbox">Sing-box JSON</button>
+          </div>
+          <button id="nc-copy" class="btn sm ghost" type="button">复制当前内容</button>
+        </div>
+        <pre id="nc-code" class="preview-code">加载中…</pre>
+      </div>
+      <div class="modal-footer">
+        <span id="nc-meta" class="muted"></span>
+        <button id="nc-close-btn" class="btn ghost" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./proxy.js"></script>
 </body>
 </html>

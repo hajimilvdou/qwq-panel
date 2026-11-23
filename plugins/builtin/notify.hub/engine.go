@@ -123,7 +123,7 @@ func parseHHMM(v string) (int, bool) {
 	return h*60 + m, true
 }
 
-func (e *routerEngine) checkAndTouchCooldown(key string, sec int, now time.Time) bool {
+func (e *routerEngine) isInCooldown(key string, sec int, now time.Time) bool {
 	if sec <= 0 {
 		return false
 	}
@@ -132,6 +132,15 @@ func (e *routerEngine) checkAndTouchCooldown(key string, sec int, now time.Time)
 	if last, ok := e.cooldown[key]; ok && now.Sub(last) < time.Duration(sec)*time.Second {
 		return true
 	}
+	return false
+}
+
+func (e *routerEngine) markCooldown(key string, sec int, now time.Time) {
+	if sec <= 0 {
+		return
+	}
+	e.coolMu.Lock()
+	defer e.coolMu.Unlock()
 	if len(e.cooldown) >= maxCooldownKeys {
 		// 先驱逐过期条目，仍满时按最旧时间腾出空间，保证 1C1G 内存绝对有界。
 		var oldestKey string
@@ -150,7 +159,6 @@ func (e *routerEngine) checkAndTouchCooldown(key string, sec int, now time.Time)
 		}
 	}
 	e.cooldown[key] = now
-	return false
 }
 
 func (e *routerEngine) dispatch(ctx context.Context, ev NotifyEvent) (DispatchSummary, error) {
@@ -200,7 +208,6 @@ func (e *routerEngine) dispatch(ctx context.Context, ev NotifyEvent) (DispatchSu
 			if err != nil || !ch.Enabled {
 				continue
 			}
-			seenCh[chID] = true
 
 			rec := DeliveryRecord{
 				ID:          newID("ndl"),
@@ -222,9 +229,10 @@ func (e *routerEngine) dispatch(ctx context.Context, ev NotifyEvent) (DispatchSu
 				summary.Deliveries = append(summary.Deliveries, rec)
 				continue
 			}
+			seenCh[chID] = true
 
 			coolKey := rule.ID + "|" + ch.ID + "|" + dedup
-			if e.checkAndTouchCooldown(coolKey, rule.CooldownSec, ev.Timestamp) {
+			if e.isInCooldown(coolKey, rule.CooldownSec, ev.Timestamp) {
 				rec.Status = "suppressed_cooldown"
 				rec.ErrorMsg = fmt.Sprintf("dedup cooldown %ds", rule.CooldownSec)
 				_ = e.store.recordDelivery(ctx, rec)
@@ -243,6 +251,7 @@ func (e *routerEngine) dispatch(ctx context.Context, ev NotifyEvent) (DispatchSu
 				summary.Failed++
 			} else {
 				rec.Status = "sent"
+				e.markCooldown(coolKey, rule.CooldownSec, ev.Timestamp)
 				e.store.markChannelStatus(ctx, ch.ID, "ok", "")
 				summary.Sent++
 			}

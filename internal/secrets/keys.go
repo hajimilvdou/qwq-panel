@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // MasterKeySize is the size of the AES-256 key in master.key.
@@ -84,6 +85,7 @@ type KeyRing struct {
 	primary Key
 	keys    map[string]Key
 	aeads   map[string]cipher.AEAD
+	hot     hotReloadState
 }
 
 // LoadKeyRing loads (and on first start creates) the key ring under
@@ -122,17 +124,21 @@ func LoadKeyRing(dataDir string) (*KeyRing, error) {
 		}
 		r.aeads[id] = aead
 	}
+	if fi, err := os.Lstat(filepath.Join(dir, masterKeyName)); err == nil {
+		r.hot.masterModNano = fi.ModTime().UnixNano()
+		r.hot.masterSize = fi.Size()
+	}
+	r.hot.lastCheckUnixNano.Store(time.Now().UnixNano())
 	return r, nil
 }
 
 // Dir returns the directory that holds the key files.
 func (r *KeyRing) Dir() string { return r.dir }
 
-// Primary returns the key that encrypts new values.
+// Primary returns the key that encrypts new values, hot-reloading master.key
+// if an external CLI rotation updated it on disk.
 func (r *KeyRing) Primary() Key {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.primary
+	return r.PrimaryHotSafe(&r.hot)
 }
 
 // IDs returns every key id, the primary first and the retired keys sorted after
@@ -166,16 +172,10 @@ func (r *KeyRing) Retired() []string {
 	return out
 }
 
-// aead returns the AEAD of a key id. The error is deliberately explicit: a
-// missing key means ciphertext that can no longer be opened.
+// aead returns the AEAD of a key id, rescanning the keys directory on a cache
+// miss so newly rotated keys become visible without restarting the process.
 func (r *KeyRing) aead(id string) (cipher.AEAD, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	a, ok := r.aeads[id]
-	if !ok {
-		return nil, fmt.Errorf("secrets: key %s is not in the key ring; restore its retired key file before the values it encrypted are lost", id)
-	}
-	return a, nil
+	return r.aeadHotSafe(id)
 }
 
 // Rotate makes a new primary key and keeps the previous one as a retired key.
@@ -205,6 +205,10 @@ func (r *KeyRing) Rotate() (Key, error) {
 	r.keys[nk.ID] = nk
 	r.aeads[nk.ID] = aead
 	r.primary = nk
+	if fi, err := os.Lstat(filepath.Join(r.dir, masterKeyName)); err == nil {
+		r.hot.masterModNano = fi.ModTime().UnixNano()
+		r.hot.masterSize = fi.Size()
+	}
 	return nk, nil
 }
 

@@ -263,17 +263,7 @@ func mergeNode(existing, proposed any, path string) (any, error) {
 		byID := indexSliceByID(existingSlice)
 		out := make([]any, len(p))
 		for i, item := range p {
-			var eItem any
-			if im, ok := item.(map[string]any); ok {
-				if id, ok := im["id"].(string); ok && id != "" {
-					if matched, found := byID[id]; found {
-						eItem = matched
-					}
-				}
-			}
-			if eItem == nil && i < len(existingSlice) {
-				eItem = existingSlice[i]
-			}
+			eItem := MatchExistingSliceElement(item, i, existingSlice, byID)
 			mergedItem, err := mergeNode(eItem, item, fmt.Sprintf("%s/%d", path, i))
 			if err != nil {
 				return nil, err
@@ -285,6 +275,26 @@ func mergeNode(existing, proposed any, path string) (any, error) {
 	default:
 		return p, nil
 	}
+}
+
+// MatchExistingSliceElement prevents cross-entry secret grafting when merging
+// $keep_secret placeholders inside slice configs: if an element carries an
+// explicit "id" (or existingSlice is keyed by "id"), an unmatched new element
+// MUST NOT fall back to existingSlice[index].
+func MatchExistingSliceElement(item any, index int, existingSlice []any, byID map[string]any) any {
+	hasExplicitID := false
+	if im, ok := item.(map[string]any); ok {
+		if id, ok := im["id"].(string); ok && id != "" {
+			hasExplicitID = true
+			if matched, found := byID[id]; found {
+				return matched
+			}
+		}
+	}
+	if !hasExplicitID && len(byID) == 0 && index < len(existingSlice) {
+		return existingSlice[index]
+	}
+	return nil
 }
 
 func indexSliceByID(items []any) map[string]any {

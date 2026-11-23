@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qwq-panel/qwq/internal/capability/sysctl"
+	"github.com/qwq-panel/qwq/internal/sandbox"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
 
@@ -80,6 +82,7 @@ type tuningSnapshotRecord struct {
 	BandwidthMbps int               `json:"bandwidth_mbps"`
 	RTTMs         int               `json:"rtt_ms"`
 	Applied       bool              `json:"applied"`
+	Pinned        bool              `json:"pinned"`
 	SysctlMap     map[string]string `json:"sysctl_map,omitempty"`
 	CreatedAt     int64             `json:"created_at"`
 }
@@ -97,6 +100,9 @@ var trackedSysctlKeys = []string{
 	"net.ipv4.tcp_tw_reuse",
 	"net.core.somaxconn",
 	"net.core.netdev_max_backlog",
+	"net.ipv4.ip_forward",
+	"net.ipv6.conf.all.forwarding",
+	"net.netfilter.nf_conntrack_max",
 }
 
 func readProcSysctl(key string) string {
@@ -228,8 +234,10 @@ func computeTcpfitPlan(profile hostTuningProfile, brutal brutalEnvInfo, in tcpfi
 		targetBuf = minBuf
 	}
 
-	// 拥塞控制算法优选：auto 优先 bbr -> cubic；brutal 仅在内核已加载时推荐，否则退回 bbr。
+	// 拥塞控制算法优选：严禁在全局 sysctl 启用 brutal（否则未执行 TCP_BRUTAL_PARAMS 的整机连接会被限速至 ~1 Mbps）！
+	// 全局恒使用 bbr（单端口超发请使用下方 TCP Brutal 透明接管器），仅显式指定 cubic 时切 cubic。
 	selectedCC := "bbr"
+	ccReason := "全局恒使用 bbr 拥塞控制（如需 TCP Brutal 超发，请通过下方单端口透明接管器按端口启用）"
 	hasBBR := false
 	for _, cc := range brutal.AvailableCC {
 		if cc == "bbr" {
@@ -238,22 +246,24 @@ func computeTcpfitPlan(profile hostTuningProfile, brutal brutalEnvInfo, in tcpfi
 	}
 	switch strings.ToLower(strings.TrimSpace(in.PreferCC)) {
 	case "brutal":
-		if brutal.BrutalAvailable {
-			selectedCC = "brutal"
-		} else if hasBBR {
-			selectedCC = "bbr"
-		} else {
-			selectedCC = "cubic"
-		}
+		selectedCC = "bbr"
+		ccReason = "已拒绝全局设置 tcp_congestion_control=brutal（防止普通连接退化至 ~1 Mbps），全局保持 bbr；请使用下方 TCP Brutal 透明接管器按端口开启"
 	case "cubic":
 		selectedCC = "cubic"
+		ccReason = "按用户偏好选择全局 cubic 拥塞控制"
 	case "bbr":
 		selectedCC = "bbr"
 	default:
 		if hasBBR || len(brutal.AvailableCC) == 0 {
 			selectedCC = "bbr"
 		} else {
-			selectedCC = brutal.AvailableCC[0]
+			selectedCC = "bbr"
+			for _, cc := range brutal.AvailableCC {
+				if cc == "cubic" || cc == "reno" {
+					selectedCC = cc
+					break
+				}
+			}
 		}
 	}
 
@@ -282,10 +292,15 @@ func computeTcpfitPlan(profile hostTuningProfile, brutal brutalEnvInfo, in tcpfi
 		"net.core.somaxconn":                 strconv.Itoa(somaxconn),
 		"net.core.netdev_max_backlog":        strconv.Itoa(backlog),
 	}
+	if role == "relay" {
+		recMap["net.ipv4.ip_forward"] = "1"
+		recMap["net.ipv6.conf.all.forwarding"] = "1"
+		recMap["net.netfilter.nf_conntrack_max"] = "262144"
+	}
 
 	reasons := map[string]string{
 		"net.core.default_qdisc":             "BBR / Brutal 精准发包节奏依赖 fq 队列调度",
-		"net.ipv4.tcp_congestion_control":    "按本机内核可用算法优选抗丢包拥塞控制",
+		"net.ipv4.tcp_congestion_control":    ccReason,
 		"net.core.rmem_max":                  fmt.Sprintf("基于 BDP(%d KiB) 与内存上限(%d MiB) 动态封顶，兼顾吞吐与防 OOM", bdp/1024, hardCap/(1024*1024)),
 		"net.core.wmem_max":                  "与接收窗口对齐并受小内存预算约束",
 		"net.ipv4.tcp_rmem":                  "动态推导的 TCP 接收缓冲区最小/默认/上限",
@@ -296,14 +311,21 @@ func computeTcpfitPlan(profile hostTuningProfile, brutal brutalEnvInfo, in tcpfi
 		"net.ipv4.tcp_tw_reuse":              "高并发代理转发下安全复用 TIME_WAIT 套接字",
 		"net.core.somaxconn":                 "适配代理监听队列深度",
 		"net.core.netdev_max_backlog":        "提升网卡软中断突发包接收能力",
+		"net.ipv4.ip_forward":                "中转机 (relay) 必须开启 IPv4 转发",
+		"net.ipv6.conf.all.forwarding":       "中转机 (relay) 必须开启 IPv6 转发",
+		"net.netfilter.nf_conntrack_max":     "提高中转机连接追踪表上限至 262144，防止高并发丢包",
 	}
 
-	changes := make([]sysctlDiffItem, 0, len(trackedSysctlKeys))
+	changes := make([]sysctlDiffItem, 0, len(recMap))
 	for _, k := range trackedSysctlKeys {
+		recVal, ok := recMap[k]
+		if !ok {
+			continue
+		}
 		changes = append(changes, sysctlDiffItem{
 			Key:         k,
 			Current:     profile.CurrentSysctl[k],
-			Recommended: recMap[k],
+			Recommended: recVal,
 			Reason:      reasons[k],
 		})
 	}
@@ -374,16 +396,22 @@ func (s *proxyStore) SaveTuningSnapshot(ctx context.Context, reason, role string
 	if len(raw) == 0 || string(raw) == "null" {
 		raw = []byte("{}")
 	}
+	var pinnedCount int
+	_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tuning_snapshots WHERE pinned = 1`).Scan(&pinnedCount)
+	pinned := reason == "pre_apply_baseline" && pinnedCount == 0
+
 	id := "tsnp_" + strconv.FormatInt(nextRev, 10) + "_" + strconv.FormatInt(s.now().Unix(), 10)
 	nowMs := s.now().UTC().UnixMilli()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO tuning_snapshots(id, revision, reason, role, bandwidth_mbps, rtt_ms, sysctl_json, applied, created_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, nextRev, reason, role, bw, rtt, string(raw), boolToInt(applied), nowMs); err != nil {
+		INSERT INTO tuning_snapshots(id, revision, reason, role, bandwidth_mbps, rtt_ms, sysctl_json, applied, pinned, created_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, nextRev, reason, role, bw, rtt, string(raw), boolToInt(applied), boolToInt(pinned), nowMs); err != nil {
 		return tuningSnapshotRecord{}, err
 	}
 	_, _ = tx.ExecContext(ctx, `
-		DELETE FROM tuning_snapshots WHERE id NOT IN (SELECT id FROM tuning_snapshots ORDER BY revision DESC LIMIT ?)`,
+		DELETE FROM tuning_snapshots
+		WHERE pinned = 0
+		  AND id NOT IN (SELECT id FROM tuning_snapshots ORDER BY revision DESC LIMIT ?)`,
 		maxTuningSnapshots)
 	if err := tx.Commit(); err != nil {
 		return tuningSnapshotRecord{}, err
@@ -396,15 +424,16 @@ func (s *proxyStore) SaveTuningSnapshot(ctx context.Context, reason, role string
 		BandwidthMbps: bw,
 		RTTMs:         rtt,
 		Applied:       applied,
+		Pinned:        pinned,
 		SysctlMap:     sysctlMap,
 		CreatedAt:     nowMs,
 	}, nil
 }
 
 func (s *proxyStore) ListTuningSnapshots(ctx context.Context) ([]tuningSnapshotRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, revision, reason, role, bandwidth_mbps, rtt_ms, sysctl_json, applied, created_at
-		FROM tuning_snapshots ORDER BY revision DESC LIMIT ?`, maxTuningSnapshots)
+	rows, err := s.readDB().QueryContext(ctx, `
+		SELECT id, revision, reason, role, bandwidth_mbps, rtt_ms, sysctl_json, applied, pinned, created_at
+		FROM tuning_snapshots ORDER BY pinned DESC, revision DESC LIMIT ?`, maxTuningSnapshots+1)
 	if err != nil {
 		return nil, err
 	}
@@ -413,11 +442,12 @@ func (s *proxyStore) ListTuningSnapshots(ctx context.Context) ([]tuningSnapshotR
 	for rows.Next() {
 		var r tuningSnapshotRecord
 		var raw string
-		var ap int
-		if err := rows.Scan(&r.ID, &r.Revision, &r.Reason, &r.Role, &r.BandwidthMbps, &r.RTTMs, &raw, &ap, &r.CreatedAt); err != nil {
+		var ap, pin int
+		if err := rows.Scan(&r.ID, &r.Revision, &r.Reason, &r.Role, &r.BandwidthMbps, &r.RTTMs, &raw, &ap, &pin, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		r.Applied = ap == 1
+		r.Pinned = pin == 1
 		_ = json.Unmarshal([]byte(raw), &r.SysctlMap)
 		out = append(out, r)
 	}
@@ -427,25 +457,80 @@ func (s *proxyStore) ListTuningSnapshots(ctx context.Context) ([]tuningSnapshotR
 func (s *proxyStore) GetTuningSnapshot(ctx context.Context, id string, rev int64) (tuningSnapshotRecord, error) {
 	var r tuningSnapshotRecord
 	var raw string
-	var ap int
+	var ap, pin int
 	var err error
 	if id != "" {
-		err = s.db.QueryRowContext(ctx, `
-			SELECT id, revision, reason, role, bandwidth_mbps, rtt_ms, sysctl_json, applied, created_at
+		err = s.readDB().QueryRowContext(ctx, `
+			SELECT id, revision, reason, role, bandwidth_mbps, rtt_ms, sysctl_json, applied, pinned, created_at
 			FROM tuning_snapshots WHERE id = ?`, id).
-			Scan(&r.ID, &r.Revision, &r.Reason, &r.Role, &r.BandwidthMbps, &r.RTTMs, &raw, &ap, &r.CreatedAt)
+			Scan(&r.ID, &r.Revision, &r.Reason, &r.Role, &r.BandwidthMbps, &r.RTTMs, &raw, &ap, &pin, &r.CreatedAt)
 	} else {
-		err = s.db.QueryRowContext(ctx, `
-			SELECT id, revision, reason, role, bandwidth_mbps, rtt_ms, sysctl_json, applied, created_at
+		err = s.readDB().QueryRowContext(ctx, `
+			SELECT id, revision, reason, role, bandwidth_mbps, rtt_ms, sysctl_json, applied, pinned, created_at
 			FROM tuning_snapshots WHERE revision = ?`, rev).
-			Scan(&r.ID, &r.Revision, &r.Reason, &r.Role, &r.BandwidthMbps, &r.RTTMs, &raw, &ap, &r.CreatedAt)
+			Scan(&r.ID, &r.Revision, &r.Reason, &r.Role, &r.BandwidthMbps, &r.RTTMs, &raw, &ap, &pin, &r.CreatedAt)
 	}
 	if err != nil {
 		return r, pluginsdk.Errorf("NOT_FOUND", "调优快照不存在")
 	}
 	r.Applied = ap == 1
+	r.Pinned = pin == 1
 	_ = json.Unmarshal([]byte(raw), &r.SysctlMap)
 	return r, nil
+}
+
+// filterCapabilitySysctlKV 仅保留 qwq-capability sysctl 白名单允许的内核键，并确保禁止全局 brutal。
+func filterCapabilitySysctlKV(kv map[string]string) map[string]string {
+	out := make(map[string]string, len(kv))
+	for k, v := range kv {
+		validator, ok := sysctl.AllowedSysctlValidators[k]
+		if !ok {
+			continue
+		}
+		cleanVal := strings.TrimSpace(v)
+		if cleanVal == "" || validator(cleanVal) != nil {
+			continue
+		}
+		out[k] = cleanVal
+	}
+	return out
+}
+
+// applySysctlConfigWithCapability 优先通过宿主特权能力 qwq-capability (sysctl.apply / sysctl.rollback) 原子落盘生效；
+// 在非默认路径（单元测试隔离目录）或宿主能力套接字未就绪时优雅回退至本地落盘。
+func applySysctlConfigWithCapability(ctx context.Context, targetPath string, kv map[string]string, rendered string, dryRun bool, rollback bool) (bool, string, error) {
+	if dryRun {
+		return false, "dry_run 模式：已保存基线快照与渲染配置，未改动宿主机内核参数。", nil
+	}
+	if targetPath == sysctlDropInPath {
+		if _, statErr := os.Stat(sandbox.DefaultCapabilitySocket); statErr == nil {
+			filtered := filterCapabilitySysctlKV(kv)
+			var op string
+			var params []byte
+			if rollback {
+				op = "sysctl.rollback"
+				params, _ = json.Marshal(map[string]any{"baseline": filtered})
+			} else if len(filtered) > 0 {
+				op = "sysctl.apply"
+				params, _ = json.Marshal(map[string]any{"values": filtered})
+			}
+			if op != "" {
+				capClient := sandbox.NewCapabilityClient(sandbox.DefaultCapabilitySocket)
+				resp, callErr := capClient.Call(ctx, sandbox.CapabilityRequest{
+					Op:         op,
+					ID:         "proxy.advanced",
+					ParamsJSON: params,
+				})
+				if callErr == nil {
+					if !resp.OK {
+						return false, resp.Error, fmt.Errorf("qwq-capability %s rejected (%s): %s", op, resp.Code, resp.Error)
+					}
+					return true, "applied via qwq-capability (" + op + ")", nil
+				}
+			}
+		}
+	}
+	return applySysctlConfig(ctx, targetPath, rendered, dryRun)
 }
 
 // applySysctlConfig 将渲染好的调优文件原子落盘，并在系统具备权限时执行 sysctl -p 生效。

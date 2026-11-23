@@ -28,11 +28,11 @@ import (
 //  2. Fallback: `dsh --profile headless` NDJSON stream.
 
 type DSHConfig struct {
-	Binary       string   `json:"binary,omitempty"`    // default "dsh"
+	Binary       string   `json:"-"`                   // host-controlled only; default "dsh"
 	Transport    string   `json:"transport,omitempty"` // acp (default) | headless
 	Profile      string   `json:"profile,omitempty"`   // code | standard | headless
 	Model        string   `json:"model,omitempty"`
-	WorkDir      string   `json:"work_dir,omitempty"`
+	WorkDir      string   `json:"-"` // host-controlled only; isolated workspace used
 	PlanMode     bool     `json:"plan_mode,omitempty"`
 	ActiveSkills []string `json:"active_skills,omitempty"`
 }
@@ -82,15 +82,11 @@ func (c *DSHCore) Preflight(_ context.Context, rawConfig json.RawMessage) error 
 	if err := refusePlaintextSecrets(rawConfig); err != nil {
 		return err
 	}
-	cfg := DSHConfig{Binary: c.bin}
-	if len(rawConfig) > 0 {
-		_ = json.Unmarshal(rawConfig, &cfg)
-		if cfg.Binary == "" {
-			cfg.Binary = c.bin
-		}
+	if _, err := ValidateExternalSessionConfig(rawConfig); err != nil {
+		return err
 	}
 	if _, isReal := c.launcher.(OSProcessLauncher); isReal {
-		if ok, reason := probeBinary(cfg.Binary); !ok {
+		if ok, reason := probeBinary(c.bin); !ok {
 			return problem.New(problem.Unavailable, "DeepSeek Harness (dsh) is not installed on this host (%s).", reason)
 		}
 	}
@@ -144,12 +140,14 @@ func (c *DSHCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 	if err := refusePlaintextSecrets(turn.Config); err != nil {
 		return err
 	}
+	if _, err := ValidateExternalSessionConfig(turn.Config); err != nil {
+		return err
+	}
 	cfg := DSHConfig{Binary: c.bin, Transport: "acp", Profile: "code"}
 	if len(turn.Config) > 0 {
 		_ = json.Unmarshal(turn.Config, &cfg)
-		if cfg.Binary == "" {
-			cfg.Binary = c.bin
-		}
+		cfg.Binary = c.bin
+		cfg.WorkDir = ""
 		if cfg.Transport == "" {
 			cfg.Transport = "acp"
 		}
@@ -184,9 +182,9 @@ func (c *DSHCore) runHeadless(ctx context.Context, cfg DSHConfig, turn Turn, emi
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
-	args = append(args, latestUserMessage(turn.Messages))
+	args = AppendPosixPromptArg(args, latestUserMessage(turn.Messages))
 
-	proc, err := c.launcher.Start(ctx, cfg.Binary, args, nil, cfg.WorkDir)
+	proc, err := c.launcher.Start(ctx, cfg.Binary, args, nil, "")
 	if err != nil {
 		return err
 	}

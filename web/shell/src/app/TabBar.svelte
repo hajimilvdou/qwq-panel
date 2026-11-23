@@ -11,7 +11,7 @@
 
 <nav class="tabbar" aria-label="快捷导航">
   {#each tabs as t (t.href)}
-    <a href={t.href} aria-current={isActive(t.href, router.path) ? 'page' : undefined}>
+    <a href={t.href} aria-current={isActive(t.href, router.path, tabs) ? 'page' : undefined}>
       <Icon name={t.icon} size={22} />
       <span>{t.label}</span>
     </a>

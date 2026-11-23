@@ -484,9 +484,12 @@ func (i *instance) handleComposeDeploy(ctx context.Context, payload []byte) (plu
 	args := append(append([]string{}, baseArgs...), "-f", filepath.Join(st.WorkDir, "compose.yml"), "-p", "qwq_"+st.Name, "up", "-d", "--remove-orphans")
 	cmd := exec.CommandContext(cctx, bin, args...)
 	cmd.Dir = st.WorkDir
-	out, runErr := cmd.CombinedOutput()
+	outRing := newTailRingBuffer(maxLogBytes)
+	cmd.Stdout = outRing
+	cmd.Stderr = outRing
+	runErr := cmd.Run()
 	if runErr != nil {
-		msg := strings.TrimSpace(string(out))
+		msg := strings.TrimSpace(outRing.String())
 		if len(msg) > 512 {
 			msg = msg[len(msg)-512:]
 		}

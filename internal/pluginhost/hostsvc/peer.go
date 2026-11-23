@@ -52,6 +52,10 @@ func (c *peerCredentials) ServerHandshake(rawConn net.Conn) (net.Conn, credentia
 		_ = rawConn.Close()
 		return nil, nil, fmt.Errorf("hostsvc: rejected peer pid=%d uid=%d: %w", handle.info.PID, handle.info.UID, err)
 	}
+	if err := handle.verifyAlive(); err != nil {
+		_ = rawConn.Close()
+		return nil, nil, fmt.Errorf("hostsvc: peer exited during verification pid=%d uid=%d: %w", handle.info.PID, handle.info.UID, err)
+	}
 	return rawConn, &peerAuthInfo{
 		CommonAuthInfo: credentials.CommonAuthInfo{SecurityLevel: credentials.PrivacyAndIntegrity},
 		info:           handle.info,

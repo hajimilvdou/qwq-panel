@@ -25,6 +25,7 @@
   import { session } from '$lib/session.svelte';
   import { toasts } from '$lib/toast.svelte';
   import { Avatar, Button, Card, Chip, ConfirmDialog, CopyButton, ErrorState, Skeleton } from '$ui';
+  import { safeInternalPath } from '$ui/safe-url';
   import { pluginsResource } from '../../app/nav';
   import ApprovalHistory from './ApprovalHistory.svelte';
   import AuditPanel from './AuditPanel.svelte';
@@ -112,7 +113,10 @@
           </p>
         </div>
         <div class="actions">
-          {#if op.ui_route}<Button variant="ghost" size="sm" href={op.ui_route}>在应用中查看</Button>{/if}
+          {#if op.ui_route}
+            {@const safeRoute = safeInternalPath(op.ui_route, '')}
+            {#if safeRoute}<Button variant="ghost" size="sm" href={safeRoute}>在应用中查看</Button>{/if}
+          {/if}
           {#if canCancel}<Button variant="plain" size="sm" icon="x" onclick={() => (confirmOpen = true)}>取消</Button>{/if}
         </div>
       </div>

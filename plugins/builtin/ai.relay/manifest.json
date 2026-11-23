@@ -45,7 +45,9 @@
     "schemas/relay.users.create.response.json": "sha256:db791ddad6abd7d2f5de0109f5b24f128a93a41af5a8ae110532ee47f0ccd63b",
     "schemas/relay.users.list.request.json": "sha256:1c7603b39dccd443ebb27ada12c2e70ab4902abfab9a2a2a710d9aaf45a6d579",
     "schemas/relay.users.list.response.json": "sha256:8c02e068c4bd7ba3c171e24257d2ee4336194ac3490037b8ff89e57aa8665a18",
-    "ui/index.html": "sha256:f0dd2dddc54b48c4d83f7568491b0396f9e85a1889bfeb337a668786ea61502f"
+    "ui/index.html": "sha256:ea422a04848efda869c1153ce7191421cf251e1bbf5d0530502926892a9b58ea",
+    "ui/plugin.css": "sha256:eebd1ae56c68ee32c3cace900e42ef3e8914afe99f897f9f85f272a912ef1302",
+    "ui/plugin.js": "sha256:7eac56c90b5e78dd17fc88e5cd72a7c8ee8e2a374d3a2c1c9c42d27cf7491fee"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

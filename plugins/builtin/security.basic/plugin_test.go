@@ -847,8 +847,17 @@ func TestSSHDPortSagaPrepareCommitAndRollback(t *testing.T) {
 		t.Fatalf("错误 transaction_ref 应返回 PRECONDITION_FAILED，实际: %+v", badCommit.GetError())
 	}
 
-	// 正确 Commit：移除旧端口放行并清理 KV 事务。
-	commit := runSecurityJob(t, h.srv, "security.sshd.change_port_commit", map[string]any{"transaction_ref": prepOut.TransactionRef}, nil)
+	// 无外部 ESTABLISHED 连接且未显式二次确认时，应返回 PRECONDITION_FAILED 防止云安全组锁死。
+	unconfirmedCommit := runSecurityJob(t, h.srv, "security.sshd.change_port_commit", map[string]any{"transaction_ref": prepOut.TransactionRef}, nil)
+	if unconfirmedCommit.GetError() == nil || unconfirmedCommit.GetError().GetCode() != "PRECONDITION_FAILED" {
+		t.Fatalf("未确认外部可达时应返回 PRECONDITION_FAILED，实际: %+v", unconfirmedCommit.GetError())
+	}
+
+	// 正确 Commit（携带 confirm_external_reachable）：移除旧端口放行并清理 KV 事务。
+	commit := runSecurityJob(t, h.srv, "security.sshd.change_port_commit", map[string]any{
+		"transaction_ref":            prepOut.TransactionRef,
+		"confirm_external_reachable": true,
+	}, nil)
 	if commit.GetError() != nil {
 		t.Fatalf("commit 失败: %+v", commit.GetError())
 	}

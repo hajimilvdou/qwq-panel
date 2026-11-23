@@ -143,7 +143,7 @@ func snapshotDefinition(raw []byte, tableExists bool) ([]byte, []uint32, error) 
 	var document struct {
 		Nftables []json.RawMessage `json:"nftables"`
 	}
-	if decodeObject(raw, &document) != nil || len(document.Nftables) > maxRules+6 {
+	if decodeObject(raw, &document) != nil || len(document.Nftables) > maxRules+10 {
 		return nil, nil, errInvalidRuleset
 	}
 	var chain *chainObject

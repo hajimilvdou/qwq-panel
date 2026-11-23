@@ -42,24 +42,45 @@
       const data = await invoke('certificates.summary', {});
       render(data);
       setStatus('已连接');
-    } catch {
-      setStatus('摘要暂不可用');
+    } catch (err) {
+      if (err && err.awaitingApproval) {
+        setStatus('等待审批确认');
+      } else {
+        setStatus(err?.message ? `摘要暂不可用：${err.message}` : '摘要暂不可用');
+      }
     }
+  }
+
+  function extractErrorMessage(errObj, fallback) {
+    if (!errObj) return fallback;
+    if (typeof errObj === 'string') return errObj;
+    return errObj.detail || errObj.message || errObj.code || fallback;
   }
 
   function accept(msg) {
     if (!msg || typeof msg !== 'object') return;
-    if (msg.t === 'api.result' && typeof msg.id === 'string') {
+    if (msg.t === 'api.result' && pending.has(msg.id)) {
       const req = pending.get(msg.id);
-      if (!req) return;
       clearTimeout(req.deadline);
       pending.delete(msg.id);
       if (msg.ok === true) {
-        const result = msg.data?.result ?? msg.data;
-        if (!result || typeof result !== 'object' || msg.data?.error) req.reject(new Error('摘要无效'));
+        const env = msg.data;
+        if (env && typeof env === 'object' && (env.status === 'AWAITING_APPROVAL' || env.approval_id)) {
+          const err = new Error('等待审批确认');
+          err.awaitingApproval = true;
+          err.approvalId = env.approval_id;
+          req.reject(err);
+          return;
+        }
+        if (env && typeof env === 'object' && (env.error || env.status === 'FAILED' || env.status === 'REJECTED' || env.status === 'CANCELED' || env.status === 'EXPIRED')) {
+          req.reject(new Error(extractErrorMessage(env.error, '摘要无效')));
+          return;
+        }
+        const result = env && typeof env === 'object' && 'result' in env && env.result !== undefined ? env.result : env;
+        if (!result || typeof result !== 'object') req.reject(new Error('摘要无效'));
         else req.resolve(result);
       } else {
-        req.reject(new Error('宿主拒绝请求'));
+        req.reject(new Error(extractErrorMessage(msg.problem || msg.error, '宿主拒绝请求')));
       }
     }
     if (msg.t === 'ui.settings') {

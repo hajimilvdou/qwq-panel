@@ -30,7 +30,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/crypto/argon2"
 	_ "modernc.org/sqlite"
 )
 
@@ -152,50 +151,15 @@ func DecryptSecret(key, ciphertext []byte) ([]byte, error) {
 	return gcm.Open(nil, nonce, body, nil)
 }
 
-// HashPassword 使用 Argon2id（适配 1C1G 内存参数）生成加盐密码哈希。
+// HashPassword 使用带单槽并发保护与有界内存的 Argon2id 生成加盐密码哈希。
 func HashPassword(password string) (string, error) {
-	if len(password) < 8 || len(password) > 128 {
-		return "", errors.New("VALIDATION_FAILED: 密码长度需在 8..128 字符之间")
-	}
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return "", err
-	}
-	const (
-		argonTime    = uint32(2)
-		argonMemory  = uint32(32 * 1024) // 32 MiB 兼顾安全性与 1C1G 低内存限制
-		argonThreads = uint8(1)
-		argonKeyLen  = uint32(32)
-	)
-	hash := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
-	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, argonMemory, argonTime, argonThreads,
-		base64.RawStdEncoding.EncodeToString(salt),
-		base64.RawStdEncoding.EncodeToString(hash),
-	), nil
+	return HashPasswordBounded(context.Background(), password)
 }
 
-// VerifyPassword 常量时间验证明文口令与 Argon2id 哈希是否匹配。
+// VerifyPassword 常量时间验证明文口令与 Argon2id 哈希是否匹配（受单槽与参数上限保护）。
 func VerifyPassword(password, encoded string) bool {
-	parts := strings.Split(encoded, "$")
-	if len(parts) != 6 || parts[1] != "argon2id" {
-		return false
-	}
-	var mem, iter uint32
-	var par uint8
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &mem, &iter, &par); err != nil || mem == 0 || iter == 0 || par == 0 {
-		return false
-	}
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil || len(salt) == 0 {
-		return false
-	}
-	expected, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil || len(expected) == 0 {
-		return false
-	}
-	actual := argon2.IDKey([]byte(password), salt, iter, mem, par, uint32(len(expected)))
-	return subtle.ConstantTimeCompare(actual, expected) == 1
+	ok, err := VerifyPasswordBounded(context.Background(), password, encoded)
+	return err == nil && ok
 }
 
 // ======================== 数据视图模型 ========================
@@ -663,7 +627,13 @@ func (e *LedgerEngine) StartBatcher(ctx context.Context) func() {
 			if len(buf) == 0 {
 				return
 			}
-			_ = e.flushBatchToSQLite(context.Background(), buf)
+			if err := e.flushBatchToSQLite(context.Background(), buf); err != nil {
+				// Retain failed batch for next tick retry instead of dropping ledger records.
+				if len(buf) > BatchMaxRows*8 {
+					buf = buf[len(buf)-BatchMaxRows*8:]
+				}
+				return
+			}
 			buf = buf[:0]
 		}
 		drainAndExit := func() {
@@ -902,7 +872,7 @@ func (e *LedgerEngine) CreateUserByAdmin(ctx context.Context, username, password
 	if len(username) < 3 || len(username) > 32 {
 		return UserView{}, errors.New("VALIDATION_FAILED: 用户名长度需在 3..32 字符之间")
 	}
-	pwHash, err := HashPassword(password)
+	pwHash, err := HashPasswordBounded(ctx, password)
 	if err != nil {
 		return UserView{}, err
 	}
@@ -983,7 +953,7 @@ func (e *LedgerEngine) SignupWithInviteCode(ctx context.Context, username, passw
 	if len(username) < 3 || len(username) > 32 {
 		return "", errors.New("VALIDATION_FAILED: 用户名长度需在 3..32 字符之间")
 	}
-	pwHash, err := HashPassword(password)
+	pwHash, err := HashPasswordBounded(ctx, password)
 	if err != nil {
 		return "", err
 	}
@@ -1134,7 +1104,7 @@ func (e *LedgerEngine) SignupWithEmailOTP(ctx context.Context, username, passwor
 	if len(username) < 3 || len(username) > 32 {
 		return "", errors.New("VALIDATION_FAILED: 用户名长度需在 3..32 字符之间")
 	}
-	pwHash, err := HashPassword(password)
+	pwHash, err := HashPasswordBounded(ctx, password)
 	if err != nil {
 		return "", err
 	}
@@ -1368,11 +1338,21 @@ func (e *LedgerEngine) AuthenticatePassword(ctx context.Context, username, passw
 	err := e.db.QueryRowContext(ctx, `
 		SELECT id, password_hash, status FROM relay_users WHERE username = ?;`, strings.TrimSpace(username),
 	).Scan(&id, &hash, &status)
-	if errors.Is(err, sql.ErrNoRows) || hash == "" || !VerifyPassword(password, hash) {
+	if errors.Is(err, sql.ErrNoRows) || hash == "" {
 		return "", errors.New("UNAUTHENTICATED: 用户名或密码错误")
 	}
 	if err != nil {
 		return "", err
+	}
+	matched, verifyErr := VerifyPasswordBounded(ctx, password, hash)
+	if verifyErr != nil {
+		if strings.HasPrefix(verifyErr.Error(), "RATE_LIMITED") {
+			return "", verifyErr
+		}
+		return "", errors.New("UNAUTHENTICATED: 用户名或密码错误")
+	}
+	if !matched {
+		return "", errors.New("UNAUTHENTICATED: 用户名或密码错误")
 	}
 	if status != "active" {
 		return "", errors.New("USER_DISABLED: 该分发账号已被停用")
@@ -1861,7 +1841,7 @@ func (e *LedgerEngine) AdjustUserQuota(ctx context.Context, userID string, delta
 		lu.GroupName = cur.GroupName
 		lu.StatusActive.Store(cur.Status == "active")
 		if deltaMicros != 0 {
-			lu.BalanceMicros.Store(cur.BalanceMicros)
+			ApplyAtomicBalanceDelta(&lu.BalanceMicros, deltaMicros)
 		}
 	}
 	e.mu.Unlock()
@@ -2431,7 +2411,7 @@ func (e *LedgerEngine) addMemoryBalance(userID string, delta int64) {
 	u, ok := e.users[userID]
 	e.mu.RUnlock()
 	if ok {
-		u.BalanceMicros.Add(delta)
+		ApplyAtomicBalanceDelta(&u.BalanceMicros, delta)
 	}
 }
 

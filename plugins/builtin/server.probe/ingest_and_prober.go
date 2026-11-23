@@ -61,6 +61,8 @@ var sharedSafeHTTPClient = &http.Client{
 type AgentReportPayload struct {
 	NodeID        string           `json:"node_id"`
 	TimestampUnix int64            `json:"timestamp_unix"`
+	TimestampNano int64            `json:"timestamp_nano,omitempty"`
+	SessionEpoch  int64            `json:"session_epoch,omitempty"`
 	Sequence      uint64           `json:"seq"`
 	BootEpoch     uint64           `json:"boot_epoch"`
 	OSName        string           `json:"os_name"`
@@ -120,9 +122,9 @@ type ServiceMonitor struct {
 // IngestAgentReport 校验单向 Agent 令牌与防重放窗口，并对映射长度做有界清洗防内存放大。
 func (s *ProbeStore) IngestAgentReport(now time.Time, clientIP, bearerToken string, rep AgentReportPayload) (AgentDesiredPullConfig, error) {
 	nowUnix := now.Unix()
-	diff := nowUnix - rep.TimestampUnix
-	if diff < -MaxClockSkewSeconds || diff > MaxClockSkewSeconds {
-		return AgentDesiredPullConfig{}, ErrReplayOrSkewedClock
+	repTsNano := rep.TimestampNano
+	if repTsNano == 0 {
+		repTsNano = rep.TimestampUnix * int64(time.Second)
 	}
 
 	s.mu.Lock()
@@ -135,7 +137,15 @@ func (s *ProbeStore) IngestAgentReport(now time.Time, clientIP, bearerToken stri
 	if !VerifyAgentToken(bearerToken, node.AgentTokenSHA256) {
 		return AgentDesiredPullConfig{}, ErrUnauthorizedAgent
 	}
-	if rep.BootEpoch == node.LastBootEpoch && rep.Sequence <= node.LastReportSeq && node.LastReportSeq > 0 {
+	if err := VerifyProbeReportSequence(
+		now.UnixNano(),
+		repTsNano,
+		rep.SessionEpoch,
+		rep.Sequence,
+		node.LastTimestampNano,
+		node.LastSessionEpoch,
+		node.LastReportSeq,
+	); err != nil {
 		return AgentDesiredPullConfig{}, ErrReplayOrSkewedClock
 	}
 
@@ -148,6 +158,10 @@ func (s *ProbeStore) IngestAgentReport(now time.Time, clientIP, bearerToken stri
 	}
 
 	node.LastReportSeq = rep.Sequence
+	if rep.SessionEpoch != 0 {
+		node.LastSessionEpoch = rep.SessionEpoch
+	}
+	node.LastTimestampNano = repTsNano
 	node.OSName = truncateSafe(rep.OSName, 64)
 	node.KernelVersion = truncateSafe(rep.KernelVersion, 64)
 	node.Arch = truncateSafe(rep.Arch, 32)

@@ -286,17 +286,28 @@ func TestProxyChainsCRUDCycleDetectionProbeAndSubscriptionExport(t *testing.T) {
 		t.Fatalf("chains.probe 应探测到本地监听可达: %+v err=%v", probeOut, err)
 	}
 
-	// 5. 预览 Xray 服务端链式出口 JSON（含 proxySettings.tag 且不含明文密码）。
+	// 5. 预览 Xray 服务端链式出口 JSON（含正确方向 proxySettings.tag 且不含明文密码）。
 	prevResp := invokeProxy(t, h.srv, "chains.preview", map[string]any{})
 	if prevResp.GetError() != nil {
 		t.Fatalf("chains.preview failed: %+v", prevResp.GetError())
 	}
 	prevText := string(prevResp.GetPayloadJson())
-	if !strings.Contains(prevText, "proxySettings") || !strings.Contains(prevText, "chain-hop-exit") {
+	if !strings.Contains(prevText, "proxySettings") || !strings.Contains(prevText, "chain-hop-exit") || !strings.Contains(prevText, "chain-hop-mid") {
 		t.Fatalf("chains.preview 缺少 proxySettings 多跳链式配置:\n%s", prevText)
 	}
 	if strings.Contains(prevText, "SuperSecretPassword!") || strings.Contains(prevText, "MidTrojanSecret") {
 		t.Fatalf("chains.preview 绝不能泄漏明文密码!")
+	}
+	// 验证 VLESS 链式节点即使不填 SNI，只要 TLS=true 也会生成 Sing-box TLS 对象与 Clash udp: true。
+	cnVless, sbVless := buildChainSubEntry("chain-v", "entry", chainWithSecret{
+		chainRecord: chainRecord{Protocol: "vless", Server: "exit.example.com", Port: 443},
+		Secret:      chainSecretConfig{UUID: "11111111-1111-1111-1111-111111111111", TLS: true},
+	})
+	if cnVless["udp"] != true {
+		t.Fatalf("Clash 链式节点应包含 udp: true: %+v", cnVless)
+	}
+	if tlsMap, ok := sbVless["tls"].(map[string]any); !ok || tlsMap["enabled"] != true || tlsMap["server_name"] != "exit.example.com" {
+		t.Fatalf("Sing-box VLESS TLS=true 缺失默认 server_name: %+v", sbVless)
 	}
 
 	// 6. 验证客户端订阅导出 Clash dialer-proxy 与 sing-box detour！
@@ -407,7 +418,17 @@ func TestBrutalSelectivePortTakeoverOversendAndLiveEcho(t *testing.T) {
 		t.Fatalf("oversend_pct=180 应返回 HIGH_OVERSEND 警告，实际: %+v", planResp.GetWarnings())
 	}
 
-	// 2. 只为 vless-tcp 创建 Brutal 接管（默认超发 125% -> 125.0 Mbps），保持 ss2022-tcp 原端口不变！
+	// 2. 拒绝非 Xray 入站的任意 127.0.0.1 目标端口（例如 5432）。
+	badTarget := invokeProxy(t, h.srv, "brutal.binding.upsert", map[string]any{
+		"id": "brutal-bad", "inbound_tag": "rogue-tcp", "protocol": "tcp",
+		"listen_port": brutalListenPort, "target_port": 5432,
+		"bandwidth_mbps": 100, "enabled": true,
+	})
+	if badTarget.GetError() == nil {
+		t.Fatalf("brutal.binding.upsert 必须拒绝未托管的 target_port=5432")
+	}
+
+	// 2b. 只为 vless-tcp 创建 Brutal 接管（默认超发 125% -> 125.0 Mbps），保持 ss2022-tcp 原端口不变！
 	upResp := invokeProxy(t, h.srv, "brutal.binding.upsert", map[string]any{
 		"id": "brutal-vless", "inbound_tag": "vless-tcp", "protocol": "vless",
 		"listen_port": brutalListenPort, "target_port": vlessBackendPort,
@@ -533,6 +554,21 @@ func TestTcpfitDynamicPlanOOMCapApplyRollbackAndIperf3Honesty(t *testing.T) {
 	if lowPlan.SelectedCC != "bbr" {
 		t.Fatalf("可用 bbr 且 prefer=auto 时应选择 bbr，实际 %s", lowPlan.SelectedCC)
 	}
+	// 验证全局 prefer_cc=brutal 被严禁，即使内核支持 brutal 全局也恒用 bbr，且 relay 角色补齐转发与 conntrack 参数。
+	relayPlan, err := computeTcpfitPlan(lowMemProfile, brutalEnvInfo{AvailableCC: []string{"cubic", "bbr", "brutal"}, BrutalAvailable: true}, tcpfitPlanRequest{
+		Role: "relay", BandwidthMbps: 500, RTTMs: 100, MemBudgetPct: 12, PreferCC: "brutal",
+	})
+	if err != nil {
+		t.Fatalf("computeTcpfitPlan(relay, brutal) failed: %v", err)
+	}
+	if relayPlan.SelectedCC != "bbr" || relayPlan.SysctlMap["net.ipv4.tcp_congestion_control"] != "bbr" {
+		t.Fatalf("严禁全局 brutal，应恒为 bbr，实际 %q", relayPlan.SelectedCC)
+	}
+	if relayPlan.SysctlMap["net.ipv4.ip_forward"] != "1" ||
+		relayPlan.SysctlMap["net.ipv6.conf.all.forwarding"] != "1" ||
+		relayPlan.SysctlMap["net.netfilter.nf_conntrack_max"] != "262144" {
+		t.Fatalf("relay 角色缺少转发或 conntrack 参数: %+v", relayPlan.SysctlMap)
+	}
 
 	// 2. 通过真实 gRPC 测试 tuning.status / tuning.plan / PlanOperation / tuning.apply(dry_run + temp file) / tuning.rollback / tuning.sweep。
 	h, sysctlFile := newExtProxyHarness(t, `{"public_host":"proxy.example.com"}`)
@@ -565,8 +601,8 @@ func TestTcpfitDynamicPlanOOMCapApplyRollbackAndIperf3Honesty(t *testing.T) {
 		BaselineSnapshot tuningSnapshotRecord `json:"baseline_snapshot"`
 	}
 	_ = json.Unmarshal(dryResp.GetPayloadJson(), &dryOut)
-	if !dryOut.DryRun || dryOut.BaselineSnapshot.ID == "" {
-		t.Fatalf("dry_run 应保存基线快照: %+v", dryOut)
+	if !dryOut.DryRun || dryOut.BaselineSnapshot.ID == "" || !dryOut.BaselineSnapshot.Pinned {
+		t.Fatalf("dry_run 应保存首个 pinned=true 基线快照: %+v", dryOut)
 	}
 	if _, err := os.Stat(sysctlFile); err == nil {
 		t.Fatalf("dry_run 不应落盘目标文件 %s", sysctlFile)

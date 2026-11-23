@@ -67,17 +67,32 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 		_ = json.Unmarshal(info.Config, &cfg)
 	}
 
-	store := NewProbeStore()
+	store, err := OpenProbeStore(info.DataDir)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.CollectLocalHost {
-		store.nodes["local"] = &NodeRecord{
-			ID:          "local",
-			Name:        cfg.LocalNodeName,
-			RegionCode:  cfg.LocalRegionCode,
-			GroupName:   "主控本机",
-			IsLocal:     true,
-			SortOrder:   1,
-			OnlineState: "online",
-			Revision:    "r1",
+		store.mu.Lock()
+		_, hasLocal := store.nodes["local"]
+		var localCopy *NodeRecord
+		if !hasLocal {
+			rec := &NodeRecord{
+				ID:          "local",
+				Name:        cfg.LocalNodeName,
+				RegionCode:  cfg.LocalRegionCode,
+				GroupName:   "主控本机",
+				IsLocal:     true,
+				SortOrder:   1,
+				OnlineState: "online",
+				Revision:    "r1",
+			}
+			store.nodes["local"] = rec
+			cp := *rec
+			localCopy = &cp
+		}
+		store.mu.Unlock()
+		if localCopy != nil {
+			_ = store.PersistNode(context.Background(), localCopy)
 		}
 	}
 
@@ -108,7 +123,18 @@ func (i *instance) Activate(context.Context) error {
 	return i.Go(i.backgroundLoop)
 }
 
-func (i *instance) Deactivate(context.Context) error { return nil }
+func (i *instance) Deactivate(ctx context.Context) error {
+	return i.store.FlushPeriodic(ctx, time.Now())
+}
+
+func (i *instance) Stop(ctx context.Context) error {
+	return i.store.FlushPeriodic(ctx, time.Now())
+}
+
+func (i *instance) Release(_ context.Context) error {
+	_ = i.portal.Close()
+	return i.store.Close()
+}
 
 func (i *instance) ValidateConfig(_ context.Context, cand pluginsdk.Config) (pluginsdk.ConfigValidation, error) {
 	var next probeConfig
@@ -168,21 +194,28 @@ func (i *instance) ServePublicRoute(_ context.Context, req pluginsdk.PublicRoute
 }
 
 func (i *instance) backgroundLoop(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	sampleTicker := time.NewTicker(2 * time.Second)
+	flushTicker := time.NewTicker(60 * time.Second)
+	defer sampleTicker.Stop()
+	defer flushTicker.Stop()
 
 	var prevSnap *metricsv1.MetricsSnapshot
 	for {
 		select {
 		case <-ctx.Done():
+			fctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			_ = i.store.FlushPeriodic(fctx, time.Now())
+			cancel()
 			return
-		case <-ticker.C:
+		case <-sampleTicker.C:
 			i.cfgMu.RLock()
 			collectLocal := i.cfg.CollectLocalHost
 			i.cfgMu.RUnlock()
 			if collectLocal {
 				prevSnap = i.sampleLocalHostOnce(ctx, prevSnap)
 			}
+		case <-flushTicker.C:
+			_ = i.store.FlushPeriodic(ctx, time.Now())
 		}
 	}
 }
@@ -378,13 +411,133 @@ func (i *instance) registerOperations() {
 		i.store.mu.RLock()
 		cfg := i.store.settings
 		i.store.mu.RUnlock()
+		activeTheme := cfg.ActiveThemeID
+		if activeTheme == "" {
+			activeTheme = BuiltinThemeClassic
+		}
+		ts := cfg.ThemeSettings
+		if ts == nil {
+			ts = map[string]any{}
+		}
 		b, _ := json.Marshal(map[string]any{
 			"public_nodes":     i.store.BuildPublicNodes(now),
 			"settings":         cfg,
+			"active_theme_id":  activeTheme,
+			"appearance":       SanitizeAppearanceConfig(cfg.Appearance),
+			"theme_settings":   ts,
+			"bg_url":           BackgroundURL(cfg),
+			"themes":           i.portal.themes.ListThemes(),
 			"dnc_capabilities": i.domains.InspectEnvironment(),
 			"proxy_snippets":   BuildReverseProxySnippets(cfg.CustomDomain, cfg.BuiltinListenAddr),
 		})
 		return pluginsdk.Response{Payload: b}, nil
+	})
+
+	// 3.5 可插拔前台主题中心与动态水玻璃背景配置 RPC（供 qwq 面板内嵌 UI 调用）
+	i.HandleInvoke("probe.themes.list", func(_ context.Context, _ pluginsdk.Request) (pluginsdk.Response, error) {
+		b, _ := json.Marshal(i.portal.themeStatePayload())
+		return pluginsdk.Response{Payload: b}, nil
+	})
+
+	i.HandleJob("probe.themes.install", func(ctx context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
+		var p struct {
+			Filename  string `json:"filename,omitempty"`
+			ZipBase64 string `json:"zip_base64,omitempty"`
+			URL       string `json:"url,omitempty"`
+		}
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "主题安装请求 JSON 无效")
+		}
+		var (
+			manifest ThemeManifest
+			err      error
+		)
+		if strings.TrimSpace(p.ZipBase64) != "" {
+			raw, derr := DecodeBase64Payload(p.ZipBase64)
+			if derr != nil {
+				return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "主题 ZIP Base64 解码失败")
+			}
+			manifest, err = i.portal.themes.InstallZip(raw)
+		} else if strings.TrimSpace(p.URL) != "" {
+			manifest, err = i.portal.themes.InstallFromURL(ctx, p.URL)
+		} else {
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "请提供 zip_base64 或 https:// url")
+		}
+		if err != nil {
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
+		}
+		b, _ := json.Marshal(map[string]any{
+			"installed": manifest,
+			"themes":    i.portal.themes.ListThemes(),
+		})
+		return pluginsdk.Result{
+			Payload: b,
+			Changes: []pluginsdk.ResourceChange{{Subject: "themes/" + manifest.ID, Revision: manifest.Version}},
+		}, nil
+	})
+
+	i.HandleJob("probe.themes.activate", func(_ context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
+		var p ThemeActivateRequest
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "主题启用参数 JSON 无效")
+		}
+		saved, err := i.portal.ApplyThemeActivation(p)
+		if err != nil {
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
+		}
+		b, _ := json.Marshal(map[string]any{
+			"active_theme_id": saved.ActiveThemeID,
+			"appearance":      saved.Appearance,
+			"theme_settings":  saved.ThemeSettings,
+			"bg_url":          BackgroundURL(saved),
+			"revision":        saved.Revision,
+		})
+		return pluginsdk.Result{
+			Payload: b,
+			Changes: []pluginsdk.ResourceChange{{Subject: "themes", Revision: saved.Revision}},
+		}, nil
+	})
+
+	i.HandleJob("probe.themes.delete", func(_ context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
+		var p struct {
+			ThemeID string `json:"theme_id"`
+		}
+		if err := json.Unmarshal(req.Payload, &p); err != nil || strings.TrimSpace(p.ThemeID) == "" {
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "theme_id 不能为空")
+		}
+		saved, err := i.portal.DeleteCustomTheme(strings.TrimSpace(p.ThemeID))
+		if err != nil {
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
+		}
+		b, _ := json.Marshal(map[string]any{
+			"deleted":         strings.TrimSpace(p.ThemeID),
+			"active_theme_id": saved.ActiveThemeID,
+			"themes":          i.portal.themes.ListThemes(),
+		})
+		return pluginsdk.Result{
+			Payload: b,
+			Changes: []pluginsdk.ResourceChange{{Subject: "themes/" + strings.TrimSpace(p.ThemeID), Deleted: true}},
+		}, nil
+	})
+
+	i.HandleJob("probe.background.set", func(_ context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
+		var p BackgroundSetRequest
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "背景图配置 JSON 无效")
+		}
+		saved, err := i.portal.ApplyBackground(p)
+		if err != nil {
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
+		}
+		b, _ := json.Marshal(map[string]any{
+			"appearance": saved.Appearance,
+			"bg_url":     BackgroundURL(saved),
+			"revision":   saved.Revision,
+		})
+		return pluginsdk.Result{
+			Payload: b,
+			Changes: []pluginsdk.ResourceChange{{Subject: "appearance/background", Revision: saved.Revision}},
+		}, nil
 	})
 
 	// 4. ADR-0004 D7 无副作用 PlanOperation 预演（供 AI 与人类在确认卡片看到精确前后对比与版本锁）
@@ -441,7 +594,7 @@ func (i *instance) registerOperations() {
 
 	// 5. 写入与撤销 Operations（校验 Preconditions，发出实时 ResourceChange 驱动前端与 AI 跟随模式）
 	i.HandleJob("probe.nodes.upsert", func(_ context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
-		_, _, body := i.portal.handleStandaloneAdminAction(time.Now(), "POST", "/api/admin/nodes", req.Payload)
+		_, _, body := i.portal.handleStandaloneAdminAction(time.Now(), "POST", "/api/admin/nodes", nil, req.Payload)
 		return pluginsdk.Result{
 			Payload: body,
 			Changes: []pluginsdk.ResourceChange{{Subject: "nodes", Revision: "r2"}},
@@ -460,6 +613,7 @@ func (i *instance) registerOperations() {
 		delete(i.store.nodes, p.ID)
 		delete(i.store.live, p.ID)
 		i.store.mu.Unlock()
+		_ = i.store.DeleteNode(context.Background(), p.ID)
 		b, _ := json.Marshal(map[string]any{"removed": p.ID})
 		return pluginsdk.Result{
 			Payload: b,
@@ -490,6 +644,7 @@ func (i *instance) registerOperations() {
 		out := i.store.settings
 		i.store.mu.Unlock()
 		i.ai.mu.Unlock()
+		_ = i.store.PersistSettings(context.Background(), out)
 
 		b, _ := json.Marshal(out)
 		return pluginsdk.Result{
@@ -503,6 +658,7 @@ func (i *instance) registerOperations() {
 		if err != nil {
 			return pluginsdk.Result{}, pluginsdk.Errorf("PRECONDITION_FAILED", "%s", err.Error())
 		}
+		_ = i.store.PersistSettings(context.Background(), restored)
 		b, _ := json.Marshal(restored)
 		return pluginsdk.Result{
 			Payload: b,
@@ -511,7 +667,7 @@ func (i *instance) registerOperations() {
 	})
 
 	i.HandleJob("probe.domain.bind", func(_ context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
-		code, _, body := i.portal.handleStandaloneAdminAction(time.Now(), "POST", "/api/admin/domain/bind", req.Payload)
+		code, _, body := i.portal.handleStandaloneAdminAction(time.Now(), "POST", "/api/admin/domain/bind", nil, req.Payload)
 		if code >= 400 {
 			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", string(body))
 		}

@@ -4,9 +4,12 @@ package apply
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net"
 	"net/netip"
 	"os"
@@ -18,7 +21,9 @@ import (
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/prerequisites/consumerfiles"
+	"github.com/qwq-panel/qwq/internal/sandbox"
 	"github.com/qwq-panel/qwq/internal/tlsmgr"
+	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/anytls"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayconfig"
 	"github.com/qwq-panel/qwq/sdk/coreapi"
@@ -256,6 +261,15 @@ func (e *Engine) preflightPortsV2(ctx context.Context, intent *corev2.Intent, ol
 			if err := e.preflightUDPPort(ctx, target, old); err != nil {
 				return err
 			}
+		case corev2.ProtocolShadowsocks:
+			if err := e.preflightTCPPort(ctx, target, old); err != nil {
+				return err
+			}
+			if profile.Shadowsocks != nil && profile.Shadowsocks.UDP {
+				if err := e.preflightUDPPort(ctx, target, old); err != nil {
+					return err
+				}
+			}
 		case corev2.ProtocolShadowsocks2022:
 			if err := e.preflightTCPPort(ctx, target, old); err != nil {
 				return err
@@ -292,8 +306,9 @@ func (e *Engine) preflightTCPPort(ctx context.Context, target netip.AddrPort, ol
 	if serr != nil {
 		return serr
 	}
+	owned := e.ownedPIDs(original.PID)
 	for _, previous := range prevAddrs {
-		if verifyOwnedPortConflict(ctx, netip.AddrPortFrom(scope, target.Port()), previous, original.PID) == nil {
+		if verifyOwnedPortConflict(ctx, netip.AddrPortFrom(scope, target.Port()), previous, owned...) == nil {
 			if current := e.options.Process.Snapshot(ctx); current != original {
 				return errPortIdentity
 			}
@@ -321,7 +336,7 @@ func (e *Engine) preflightUDPPort(ctx context.Context, target netip.AddrPort, ol
 		if !p.Enabled {
 			continue
 		}
-		if p.Protocol != corev2.ProtocolHysteria2 && !(p.Protocol == corev2.ProtocolShadowsocks2022 && p.UDP) {
+		if p.Protocol != corev2.ProtocolHysteria2 && !(p.Protocol == corev2.ProtocolShadowsocks2022 && p.UDP) && !(p.Protocol == corev2.ProtocolShadowsocks && p.UDP) {
 			continue
 		}
 		if p.Port == int(target.Port()) {
@@ -484,6 +499,7 @@ func (e *Engine) ReloadTLS(parent context.Context, req TLSReloadRequest) (TLSBin
 	status := TLSBindingStatus{
 		BindingRef:      req.BindingRef,
 		ProfileID:       req.ProfileID,
+		PublicTrusted:   trust == tlsmgr.PublicTrust,
 		Generation:      req.Generation,
 		PolicyRevision:  req.PolicyRevision,
 		FullchainSHA256: req.FullchainSHA256,
@@ -496,12 +512,30 @@ func (e *Engine) ReloadTLS(parent context.Context, req TLSReloadRequest) (TLSBin
 		return TLSBindingStatus{}, stateFailure(err)
 	}
 	if old != nil && old.Current != nil && old.Current.Enabled && old.Current.SummaryV2 != nil {
-		if prof, found := old.Current.SummaryV2.FindHysteriaProfile(req.ProfileID, req.BindingRef); found && prof.Enabled {
+		if prof, found := old.Current.SummaryV2.FindTLSProfile(req.ProfileID, req.BindingRef); found && prof.Enabled {
 			status.Endpoint = net.JoinHostPort(prof.Listen, strconv.Itoa(prof.Port))
-			if err := e.applyReloadedTLS(parent, old, prof, mat); err != nil {
-				return TLSBindingStatus{}, err
+			if prof.Protocol == corev2.ProtocolAnyTLS {
+				if e.options.AnyTLS != nil {
+					chainPEM, keyPEM := mat.CertificatePEM(), mat.PrivateKeyPEM()
+					reloaded, rerr := e.options.AnyTLS.ReloadCertificate(prof.ID, req.BindingRef, chainPEM, keyPEM)
+					if rerr != nil {
+						clear(chainPEM)
+						clear(keyPEM)
+						return TLSBindingStatus{}, failure("TLS_MATERIAL_INVALID", rerr)
+					}
+					if reloaded {
+						e.updateCachedAnyTLSCert(prof.ID, chainPEM, keyPEM)
+					}
+					clear(chainPEM)
+					clear(keyPEM)
+					status.Running = reloaded
+				}
+			} else {
+				if err := e.applyReloadedTLS(parent, old, prof, mat); err != nil {
+					return TLSBindingStatus{}, err
+				}
+				status.Running = true
 			}
-			status.Running = true
 		}
 	}
 
@@ -577,6 +611,14 @@ func (e *Engine) applyReloadedTLS(ctx context.Context, old *state.Metadata, prof
 		_ = e.rollbackReloadedTLS(ctx, old)
 		return failure("CORE_API_UNAVAILABLE", nil)
 	}
+	if err := e.restartObfsForSummary(next.Current.SummaryV2); err != nil {
+		_ = e.rollbackReloadedTLS(ctx, old)
+		return failure("OBFS_START_FAILED", err)
+	}
+	if err := e.restartAnyTLSForSummary(ctx, next.Current.SummaryV2); err != nil {
+		_ = e.rollbackReloadedTLS(ctx, old)
+		return failure("CORE_START_FAILED", err)
+	}
 	next.State, next.ResetEpoch = "RUNNING", observed.Epoch
 	if err := e.options.Store.Commit(ctx, next); err != nil {
 		_ = e.rollbackReloadedTLS(ctx, old)
@@ -597,9 +639,38 @@ func (e *Engine) rollbackReloadedTLS(parent context.Context, old *state.Metadata
 		if err := e.options.Process.WaitHealthy(cleanup); err != nil {
 			return err
 		}
+		if err := e.restartObfsForSummary(old.Current.SummaryV2); err != nil {
+			return err
+		}
+		if err := e.restartAnyTLSForSummary(cleanup, old.Current.SummaryV2); err != nil {
+			return err
+		}
 		_ = e.options.Store.Restore(cleanup, old)
 		_ = e.options.Process.MarkCommitted()
 	}
+	return nil
+}
+
+func (e *Engine) restartObfsForSummary(summary *state.V2IntentSummary) error {
+	if e.options.Obfs == nil {
+		return nil
+	}
+	e.mu.Lock()
+	lifetime := e.lifetime
+	plans := append([]xrayconfig.ObfsPlan(nil), e.obfsPlans...)
+	e.mu.Unlock()
+	if len(plans) == 0 && summary != nil {
+		plans = summary.ObfsPlans()
+	}
+	if len(plans) == 0 {
+		return nil
+	}
+	if err := e.options.Obfs.StartAll(lifetime, plans); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.obfsPlans = append([]xrayconfig.ObfsPlan(nil), plans...)
+	e.mu.Unlock()
 	return nil
 }
 
@@ -667,7 +738,8 @@ func (e *Engine) InspectTLS(ctx context.Context, bindingRef, profileID string) (
 				result.SNI = proof.Binding.Consumer.SNI
 				if mat, lerr := store.Load(ctx, *proof); lerr == nil {
 					roots, _ := e.roots()
-					if _, _, meta, verr := validateConsumerMaterial(mat, proof.Binding.Consumer.SNI, e.now(), roots, e.options.PermitTestCertificates); verr == nil {
+					if trust, _, meta, verr := validateConsumerMaterial(mat, proof.Binding.Consumer.SNI, e.now(), roots, e.options.PermitTestCertificates); verr == nil {
+						result.PublicTrusted = trust == tlsmgr.PublicTrust
 						result.LeafFingerprint = meta.Fingerprint
 					}
 					mat.Clear()
@@ -682,7 +754,7 @@ func (e *Engine) InspectTLS(ctx context.Context, bindingRef, profileID string) (
 	if err != nil || committed == nil || committed.Current == nil || !committed.Current.Enabled || committed.Current.SummaryV2 == nil {
 		return result, nil
 	}
-	prof, found := committed.Current.SummaryV2.FindHysteriaProfile(profileID, bindingRef)
+	prof, found := committed.Current.SummaryV2.FindTLSProfile(profileID, bindingRef)
 	if !found || !prof.Enabled {
 		return result, nil
 	}
@@ -690,9 +762,290 @@ func (e *Engine) InspectTLS(ctx context.Context, bindingRef, profileID string) (
 	if result.SNI == "" {
 		result.SNI = prof.ServerName
 	}
-	observed := e.options.Process.Snapshot(ctx)
-	if observed.State == "RUNNING" && observed.APIState == "READY" && observed.Digest == committed.Current.Digest && result.Generation > 0 {
-		result.Running = true
+	if prof.Protocol == corev2.ProtocolAnyTLS {
+		if e.options.AnyTLS != nil && e.options.AnyTLS.IsRunning(prof.ID) && result.Generation > 0 {
+			result.Running = true
+		}
+	} else {
+		observed := e.options.Process.Snapshot(ctx)
+		if observed.State == "RUNNING" && observed.APIState == "READY" && observed.Digest == committed.Current.Digest && result.Generation > 0 {
+			result.Running = true
+		}
 	}
 	return result, nil
+}
+
+type persistedAnyTLSProfile struct {
+	ProfileID     string            `json:"profile_id"`
+	BindingRef    string            `json:"binding_ref"`
+	ServerName    string            `json:"server_name"`
+	Listen        string            `json:"listen"`
+	Port          int               `json:"port"`
+	PaddingScheme []string          `json:"padding_scheme,omitempty"`
+	UserDigests   map[string]string `json:"user_digests"`
+}
+
+const anytlsStateFile = "runtime/anytls_state.json"
+
+func (e *Engine) persistAnyTLSSpecs(specs []anytls.ProfileSpec) {
+	if e.options.DataDir == "" {
+		return
+	}
+	root, err := os.OpenRoot(e.options.DataDir)
+	if err != nil {
+		return
+	}
+	defer root.Close()
+	if len(specs) == 0 {
+		_ = root.Remove(anytlsStateFile)
+		return
+	}
+	records := make([]persistedAnyTLSProfile, 0, len(specs))
+	for _, s := range specs {
+		digests := make(map[string]string, len(s.Users)+len(s.UserDigests))
+		for uid, d := range s.UserDigests {
+			digests[uid] = hex.EncodeToString(d[:])
+		}
+		for uid, pwd := range s.Users {
+			sum := sha256.Sum256(pwd)
+			digests[uid] = hex.EncodeToString(sum[:])
+		}
+		records = append(records, persistedAnyTLSProfile{
+			ProfileID:     s.ProfileID,
+			BindingRef:    s.BindingRef,
+			ServerName:    s.ServerName,
+			Listen:        s.Listen,
+			Port:          s.Port,
+			PaddingScheme: slices.Clone(s.PaddingScheme),
+			UserDigests:   digests,
+		})
+	}
+	raw, err := json.Marshal(records)
+	if err != nil {
+		return
+	}
+	_ = root.Mkdir("runtime", 0o700)
+	_ = sandbox.WriteFileAtomicIn(root, anytlsStateFile, raw, 0o600)
+}
+
+func (e *Engine) loadPersistedAnyTLS() (map[string]persistedAnyTLSProfile, error) {
+	if e.options.DataDir == "" {
+		return nil, fs.ErrNotExist
+	}
+	root, err := os.OpenRoot(e.options.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	raw, err := root.ReadFile(anytlsStateFile)
+	if err != nil {
+		return nil, err
+	}
+	var records []persistedAnyTLSProfile
+	if err := json.Unmarshal(raw, &records); err != nil {
+		return nil, err
+	}
+	byID := make(map[string]persistedAnyTLSProfile, len(records))
+	for _, rec := range records {
+		byID[rec.ProfileID] = rec
+	}
+	return byID, nil
+}
+
+func (e *Engine) updateCachedAnyTLSCert(profileID string, certPEM, keyPEM []byte) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := range e.anytlsSpecs {
+		if e.anytlsSpecs[i].ProfileID == profileID {
+			clear(e.anytlsSpecs[i].CertPEM)
+			clear(e.anytlsSpecs[i].KeyPEM)
+			e.anytlsSpecs[i].CertPEM = append([]byte(nil), certPEM...)
+			e.anytlsSpecs[i].KeyPEM = append([]byte(nil), keyPEM...)
+			break
+		}
+	}
+}
+
+func (e *Engine) rebuildAnyTLSSpecs(ctx context.Context, summary *state.V2IntentSummary) ([]anytls.ProfileSpec, error) {
+	if summary == nil {
+		return nil, nil
+	}
+	enabled := summary.EnabledAnyTLSProfiles()
+	if len(enabled) == 0 {
+		return nil, nil
+	}
+	e.mu.Lock()
+	cached := cloneAnyTLSSpecs(e.anytlsSpecs)
+	e.mu.Unlock()
+	if len(cached) > 0 {
+		byID := make(map[string]anytls.ProfileSpec, len(cached))
+		for _, s := range cached {
+			byID[s.ProfileID] = s
+		}
+		matched := make([]anytls.ProfileSpec, 0, len(enabled))
+		allFound := true
+		for _, prof := range enabled {
+			s, ok := byID[prof.ID]
+			if !ok {
+				allFound = false
+				break
+			}
+			matched = append(matched, s)
+		}
+		if allFound {
+			return matched, nil
+		}
+		clearAnyTLSSpecs(cached)
+	}
+
+	persisted, err := e.loadPersistedAnyTLS()
+	if err != nil {
+		return nil, err
+	}
+	loader := &consumerDirTLSLoader{engine: e, dataDir: e.options.DataDir}
+	out := make([]anytls.ProfileSpec, 0, len(enabled))
+	for _, prof := range enabled {
+		rec, ok := persisted[prof.ID]
+		if !ok || len(rec.UserDigests) == 0 {
+			clearAnyTLSSpecs(out)
+			return nil, errors.New("apply: missing persisted anytls profile " + prof.ID)
+		}
+		digests := make(map[string][32]byte, len(rec.UserDigests))
+		for uid, hexStr := range rec.UserDigests {
+			rawDigest, derr := hex.DecodeString(hexStr)
+			if derr != nil || len(rawDigest) != 32 {
+				clearAnyTLSSpecs(out)
+				return nil, errors.New("apply: corrupt anytls user digest")
+			}
+			var arr [32]byte
+			copy(arr[:], rawDigest)
+			digests[uid] = arr
+		}
+		tlsMat, terr := loader.LoadTLS(ctx, prof.ID, prof.BindingRef, prof.ServerName)
+		if terr != nil {
+			clearAnyTLSSpecs(out)
+			return nil, terr
+		}
+		certPEM := tlsMat.Material.CertificatePEM()
+		keyPEM := tlsMat.Material.PrivateKeyPEM()
+		tlsMat.Material.Clear()
+		out = append(out, anytls.ProfileSpec{
+			ProfileID:     prof.ID,
+			BindingRef:    prof.BindingRef,
+			ServerName:    prof.ServerName,
+			Listen:        prof.Listen,
+			Port:          prof.Port,
+			CertPEM:       certPEM,
+			KeyPEM:        keyPEM,
+			PaddingScheme: slices.Clone(rec.PaddingScheme),
+			UserDigests:   digests,
+		})
+	}
+	return out, nil
+}
+
+func (e *Engine) restartAnyTLSForSummary(ctx context.Context, summary *state.V2IntentSummary) error {
+	if e.options.AnyTLS == nil || summary == nil {
+		return nil
+	}
+	specs, err := e.rebuildAnyTLSSpecs(ctx, summary)
+	if err != nil {
+		return err
+	}
+	if len(specs) == 0 {
+		return nil
+	}
+	e.mu.Lock()
+	lifetime := e.lifetime
+	e.mu.Unlock()
+	if err := e.options.AnyTLS.StartAll(lifetime, specs); err != nil {
+		clearAnyTLSSpecs(specs)
+		return err
+	}
+	e.mu.Lock()
+	oldStored := e.anytlsSpecs
+	e.anytlsSpecs = cloneAnyTLSSpecs(specs)
+	e.mu.Unlock()
+	clearAnyTLSSpecs(oldStored)
+	clearAnyTLSSpecs(specs)
+	return nil
+}
+
+func buildAnyTLSSpecs(intent *corev2.Intent, materials xrayconfig.V2Materials) []anytls.ProfileSpec {
+	if intent == nil {
+		return nil
+	}
+	var out []anytls.ProfileSpec
+	for _, p := range intent.Profiles {
+		if p.Enabled == nil || !*p.Enabled || p.Protocol != corev2.ProtocolAnyTLS || p.AnyTLS == nil || p.AnyTLS.TLS == nil {
+			continue
+		}
+		pm, ok := materials.Profiles[p.ID]
+		if !ok || pm.AnyTLS == nil {
+			continue
+		}
+		users := make(map[string][]byte, len(pm.AnyTLS.Auth))
+		for uid, pwd := range pm.AnyTLS.Auth {
+			users[uid] = append([]byte(nil), pwd...)
+		}
+		out = append(out, anytls.ProfileSpec{
+			ProfileID:     p.ID,
+			BindingRef:    p.AnyTLS.TLS.BindingRef,
+			ServerName:    p.AnyTLS.TLS.ServerName,
+			Listen:        p.Listen,
+			Port:          p.Port,
+			CertPEM:       pm.AnyTLS.TLS.Material.CertificatePEM(),
+			KeyPEM:        pm.AnyTLS.TLS.Material.PrivateKeyPEM(),
+			PaddingScheme: slices.Clone(p.AnyTLS.PaddingScheme),
+			Users:         users,
+		})
+	}
+	return out
+}
+
+func cloneAnyTLSSpecs(specs []anytls.ProfileSpec) []anytls.ProfileSpec {
+	if len(specs) == 0 {
+		return nil
+	}
+	out := make([]anytls.ProfileSpec, len(specs))
+	for i, s := range specs {
+		users := make(map[string][]byte, len(s.Users))
+		for uid, pwd := range s.Users {
+			users[uid] = append([]byte(nil), pwd...)
+		}
+		var digests map[string][32]byte
+		if len(s.UserDigests) > 0 {
+			digests = make(map[string][32]byte, len(s.UserDigests))
+			for uid, d := range s.UserDigests {
+				digests[uid] = d
+			}
+		}
+		out[i] = anytls.ProfileSpec{
+			ProfileID:     s.ProfileID,
+			BindingRef:    s.BindingRef,
+			ServerName:    s.ServerName,
+			Listen:        s.Listen,
+			Port:          s.Port,
+			CertPEM:       append([]byte(nil), s.CertPEM...),
+			KeyPEM:        append([]byte(nil), s.KeyPEM...),
+			PaddingScheme: slices.Clone(s.PaddingScheme),
+			Users:         users,
+			UserDigests:   digests,
+		}
+	}
+	return out
+}
+
+func clearAnyTLSSpecs(specs []anytls.ProfileSpec) {
+	for i := range specs {
+		clear(specs[i].CertPEM)
+		clear(specs[i].KeyPEM)
+		specs[i].CertPEM = nil
+		specs[i].KeyPEM = nil
+		for uid, pwd := range specs[i].Users {
+			clear(pwd)
+			delete(specs[i].Users, uid)
+		}
+		clear(specs[i].UserDigests)
+	}
 }

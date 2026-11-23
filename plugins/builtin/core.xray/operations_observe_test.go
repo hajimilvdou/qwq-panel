@@ -134,3 +134,63 @@ func TestFakeSDKObserveFilteringAndRestartEpoch(t *testing.T) {
 		t.Fatal("unavailable statistics were reported as success")
 	}
 }
+
+func TestObserveMetricsV2MultiInboundAndAPIStatsIgnored(t *testing.T) {
+	summary := &state.V2IntentSummary{
+		SchemaVersion: "2",
+		OutboundType:  "direct",
+		RefsDigest:    "sha256:" + strings.Repeat("b", 64),
+		Profiles: []state.PublicProfileSummary{
+			{
+				ID:         "hy2-edge",
+				Enabled:    true,
+				Listen:     "0.0.0.0",
+				Port:       443,
+				Protocol:   "hysteria2",
+				BindingRef: "bind-01",
+				ServerName: "edge.example.com",
+				UserIDs:    []string{"alice"},
+			},
+			{
+				ID:       "vless-edge",
+				Enabled:  true,
+				Listen:   "0.0.0.0",
+				Port:     8443,
+				Protocol: "vless",
+				UserIDs:  []string{"alice", "bob"},
+			},
+		},
+	}
+	counters := map[string]int64{
+		"inbound>>>qwq-api-in>>>traffic>>>uplink":        999,
+		"inbound>>>qwq-in-hy2-edge>>>traffic>>>uplink":   100,
+		"inbound>>>qwq-in-hy2-edge>>>traffic>>>downlink": 200,
+		"user>>>qwq-user-alice>>>traffic>>>uplink":       300,
+		"user>>>qwq-user-alice>>>traffic>>>downlink":     400,
+	}
+	res, err := metrics.NormalizeV2(summary, counters, metrics.Filter{}, "epoch-v2", time.Now())
+	if err != nil {
+		t.Fatalf("NormalizeV2 failed: %v", err)
+	}
+	if len(res.Series) != 4 {
+		t.Fatalf("expected 2 inbounds + 2 unique users = 4 series, got %d", len(res.Series))
+	}
+	var foundAlice, foundBob bool
+	for _, s := range res.Series {
+		if s.Kind == "user" && s.ID == "alice" {
+			foundAlice = true
+			if !s.Present || s.UplinkBytes == nil || *s.UplinkBytes != "300" || s.DownlinkBytes == nil || *s.DownlinkBytes != "400" {
+				t.Fatalf("unexpected alice series: %+v", s)
+			}
+		}
+		if s.Kind == "user" && s.ID == "bob" {
+			foundBob = true
+			if s.Present || s.UplinkBytes != nil || s.DownlinkBytes != nil {
+				t.Fatalf("missing bob counters should stay nil: %+v", s)
+			}
+		}
+	}
+	if !foundAlice || !foundBob {
+		t.Fatalf("missing expected user series: alice=%v bob=%v", foundAlice, foundBob)
+	}
+}

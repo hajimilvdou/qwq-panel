@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /* ==========================================================================
- * 插件桥协议（ENG §9）：消息白名单、结构校验、限流——纯函数，无 DOM
+ * 插件桥协议（ENG §9 + STEP-16 沙箱受控委托）：消息白名单、结构校验、限流——纯函数，无 DOM
  * --------------------------------------------------------------------------
  *
  *   插件 iframe                         Shell
@@ -8,16 +8,17 @@
  *   window.parent ── plugin.hello ──▶   校验 source === iframe.contentWindow，仅一次
  *                 ◀── plugin.port ───   新建 MessageChannel，交出 port2
  *   port ─────────── ui.ready ──────▶   去骨架（6 秒未到 → 超时态）
- *   port ◀────────── ui.settings ────   主题 / 动效 / 密度 / token / 可见性
+ *   port ◀────────── ui.settings ────   主题 / 动效 / 密度 / token / 可见性 / public_origin
  *   port ◀────────── ui.route ───────   浏览器前进后退
- *   port ─── ui.resize / ui.toast / ui.navigate / api.invoke / api.subscribe ─▶
- *   port ◀────────── api.result / api.event
+ *   port ─── ui.resize / ui.toast / ui.navigate / ui.confirm / ui.copy
+ *            api.invoke / api.subscribe / events.unsubscribe ───▶
+ *   port ◀────────── api.result / ui.confirm.result / ui.copy.result / api.event
  *
- * 未知类型、结构不符、超过 1 MiB 的消息一律丢弃（不回错，避免给探测者信号）。
+ * 未知类型或结构不符的消息丢弃；超过 4 MiB 的 api.invoke/api.call 返回显式 PAYLOAD_TOO_LARGE 错误。
  * ========================================================================== */
 
 export const READY_TIMEOUT_MS = 6000;
-export const MAX_MESSAGE_BYTES = 1024 * 1024;
+export const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 export const HEIGHT_MIN = 240;
 export const HEIGHT_MAX = 4000;
 export const TOAST_MAX_CHARS = 120;
@@ -28,20 +29,25 @@ export const OPERATION_RE = /^[a-z0-9._-]+$/;
 
 /* ------------------------------------------------------------------ 消息类型 */
 
+export type RpcId = string | number;
+
 export type PluginToShell =
   | { t: 'ui.ready' }
   | { t: 'ui.resize'; height: number }
   | { t: 'ui.toast'; text: string }
   | { t: 'ui.navigate'; path: string }
+  | { t: 'ui.confirm'; id: RpcId; title: string; body: string; confirm_label?: string; danger?: boolean }
+  | { t: 'ui.copy'; id: RpcId; text: string; label?: string }
   | {
       t: 'api.invoke';
-      id: string;
+      id: RpcId;
       operation: string;
       payload: Record<string, unknown>;
       subject?: string;
       expected_revision?: string;
     }
-  | { t: 'api.subscribe'; subjects: string[] };
+  | { t: 'api.subscribe'; subjects: string[] }
+  | { t: 'events.unsubscribe'; subjects: string[] };
 
 export interface HostSettings {
   theme: 'light' | 'dark';
@@ -49,13 +55,18 @@ export interface HostSettings {
   density: 'comfortable' | 'compact';
   tokens: Record<string, string>;
   visible: boolean;
+  public_origin?: string;
 }
 
 export type ShellToPlugin =
   | ({ t: 'ui.settings' } & HostSettings)
   | { t: 'ui.route'; path: string }
-  | { t: 'api.result'; id: string; ok: true; data: unknown }
-  | { t: 'api.result'; id: string; ok: false; problem: { code: string; detail?: string; status?: number } }
+  | { t: 'api.result'; id: RpcId; ok: true; data: unknown }
+  | { t: 'api.result'; id: RpcId; ok: false; problem: { code: string; detail?: string; status?: number } }
+  | { t: 'ui.confirm.result'; id: RpcId; ok: true; data: { confirmed: boolean } }
+  | { t: 'ui.confirm.result'; id: RpcId; ok: false; problem: { code: string; detail?: string; status?: number } }
+  | { t: 'ui.copy.result'; id: RpcId; ok: true; data?: { copied: boolean } }
+  | { t: 'ui.copy.result'; id: RpcId; ok: false; problem: { code: string; detail?: string; status?: number } }
   | { t: 'api.event'; event: unknown };
 
 /* ------------------------------------------------------------------ 校验 */
@@ -63,6 +74,8 @@ export type ShellToPlugin =
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isStr = (v: unknown, max = 4096): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
+const isRpcId = (v: unknown): v is RpcId =>
+  (typeof v === 'string' && v.length > 0 && v.length <= 128) || (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0);
 
 const utf8Encoder = new TextEncoder();
 
@@ -100,6 +113,15 @@ export function parseHello(data: unknown): { kitMajor: number } | null {
   return typeof k === 'number' && Number.isInteger(k) && k > 0 ? { kitMajor: k } : null;
 }
 
+/** 识别超限的 api.invoke / api.call 帧并提取其 id，便于宿主返回显式 PAYLOAD_TOO_LARGE 错误而非静默丢弃 */
+export function extractOversizedApiCallId(data: unknown): RpcId | null {
+  if (!isObj(data)) return null;
+  if ((data.t === 'api.invoke' || data.t === 'api.call') && isRpcId(data.id) && sizeOf(data) > MAX_MESSAGE_BYTES) {
+    return data.id;
+  }
+  return null;
+}
+
 /** port 上收到的消息 → 合法消息或 null */
 export function parsePluginMessage(data: unknown): PluginToShell | null {
   if (!isObj(data) || typeof data.t !== 'string') return null;
@@ -113,25 +135,59 @@ export function parsePluginMessage(data: unknown): PluginToShell | null {
       return isStr(data.text, 10_000) ? { t: 'ui.toast', text: data.text } : null;
     case 'ui.navigate':
       return isStr(data.path, 2048) ? { t: 'ui.navigate', path: data.path } : null;
-    case 'api.invoke': {
-      if (!isStr(data.id, 128) || !isStr(data.operation, 128)) return null;
-      const payload = data.payload === undefined ? {} : data.payload;
+    case 'ui.confirm': {
+      if (!isRpcId(data.id) || !isStr(data.title, 200)) return null;
+      const body = data.body === undefined ? '' : typeof data.body === 'string' && data.body.length <= 2000 ? data.body : null;
+      if (body === null) return null;
+      if (data.confirm_label !== undefined && !isStr(data.confirm_label, 64)) return null;
+      return {
+        t: 'ui.confirm',
+        id: data.id,
+        title: data.title,
+        body,
+        confirm_label: data.confirm_label as string | undefined,
+        danger: Boolean(data.danger),
+      };
+    }
+    case 'ui.copy': {
+      if (!isRpcId(data.id) || !isStr(data.text, 65_536)) return null;
+      if (data.label !== undefined && !isStr(data.label, 200)) return null;
+      return {
+        t: 'ui.copy',
+        id: data.id,
+        text: data.text,
+        label: data.label as string | undefined,
+      };
+    }
+    case 'api.invoke':
+    case 'api.call': {
+      const opName = data.t === 'api.invoke' ? data.operation : data.action;
+      const rawPayload = data.t === 'api.invoke' ? data.payload : data.input;
+      if (!isRpcId(data.id) || !isStr(opName, 128)) return null;
+      const payload = rawPayload === undefined ? {} : rawPayload;
       if (!isObj(payload)) return null;
       if (data.subject !== undefined && !isStr(data.subject, 512)) return null;
       if (data.expected_revision !== undefined && !isStr(data.expected_revision, 128)) return null;
       return {
         t: 'api.invoke',
         id: data.id,
-        operation: data.operation,
+        operation: opName,
         payload,
         subject: data.subject as string | undefined,
         expected_revision: data.expected_revision as string | undefined,
       };
     }
-    case 'api.subscribe': {
+    case 'api.subscribe':
+    case 'events.subscribe': {
       const s = data.subjects;
       if (!Array.isArray(s) || s.length > 32 || !s.every((x) => isStr(x, 512))) return null;
       return { t: 'api.subscribe', subjects: s as string[] };
+    }
+    case 'events.unsubscribe':
+    case 'api.unsubscribe': {
+      const s = data.subjects;
+      if (!Array.isArray(s) || s.length > 64 || !s.every((x) => isStr(x, 512))) return null;
+      return { t: 'events.unsubscribe', subjects: s as string[] };
     }
     default:
       return null;
@@ -140,10 +196,10 @@ export function parsePluginMessage(data: unknown): PluginToShell | null {
 
 export const clampHeight = (h: number): number => Math.round(Math.min(HEIGHT_MAX, Math.max(HEIGHT_MIN, h)));
 
-/** 插件 toast 文本：去控制字符、压空白、截断 */
-export function cleanToast(text: string): string {
+/** 插件 toast / 对话框单行文本：去控制字符、压空白、截断 */
+export function cleanToast(text: string, maxChars = TOAST_MAX_CHARS): string {
   const s = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return s.length > TOAST_MAX_CHARS ? s.slice(0, TOAST_MAX_CHARS - 1) + '…' : s;
+  return s.length > maxChars ? s.slice(0, maxChars - 1) + '…' : s;
 }
 
 /**

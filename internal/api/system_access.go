@@ -3,11 +3,16 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
-	"strings"
 
+	"github.com/qwq-panel/qwq/internal/gateway"
+	"github.com/qwq-panel/qwq/internal/operations"
 	"github.com/qwq-panel/qwq/internal/panelaccess"
+	"github.com/qwq-panel/qwq/internal/platform/config"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
+	"github.com/qwq-panel/qwq/internal/storage"
 )
 
 // panelAccessDTO is the PanelAccessSettings schema.
@@ -89,6 +94,18 @@ func (a *api) putSystemAccess(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
+	if a.d.Identity != nil {
+		u, uerr := a.d.Identity.User(r.Context(), act.ID)
+		if uerr != nil {
+			a.fail(w, r, uerr)
+			return
+		}
+		if u.MFAEnabled && !act.MFA {
+			a.fail(w, r, problem.New(problem.MFARequired,
+				"Updating panel access settings requires a fresh second factor."))
+			return
+		}
+	}
 	if a.d.Access == nil {
 		a.fail(w, r, problem.New(problem.Unavailable, "Panel access settings are not available."))
 		return
@@ -107,16 +124,36 @@ func (a *api) putSystemAccess(w http.ResponseWriter, r *http.Request) {
 		PanelDomain:             req.PanelDomain,
 		AutoDisableOnDomain:     req.AutoDisableOnDomain,
 		ExpectedRevision:        req.ExpectedRevision,
+		AuditTx: func(ctx context.Context, tx *storage.Tx, next panelaccess.Snapshot, changed bool) error {
+			details, _ := json.Marshal(map[string]any{
+				"port":              next.Port,
+				"port_changed":      changed,
+				"entry_gate_active": next.EntryGateActive(),
+				"disguise":          next.EffectiveDisguise(),
+				"panel_domain":      next.PanelDomain,
+				"bypass_reason":     next.DomainAutoBypassReason(),
+			})
+			return operations.Audit(ctx, tx, operations.AuditRecord{
+				Actor:     act,
+				Action:    "system.access.update",
+				Subject:   "system/access",
+				Outcome:   operations.AuditSuccess,
+				Details:   details,
+				NodeID:    a.d.NodeID,
+				TraceID:   gateway.TraceID(r.Context()),
+				RequestID: requestID(r),
+			})
+		},
 	})
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
 	// Keep the administrator's current browser tab authorized immediately when
-	// the secret entry path is active or rotated.
-	if snap.EntryGateActive() {
-		secure := r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
-		snap.SetGateCookie(w, secure)
+	// a secret entry path is configured or rotated (including bare-IP rescue).
+	if rawEntry := config.NormalizeEntryPath(snap.EntryPath); rawEntry != "" {
+		secure := snap.TLSMode != "" || r.TLS != nil
+		snap.SetGateCookieForPath(w, rawEntry, secure)
 	}
 	a.d.Logger.InfoContext(r.Context(), "panel access settings updated",
 		"actor", act.ID,

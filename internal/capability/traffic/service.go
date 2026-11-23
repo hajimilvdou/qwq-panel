@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qwq-panel/qwq/internal/capability/local"
 	"github.com/qwq-panel/qwq/internal/sandbox"
 )
 
@@ -95,9 +96,22 @@ func (execRunner) Run(ctx context.Context, name string, args []string, stdin []b
 	return cmd.CombinedOutput()
 }
 
+const (
+	defaultTrafficStateDir  = "/var/lib/qwq-capability"
+	defaultTrafficStateFile = "traffic-state.json"
+	defaultTrafficLockFile  = "traffic-state.lock"
+)
+
+type persistedTrafficState struct {
+	EgressIf string      `json:"egress_if,omitempty"`
+	Classes  []ClassSpec `json:"classes"`
+	Revision string      `json:"revision"`
+}
+
 // Service 管理独立 table inet qwq_shape 与 tc HTB 整形规则。
 type Service struct {
 	runner Runner
+	state  local.State
 
 	mu       sync.Mutex
 	classes  []ClassSpec
@@ -105,19 +119,68 @@ type Service struct {
 	revision string
 }
 
-// NewService 创建默认使用受控本地执行器的 TrafficService。
+// NewService 创建默认使用受控本地执行器与持久化文件状态的 TrafficService。
 func NewService() *Service {
-	return NewServiceWithRunner(execRunner{})
+	st := local.FileState{
+		Directory:     defaultTrafficStateDir,
+		Name:          defaultTrafficStateFile,
+		LockDirectory: defaultTrafficStateDir,
+		LockName:      defaultTrafficLockFile,
+		Trust:         sandbox.TrustPolicy{UID: 0},
+		Mode:          0o600,
+	}
+	return NewServiceWithState(execRunner{}, st)
 }
 
-// NewServiceWithRunner 使用自定义 Runner 创建 TrafficService（供单元测试）。
+// NewServiceWithRunner 使用自定义 Runner 创建纯内存 TrafficService（供单元测试）。
 func NewServiceWithRunner(r Runner) *Service {
+	return NewServiceWithState(r, nil)
+}
+
+// NewServiceWithState 使用自定义 Runner 与持久化 State 创建 TrafficService。
+func NewServiceWithState(r Runner, state local.State) *Service {
 	if r == nil {
 		r = execRunner{}
 	}
-	s := &Service{runner: r}
+	s := &Service{runner: r, state: state}
 	s.revision = computeRevision("", nil)
 	return s
+}
+
+func (s *Service) loadPersistedLocked() {
+	if s.state == nil {
+		return
+	}
+	raw, exists, err := s.state.Read()
+	if err != nil || !exists || len(bytes.TrimSpace(raw)) == 0 {
+		return
+	}
+	var st persistedTrafficState
+	if json.Unmarshal(raw, &st) != nil {
+		return
+	}
+	s.egressIf = st.EgressIf
+	s.classes = st.Classes
+	if st.Revision != "" {
+		s.revision = st.Revision
+	} else {
+		s.revision = computeRevision(st.EgressIf, st.Classes)
+	}
+}
+
+func (s *Service) savePersistedLocked() error {
+	if s.state == nil {
+		return nil
+	}
+	raw, err := json.Marshal(persistedTrafficState{
+		EgressIf: s.egressIf,
+		Classes:  s.classes,
+		Revision: s.revision,
+	})
+	if err != nil {
+		return err
+	}
+	return s.state.Commit(raw)
 }
 
 // Run 分发 traffic.status / traffic.apply / traffic.clear 能力请求。
@@ -138,6 +201,7 @@ func (s *Service) handleStatus(ctx context.Context) (sandbox.CapabilityResponse,
 	egressIf, supported, ifbOK, reason := s.probeCapabilities(ctx)
 
 	s.mu.Lock()
+	s.loadPersistedLocked()
 	if egressIf != "" {
 		s.egressIf = egressIf
 	}
@@ -177,6 +241,12 @@ func (s *Service) handleApply(ctx context.Context, payload []byte) (sandbox.Capa
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.state != nil {
+		if unlock, lockErr := s.state.Lock(ctx); lockErr == nil {
+			defer unlock()
+		}
+		s.loadPersistedLocked()
+	}
 	if in.ExpectedRevision != "" && in.ExpectedRevision != s.revision {
 		return sandbox.CapabilityResponse{Code: "PRECONDITION_FAILED", Error: "流量整形 revision 不匹配，请刷新后重试"}, nil
 	}
@@ -189,6 +259,7 @@ func (s *Service) handleApply(ctx context.Context, payload []byte) (sandbox.Capa
 	s.egressIf = egressIf
 	s.classes = normalized
 	s.revision = computeRevision(egressIf, normalized)
+	_ = s.savePersistedLocked()
 	return okResponse(ApplyPayload{
 		Revision:       s.revision,
 		DegradedUplink: degradedUplink,
@@ -207,6 +278,12 @@ func (s *Service) handleClear(ctx context.Context, payload []byte) (sandbox.Capa
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.state != nil {
+		if unlock, lockErr := s.state.Lock(ctx); lockErr == nil {
+			defer unlock()
+		}
+		s.loadPersistedLocked()
+	}
 	if in.ExpectedRevision != "" && in.ExpectedRevision != s.revision {
 		return sandbox.CapabilityResponse{Code: "PRECONDITION_FAILED", Error: "流量整形 revision 不匹配，请刷新后重试"}, nil
 	}
@@ -222,6 +299,7 @@ func (s *Service) handleClear(ctx context.Context, payload []byte) (sandbox.Capa
 
 	s.classes = nil
 	s.revision = computeRevision(egressIf, nil)
+	_ = s.savePersistedLocked()
 	return okResponse(ClearPayload{Revision: s.revision})
 }
 
@@ -266,8 +344,9 @@ func (s *Service) detectDefaultInterface(ctx context.Context) (string, error) {
 }
 
 func (s *Service) applyKernelRules(ctx context.Context, egressIf string, classes []ClassSpec, ifbOK bool, degradedUplink *bool) error {
-	// 1. 建立独立 nftables 表 inet qwq_shape（与 firewall.v1 的 inet qwq 完全隔离）
-	nftDoc := "table inet qwq_shape {}\nflush table inet qwq_shape\ntable inet qwq_shape {\n  chain mark_preserve {\n    type filter hook postrouting priority mangle; policy accept;\n  }\n}\n"
+	// 1. 建立独立 nftables 表 inet qwq_shape（与 firewall.v1 的 inet qwq 完全隔离），
+	//    并将保留区 fwmark 同步写入 conntrack mark 供 ifb0 入向 connmark 恢复。
+	nftDoc := "table inet qwq_shape {}\nflush table inet qwq_shape\ntable inet qwq_shape {\n  chain mark_preserve {\n    type filter hook postrouting priority mangle; policy accept;\n    meta mark >= 0x5100 meta mark <= 0x51ff ct mark set meta mark\n  }\n}\n"
 	if out, err := s.runner.Run(ctx, "nft", []string{"-f", "-"}, []byte(nftDoc)); err != nil {
 		return fmt.Errorf("初始化 inet qwq_shape 失败: %s", strings.TrimSpace(string(out)))
 	}
@@ -318,7 +397,7 @@ func (s *Service) applyKernelRules(ctx context.Context, egressIf string, classes
 	return nil
 }
 
-func (s *Service) applyIFBUplink(ctx context.Context, egressIf string, classes []ClassSpec) error {
+func (s *Service) applyIFBUplink(ctx context.Context, egressIf string, classes []ClassSpec) (retErr error) {
 	if _, err := s.runner.Run(ctx, "ip", []string{"link", "set", "dev", "ifb0", "up"}, nil); err != nil {
 		return err
 	}
@@ -326,7 +405,14 @@ func (s *Service) applyIFBUplink(ctx context.Context, egressIf string, classes [
 	if _, err := s.runner.Run(ctx, "tc", []string{"qdisc", "add", "dev", egressIf, "handle", "ffff:", "ingress"}, nil); err != nil {
 		return err
 	}
-	if _, err := s.runner.Run(ctx, "tc", []string{"filter", "add", "dev", egressIf, "parent", "ffff:", "protocol", "all", "u32", "match", "u32", "0", "0", "action", "mirred", "egress", "redirect", "dev", "ifb0"}, nil); err != nil {
+	// If any subsequent ifb0 configuration step fails, clean up the ingress qdisc
+	// immediately so half-configured redirection cannot blackhole inbound traffic.
+	defer func() {
+		if retErr != nil {
+			_, _ = s.runner.Run(ctx, "tc", []string{"qdisc", "del", "dev", egressIf, "ingress"}, nil)
+		}
+	}()
+	if _, err := s.runner.Run(ctx, "tc", []string{"filter", "add", "dev", egressIf, "parent", "ffff:", "protocol", "all", "u32", "match", "u32", "0", "0", "action", "connmark", "action", "mirred", "egress", "redirect", "dev", "ifb0"}, nil); err != nil {
 		return err
 	}
 	_, _ = s.runner.Run(ctx, "tc", []string{"qdisc", "del", "dev", "ifb0", "root"}, nil)

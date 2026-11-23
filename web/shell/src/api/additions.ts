@@ -10,7 +10,7 @@
  *      由插件负责、宿主不校验）、Operation 的 args 补充。
  * 改 openapi 后跑 `npm run gen:api`，不要手改 schema.d.ts。
  * ========================================================================== */
-import type { components } from './schema';
+import type { components, operations } from './schema';
 
 type S = components['schemas'];
 
@@ -28,168 +28,32 @@ export type TotpConfirmResult = S['TotpConfirmResult'];
 
 /* ------------------------------------------------------------------ 2 · AI 服务（缺口 2） */
 
-export type AiProviderKind = 'openai_compatible' | 'anthropic_compatible';
+export type AiProviderKind = NonNullable<S['AiProvider']['kind']>;
 export type ReasoningEffort = string;
 
-export type AiProvider = Omit<S['AiProvider'], 'kind'> & {
-  kind?: AiProviderKind;
-  models?: string[];
-  reasoning_effort?: ReasoningEffort;
-  max_context_tokens?: number;
-};
-export type AiProviderCreateRequest = Omit<S['AiProviderCreateRequest'], 'kind'> & {
-  kind?: AiProviderKind;
-  models?: string[];
-  reasoning_effort?: ReasoningEffort;
-  max_context_tokens?: number;
-};
-export type AiProviderUpdateRequest = S['AiProviderUpdateRequest'] & {
-  kind?: AiProviderKind;
-  models?: string[];
-  reasoning_effort?: ReasoningEffort;
-  max_context_tokens?: number;
-};
+export type AiProvider = S['AiProvider'];
+export type AiProviderCreateRequest = S['AiProviderCreateRequest'];
+export type AiProviderUpdateRequest = S['AiProviderUpdateRequest'];
 export type AiProviderTestResult = S['AiProviderTestResult'];
+export type AiProviderFetchModelsRequest = S['AiProviderFetchModelsRequest'];
+export type AiProviderFetchModelsResult = S['AiProviderFetchModelsResult'];
 
-export interface AiProviderFetchModelsRequest {
-  provider_id?: string;
-  kind?: AiProviderKind;
-  base_url?: string;
-  api_key?: string;
-}
+export type ExternalCliCore = S['AgentCoreAuthStatus']['core'];
+export type AgentCoreLoginState = S['AgentCoreLoginState'];
+export type AgentCoreAuthStatus = S['AgentCoreAuthStatus'];
+export type AgentCoreLoginRequest = S['AgentCoreLoginRequest'];
 
-export interface AiProviderFetchModelsResult {
-  ok: boolean;
-  models: string[];
-  latency_ms?: number;
-  category?: NonNullable<AiProviderTestResult['category']>;
-}
-
-export type ExternalCliCore = 'codex' | 'claude-code' | 'opencode';
-
-export interface AgentCoreLoginState {
-  state: 'pending' | 'succeeded' | 'failed' | 'cancelled' | 'expired';
-  verification_url?: string;
-  user_code?: string;
-  message?: string;
-  output_tail?: string[];
-  started_at?: string;
-  updated_at?: string;
-}
-
-export interface AgentCoreAuthStatus {
-  core: ExternalCliCore;
-  display_name: string;
-  binary: string;
-  installed: boolean;
-  install_hint: string;
-  logged_in: boolean;
-  auth_method: 'oauth' | 'token' | 'none';
-  updated_at?: string;
-  active_login?: AgentCoreLoginState;
-}
-
-export interface AgentCoreLoginRequest {
-  mode: 'device' | 'token';
-  token?: string;
-}
-
-export type WorkspaceArea = 'mcp' | 'skills' | 'prompts';
-
-export interface AgentCorePromptTarget {
-  core: 'native' | 'claude-code' | 'codex' | 'opencode';
-  display_name: string;
-  rel_path: string;
-  file_name: string;
-  description: string;
-}
-
-export interface AgentWorkspaceFileEntry {
-  area: WorkspaceArea;
-  path: string;
-  name: string;
-  group?: string;
-  size: number;
-  is_text: boolean;
-  updated_at: string;
-}
-
-export interface AgentWorkspaceListResult {
-  area: WorkspaceArea;
-  directory_hint: string;
-  items: AgentWorkspaceFileEntry[];
-  prompt_targets?: AgentCorePromptTarget[];
-}
-
-export interface AgentWorkspaceFileContent {
-  area: WorkspaceArea;
-  path: string;
-  content: string;
-  size: number;
-  updated_at?: string;
-}
-
-export interface AgentWorkspaceWriteRequest {
-  area: WorkspaceArea;
-  path: string;
-  content?: string;
-  content_base64?: string;
-}
-
-export interface AgentMCPServerEntry {
-  id: string;
-  name: string;
-  description?: string;
-  transport: 'stdio' | 'http';
-  command?: string;
-  args?: string[];
-  url?: string;
-  env?: Record<string, string>;
-  enabled: boolean;
-  source?: string;
-}
-
-export interface AgentRegistrySourceMeta {
-  id: string;
-  name: string;
-  kind: 'skill' | 'mcp';
-  repo: string;
-  url: string;
-  description: string;
-}
-
-export interface AgentRegistryItem {
-  id: string;
-  slug: string;
-  kind: 'skill' | 'mcp';
-  source: string;
-  source_name: string;
-  name: string;
-  description: string;
-  repo: string;
-  repo_path?: string;
-  repo_url: string;
-  raw_url?: string;
-  tags?: string[];
-  installed: boolean;
-  mcp_template?: AgentMCPServerEntry;
-}
-
-export interface AgentRegistrySearchResult {
-  sources: AgentRegistrySourceMeta[];
-  items: AgentRegistryItem[];
-  live_refreshed: boolean;
-  cached_at?: string;
-}
-
-export interface AgentRegistryInstallResult {
-  id: string;
-  kind: 'skill' | 'mcp';
-  installed: boolean;
-  target: string;
-  from_live: boolean;
-  message: string;
-}
+export type WorkspaceArea = S['AgentWorkspaceFileEntry']['area'];
+export type AgentCorePromptTarget = S['AgentCorePromptTarget'];
+export type AgentWorkspaceFileEntry = S['AgentWorkspaceFileEntry'];
+export type AgentWorkspaceListResult = S['AgentWorkspaceListResult'];
+export type AgentWorkspaceFileContent = S['AgentWorkspaceFileContent'];
+export type AgentWorkspaceWriteRequest = S['AgentWorkspaceWriteRequest'];
+export type AgentMCPServerEntry = S['AgentMCPServerEntry'];
+export type AgentRegistrySourceMeta = S['AgentRegistrySourceMeta'];
+export type AgentRegistryItem = S['AgentRegistryItem'];
+export type AgentRegistrySearchResult = S['AgentRegistrySearchResult'];
+export type AgentRegistryInstallResult = S['AgentRegistryInstallResult'];
 
 /** GET /api/v1/agent-cores 的条目：available/reason */
 export type AgentCoreInfo = S['AgentCoreInfo'];
@@ -223,6 +87,10 @@ export type CategoryColor =
 /* ------------------------------------------------------------------ 4 · 安装前检查（缺口 4） */
 
 export type PluginPackageInspection = S['PluginPackageInspection'];
+export type PluginPackageFetchRequest = S['PluginPackageFetchRequest'];
+export type PluginTrustKey = S['PluginTrustKey'];
+export type PluginTrustKeyList = S['PluginTrustKeyList'];
+export type PluginTrustKeyCreateRequest = S['PluginTrustKeyCreateRequest'];
 
 /* ------------------------------------------------------------------ 5 · 动作目录（缺口 5） */
 
@@ -256,36 +124,9 @@ export type PluginLogPage = S['PluginLogPage'];
 /** GET /api/v1/system；listen/data_dir 仅 admin，plugins_enabled 是布尔，无 built_at */
 export type SystemInfo = S['SystemInfo'];
 
-export type DisguiseMode = 'drop' | 'nginx_404' | 'nginx_403' | 'blank_404' | 'custom_html';
-
-export interface PanelAccessSettings {
-  listen_host: string;
-  port: number;
-  listen: string;
-  tls_mode: string;
-  entry_path: string;
-  effective_entry_path: string;
-  entry_gate_active: boolean;
-  disguise: DisguiseMode;
-  disguise_html: string;
-  panel_domain: string;
-  auto_disable_on_domain: boolean;
-  bypass_reason?: string;
-  port_changed?: boolean;
-  revision: number;
-  updated_at: string;
-}
-
-export interface PanelAccessUpdateRequest {
-  port?: number;
-  entry_path?: string;
-  generate_random_entry_path?: boolean;
-  disguise?: DisguiseMode;
-  disguise_html?: string;
-  panel_domain?: string;
-  auto_disable_on_domain?: boolean;
-  expected_revision?: number;
-}
+export type DisguiseMode = S['PanelAccessSettings']['disguise'];
+export type PanelAccessSettings = S['PanelAccessSettings'];
+export type PanelAccessUpdateRequest = operations['putSystemAccess']['requestBody']['content']['application/json'];
 
 /* ------------------------------------------------------------------ 小组件结果形状（manifest 1.3，插件负责，宿主不校验） */
 

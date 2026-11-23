@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/qwq-panel/qwq/internal/capability/sysctl"
 	"github.com/qwq-panel/qwq/internal/sandbox"
 )
 
@@ -130,5 +132,58 @@ func TestCapabilityRootRequirement(t *testing.T) {
 	output := io.Discard
 	if code := run(t.Context(), nil, output, output, func(string) string { return "" }, func() int { return 123 }); code == 0 {
 		t.Fatal("非 root 进程被接受")
+	}
+}
+
+func TestCapabilityDispatchesSysctlApplyAndRollback(t *testing.T) {
+	managedPath := filepath.Join(t.TempDir(), "99-qwq-tcpfit.conf")
+	var ranArgs [][]string
+	svc := &sysctl.Service{
+		ManagedPath: managedPath,
+		RunCmd: func(_ context.Context, _ string, args []string) ([]byte, error) {
+			ranArgs = append(ranArgs, append([]string(nil), args...))
+			return []byte("ok"), nil
+		},
+	}
+	base := &fixtureCapabilityRunner{}
+	server := newCapabilityServer(newSysctlDispatchRunner(base, svc), slog.New(slog.DiscardHandler), "test")
+
+	// 1. 允许白名单内的 bbr + fq 参数
+	okResp := server.handle(t.Context(), sandbox.CapabilityRequest{
+		Op:         "sysctl.apply",
+		ID:         "proxy.advanced",
+		ParamsJSON: []byte(`{"values":{"net.core.default_qdisc":"fq","net.ipv4.tcp_congestion_control":"bbr"}}`),
+	})
+	if !okResp.OK {
+		t.Fatalf("sysctl.apply(bbr) 应成功，实际: %+v", okResp)
+	}
+	if _, err := os.Stat(managedPath); err != nil {
+		t.Fatalf("sysctl.apply 未落盘配置文件: %v", err)
+	}
+
+	// 2. 严禁全局 tcp_congestion_control=brutal
+	badResp := server.handle(t.Context(), sandbox.CapabilityRequest{
+		Op:         "sysctl.apply",
+		ID:         "proxy.advanced",
+		ParamsJSON: []byte(`{"values":{"net.ipv4.tcp_congestion_control":"brutal"}}`),
+	})
+	if badResp.OK || badResp.Code != "VALIDATION_FAILED" {
+		t.Fatalf("全局 brutal 必须被拒绝，实际: %+v", badResp)
+	}
+
+	// 3. sysctl.rollback 删除托管文件并恢复基线
+	rbResp := server.handle(t.Context(), sandbox.CapabilityRequest{
+		Op:         "sysctl.rollback",
+		ID:         "proxy.advanced",
+		ParamsJSON: []byte(`{"baseline":{"net.ipv4.tcp_congestion_control":"cubic"}}`),
+	})
+	if !rbResp.OK {
+		t.Fatalf("sysctl.rollback 应成功，实际: %+v", rbResp)
+	}
+	if _, err := os.Stat(managedPath); !os.IsNotExist(err) {
+		t.Fatalf("sysctl.rollback 应移除托管文件")
+	}
+	if base.calls != 0 || len(ranArgs) < 2 {
+		t.Fatalf("sysctl 请求应由 sysctl.Service 处理，实际 base.calls=%d ranArgs=%v", base.calls, ranArgs)
 	}
 }

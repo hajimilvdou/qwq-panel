@@ -406,13 +406,14 @@ type CanonicalMessage struct {
 }
 
 type CanonicalRequest struct {
-	Model       string             `json:"model"`
-	System      string             `json:"system,omitempty"`
-	Messages    []CanonicalMessage `json:"messages"`
-	MaxTokens   int                `json:"max_tokens,omitempty"`
-	Temperature *float64           `json:"temperature,omitempty"`
-	Stream      bool               `json:"stream"`
-	SessionHint string             `json:"-"`
+	Model                string             `json:"model"`
+	System               string             `json:"system,omitempty"`
+	Messages             []CanonicalMessage `json:"messages"`
+	MaxTokens            int                `json:"max_tokens,omitempty"`
+	Temperature          *float64           `json:"temperature,omitempty"`
+	Stream               bool               `json:"stream"`
+	SessionHint          string             `json:"-"`
+	EstimatedInputTokens int                `json:"-"`
 }
 
 type StreamUsage struct {
@@ -545,6 +546,15 @@ func ParseDownstreamRequest(protoIn ProtocolKind, urlModel string, raw []byte) (
 		}
 		cr.SessionHint = prefix
 	}
+	textBytes := len(cr.System)
+	for _, m := range cr.Messages {
+		textBytes += len(m.Content)
+	}
+	est := max(textBytes/4, len(raw)/6)
+	if est < 1 && len(raw) > 0 {
+		est = 1
+	}
+	cr.EstimatedInputTokens = est
 	return cr, nil
 }
 
@@ -584,7 +594,19 @@ func EncodeUpstreamRequest(ch *UpstreamChannel, protoIn ProtocolKind, rawOrigina
 	}
 	base := strings.TrimRight(ch.BaseURL, "/")
 
-	if protoIn == upProto && upModel == ir.Model && len(rawOriginal) > 0 {
+	if protoIn == upProto && len(rawOriginal) > 0 {
+		passthroughBody := rawOriginal
+		if upModel != ir.Model && upProto != ProtoGeminiNative {
+			var rawMap map[string]json.RawMessage
+			if err := json.Unmarshal(rawOriginal, &rawMap); err == nil && rawMap != nil {
+				if encodedModel, mErr := json.Marshal(upModel); mErr == nil {
+					rawMap["model"] = encodedModel
+					if patched, mErr := json.Marshal(rawMap); mErr == nil {
+						passthroughBody = patched
+					}
+				}
+			}
+		}
 		switch upProto {
 		case ProtoAnthropicMessages:
 			hdrs := map[string]string{
@@ -597,22 +619,26 @@ func EncodeUpstreamRequest(ch *UpstreamChannel, protoIn ProtocolKind, rawOrigina
 			} else {
 				hdrs["x-api-key"] = cred
 			}
-			return base + "/v1/messages", hdrs, rawOriginal, nil
+			return base + "/v1/messages", hdrs, passthroughBody, nil
 		case ProtoOpenAIResponses:
 			return base + "/v1/responses", map[string]string{
 				"Content-Type":  "application/json",
 				"Authorization": "Bearer " + cred,
-			}, rawOriginal, nil
+			}, passthroughBody, nil
 		case ProtoGeminiNative:
-			return fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse", base, upModel), map[string]string{
+			endpoint := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse", base, upModel)
+			if !ir.Stream {
+				endpoint = fmt.Sprintf("%s/v1beta/models/%s:generateContent", base, upModel)
+			}
+			return endpoint, map[string]string{
 				"Content-Type":   "application/json",
 				"x-goog-api-key": cred,
-			}, rawOriginal, nil
+			}, passthroughBody, nil
 		case ProtoOpenAIChat:
 			return base + "/v1/chat/completions", map[string]string{
 				"Content-Type":  "application/json",
 				"Authorization": "Bearer " + cred,
-			}, rawOriginal, nil
+			}, passthroughBody, nil
 		}
 	}
 

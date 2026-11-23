@@ -112,19 +112,32 @@ func caaRecords(message dnsmessage.Message, name string) (caaAnswer, error) {
 
 func (r *Resolver) lookupCAA(ctx context.Context, name string) (caaAnswer, error) {
 	var selected caaAnswer
-	for index, server := range r.recursive {
+	var lastErr error
+	succeeded := 0
+	for _, server := range r.recursive {
 		message, err := r.query(ctx, server, name, typeCAA, true)
 		if err != nil {
-			return caaAnswer{}, err
+			if fault.Code(err) == "DNS_INVALID_RESPONSE" {
+				return caaAnswer{}, err
+			}
+			lastErr = err
+			continue
 		}
 		answer, err := caaRecords(message, name)
 		if err != nil {
 			return caaAnswer{}, err
 		}
-		if index > 0 && (selected.alias != answer.alias || !slices.Equal(selected.records, answer.records)) {
+		if succeeded > 0 && (selected.alias != answer.alias || !slices.Equal(selected.records, answer.records)) {
 			return caaAnswer{}, fault.New("DNS_NOT_PROPAGATED", "递归 DNS 的 CAA 结果不一致")
 		}
 		selected = answer
+		succeeded++
+	}
+	if succeeded == 0 {
+		if lastErr != nil {
+			return caaAnswer{}, lastErr
+		}
+		return caaAnswer{}, fault.New("DNS_UNAVAILABLE", "无可达的递归 DNS 来源")
 	}
 	return selected, nil
 }

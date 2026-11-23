@@ -22,10 +22,21 @@ func readDeployment(t *testing.T, parts ...string) string {
 
 func TestCapabilityDeploymentBoundaries(t *testing.T) {
 	service := readDeployment(t, "systemd", "qwq-capability.service")
-	for key, want := range map[string]string{"Restart": "no", "RuntimeMaxSec": "120", "MemoryMax": "48M", "TasksMax": "24", "ProtectSystem": "strict", "ProtectHome": "yes", "NoNewPrivileges": "yes", "PrivateNetwork": "no"} {
+	for key, want := range map[string]string{
+		"Restart":               "no",
+		"RuntimeMaxSec":         "120",
+		"MemoryMax":             "48M",
+		"TasksMax":              "24",
+		"ProtectSystem":         "strict",
+		"ProtectHome":           "no",
+		"ProtectKernelTunables": "no",
+		"ProcSubset":            "all",
+		"NoNewPrivileges":       "yes",
+		"PrivateNetwork":        "no",
+	} {
 		values := unitDirectives(service, key)
 		if len(values) != 1 || values[0] != want {
-			t.Errorf("能力 helper %s 未保持约束", key)
+			t.Errorf("能力 helper %s 未保持约束: got=%v want=%q", key, values, want)
 		}
 	}
 	socket := readDeployment(t, "systemd", "qwq-capability.socket")
@@ -35,8 +46,14 @@ func TestCapabilityDeploymentBoundaries(t *testing.T) {
 			t.Errorf("能力 socket %s 未保持访问边界", key)
 		}
 	}
-	if strings.Contains(service, "ReadWritePaths=/home") || strings.Contains(service, "ReadWritePaths=/root") {
-		t.Fatal("能力 helper 放开了完整家目录")
+	rwValues := unitDirectives(service, "ReadWritePaths")
+	if len(rwValues) != 1 {
+		t.Fatalf("能力 helper ReadWritePaths 条数=%d，期望 1", len(rwValues))
+	}
+	for _, wantPath := range []string{"/etc", "/var/lib/qwq-capability", "/root", "/home"} {
+		if !strings.Contains(rwValues[0], wantPath) {
+			t.Errorf("能力 helper ReadWritePaths 缺少 %q: %q", wantPath, rwValues[0])
+		}
 	}
 }
 
@@ -172,8 +189,8 @@ func TestCompatUnitctlDeploymentBoundaries(t *testing.T) {
 	if len(unitDirectives(service, "ReadWritePaths")) != 0 {
 		t.Fatal("compat unitctl 不应声明任何 ReadWritePaths")
 	}
-	if bp := unitDirectives(service, "BindPaths"); len(bp) != 1 || bp[0] != "-/run/credentials:/run/qwq/compat-creds" {
-		t.Fatalf("compat unitctl BindPaths=%v，期望仅限 -/run/credentials:/run/qwq/compat-creds", bp)
+	if bp := unitDirectives(service, "BindPaths"); len(bp) != 1 || bp[0] != "/run/credentials:/run/qwq/compat-creds" {
+		t.Fatalf("compat unitctl BindPaths=%v，期望仅限 /run/credentials:/run/qwq/compat-creds", bp)
 	}
 	socket := readDeployment(t, "compat", "polkit", "qwq-compat-unitctl.socket")
 	for key, want := range map[string]string{

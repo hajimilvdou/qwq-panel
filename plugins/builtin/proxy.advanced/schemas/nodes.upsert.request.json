@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "创建或更新代理节点请求",
+  "description": "支持极简模式（自动分配高位端口与生成全部密钥/SNI/填充方案）与专家模式（完整显式参数）创建或更新 9 协议代理入站。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["simplified", "expert"]
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 96
+    },
+    "protocol": {
+      "type": "string",
+      "enum": [
+        "vless",
+        "vmess",
+        "trojan",
+        "shadowsocks",
+        "shadowsocks2022",
+        "hysteria2",
+        "anytls",
+        "socks5",
+        "http"
+      ]
+    },
+    "transport": {
+      "type": "string",
+      "enum": ["", "raw", "tcp", "ws", "grpc", "xhttp", "udp"]
+    },
+    "security_mode": {
+      "type": "string",
+      "enum": ["", "reality", "tls", "none"]
+    },
+    "listen": {
+      "type": "string",
+      "maxLength": 45
+    },
+    "server": {
+      "type": "string",
+      "maxLength": 253
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "tags": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "maxLength": 32
+      }
+    },
+    "config": {
+      "type": "object"
+    },
+    "sync_core": {
+      "type": "boolean"
+    }
+  },
+  "required": ["protocol"]
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "删除代理节点响应",
+  "type": "object",
+  "properties": {
+    "deleted": {
+      "type": "boolean"
+    },
+    "id": {
+      "type": "string"
+    },
+    "core_synced": {
+      "type": "boolean"
+    },
+    "core_revision": {
+      "type": "string"
+    }
+  },
+  "required": ["deleted", "id", "core_synced"]
+}

@@ -14,10 +14,23 @@ import (
 )
 
 type Forwarder struct {
-	Helper    bridge.Caller
-	HostPorts []uint32
+	Helper        bridge.Caller
+	HostPorts     []uint32
+	HostPortsFunc func() []uint32
 	// Addresses 从宿主有效会话读取并重新核验派发，插件不能选择或伪造。
 	Addresses func(context.Context, hostsvc.CapabilityCall) ([]string, error)
+}
+
+func (f Forwarder) hostPorts() []uint32 {
+	out := slices.Clone(f.HostPorts)
+	if f.HostPortsFunc != nil {
+		for _, p := range f.HostPortsFunc() {
+			if p > 0 && !slices.Contains(out, p) {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
 
 func (f Forwarder) Forward(ctx context.Context, call hostsvc.CapabilityCall) (hostsvc.CapabilityResult, error) {
@@ -58,7 +71,7 @@ func (f Forwarder) Forward(ctx context.Context, call hostsvc.CapabilityCall) (ho
 		if !ok {
 			return validationFailure("必须指定 SSH 端口事务阶段")
 		}
-		params := PortMutation{Kind: "port", NewPort: request.NewPort, Stage: stage, ExpectedRevision: request.ExpectedRevision, TransactionRef: request.TransactionRef, OperationID: call.OperationID, InstanceID: call.InstanceID, HostPorts: slices.Clone(f.HostPorts)}
+		params := PortMutation{Kind: "port", NewPort: request.NewPort, Stage: stage, ExpectedRevision: request.ExpectedRevision, TransactionRef: request.TransactionRef, OperationID: call.OperationID, InstanceID: call.InstanceID, HostPorts: f.hostPorts()}
 		return bridge.Invoke(ctx, f.Helper, call.PluginID, "sshd.write-dropin", params, new(sshdv1.SetPortResponse))
 	case "SetLoginPolicy":
 		request, ok := call.Request.(*sshdv1.SetLoginPolicyRequest)

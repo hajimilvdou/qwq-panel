@@ -36,14 +36,26 @@ type Stats interface {
 	Close() error
 }
 
+const (
+	// DefaultMaxRestarts 是已提交核心进程意外退出时的默认最大有界重启次数；超出后置为退化态，保留驱动 RPC 通道存活。
+	DefaultMaxRestarts        = 5
+	defaultRestartBackoff     = 500 * time.Millisecond
+	defaultRestartMaxBackoff  = 16 * time.Second
+	defaultHealthyResetWindow = 30 * time.Second
+)
+
 // Options 的 Command 由已核验 Binary 提供，Track 必须绑定实例的 SDK Go。
 type Options struct {
-	Socket    string
-	Command   func(context.Context, string) (*exec.Cmd, error)
-	Track     func(func(context.Context)) error
-	API       func(string) (Stats, error)
-	OnExit    func(error)
-	StopGrace time.Duration
+	Socket            string
+	Command           func(context.Context, string) (*exec.Cmd, error)
+	Track             func(func(context.Context)) error
+	API               func(string) (Stats, error)
+	OnExit            func(error)
+	StopGrace         time.Duration
+	MaxRestarts       int
+	RestartBackoff    time.Duration
+	RestartMaxBackoff time.Duration
+	HealthyResetAfter time.Duration
 }
 
 // StartSpec 来自已验证 generation，不从 operation 接受自由程序或参数。
@@ -98,6 +110,21 @@ func New(options Options) (*Manager, error) {
 	}
 	if options.API == nil {
 		options.API = func(socket string) (Stats, error) { return xrayapi.New(socket) }
+	}
+	if options.MaxRestarts == 0 {
+		options.MaxRestarts = DefaultMaxRestarts
+	}
+	if options.RestartBackoff <= 0 {
+		options.RestartBackoff = defaultRestartBackoff
+	}
+	if options.RestartMaxBackoff <= 0 {
+		options.RestartMaxBackoff = defaultRestartMaxBackoff
+	}
+	if options.RestartMaxBackoff < options.RestartBackoff {
+		options.RestartMaxBackoff = options.RestartBackoff
+	}
+	if options.HealthyResetAfter <= 0 {
+		options.HealthyResetAfter = defaultHealthyResetWindow
 	}
 	return &Manager{options: options}, nil
 }
@@ -202,15 +229,106 @@ func (m *Manager) run(background, request context.Context, slot *processSlot) {
 	slot.command, slot.state, slot.epoch = command, "RUNNING", hex.EncodeToString(entropy[:])
 	m.mu.Unlock()
 	slot.started <- nil
-	// 所有退出信息留在本层，原生诊断不会进入错误、日志或响应。
-	waitError := command.Wait()
-	m.mu.Lock()
-	if command.ProcessState != nil {
-		slot.exitCode = command.ProcessState.ExitCode()
-	} else if waitError != nil {
-		slot.exitCode = -1
+
+	// 已提交的核心进程意外退出时，在本管理槽内执行有界指数退避重启（最多 MaxRestarts 次）；
+	// 超出次数后释放槽并触发 OnExit(ErrExited)，同时保持外层插件 RPC 通道存活以便管理员修复配置。
+	maxRestarts := m.options.MaxRestarts
+	backoff := m.options.RestartBackoff
+	restarts := 0
+	for {
+		startedAt := time.Now()
+		// 所有退出信息留在本层，原生诊断不会进入错误、日志或响应。
+		waitError := command.Wait()
+		m.mu.Lock()
+		if command.ProcessState != nil {
+			slot.exitCode = command.ProcessState.ExitCode()
+		} else if waitError != nil {
+			slot.exitCode = -1
+		}
+		unexpected := slot.committed && !slot.intentional && slot.context.Err() == nil && background.Err() == nil
+		m.mu.Unlock()
+
+		if !unexpected || maxRestarts <= 0 {
+			break
+		}
+		if time.Since(startedAt) >= m.options.HealthyResetAfter {
+			restarts = 0
+			backoff = m.options.RestartBackoff
+		}
+
+		var nextCmd *exec.Cmd
+		var nextEpoch string
+		recovered := false
+		for restarts < maxRestarts {
+			restarts++
+			m.mu.Lock()
+			slot.state = "STARTING"
+			oldClient := slot.api
+			slot.api = nil
+			m.mu.Unlock()
+			if oldClient != nil {
+				_ = oldClient.Close()
+			}
+
+			timer := time.NewTimer(backoff)
+			select {
+			case <-slot.context.Done():
+				timer.Stop()
+				m.finish(background, slot)
+				return
+			case <-background.Done():
+				timer.Stop()
+				m.finish(background, slot)
+				return
+			case <-timer.C:
+			}
+			backoff *= 2
+			if backoff > m.options.RestartMaxBackoff {
+				backoff = m.options.RestartMaxBackoff
+			}
+
+			m.mu.Lock()
+			cancelled := slot.intentional || slot.context.Err() != nil || background.Err() != nil
+			m.mu.Unlock()
+			if cancelled {
+				m.finish(background, slot)
+				return
+			}
+
+			cleanupCtx, cleanupCancel := context.WithTimeout(slot.context, time.Second)
+			clearErr := m.clearSocket(cleanupCtx)
+			cleanupCancel()
+			if clearErr != nil {
+				continue
+			}
+
+			cmd, cmdErr := m.options.Command(slot.context, slot.spec.ConfigPath)
+			var nextEntropy [16]byte
+			if cmdErr == nil {
+				_, cmdErr = rand.Read(nextEntropy[:])
+			}
+			if cmdErr != nil || cmd == nil {
+				continue
+			}
+			cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+			cmd.WaitDelay = m.options.StopGrace
+			cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+			if err := cmd.Start(); err != nil {
+				continue
+			}
+			nextCmd = cmd
+			nextEpoch = hex.EncodeToString(nextEntropy[:])
+			recovered = true
+			break
+		}
+		if !recovered {
+			break
+		}
+		m.mu.Lock()
+		slot.command, slot.state, slot.epoch, slot.exitCode = nextCmd, "RUNNING", nextEpoch, -1
+		m.mu.Unlock()
+		command = nextCmd
 	}
-	m.mu.Unlock()
 	m.finish(background, slot)
 }
 

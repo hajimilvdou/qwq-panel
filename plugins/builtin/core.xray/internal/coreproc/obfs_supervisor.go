@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,16 +125,12 @@ func (s *ObfsSupervisor) StartAll(parentCtx context.Context, plans []xrayconfig.
 			s.StopAll(3 * time.Second)
 			return err
 		}
-		cmd, err := s.spawnProcess(args)
+		cmd, waitCh, err := s.spawnProcess(args)
 		if err != nil {
 			s.StopAll(3 * time.Second)
 			return fmt.Errorf("coreproc: start obfs %s: %w", plan.ProfileID, err)
 		}
 		startedAt := time.Now()
-		waitCh := make(chan error, 1)
-		go func(c *exec.Cmd, ch chan error) {
-			ch <- c.Wait()
-		}(cmd, waitCh)
 
 		probeCtx, probeCancel := context.WithCancel(runCtx)
 		probeDone := make(chan error, 1)
@@ -202,6 +199,22 @@ func (s *ObfsSupervisor) Status() (healthy bool, errText string) {
 	return true, ""
 }
 
+// OwnedPIDs 返回当前监管中所有存活 simple-obfs 子进程的 PID，供端口占用归属核验。
+func (s *ObfsSupervisor) OwnedPIDs() []int {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pids := make([]int, 0, len(s.instances))
+	for _, inst := range s.instances {
+		if cmd := inst.currentCmd(); cmd != nil && cmd.Process != nil && cmd.Process.Pid > 0 {
+			pids = append(pids, cmd.Process.Pid)
+		}
+	}
+	return pids
+}
+
 // ======================== 子进程崩溃退避重启与优雅回收 ========================
 
 func (s *ObfsSupervisor) supervise(runCtx context.Context, inst *obfsInstance, waitCh chan error, startedAt time.Time) {
@@ -253,7 +266,7 @@ func (s *ObfsSupervisor) supervise(runCtx context.Context, inst *obfsInstance, w
 				startedAt = time.Now()
 				continue
 			}
-			cmd, err := s.spawnProcess(args)
+			cmd, nextWait, err := s.spawnProcess(args)
 			if err != nil {
 				inst.setCmd(nil)
 				waitCh = make(chan error, 1)
@@ -263,28 +276,53 @@ func (s *ObfsSupervisor) supervise(runCtx context.Context, inst *obfsInstance, w
 			}
 			inst.setCmd(cmd)
 			startedAt = time.Now()
-			nextWait := make(chan error, 1)
-			go func(c *exec.Cmd, ch chan error) {
-				ch <- c.Wait()
-			}(cmd, nextWait)
 			waitCh = nextWait
 		}
 	}
 }
 
-func (s *ObfsSupervisor) spawnProcess(args []string) (*exec.Cmd, error) {
-	var cmd *exec.Cmd
-	if s.cmdFactory != nil {
-		cmd = s.cmdFactory(s.binaryPath, args)
-	} else {
-		cmd = exec.Command(s.binaryPath, args...)
+// spawnThreadLockedProcess 在独立绑定 OS 线程的守护协程内执行 cmd.Start() + cmd.Wait()，
+// 防止 Linux PR_SET_PDEATHSIG 因 Go 调度器回收空闲 M 线程而向 obfs-server 误发 SIGTERM。
+func spawnThreadLockedProcess(buildCmd func() *exec.Cmd) (*exec.Cmd, chan error, error) {
+	type startRes struct {
+		cmd *exec.Cmd
+		err error
+	}
+	started := make(chan startRes, 1)
+	waitCh := make(chan error, 1)
+
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+
+		cmd := buildCmd()
+		if err := cmd.Start(); err != nil {
+			started <- startRes{err: err}
+			close(waitCh)
+			return
+		}
+		started <- startRes{cmd: cmd}
+		waitCh <- cmd.Wait()
+		close(waitCh)
+	}()
+
+	res := <-started
+	if res.err != nil {
+		return nil, nil, res.err
+	}
+	return res.cmd, waitCh, nil
+}
+
+func (s *ObfsSupervisor) spawnProcess(args []string) (*exec.Cmd, chan error, error) {
+	return spawnThreadLockedProcess(func() *exec.Cmd {
+		if s.cmdFactory != nil {
+			return s.cmdFactory(s.binaryPath, args)
+		}
+		cmd := exec.Command(s.binaryPath, args...)
 		cmd.Env = []string{"PATH=/usr/bin:/bin"}
 		setPlatformProcessAttrs(cmd)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	return cmd, nil
+		return cmd
+	})
 }
 
 func (s *ObfsSupervisor) initialBackoffDuration() time.Duration {

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qwq-panel/qwq/sdk/coreapi"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
 
@@ -393,7 +394,7 @@ func (s *proxyStore) UpsertChain(ctx context.Context, in chainUpsertRequest) (ch
 }
 
 func (s *proxyStore) ListChains(ctx context.Context) ([]chainRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB().QueryContext(ctx, `
 		SELECT id, name, enabled, mode, protocol, server, port, config_masked_json,
 		       next_hop_id, apply_default, notes, revision, created_at, updated_at
 		FROM proxy_chains ORDER BY apply_default DESC, id ASC`)
@@ -419,7 +420,7 @@ func (s *proxyStore) ListChains(ctx context.Context) ([]chainRecord, error) {
 }
 
 func (s *proxyStore) ListChainsWithSecrets(ctx context.Context) ([]chainWithSecret, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB().QueryContext(ctx, `
 		SELECT id, name, enabled, mode, protocol, server, port, config_enc, config_masked_json,
 		       next_hop_id, apply_default, notes, revision, created_at, updated_at
 		FROM proxy_chains ORDER BY apply_default DESC, id ASC`)
@@ -467,10 +468,13 @@ func (s *proxyStore) DeleteChain(ctx context.Context, id string) (bool, error) {
 	return n > 0, nil
 }
 
-// renderXrayChainOutbounds 生成 Xray 服务端多跳出口链 JSON（通过 proxySettings.tag 逐跳转发，支持单用户/默认路由）。
+// renderXrayChainOutbounds 生成 Xray 服务端多跳出口链 JSON：
+// 遵循 Xray proxySettings.tag 语义——落地节点通过 proxySettings.tag 指向前置跳 tag，
+// 路由规则使用 coreapi.UserEmail(u.ID)（即 "qwq-user-" + u.ID）并将流量导向链路末端的落地出站 tag。
 func renderXrayChainOutbounds(chains []chainWithSecret, users []userRecord) map[string]any {
 	outbounds := make([]map[string]any, 0, len(chains))
 	enabledByID := make(map[string]chainWithSecret)
+	prevHopByID := make(map[string]string)
 	var defaultTag string
 
 	for _, c := range chains {
@@ -479,6 +483,30 @@ func renderXrayChainOutbounds(chains []chainWithSecret, users []userRecord) map[
 		}
 		enabledByID[c.ID] = c
 	}
+	for _, c := range chains {
+		if _, ok := enabledByID[c.ID]; !ok || c.NextHopID == "" {
+			continue
+		}
+		if _, ok := enabledByID[c.NextHopID]; ok {
+			prevHopByID[c.NextHopID] = c.ID
+		}
+	}
+
+	resolveTerminalID := func(startID string) string {
+		cur := startID
+		visited := map[string]bool{cur: true}
+		for {
+			node, ok := enabledByID[cur]
+			if !ok || node.NextHopID == "" {
+				return cur
+			}
+			if _, nextOK := enabledByID[node.NextHopID]; !nextOK || visited[node.NextHopID] {
+				return cur
+			}
+			visited[node.NextHopID] = true
+			cur = node.NextHopID
+		}
+	}
 
 	for _, c := range chains {
 		if _, ok := enabledByID[c.ID]; !ok {
@@ -486,7 +514,7 @@ func renderXrayChainOutbounds(chains []chainWithSecret, users []userRecord) map[
 		}
 		tag := "chain-" + c.ID
 		if c.ApplyDefault && defaultTag == "" {
-			defaultTag = tag
+			defaultTag = "chain-" + resolveTerminalID(c.ID)
 		}
 		ob := map[string]any{
 			"tag":      tag,
@@ -530,10 +558,8 @@ func renderXrayChainOutbounds(chains []chainWithSecret, users []userRecord) map[
 			}
 			ob["streamSettings"] = map[string]any{"security": "tls", "tlsSettings": tlsCfg}
 		}
-		if c.NextHopID != "" {
-			if _, ok := enabledByID[c.NextHopID]; ok {
-				ob["proxySettings"] = map[string]any{"tag": "chain-" + c.NextHopID}
-			}
+		if prevID, ok := prevHopByID[c.ID]; ok {
+			ob["proxySettings"] = map[string]any{"tag": "chain-" + prevID}
 		}
 		outbounds = append(outbounds, ob)
 	}
@@ -544,10 +570,14 @@ func renderXrayChainOutbounds(chains []chainWithSecret, users []userRecord) map[
 			continue
 		}
 		if _, ok := enabledByID[u.ChainID]; ok {
+			userEmail, err := coreapi.UserEmail(u.ID)
+			if err != nil {
+				userEmail = "qwq-user-" + u.ID
+			}
 			rules = append(rules, map[string]any{
 				"type":        "field",
-				"user":        []string{u.ID},
-				"outboundTag": "chain-" + u.ChainID,
+				"user":        []string{userEmail},
+				"outboundTag": "chain-" + resolveTerminalID(u.ChainID),
 			})
 		}
 	}

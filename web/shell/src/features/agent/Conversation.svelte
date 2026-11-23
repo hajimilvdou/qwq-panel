@@ -166,11 +166,19 @@
     if (s?.title) page.setTitle(s.title);
   });
 
+  let savingOrCancelled = false;
   function startEdit() {
+    savingOrCancelled = false;
     titleDraft = s?.title ?? '';
     editing = true;
   }
+  function cancelEdit() {
+    savingOrCancelled = true;
+    editing = false;
+  }
   async function saveTitle() {
+    if (savingOrCancelled) return;
+    savingOrCancelled = true;
     editing = false;
     const t = titleDraft.trim();
     if (!t || t === s?.title) return;
@@ -244,10 +252,15 @@
             maxlength={80}
             bind:value={titleDraft}
             autofocus
-            onblur={saveTitle}
+            onblur={() => void saveTitle()}
             onkeydown={(e) => {
-              if (e.key === 'Enter') saveTitle();
-              if (e.key === 'Escape') editing = false;
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                void saveTitle();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelEdit();
+              }
             }}
           />
         {:else}

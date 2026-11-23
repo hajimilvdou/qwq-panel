@@ -13,6 +13,15 @@ import (
 
 // registerExtendedOperations 注册用户连接限制、链式代理、TCP Brutal 端口透明接管与 tcpfit 动态调优操作。
 func (i *instance) registerExtendedOperations() {
+	// 全协议节点构建器与外部节点管理（VLESS/VMess/Trojan/SS/SS2022/Hy2/AnyTLS/SOCKS5/HTTP）
+	i.HandleInvoke("nodes.list", i.handleNodesList)
+	i.HandleInvoke("nodes.upsert", i.handleNodesUpsert)
+	i.HandleInvoke("nodes.delete", i.handleNodesDelete)
+	i.HandleInvoke("nodes.probe_sni", i.handleNodesProbeSNI)
+	i.HandleInvoke("nodes.preview_json", i.handleNodesPreviewJSON)
+	i.HandleInvoke("nodes.import_uri", i.handleNodesImportURI)
+	i.HandleInvoke("nodes.test", i.handleNodesTest)
+
 	// 用户连接数与同时在线 IP 限制
 	i.HandleInvoke("users.set_limits", i.handleUsersSetLimits)
 	i.HandleInvoke("users.connections.status", i.handleUsersConnectionsStatus)
@@ -81,7 +90,7 @@ func (i *instance) handleUsersConnectionsStatus(ctx context.Context, req plugins
 	if err := decodeOptionalJSON(req.Payload, &in); err != nil {
 		return pluginsdk.Response{}, err
 	}
-	users, err := i.store.ListUsers(ctx, "", "", 256)
+	users, err := i.store.ListUsers(ctx, "", "", 10000)
 	if err != nil {
 		return pluginsdk.Response{}, err
 	}
@@ -170,7 +179,7 @@ func (i *instance) handleChainsPreview(ctx context.Context, _ pluginsdk.Request)
 	if err != nil {
 		return pluginsdk.Response{}, err
 	}
-	users, err := i.store.ListUsers(ctx, "", "", 256)
+	users, err := i.store.ListUsers(ctx, "", "", 10000)
 	if err != nil {
 		return pluginsdk.Response{}, err
 	}
@@ -258,15 +267,48 @@ func (i *instance) planBrutalBindingUpsert(_ context.Context, req pluginsdk.Requ
 	return plan, nil
 }
 
+func (i *instance) allowedBrutalTargetPorts(ctx context.Context) []uint16 {
+	cfg := i.configSnapshot()
+	seen := make(map[uint16]struct{}, 8)
+	ports := make([]uint16, 0, 8)
+	add := func(p int) {
+		if p < 1 || p > 65535 {
+			return
+		}
+		u := uint16(p)
+		if _, ok := seen[u]; !ok {
+			seen[u] = struct{}{}
+			ports = append(ports, u)
+		}
+	}
+	add(int(cfg.VLESSPort))
+	add(int(cfg.SSPort))
+	for _, inb := range i.discoverCoreXrayInboundPorts(ctx, nil) {
+		if inb.Protocol == "vless" || inb.Protocol == "shadowsocks2022" {
+			add(inb.Port)
+		}
+	}
+	return ports
+}
+
 func (i *instance) handleBrutalBindingUpsert(ctx context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
 	var in brutalBindingUpsertRequest
 	if err := decodeStrictJSON(req.Payload, &in); err != nil {
 		return pluginsdk.Response{}, err
 	}
+	allowedPorts := i.allowedBrutalTargetPorts(ctx)
+	if !ValidateTargetPortAllowed(in.TargetPort, allowedPorts) {
+		return pluginsdk.Response{}, invalidField("/target_port", "FORBIDDEN_TARGET_PORT", "target_port 必须是当前已托管的代理 TCP 入站端口")
+	}
 	in.ExpectedRevision = resolveRevision(in.ExpectedRevision, req, "brutal/"+in.ID)
 	rec, created, err := i.store.UpsertBrutalBinding(ctx, in)
 	if err != nil {
 		return pluginsdk.Response{}, err
+	}
+	if i.brutalMgr != nil {
+		if bindings, lerr := i.store.ListBrutalBindings(ctx); lerr == nil {
+			_, _ = i.brutalMgr.Reconcile(bindings)
+		}
 	}
 	return marshalResponse(map[string]any{"binding": rec, "created": created})
 }
@@ -384,7 +426,7 @@ func (i *instance) handleTuningApply(ctx context.Context, req pluginsdk.Request)
 	if err != nil {
 		return pluginsdk.Response{}, err
 	}
-	applied, output, applyErr := applySysctlConfig(ctx, i.sysctlTargetPath, calc.RenderedConf, in.DryRun)
+	applied, output, applyErr := applySysctlConfigWithCapability(ctx, i.sysctlTargetPath, calc.SysctlMap, calc.RenderedConf, in.DryRun, false)
 	errMsg := ""
 	if applyErr != nil {
 		errMsg = applyErr.Error()
@@ -420,7 +462,7 @@ func (i *instance) handleTuningRollback(ctx context.Context, req pluginsdk.Reque
 		return pluginsdk.Response{}, err
 	}
 	rendered := renderSysctlConf(snap.Role, snap.BandwidthMbps, snap.RTTMs, snap.SysctlMap)
-	applied, output, applyErr := applySysctlConfig(ctx, i.sysctlTargetPath, rendered, in.DryRun)
+	applied, output, applyErr := applySysctlConfigWithCapability(ctx, i.sysctlTargetPath, snap.SysctlMap, rendered, in.DryRun, true)
 	errMsg := ""
 	if applyErr != nil {
 		errMsg = applyErr.Error()

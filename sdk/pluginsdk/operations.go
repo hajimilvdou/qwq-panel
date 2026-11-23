@@ -217,7 +217,11 @@ func (s *Server) admit(rc *platformv1.RequestContext) (*instance, func(), error)
 	if err != nil {
 		return nil, nil, err
 	}
-	return in, release, nil
+	doneIdle := s.drainer.BeginRequest()
+	return in, func() {
+		release()
+		doneIdle()
+	}, nil
 }
 
 // checkAPIVersion rejects an api_version other than the manifest's. The call

@@ -1,13 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /* Track 07 缺陷修复回归 + @qwq/kit v1 ↔ PluginBridge 端到端协议互通测试 */
 import { describe, expect, it, vi } from 'vitest';
-import { createPluginBridge, parseInitialFragment, PluginHostError } from '../kit/src/index';
-import { PluginBridge, subjectAllowed } from '../shell/src/lib/plugin-host/index';
+import {
+  createPluginBridge,
+  parseInitialFragment,
+  PluginHostError,
+  PluginInvokeError,
+  QwqPluginBridge,
+  unwrapInvokeOutcome,
+} from '../kit/src/index';
+import { MAX_MESSAGE_BYTES, PluginBridge, subjectAllowed } from '../shell/src/lib/plugin-host/index';
 import { roleCan } from '../shell/src/lib/session.svelte';
 import { stripSecrets } from '../shell/src/lib/drafts';
 import { createFormIntent } from '../shell/src/lib/ops';
 import { safeHref } from '../shell/src/ui/markdown';
+import { safeExternalHref, safeInternalPath } from '../shell/src/ui/safe-url';
 import { fieldsOf } from '../shell/src/ui/schema-form';
+import { activeHref, isActive } from '../shell/src/app/nav';
 
 describe('Track 07 P0/P1 修复回归', () => {
   it('P0-FE-02: roleCan 与后端 internal/authz/roles.go 一致', () => {
@@ -266,5 +275,146 @@ describe('@qwq/kit v1 ↔ PluginBridge 端到端握手与调用', () => {
     await expect(oldReq).rejects.toMatchObject({ code: 'DISPOSED' });
     client2.dispose();
     hostBridge.dispose();
+  });
+
+  it('STEP-16: @qwq/kit v2 public_origin / ui.confirm / ui.copy / events.unsubscribe / 三态解包与 QwqPluginBridge', async () => {
+    let pluginMsgListener: ((e: MessageEvent) => void) | null = null;
+    const parentWin = {
+      postMessage: (data: unknown) => {
+        hostBridge.onWindowMessage({ source: iframeWin, data } as unknown as MessageEvent);
+      },
+    } as unknown as Window;
+    const iframeWin = {
+      postMessage: (data: unknown, _origin: string, transfer?: Transferable[]) => {
+        pluginMsgListener?.({ source: parentWin, data, ports: (transfer ?? []) as unknown as MessagePort[] } as unknown as MessageEvent);
+      },
+    } as unknown as Window;
+
+    const hostEvents: { emit: ((e: { subject: string; type: string }) => void) | null; unsubCalled: number } = {
+      emit: null,
+      unsubCalled: 0,
+    };
+    const copied: Array<{ text: string; label?: string }> = [];
+    const hostBridge = new PluginBridge({
+      pluginId: 'proxy.advanced',
+      operations: [
+        { id: 'proxy.advanced/list', effect: 'read', mode: 'invoke' },
+        { id: 'proxy.advanced/delete', effect: 'destructive', mode: 'invoke' },
+      ],
+      routes: [{ path: '/' }],
+      invoke: async (op) => {
+        if (op.id === 'proxy.advanced/delete') {
+          return { status: 'AWAITING_APPROVAL', operation_id: 'op_1', approval_id: 'apv_9' };
+        }
+        return { status: 'SUCCEEDED', operation_id: 'op_0', result: { items: [1, 2] } };
+      },
+      toProblem: () => ({ code: 'INTERNAL', status: 500 }),
+      subscribe: (fn) => {
+        hostEvents.emit = (e) => fn(e);
+        return () => {
+          hostEvents.emit = null;
+          hostEvents.unsubCalled++;
+        };
+      },
+      newKey: () => 'idem_v2',
+      onReady: vi.fn(),
+      onResize: vi.fn(),
+      onToast: vi.fn(),
+      onNavigate: vi.fn(),
+      onTimeout: vi.fn(),
+      onConfirm: async (req) => req.danger === true,
+      onCopy: async (req) => {
+        copied.push(req);
+      },
+    });
+
+    hostBridge.settings({
+      theme: 'dark',
+      motion: 'full',
+      density: 'comfortable',
+      tokens: { '--accent': '#6366f1' },
+      visible: true,
+      public_origin: 'https://panel.example.com:8443',
+    });
+    hostBridge.attach(iframeWin);
+
+    const bridge = new QwqPluginBridge({
+      hash: '#theme=dark&path=/',
+      win: {
+        addEventListener: (_t: string, fn: EventListenerOrEventListenerObject) => {
+          pluginMsgListener = fn as (e: MessageEvent) => void;
+        },
+        removeEventListener: () => {
+          pluginMsgListener = null;
+        },
+      },
+      parent: parentWin,
+    });
+    await bridge.connect();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(bridge.publicOrigin).toBe('https://panel.example.com:8443');
+    expect(bridge.buildPublicURL('/p/proxy.advanced/sub/abc')).toBe('https://panel.example.com:8443/p/proxy.advanced/sub/abc');
+
+    const okRes = await bridge.invoke<{ items: number[] }>('list');
+    expect(okRes).toEqual({ kind: 'done', operationId: 'op_0', result: { items: [1, 2] } });
+
+    const waitRes = await bridge.invoke('delete');
+    expect(waitRes).toEqual({ kind: 'awaiting_approval', operationId: 'op_1', approvalId: 'apv_9' });
+
+    expect(unwrapInvokeOutcome({ status: 'RUNNING', operation_id: 'op_2' })).toEqual({ kind: 'running', operationId: 'op_2' });
+
+    for (const badStatus of ['FAILED', 'REJECTED', 'CANCELED', 'EXPIRED']) {
+      expect(() => unwrapInvokeOutcome({ status: badStatus, operation_id: 'op_fail' })).toThrow(PluginInvokeError);
+    }
+    expect(() => unwrapInvokeOutcome({ status: 'SUCCEEDED', error: 'PLUGIN_ERROR' })).toThrow(PluginInvokeError);
+    expect(() => unwrapInvokeOutcome({ status: 'FAILED', error: { code: 'CONFLICT', detail: '版本冲突' } })).toThrow(/版本冲突/);
+
+    /* 超过 4 MiB 的 api.invoke 应返回显式 PAYLOAD_TOO_LARGE 错误而不是静默丢弃 */
+    expect(MAX_MESSAGE_BYTES).toBe(4 * 1024 * 1024);
+    await expect(
+      bridge.invoke('list', { blob: 'x'.repeat(MAX_MESSAGE_BYTES + 128) }, 2000),
+    ).rejects.toMatchObject({ code: 'PAYLOAD_TOO_LARGE', status: 413 });
+
+    expect(await bridge.confirm({ title: '删除节点', body: '不可恢复', danger: true })).toBe(true);
+    expect(await bridge.confirm({ title: '普通确认', body: '继续？', danger: false })).toBe(false);
+
+    await bridge.copyText('vless://abc', '已复制节点链接');
+    expect(copied).toEqual([{ text: 'vless://abc', label: '已复制节点链接' }]);
+
+    const received: string[] = [];
+    const off = bridge.subscribe('plugins/proxy.advanced', (e) => received.push(e.subject));
+    await new Promise((r) => setTimeout(r, 20));
+    hostEvents.emit?.({ subject: 'plugins/proxy.advanced/users', type: 'resource.changed' });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(received).toEqual(['plugins/proxy.advanced/users']);
+
+    off();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(hostEvents.unsubCalled).toBe(1);
+
+    bridge.dispose();
+    hostBridge.dispose();
+  });
+
+  it('STEP-15: safeInternalPath / safeExternalHref 与 nav 最长前缀唯一激活', () => {
+    expect(safeInternalPath('/plugins/security.basic/firewall')).toBe('/plugins/security.basic/firewall');
+    expect(safeInternalPath('javascript:alert(1)', '')).toBe('');
+    expect(safeInternalPath('//evil.com/x', '/')).toBe('/');
+    expect(safeInternalPath('/\\evil.com', '/')).toBe('/');
+
+    expect(safeExternalHref('https://github.com/org/repo')).toBe('https://github.com/org/repo');
+    expect(safeExternalHref('http://127.0.0.1:8080/auth')).toBe('http://127.0.0.1:8080/auth');
+    expect(safeExternalHref('javascript:alert(1)')).toBeNull();
+    expect(safeExternalHref('data:text/html,<script>1</script>')).toBeNull();
+
+    const items = [
+      { href: '/' },
+      { href: '/plugins/security.basic' },
+      { href: '/plugins/security.basic/firewall' },
+    ];
+    expect(activeHref(items, '/plugins/security.basic/firewall')).toBe('/plugins/security.basic/firewall');
+    expect(isActive('/plugins/security.basic', '/plugins/security.basic/firewall', items)).toBe(false);
+    expect(isActive('/plugins/security.basic/firewall', '/plugins/security.basic/firewall', items)).toBe(true);
   });
 });

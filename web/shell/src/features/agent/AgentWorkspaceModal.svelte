@@ -8,6 +8,7 @@
 -->
 <script lang="ts">
   import { Alert, Button, Chip, Dialog, EmptyState, Icon, Input, Skeleton, Switch } from '$ui';
+  import { safeExternalHref } from '$ui/safe-url';
   import { agent } from '$api/endpoints';
   import type {
     AgentCorePromptTarget,
@@ -614,7 +615,9 @@
                 <p class="small muted">{item.description}</p>
               </div>
               <div class="row-actions">
-                <a class="repo-link" href={item.repo_url} target="_blank" rel="noopener noreferrer">源码</a>
+                {#if safeExternalHref(item.repo_url)}
+                  <a class="repo-link" href={safeExternalHref(item.repo_url)} target="_blank" rel="noopener noreferrer">源码</a>
+                {/if}
                 <Button
                   size="sm"
                   variant={item.installed ? 'soft' : 'primary'}

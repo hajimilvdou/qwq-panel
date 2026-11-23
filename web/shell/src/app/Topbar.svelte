@@ -4,14 +4,18 @@
   import { page } from '$lib/page.svelte';
   import { palette, paletteShortcut } from '$lib/palette.svelte';
   import { prefs } from '$lib/prefs.svelte';
+  import { useResource } from '$lib/resource.svelte';
   import { router } from '$lib/router.svelte';
   import { session } from '$lib/session.svelte';
   import { Avatar, Icon, IconButton, Menu, Mood } from '$ui';
-  import { APP_CENTER, isActive, PRIMARY, SETTINGS } from './nav';
+  import { APP_CENTER, isActive, pluginNav, pluginsResource, PRIMARY, SETTINGS } from './nav';
 
   const shortcut = paletteShortcut();
   const name = $derived(session.user?.display_name || session.user?.username || '');
-  const topNavItems = $derived([...PRIMARY, APP_CENTER, SETTINGS].filter((i) => session.can(i.perm)));
+  const plugins = useResource(pluginsResource);
+  const topNavItems = $derived(
+    [...PRIMARY, ...pluginNav(plugins.data ?? []), APP_CENTER, SETTINGS].filter((i) => session.can(i.perm)),
+  );
 
   /* 全局 ⌘K / Ctrl+K */
   $effect(() => {
@@ -34,7 +38,7 @@
     </a>
     <nav class="t-nav" aria-label="主导航">
       {#each topNavItems as it (it.href)}
-        <a href={it.href} class="t-pill" aria-current={isActive(it.href, router.path) ? 'page' : undefined}>
+        <a href={it.href} class="t-pill" aria-current={isActive(it.href, router.path, topNavItems) ? 'page' : undefined}>
           <Icon name={it.icon} size={15} />
           <span>{it.label}</span>
         </a>

@@ -66,15 +66,93 @@ type nativeUser struct {
 	ID    string `json:"id"`
 	Email string `json:"email"`
 	Level int    `json:"level"`
-	Flow  string `json:"flow"`
+	Flow  string `json:"flow,omitempty"`
+}
+
+type vmessSettings struct {
+	Clients []vmessUser `json:"clients"`
+}
+
+type vmessUser struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Level int    `json:"level"`
+}
+
+type trojanSettings struct {
+	Clients []trojanUser `json:"clients"`
+}
+
+type trojanUser struct {
+	Password string `json:"password"`
+	Email    string `json:"email"`
+	Level    int    `json:"level"`
+}
+
+type ssAEADSettings struct {
+	Clients []ssAEADUser `json:"clients"`
+	Network string       `json:"network"`
+}
+
+type ssAEADUser struct {
+	Method   string `json:"method"`
+	Password string `json:"password"`
+	Email    string `json:"email"`
+	Level    int    `json:"level"`
+}
+
+type socksSettings struct {
+	Auth      string         `json:"auth"`
+	Accounts  []proxyAccount `json:"accounts"`
+	UDP       bool           `json:"udp"`
+	UserLevel int            `json:"userLevel"`
+}
+
+type httpSettings struct {
+	Accounts         []proxyAccount `json:"accounts"`
+	AllowTransparent bool           `json:"allowTransparent"`
+	UserLevel        int            `json:"userLevel"`
+}
+
+type proxyAccount struct {
+	User string `json:"user"`
+	Pass string `json:"pass"`
 }
 
 type nativeStream struct {
-	Network  string                   `json:"network"`
-	Security string                   `json:"security"`
-	Reality  *nativeReality           `json:"realitySettings,omitempty"`
-	TLS      *nativeTLS               `json:"tlsSettings,omitempty"`
-	Hysteria *nativeHysteriaTransport `json:"hysteriaSettings,omitempty"`
+	Network   string                   `json:"network"`
+	Security  string                   `json:"security"`
+	Reality   *nativeReality           `json:"realitySettings,omitempty"`
+	TLS       *nativeTLS               `json:"tlsSettings,omitempty"`
+	Hysteria  *nativeHysteriaTransport `json:"hysteriaSettings,omitempty"`
+	WS        *nativeWS                `json:"wsSettings,omitempty"`
+	GRPC      *nativeGRPC              `json:"grpcSettings,omitempty"`
+	XHTTP     *nativeXHTTP             `json:"xhttpSettings,omitempty"`
+	FinalMask *nativeFinalMask         `json:"finalmask,omitempty"`
+}
+
+type nativeWS struct {
+	Path string `json:"path,omitempty"`
+	Host string `json:"host,omitempty"`
+}
+
+type nativeGRPC struct {
+	ServiceName string `json:"serviceName,omitempty"`
+}
+
+type nativeXHTTP struct {
+	Path string `json:"path,omitempty"`
+	Host string `json:"host,omitempty"`
+	Mode string `json:"mode,omitempty"`
+}
+
+type nativeFinalMask struct {
+	UDP []nativeFinalMaskEntry `json:"udp,omitempty"`
+}
+
+type nativeFinalMaskEntry struct {
+	Type     string         `json:"type"`
+	Settings map[string]any `json:"settings,omitempty"`
 }
 
 type nativeHysteriaTransport struct {
@@ -112,6 +190,14 @@ type ss2022Settings struct {
 	Password string       `json:"password"`
 	Users    []ss2022User `json:"users"`
 	Network  string       `json:"network"`
+}
+
+type ss2022SingleSettings struct {
+	Method   string `json:"method"`
+	Password string `json:"password"`
+	Email    string `json:"email"`
+	Level    int    `json:"level"`
+	Network  string `json:"network"`
 }
 
 type ss2022User struct {

@@ -57,6 +57,13 @@ func initInstallation(t *testing.T, cfg config.Config) string {
 	if err := os.WriteFile(state, []byte(`{"k":"v"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	trustKey := filepath.Join(cfg.DataDir, "trust", "publishers", "dev.pem")
+	if err := os.MkdirAll(filepath.Dir(trustKey), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(trustKey, []byte("-----BEGIN PUBLIC KEY-----\nDEMO\n-----END PUBLIC KEY-----\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	return ref
 }
 
@@ -126,6 +133,9 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(cfg.DataDir, "plugin-state", "alpha", "state.json")); err != nil || string(got) != `{"k":"v"}` {
 		t.Fatalf("plugin state after restore = %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(cfg.DataDir, "trust", "publishers", "dev.pem")); err != nil || !strings.Contains(string(got), "BEGIN PUBLIC KEY") {
+		t.Fatalf("trust key after restore = %q, %v", got, err)
 	}
 }
 

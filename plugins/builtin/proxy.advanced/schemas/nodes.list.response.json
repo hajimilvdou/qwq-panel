@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "列举代理节点响应",
+  "type": "object",
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "total": {
+      "type": "integer"
+    },
+    "managed_count": {
+      "type": "integer"
+    },
+    "external_count": {
+      "type": "integer"
+    }
+  },
+  "required": ["nodes", "total", "managed_count", "external_count"]
+}

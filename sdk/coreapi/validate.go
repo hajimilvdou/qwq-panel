@@ -48,7 +48,7 @@ func (v *validator) inbound(in *Inbound) {
 	v.require(validID(in.ID), path+"/id", "ID", "ID 必须是 1 至 32 位的小写稳定标识")
 	addr, err := netip.ParseAddr(in.Listen)
 	v.require(err == nil && addr.Zone() == "", path+"/listen", "IP", "监听地址必须是无 zone 的 IPv4 或 IPv6")
-	v.require(in.Port >= 1024 && in.Port <= 65535, path+"/port", "RANGE", "入站端口必须在 1024 至 65535 之间")
+	v.require(in.Port >= 1 && in.Port <= 65535, path+"/port", "RANGE", "入站端口必须在 1 至 65535 之间")
 	v.require(in.Protocol == "vless", path+"/protocol", "ENUM", "首版只支持 vless")
 	v.require(in.Transport == "raw", path+"/transport", "ENUM", "首版只支持 raw")
 	v.require(in.Flow == "xtls-rprx-vision", path+"/flow", "ENUM", "首版只支持 xtls-rprx-vision")
@@ -88,13 +88,13 @@ func (v *validator) reality(reality *Reality, path string) {
 	seen := make(map[string]struct{}, min(len(reality.ShortIDs), MaxNames))
 	for index, id := range reality.ShortIDs[:min(len(reality.ShortIDs), MaxNames)] {
 		itemPath := pointer(path+"/short_ids", strconv.Itoa(index))
-		if len(id) < 2 || len(id) > 16 || len(id)%2 != 0 {
-			v.require(false, itemPath, "SHORT_ID", "short ID 必须是 2 至 16 位的偶数长度 hex")
+		if len(id) > 16 || len(id)%2 != 0 {
+			v.require(false, itemPath, "SHORT_ID", "short ID 必须是 0 至 16 位的偶数长度 hex")
 			continue
 		}
 		decoded, err := hex.DecodeString(id)
 		ok := err == nil
-		v.require(ok, itemPath, "SHORT_ID", "short ID 必须是 2 至 16 位的偶数长度 hex")
+		v.require(ok, itemPath, "SHORT_ID", "short ID 必须是 0 至 16 位的偶数长度 hex")
 		if ok {
 			_, duplicate := seen[string(decoded)]
 			v.require(!duplicate, itemPath, "DUPLICATE", "short ID 不能重复")

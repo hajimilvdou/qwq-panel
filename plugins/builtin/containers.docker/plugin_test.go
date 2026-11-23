@@ -236,8 +236,23 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 		t.Fatalf("docker mutations mismatch: action=%q mem=%d rem=%q pruned=%+v", gotAction, gotMem, gotRem, pruned)
 	}
 
-	// 4. Compose YAML 静态安全扫描（含 Plan 审批预演告警 + quoted host/pid/SYS_ADMIN）与 dry_run 持久化 + 清理
-	yamlDoc := "services:\n  app:\n    image: nginx:alpine\n    privileged:   true\n    network_mode: \"host\"\n    pid: \"host\"\n    cap_add:\n      - SYS_ADMIN\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n"
+	// 4. Compose YAML 静态安全扫描：高危隔离逃逸项（privileged: true / include / 越界 env_file / 根目录挂载）强阻断，
+	//    其余中高危项（network_mode: host / pid: host / SYS_ADMIN / docker.sock）在 Plan 与 dry_run 中告警。
+	for _, blockedYAML := range []string{
+		"services:\n  app:\n    image: nginx:alpine\n    privileged: true\n",
+		"include:\n  - /etc/passwd\nservices:\n  app:\n    image: nginx:alpine\n",
+		"services:\n  app:\n    image: nginx:alpine\n    env_file:\n      - ../../etc/shadow\n",
+		"services:\n  app:\n    image: nginx:alpine\n    volumes:\n      - /:/host\n",
+	} {
+		badCP := invokeDockerRaw(t, srv, "docker.compose.deploy", map[string]any{
+			"name": "blocked-demo", "compose_yaml": blockedYAML, "dry_run": true,
+		})
+		if badCP.GetError() == nil || badCP.GetError().GetCode() != "INVALID_ARGUMENT" {
+			t.Fatalf("expected INVALID_ARGUMENT for blocked compose YAML %q, got %+v", blockedYAML, badCP.GetError())
+		}
+	}
+
+	yamlDoc := "services:\n  app:\n    image: nginx:alpine\n    network_mode: \"host\"\n    pid: \"host\"\n    cap_add:\n      - SYS_ADMIN\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n"
 	planRaw, _ := json.Marshal(map[string]any{"name": "risky-demo", "compose_yaml": yamlDoc})
 	planResp, err := srv.PlanOperation(t.Context(), &pb.PlanOperationRequest{
 		Context:     &pb.RequestContext{InstanceId: "default", NodeId: "local", OperationId: "plan-cp-1", Locale: "zh-CN"},
@@ -245,16 +260,16 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 		ApiVersion:  "v1",
 		PayloadJson: planRaw,
 	})
-	if err != nil || planResp.GetError() != nil || len(planResp.GetWarnings()) < 5 {
-		t.Fatalf("expected >=5 security warnings in Plan response, got resp=%+v err=%v", planResp, err)
+	if err != nil || planResp.GetError() != nil || len(planResp.GetWarnings()) < 4 {
+		t.Fatalf("expected >=4 security warnings in Plan response, got resp=%+v err=%v", planResp, err)
 	}
 	cpRes := invokeDocker(t, srv, "docker.compose.deploy", map[string]any{
 		"name": "risky-demo", "compose_yaml": yamlDoc, "dry_run": true,
 	})
 	stack := cpRes["stack"].(map[string]any)
 	warns := stack["warnings"].([]any)
-	if len(warns) < 5 {
-		t.Fatalf("expected >=5 security warnings on risky compose, got %+v", warns)
+	if len(warns) < 4 {
+		t.Fatalf("expected >=4 security warnings on risky compose, got %+v", warns)
 	}
 	if _, err := os.Stat(filepath.Join(stack["work_dir"].(string), "compose.yml")); err != nil {
 		t.Fatalf("expected compose.yml saved on disk: %v", err)

@@ -343,12 +343,23 @@ func TestOriginAndHostChecks(t *testing.T) {
 		}
 	})
 
-	t.Run("loopback host allowed", func(t *testing.T) {
+	t.Run("loopback host allowed from loopback remote", func(t *testing.T) {
 		req := sessionRequest(http.MethodGet, "/api/v1/echo", "")
 		req.Host = "127.0.0.1:8443"
+		req.RemoteAddr = "127.0.0.1:4321"
 		req.Header.Del("Origin")
 		if resp := do(t, g, req); resp.code != http.StatusOK {
 			t.Fatalf("status = %d", resp.code)
+		}
+	})
+
+	t.Run("spoofed loopback host from remote IP rejected", func(t *testing.T) {
+		req := sessionRequest(http.MethodGet, "/api/v1/echo", "")
+		req.Host = "localhost:8443"
+		req.RemoteAddr = "203.0.113.10:4321"
+		req.Header.Del("Origin")
+		if resp := do(t, g, req); resp.code != http.StatusForbidden {
+			t.Fatalf("spoofed loopback status = %d, want 403", resp.code)
 		}
 	})
 
@@ -380,6 +391,39 @@ func TestOriginAndHostChecks(t *testing.T) {
 		req.Header.Set("Origin", "https://evil.example")
 		if resp := do(t, g, req); resp.code != http.StatusForbidden {
 			t.Fatalf("foreign origin status = %d", resp.code)
+		}
+	})
+
+	t.Run("dynamicPanelHost enforces https with allow-list and allows port without allow-list", func(t *testing.T) {
+		// With configured PublicOrigins: https://<dynHost>[:port] allowed, http://<dynHost> rejected.
+		gWithOrigins := testGateway(t, echoRoute("/api/v1/echo"))
+		gWithOrigins.SetDynamicPanelHost("dyn.example.com")
+
+		reqHTTPS := sessionRequest(http.MethodGet, "/api/v1/echo", "")
+		reqHTTPS.Host = "dyn.example.com:8443"
+		reqHTTPS.Header.Set("Origin", "https://dyn.example.com:8443")
+		if resp := do(t, gWithOrigins, reqHTTPS); resp.code != http.StatusOK {
+			t.Fatalf("https dynamicPanelHost with origins status = %d, want 200", resp.code)
+		}
+
+		reqHTTP := sessionRequest(http.MethodGet, "/api/v1/echo", "")
+		reqHTTP.Host = "dyn.example.com"
+		reqHTTP.Header.Set("Origin", "http://dyn.example.com")
+		if resp := do(t, gWithOrigins, reqHTTP); resp.code != http.StatusForbidden {
+			t.Fatalf("http dynamicPanelHost with origins status = %d, want 403", resp.code)
+		}
+
+		// Without configured PublicOrigins: https://<dynHost>:8443 allowed cleanly.
+		cfg := testConfig(nil)
+		cfg.PublicOrigins = nil
+		gNoOrigins := newGateway(t, cfg, echoRoute("/api/v1/echo"))
+		gNoOrigins.SetDynamicPanelHost("dyn.example.com")
+
+		reqPort := sessionRequest(http.MethodGet, "/api/v1/echo", "")
+		reqPort.Host = "127.0.0.1:8443"
+		reqPort.Header.Set("Origin", "https://dyn.example.com:8443")
+		if resp := do(t, gNoOrigins, reqPort); resp.code != http.StatusOK {
+			t.Fatalf("dynamicPanelHost with port without origins status = %d, want 200", resp.code)
 		}
 	})
 }

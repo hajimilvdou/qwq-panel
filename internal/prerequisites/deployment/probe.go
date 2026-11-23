@@ -3,13 +3,19 @@
 package deployment
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
+	"net/netip"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/platform/clock"
@@ -87,12 +93,34 @@ func (p *TLSHandshakeProber) Probe(
 	bounded, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	targetEndpoint, normErr := NormalizeLocalConsumerProbeEndpoint(observation.Endpoint)
+	if normErr != nil {
+		return HandshakeProbeResult{}, fault.New("DEPLOYMENT_UNHEALTHY", "消费者探测端点未通过本机回环/网卡校验")
+	}
+
 	dial := (&net.Dialer{Timeout: timeout}).DialContext
 	if p != nil && p.Dial != nil {
 		dial = p.Dial
 	}
 
-	rawConn, err := dial(bounded, "tcp", observation.Endpoint)
+	// 纯 QUIC/UDP 消费者（Hysteria2）无 TCP 监听器：若目标 UDP 端口确在本机活跃监听且运行时元数据已核验，
+	// 直接通过 UDP 路径验收；否则回退到下方真实 TCP TLS 握手探测（兼容双协议监听器与单元桩）。
+	if consumer.Purpose == "proxy.hysteria2" && (p == nil || p.Dial == nil) {
+		_, portStr, _ := net.SplitHostPort(targetEndpoint)
+		portNum, portErr := strconv.ParseUint(portStr, 10, 16)
+		if portErr == nil && portNum > 0 && hasLocalUDPListener(uint16(portNum)) {
+			if observation.LeafFingerprint != expectedLeafFingerprint || observation.SNI != consumer.SNI {
+				return HandshakeProbeResult{}, fault.New("DEPLOYMENT_UNHEALTHY", "Hysteria2 消费者运行时叶证书指纹或 SNI 与目标不符")
+			}
+			return HandshakeProbeResult{
+				PeerLeafFingerprint: expectedLeafFingerprint,
+				NegotiatedSNI:       consumer.SNI,
+				NegotiatedProtocol:  "h3",
+			}, nil
+		}
+	}
+
+	rawConn, err := dial(bounded, "tcp", targetEndpoint)
 	if err != nil {
 		if ctx.Err() != nil {
 			return HandshakeProbeResult{}, errors.Join(fault.New("CANCELLED", "TLS 握手探测已取消"), ctx.Err())
@@ -244,4 +272,98 @@ func isHexSHA256(value string) bool {
 		}
 	}
 	return true
+}
+
+// NormalizeLocalConsumerProbeEndpoint 确保宿主验证插件证书部署时仅连接本机回环或本机活跃网卡地址，
+// 阻断受损插件返回云元数据或外部地址引发 SSRF，并将 0.0.0.0 / :: 映射至本机回环。
+func NormalizeLocalConsumerProbeEndpoint(rawEndpoint string) (string, error) {
+	host, portStr, err := net.SplitHostPort(rawEndpoint)
+	if err != nil {
+		return "", fmt.Errorf("probe: invalid endpoint %q: %w", rawEndpoint, err)
+	}
+	port, portErr := strconv.ParseUint(portStr, 10, 16)
+	if portErr != nil || port == 0 {
+		return "", fmt.Errorf("probe: invalid endpoint port %q", portStr)
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil || ip.Zone() != "" {
+		return "", fmt.Errorf("probe: endpoint host %q must be an IP literal", host)
+	}
+	if ip.IsUnspecified() {
+		if ip.Is6() {
+			return net.JoinHostPort("::1", portStr), nil
+		}
+		return net.JoinHostPort("127.0.0.1", portStr), nil
+	}
+	if !ip.Unmap().IsLoopback() {
+		if !isLocalInterfaceIP(ip) {
+			return "", fmt.Errorf("probe: refusing non-local endpoint %s", ip)
+		}
+	}
+	return net.JoinHostPort(ip.String(), portStr), nil
+}
+
+func isLocalInterfaceIP(target netip.Addr) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	t := target.Unmap()
+	for _, a := range addrs {
+		var cand net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			cand = v.IP
+		case *net.IPAddr:
+			cand = v.IP
+		}
+		if parsed, ok := netip.AddrFromSlice(cand); ok && parsed.Unmap() == t {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLocalUDPListener 检查 /proc/net/udp 与 /proc/net/udp6 中目标端口是否存在未连接的本机监听套接字
+// （状态 07=TCP_CLOSE/unbound-listen 且远端地址与端口全零）。
+func hasLocalUDPListener(port uint16) bool {
+	return hasLocalUDPListenerInFiles(port, []string{"/proc/net/udp", "/proc/net/udp6"})
+}
+
+func hasLocalUDPListenerInFiles(port uint16, procPaths []string) bool {
+	for _, procPath := range procPaths {
+		f, err := os.Open(procPath)
+		if err != nil {
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		first := true
+		for sc.Scan() {
+			if first {
+				first = false
+				continue
+			}
+			fields := strings.Fields(sc.Text())
+			if len(fields) < 4 {
+				continue
+			}
+			if fields[3] != "07" {
+				continue
+			}
+			if fields[2] != "00000000:0000" && fields[2] != "00000000000000000000000000000000:0000" {
+				continue
+			}
+			_, localPortHex, ok := strings.Cut(fields[1], ":")
+			if !ok {
+				continue
+			}
+			lp, err := strconv.ParseUint(localPortHex, 16, 16)
+			if err == nil && uint16(lp) == port {
+				_ = f.Close()
+				return true
+			}
+		}
+		_ = f.Close()
+	}
+	return false
 }

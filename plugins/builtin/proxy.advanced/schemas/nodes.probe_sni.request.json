@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "探测 Reality 伪装域名 SNI 请求",
+  "description": "并发测试候选伪装域名的 TLS 1.3 握手与 RTT 延迟并返回排序推荐结果。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "domains": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 253
+      }
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 500,
+      "maximum": 10000
+    }
+  }
+}

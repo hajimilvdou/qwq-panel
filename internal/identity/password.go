@@ -46,7 +46,7 @@ func DefaultParams() Params {
 // database row cannot make the host allocate an unbounded amount of memory.
 var (
 	minMemory = uint32(8 * 1024)
-	maxMemory = uint32(1024 * 1024)
+	maxMemory = uint32(64 * 1024)
 )
 
 func (p Params) valid() error {
@@ -151,6 +151,9 @@ type VerifyResult struct {
 // Verify checks password against a PHC string in constant time with respect to
 // the hash contents. A malformed hash is an error, never a successful match.
 func (h *Hasher) Verify(ctx context.Context, encoded, password string) (VerifyResult, error) {
+	if len(password) > 1024 {
+		return VerifyResult{OK: false}, nil
+	}
 	p, salt, want, err := parsePHC(encoded)
 	if err != nil {
 		return VerifyResult{}, err

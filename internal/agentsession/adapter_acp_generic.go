@@ -98,15 +98,11 @@ func (c *GenericACPCore) Preflight(_ context.Context, rawConfig json.RawMessage)
 	if err := refusePlaintextSecrets(rawConfig); err != nil {
 		return err
 	}
-	cfg := acpSessionConfig{Binary: c.bin}
-	if len(rawConfig) > 0 {
-		_ = json.Unmarshal(rawConfig, &cfg)
-		if cfg.Binary == "" {
-			cfg.Binary = c.bin
-		}
+	if _, err := ValidateExternalSessionConfig(rawConfig); err != nil {
+		return err
 	}
 	if _, isReal := c.launcher.(OSProcessLauncher); isReal {
-		if ok, reason := probeBinary(cfg.Binary); !ok {
+		if ok, reason := probeBinary(c.bin); !ok {
 			return problem.New(problem.Unavailable, "ACP agent binary is not installed on this host (%s).", reason)
 		}
 	}
@@ -143,10 +139,10 @@ func (c *GenericACPCore) Descriptor(context.Context) CoreDescriptor {
 }
 
 type acpSessionConfig struct {
-	Binary       string   `json:"binary,omitempty"`
-	Args         []string `json:"args,omitempty"`
+	Binary       string   `json:"-"` // host-controlled only
+	Args         []string `json:"-"` // host-controlled only
 	ProviderID   string   `json:"provider_id,omitempty"`
-	WorkDir      string   `json:"work_dir,omitempty"`
+	WorkDir      string   `json:"-"` // host-controlled only
 	PlanMode     bool     `json:"plan_mode,omitempty"`
 	ActiveSkills []string `json:"active_skills,omitempty"`
 }
@@ -156,16 +152,16 @@ func (c *GenericACPCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 	if err := refusePlaintextSecrets(turn.Config); err != nil {
 		return err
 	}
+	if _, err := ValidateExternalSessionConfig(turn.Config); err != nil {
+		return err
+	}
 	cfg := acpSessionConfig{Binary: c.bin, Args: c.args}
 	if len(turn.Config) > 0 {
 		_ = json.Unmarshal(turn.Config, &cfg)
-		if cfg.Binary == "" {
-			cfg.Binary = c.bin
-		}
-		if len(cfg.Args) == 0 {
-			cfg.Args = c.args
-		}
 	}
+	cfg.Binary = c.bin
+	cfg.Args = c.args
+	cfg.WorkDir = ""
 
 	router := NewApprovalRouter(turn, cfg.PlanMode, emit, c.minter, c.bridge)
 	mcpBridge := NewMCPBridge(turn, cfg.PlanMode, emit, c.bridge)

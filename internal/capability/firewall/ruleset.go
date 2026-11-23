@@ -75,7 +75,7 @@ func Normalize(raw []byte, required, declared []uint32) (*Ruleset, error) {
 	var document struct {
 		Nftables []json.RawMessage `json:"nftables"`
 	}
-	if err := decodeObject(raw, &document); err != nil || len(document.Nftables) > maxRules+6 {
+	if err := decodeObject(raw, &document); err != nil || len(document.Nftables) > maxRules+10 {
 		return nil, errInvalidRuleset
 	}
 	r := &Ruleset{ports: ports}
@@ -181,7 +181,13 @@ func generatedGuard(rule ruleObject) bool {
 	if len(rule.Expr) != 2 || !bytes.Equal(rule.Expr[1], []byte(`{"accept":null}`)) {
 		return false
 	}
-	classes := map[string]string{"qwq:preserve": "tcp-port", "qwq:loopback": "loopback", "qwq:established": "state"}
+	classes := map[string]string{
+		"qwq:preserve":        "tcp-port",
+		"qwq:preserve-udp":    "udp-port",
+		"qwq:preserve-icmpv6": "icmpv6-type",
+		"qwq:loopback":        "loopback",
+		"qwq:established":     "state",
+	}
 	return classes[rule.Comment] != "" && classes[rule.Comment] == rule.class
 }
 
@@ -238,13 +244,25 @@ func (r *Ruleset) Transaction(tableExists, chainExists bool) ([]byte, error) {
 }
 
 func guardRules(ports []uint32) ([]ruleObject, error) {
+	return guardRulesWithUDP(ports, nil)
+}
+
+func guardRulesWithUDP(ports, udpPorts []uint32) ([]ruleObject, error) {
 	matches := []string{
 		fmt.Sprintf(`{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":{"set":%s}}}`, mustPortsJSON(ports)),
+	}
+	names := []string{"qwq:preserve"}
+	if len(udpPorts) > 0 {
+		matches = append(matches, fmt.Sprintf(`{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":{"set":%s}}}`, mustPortsJSON(udpPorts)))
+		names = append(names, "qwq:preserve-udp")
+	}
+	matches = append(matches,
+		`{"match":{"op":"==","left":{"payload":{"protocol":"icmpv6","field":"type"}},"right":{"set":["destination-unreachable","packet-too-big","time-exceeded","parameter-problem","echo-request","nd-router-advert","nd-neighbor-solicit","nd-neighbor-advert"]}}}`,
 		`{"match":{"op":"==","left":{"meta":{"key":"iifname"}},"right":"lo"}}`,
 		`{"match":{"op":"==","left":{"ct":{"key":"state"}},"right":{"set":["established","related"]}}}`,
-	}
-	names := []string{"qwq:preserve", "qwq:loopback", "qwq:established"}
-	rules := make([]ruleObject, 0, 3)
+	)
+	names = append(names, "qwq:preserve-icmpv6", "qwq:loopback", "qwq:established")
+	rules := make([]ruleObject, 0, len(matches))
 	for i, match := range matches {
 		rule := ruleObject{Family: "inet", Table: "qwq", Chain: "input", Comment: names[i], Expr: []json.RawMessage{[]byte(match), []byte(`{"accept":null}`)}}
 		if err := normalizeRule(&rule); err != nil {

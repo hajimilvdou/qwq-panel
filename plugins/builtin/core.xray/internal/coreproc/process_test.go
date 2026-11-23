@@ -93,6 +93,7 @@ func fakeProcessFixture(t *testing.T, mode string, apiErr error) *processFixture
 	}
 	fixture.manager, err = New(Options{
 		Socket: filepath.Join(directory, "api.sock"), StopGrace: 100 * time.Millisecond,
+		RestartBackoff: 10 * time.Millisecond, RestartMaxBackoff: 40 * time.Millisecond,
 		Track: func(fn func(context.Context)) error {
 			tasks.Add(1)
 			go func() { defer tasks.Done(); fn(lifetime) }()
@@ -290,8 +291,8 @@ func TestFakeProcessExitOnlyEscalatesCommittedGeneration(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// race 子进程在退出时还会执行运行库的收尾，不能只等普通模式的 250ms。
-			deadline := time.NewTimer(3 * time.Second)
+			// race 子进程在退出时还会执行运行库的收尾，加上最多 5 次有界退避重启，预留 8s 预算。
+			deadline := time.NewTimer(8 * time.Second)
 			defer deadline.Stop()
 			if committed {
 				select {
@@ -299,8 +300,11 @@ func TestFakeProcessExitOnlyEscalatesCommittedGeneration(t *testing.T) {
 					if !errors.Is(err, ErrExited) {
 						t.Fatal("unexpected exit leaked an underlying diagnostic")
 					}
+					if got := fixture.commands.Load(); got != int32(1+DefaultMaxRestarts) {
+						t.Fatalf("expected 1 initial + %d bounded restarts, got %d launches", DefaultMaxRestarts, got)
+					}
 				case <-deadline.C:
-					t.Fatal("committed exit did not notify the fault domain")
+					t.Fatal("committed exit did not notify the fault domain after bounded restarts")
 				}
 			} else {
 				fixture.manager.mu.Lock()

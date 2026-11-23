@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -839,8 +839,47 @@ func (i *instance) handleCodesGenerate(ctx context.Context, req pluginsdk.Reques
 
 // ======================== 公开路由（ServePublicRoute + 零缓冲 ServeHTTP SSE） ========================
 
-// ServePublicRoute 实现 pluginsdk.PublicRouteHandler，复用同一 HTTP 路由器服务 v1/v1beta/portal。
-func (i *instance) ServePublicRoute(ctx context.Context, req pluginsdk.PublicRouteRequest) (pluginsdk.PublicRouteResponse, error) {
+const maxBufferedPublicRespBytes = 16 << 20
+
+type boundedResponseWriter struct {
+	hdr     http.Header
+	status  int
+	buf     bytes.Buffer
+	limit   int
+	clipped bool
+}
+
+func newBoundedResponseWriter(limit int) *boundedResponseWriter {
+	return &boundedResponseWriter{
+		hdr:    make(http.Header),
+		status: http.StatusOK,
+		limit:  limit,
+	}
+}
+
+func (b *boundedResponseWriter) Header() http.Header { return b.hdr }
+
+func (b *boundedResponseWriter) WriteHeader(code int) {
+	if code > 0 {
+		b.status = code
+	}
+}
+
+func (b *boundedResponseWriter) Write(p []byte) (int, error) {
+	rem := b.limit - b.buf.Len()
+	if rem <= 0 {
+		b.clipped = true
+		return len(p), nil
+	}
+	if len(p) > rem {
+		b.clipped = true
+		_, _ = b.buf.Write(p[:rem])
+		return len(p), nil
+	}
+	return b.buf.Write(p)
+}
+
+func buildPublicHTTPRequest(ctx context.Context, req pluginsdk.PublicRouteRequest, body io.Reader) (*http.Request, error) {
 	path := req.Path
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
@@ -853,31 +892,52 @@ func (i *instance) ServePublicRoute(ctx context.Context, req pluginsdk.PublicRou
 	if req.RawQuery != "" {
 		target += "?" + req.RawQuery
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, req.Method, target, bytes.NewReader(req.Body))
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, target, body)
 	if err != nil {
-		return pluginsdk.PublicRouteResponse{Status: 400, Body: []byte("bad request")}, nil
+		return nil, err
 	}
 	for _, h := range req.Headers {
 		httpReq.Header.Add(h.Name, h.Value)
 	}
+	return httpReq, nil
+}
 
-	rec := httptest.NewRecorder()
-	i.ServeHTTP(rec, httpReq)
-	res := rec.Result()
-	defer res.Body.Close()
-	body, _ := io.ReadAll(res.Body)
+// ServePublicStream 零缓冲直接向 http.ResponseWriter 流式转发公开路由响应（供流式 SSE / 长思考使用）。
+func (i *instance) ServePublicStream(ctx context.Context, req pluginsdk.PublicRouteRequest, body io.Reader, w http.ResponseWriter) error {
+	if body == nil {
+		body = bytes.NewReader(req.Body)
+	}
+	httpReq, err := buildPublicHTTPRequest(ctx, req, body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+		return nil
+	}
+	i.ServeHTTP(w, httpReq)
+	return nil
+}
 
-	hdrs := make([]pluginsdk.HTTPHeader, 0, len(res.Header))
-	for name, vals := range res.Header {
+// ServePublicRoute 实现 pluginsdk.PublicRouteHandler，复用同一 HTTP 路由器服务 v1/v1beta/portal，
+// 并使用有界写入器替代无上限 httptest.NewRecorder() 防止大响应击穿插件内存限制。
+func (i *instance) ServePublicRoute(ctx context.Context, req pluginsdk.PublicRouteRequest) (pluginsdk.PublicRouteResponse, error) {
+	httpReq, err := buildPublicHTTPRequest(ctx, req, bytes.NewReader(req.Body))
+	if err != nil {
+		return pluginsdk.PublicRouteResponse{Status: 400, Body: []byte("bad request")}, nil
+	}
+
+	bw := newBoundedResponseWriter(maxBufferedPublicRespBytes)
+	i.ServeHTTP(bw, httpReq)
+
+	hdrs := make([]pluginsdk.HTTPHeader, 0, len(bw.hdr))
+	for name, vals := range bw.hdr {
 		lower := strings.ToLower(name)
 		for _, v := range vals {
 			hdrs = append(hdrs, pluginsdk.HTTPHeader{Name: lower, Value: v})
 		}
 	}
 	return pluginsdk.PublicRouteResponse{
-		Status:  uint32(res.StatusCode),
+		Status:  uint32(bw.status),
 		Headers: hdrs,
-		Body:    body,
+		Body:    bw.buf.Bytes(),
 	}, nil
 }
 
@@ -957,6 +1017,9 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "message": "invalid protocol payload or missing model"})
 		return
 	}
+	if protoIn == proxy.ProtoGeminiNative && strings.HasSuffix(cleanPath, ":generateContent") {
+		ir.Stream = false
+	}
 
 	cfg := i.configSnapshot()
 	tok, reservation, err := i.ledger.AuthorizeAndReserve(rawKey, ir.Model, clientIPFromRequest(r), cfg.DefaultReserveMicros)
@@ -1020,7 +1083,24 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 			continue
 		}
 
-		usage, _ := proxy.RelayStreamBridge(startedAt, upResp.Body, ch.NativeProtocol(), protoIn, ir.Model, w)
+		var usage proxy.StreamUsage
+		var relayErr error
+		upCT := strings.ToLower(upResp.Header.Get("Content-Type"))
+		if ch.NativeProtocol() == protoIn && (!ir.Stream || strings.Contains(upCT, "application/json")) {
+			tw := &headerTrackingResponseWriter{ResponseWriter: w}
+			usage, relayErr = proxy.RelayJSONResponseBridge(startedAt, upResp.Body, upResp.StatusCode, upResp.Header.Get("Content-Type"), ir.EstimatedInputTokens, tw)
+			if relayErr != nil {
+				log.Printf("ai.relay: non-stream relay failed (channel=%s model=%s): %v", ch.ID, ir.Model, relayErr)
+				if !tw.wroteHeader {
+					writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_relay_failed", "message": relayErr.Error()})
+				}
+			}
+		} else {
+			usage, _ = proxy.RelayStreamBridge(startedAt, upResp.Body, ch.NativeProtocol(), protoIn, ir.Model, w)
+			if usage.InputTokens <= 0 && ir.EstimatedInputTokens > 0 {
+				usage.InputTokens = ir.EstimatedInputTokens
+			}
+		}
 		_ = upResp.Body.Close()
 		ch.ReleaseSlot()
 
@@ -1114,6 +1194,8 @@ func (i *instance) handlePortalHTTP(w http.ResponseWriter, r *http.Request, clea
 			code := http.StatusBadRequest
 			if strings.HasPrefix(err.Error(), "UNAUTHENTICATED") {
 				code = http.StatusUnauthorized
+			} else if strings.HasPrefix(err.Error(), "RATE_LIMITED") {
+				code = http.StatusTooManyRequests
 			}
 			writeJSON(w, code, map[string]string{"message": err.Error()})
 			return
@@ -1331,6 +1413,21 @@ func mapStoreError(err error) error {
 		return &pluginsdk.Error{Code: strings.TrimSpace(code), Message: strings.TrimSpace(rest)}
 	}
 	return pluginsdk.Errorf("INTERNAL", "%s", msg)
+}
+
+type headerTrackingResponseWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *headerTrackingResponseWriter) WriteHeader(code int) {
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *headerTrackingResponseWriter) Write(p []byte) (int, error) {
+	w.wroteHeader = true
+	return w.ResponseWriter.Write(p)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

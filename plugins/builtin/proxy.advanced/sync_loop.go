@@ -184,7 +184,7 @@ func (i *instance) syncCoreXrayLockedWithWARP(ctx context.Context, host *plugins
 		return "", err
 	}
 
-	activeUsers, err := i.store.ListUsers(ctx, "active", "", 256)
+	activeUsers, err := i.store.ListUsers(ctx, "active", "", 10000)
 	if err != nil {
 		return "", err
 	}
@@ -249,7 +249,7 @@ func (i *instance) syncTrafficShapingLocked(ctx context.Context, host *pluginsdk
 		return true, reason, nil
 	}
 
-	activeUsers, err := i.store.ListUsers(ctx, "active", "", 256)
+	activeUsers, err := i.store.ListUsers(ctx, "active", "", 10000)
 	if err != nil {
 		return false, "", err
 	}
@@ -423,13 +423,13 @@ func buildProfileUsers(protocol string, activeUsers []userRecord, existing map[s
 		}
 		slots := existing[u.ID]
 		switch protocol {
-		case "vless":
+		case "vless", "vmess":
 			if slots["uuid"] {
 				entry["uuid"] = map[string]any{"$keep_secret": true}
 			} else {
 				entry["uuid"] = u.VLESSUUID
 			}
-		case "hysteria2":
+		case "trojan", "shadowsocks", "hysteria2", "anytls", "socks5", "http":
 			if slots["auth"] {
 				entry["auth"] = map[string]any{"$keep_secret": true}
 			} else {

@@ -1,0 +1,17 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+html,
+body.sandbox-host {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0f172a;
+}
+
+.theme-sandbox-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}

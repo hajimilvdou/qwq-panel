@@ -41,15 +41,16 @@
     "schemas/overview.response.json": "sha256:7e656cba561984fed322308c38f0ae5180b1cd39d6c140d81d6c76c424e35edf",
     "schemas/revision.request.json": "sha256:20c3e517a1da6814d808a3d08e6d44e418e49b88554064d51748943baf27d2ce",
     "schemas/revision.response.json": "sha256:8a6cd1ab8a30f6b0761c891070aa707512573d36256692b662ef6ada26f5024e",
-    "schemas/sshd.change_port_action.request.json": "sha256:b0a5a029b4318e6f041363db516087dbf2fed6f4b266e40d316118bbcf0728c0",
+    "schemas/sshd.change_port_action.request.json": "sha256:c3065ebfb581c7e1c6fa0ba5174976650bd85586cd6813158ec15ba786867617",
     "schemas/sshd.change_port_prepare.request.json": "sha256:25090b7b9d5efd0de800f70110642dccb814b02c83e15a02247822b58760ca62",
     "schemas/sshd.port_saga.response.json": "sha256:66d724cd8db336c73ea226d8996d22ca00ad9e0b1a57010062fa0dd6156bdde4",
     "schemas/sshd.set_login_policy.request.json": "sha256:ebe804da41ed9ea029768ed8621f39f980dded490ef71cf28b2f0fa1ae69e08a",
     "schemas/sshd.set_login_policy.response.json": "sha256:24a128ac1dafb289eca8f383ea39773af8109347d98ef4f640b0c64656bd665e",
     "schemas/sshd.status.request.json": "sha256:8797461339fd07222572571dff7c67658ad403cd5df23c515dfd2923e10428a9",
     "schemas/sshd.status.response.json": "sha256:f8fa9a329bfdeb79856a39fc72622215017001a1153ac747487766b99b9971fc",
-    "ui/index.html": "sha256:b32f1cdc3f887ebc714a3a31adb1bdf64760fa2d8e8d44aad11d53d215bdd770",
-    "ui/security.js": "sha256:b19540247773568ec08242906f705ea30cc117873b2fed3540321aaeb7c9ce9d"
+    "ui/index.html": "sha256:86f8b67a6873853c26356fea7a03a6dfeee08fe194fee4bd2d3676dae052f9ec",
+    "ui/plugin.css": "sha256:f199659aaf9ad12bed5caa0f663a4c64a80560ca64e97378a08e3a1221f28d97",
+    "ui/security.js": "sha256:4d37983eeb7ace8ba04d95297d168794b99bb48ca37cf41568de041829ea300e"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

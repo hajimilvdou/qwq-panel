@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "测试代理节点连通性与延迟响应",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "latency_ms": {
+      "type": "integer"
+    },
+    "protocol": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string"
+    },
+    "tls_version": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    },
+    "tested_at": {
+      "type": "integer"
+    }
+  },
+  "required": ["id", "ok", "latency_ms", "protocol", "target", "tested_at"]
+}

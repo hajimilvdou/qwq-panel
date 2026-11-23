@@ -3,10 +3,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/netip"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,19 +24,33 @@ import (
 // ======================== 7 步双端口零断连 SSH 改端口 Saga ========================
 
 const (
-	minUserSSHPort = 1024
-	maxUserSSHPort = 65535
+	minUserSSHPort         = 1024
+	maxUserSSHPort         = 65535
+	sagaStagePrepared      = "PREPARED"
+	sagaStageSSHDCommitted = "SSHD_COMMITTED"
 )
 
 type portSagaState struct {
-	TransactionRef   string `json:"transaction_ref"`
-	OldPort          uint32 `json:"old_port"`
-	NewPort          uint32 `json:"new_port"`
-	DeadlineUnix     int64  `json:"deadline_unix"`
-	CreatedAtUnix    int64  `json:"created_at_unix"`
-	SSHDRevision     string `json:"sshd_revision"`
-	FirewallRevision string `json:"firewall_revision"`
-	FirewallManaged  bool   `json:"firewall_managed"`
+	TransactionRef   string   `json:"transaction_ref"`
+	Stage            string   `json:"stage,omitempty"`
+	OldPort          uint32   `json:"old_port"`
+	OldPorts         []uint32 `json:"old_ports,omitempty"`
+	NewPort          uint32   `json:"new_port"`
+	DeadlineUnix     int64    `json:"deadline_unix"`
+	CreatedAtUnix    int64    `json:"created_at_unix"`
+	SSHDRevision     string   `json:"sshd_revision"`
+	FirewallRevision string   `json:"firewall_revision"`
+	FirewallManaged  bool     `json:"firewall_managed"`
+}
+
+func (s portSagaState) allOldPorts() []uint32 {
+	if len(s.OldPorts) > 0 {
+		return s.OldPorts
+	}
+	if s.OldPort > 0 {
+		return []uint32{s.OldPort}
+	}
+	return nil
 }
 
 type sshdChangePortPrepareRequest struct {
@@ -43,8 +61,9 @@ type sshdChangePortPrepareRequest struct {
 }
 
 type sshdChangePortActionRequest struct {
-	TransactionRef   string `json:"transaction_ref"`
-	ExpectedRevision string `json:"expected_revision"`
+	TransactionRef           string `json:"transaction_ref"`
+	ExpectedRevision         string `json:"expected_revision"`
+	ConfirmExternalReachable bool   `json:"confirm_external_reachable,omitempty"`
 }
 
 type sshdPortSagaResponse struct {
@@ -138,7 +157,7 @@ func (i *instance) handleSSHDChangePortPrepare(ctx context.Context, req pluginsd
 		if err != nil {
 			return pluginsdk.Result{}, err
 		}
-		dualPorts := mergePorts(fwSnap.GetPreservedPorts(), oldPort, in.NewPort)
+		dualPorts := mergePorts(fwSnap.GetPreservedPorts(), append(append([]uint32(nil), currentPorts...), in.NewPort)...)
 		applyResp, err := fwWrite.ApplyRuleset(ctx, &firewallv1.ApplyRulesetRequest{
 			Context:          fwWriteMeta,
 			RulesetJson:      rulesetOrMinimal(fwSnap.GetRulesetJson()),
@@ -159,7 +178,7 @@ func (i *instance) handleSSHDChangePortPrepare(ctx context.Context, req pluginsd
 	sshdWrite, sshdWriteMeta, err := sshdClientWrite(ctx, host)
 	if err != nil {
 		if fwManaged {
-			_ = i.restoreFirewallPorts(ctx, host, oldPort, in.NewPort)
+			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort)
 		}
 		return pluginsdk.Result{}, err
 	}
@@ -171,13 +190,13 @@ func (i *instance) handleSSHDChangePortPrepare(ctx context.Context, req pluginsd
 	})
 	if err != nil {
 		if fwManaged {
-			_ = i.restoreFirewallPorts(ctx, host, oldPort, in.NewPort)
+			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort)
 		}
 		return pluginsdk.Result{}, err
 	}
 	if err := protoError(setResp.GetError()); err != nil {
 		if fwManaged {
-			_ = i.restoreFirewallPorts(ctx, host, oldPort, in.NewPort)
+			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort)
 		}
 		return pluginsdk.Result{}, err
 	}
@@ -201,7 +220,7 @@ func (i *instance) handleSSHDChangePortPrepare(ctx context.Context, req pluginsd
 			TransactionRef:   txRef,
 		})
 		if fwManaged {
-			_ = i.restoreFirewallPorts(ctx, host, oldPort, in.NewPort)
+			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort)
 		}
 		if verifyErr != nil {
 			return pluginsdk.Result{}, verifyErr
@@ -220,7 +239,9 @@ func (i *instance) handleSSHDChangePortPrepare(ctx context.Context, req pluginsd
 	now := i.nowTime()
 	saga := portSagaState{
 		TransactionRef:   txRef,
+		Stage:            sagaStagePrepared,
 		OldPort:          oldPort,
+		OldPorts:         append([]uint32(nil), currentPorts...),
 		NewPort:          in.NewPort,
 		DeadlineUnix:     now.Add(time.Duration(timeoutSec) * time.Second).Unix(),
 		CreatedAtUnix:    now.Unix(),
@@ -238,7 +259,7 @@ func (i *instance) handleSSHDChangePortPrepare(ctx context.Context, req pluginsd
 			TransactionRef:   txRef,
 		})
 		if fwManaged {
-			_ = i.restoreFirewallPorts(ctx, host, oldPort, in.NewPort)
+			_ = i.restoreFirewallPorts(ctx, host, currentPorts, in.NewPort)
 		}
 		return pluginsdk.Result{}, err
 	}
@@ -285,50 +306,77 @@ func (i *instance) handleSSHDChangePortCommit(ctx context.Context, req pluginsdk
 		return pluginsdk.Result{}, pluginsdk.Errorf("PRECONDITION_FAILED", "transaction_ref 与当前挂起事务不匹配")
 	}
 
-	// 提交前再次确认新端口可达，防止半途故障导致失联。
-	sshdRead, sshdReadMeta, err := sshdClientReadOnly(ctx, host)
-	if err != nil {
-		return pluginsdk.Result{}, err
-	}
-	verifyResp, err := sshdRead.VerifyPort(ctx, &sshdv1.VerifyPortRequest{
-		Context: sshdReadMeta,
-		Port:    saga.NewPort,
-	})
-	if err != nil {
-		return pluginsdk.Result{}, err
-	}
-	if err := protoError(verifyResp.GetError()); err != nil {
-		return pluginsdk.Result{}, err
-	}
-	if !verifyResp.GetReachable() {
-		return pluginsdk.Result{}, pluginsdk.Errorf("PORT_VERIFY_FAILED", "新 SSH 端口 %d 当前不可达，已拒绝提交（可继续排查或执行回滚）", saga.NewPort)
+	var (
+		banner    string
+		listening []uint32
+		finalRev  = saga.SSHDRevision
+	)
+
+	if saga.Stage != sagaStageSSHDCommitted {
+		// 提交前再次确认新端口可达，防止半途故障导致失联。
+		sshdRead, sshdReadMeta, err := sshdClientReadOnly(ctx, host)
+		if err != nil {
+			return pluginsdk.Result{}, err
+		}
+		verifyResp, err := sshdRead.VerifyPort(ctx, &sshdv1.VerifyPortRequest{
+			Context: sshdReadMeta,
+			Port:    saga.NewPort,
+		})
+		if err != nil {
+			return pluginsdk.Result{}, err
+		}
+		if err := protoError(verifyResp.GetError()); err != nil {
+			return pluginsdk.Result{}, err
+		}
+		if !verifyResp.GetReachable() {
+			return pluginsdk.Result{}, pluginsdk.Errorf("PORT_VERIFY_FAILED", "新 SSH 端口 %d 当前不可达，已拒绝提交（可继续排查或执行回滚）", saga.NewPort)
+		}
+		banner = verifyResp.GetBanner()
+
+		// 云安全组防自锁检查：仅回环可达不能证明公网/云安全组已放行新端口；
+		// 若未检测到来自非回环外部客户端的 ESTABLISHED 连接，需显式二次确认。
+		if !hasExternalEstablishedTCP(saga.NewPort) && !in.ConfirmExternalReachable {
+			return pluginsdk.Result{}, pluginsdk.Errorf("PRECONDITION_FAILED",
+				"未检测到新 SSH 端口 %d 的外部 ESTABLISHED 连接；请先使用新终端从外部登录验证云安全组已放行，或携带 confirm_external_reachable=true 二次确认后再提交",
+				saga.NewPort)
+		}
+
+		expectedRev := resolveRevision(in.ExpectedRevision, req, "sshd/config")
+		if expectedRev == "" {
+			expectedRev = saga.SSHDRevision
+		}
+		sshdWrite, sshdWriteMeta, err := sshdClientWrite(ctx, host)
+		if err != nil {
+			return pluginsdk.Result{}, err
+		}
+		commitResp, err := sshdWrite.SetPort(ctx, &sshdv1.SetPortRequest{
+			Context:          sshdWriteMeta,
+			NewPort:          saga.NewPort,
+			ExpectedRevision: expectedRev,
+			Stage:            sshdv1.PortChangeStage_PORT_CHANGE_STAGE_COMMIT_NEW,
+			TransactionRef:   saga.TransactionRef,
+		})
+		if err != nil {
+			return pluginsdk.Result{}, err
+		}
+		if err := protoError(commitResp.GetError()); err != nil {
+			return pluginsdk.Result{}, err
+		}
+		finalRev = commitResp.GetRevision()
+		listening = append(listening, commitResp.GetListeningPorts()...)
+
+		// 立即将阶段推进为 SSHD_COMMITTED 并写回 KV：此后即使防火墙清理暂时报错，
+		// sagaWatchLoop 也只收敛防火墙与删除 KV，绝不再向已提交的 sshd 发送 ROLLBACK。
+		saga.Stage = sagaStageSSHDCommitted
+		saga.SSHDRevision = finalRev
+		_ = i.savePortSaga(ctx, host, saga)
+	} else {
+		listening = []uint32{saga.NewPort}
 	}
 
-	expectedRev := resolveRevision(in.ExpectedRevision, req, "sshd/config")
-	if expectedRev == "" {
-		expectedRev = saga.SSHDRevision
-	}
-	sshdWrite, sshdWriteMeta, err := sshdClientWrite(ctx, host)
-	if err != nil {
-		return pluginsdk.Result{}, err
-	}
-	commitResp, err := sshdWrite.SetPort(ctx, &sshdv1.SetPortRequest{
-		Context:          sshdWriteMeta,
-		NewPort:          saga.NewPort,
-		ExpectedRevision: expectedRev,
-		Stage:            sshdv1.PortChangeStage_PORT_CHANGE_STAGE_COMMIT_NEW,
-		TransactionRef:   saga.TransactionRef,
-	})
-	if err != nil {
-		return pluginsdk.Result{}, err
-	}
-	if err := protoError(commitResp.GetError()); err != nil {
-		return pluginsdk.Result{}, err
-	}
-
-	// 若准备阶段托管了防火墙，则提交完成后移除旧端口放行并保留新端口。
+	// 若准备阶段托管了防火墙，则提交完成后移除所有旧端口放行并保留新端口。
 	if saga.FirewallManaged {
-		if err := i.commitFirewallPorts(ctx, host, saga.OldPort, saga.NewPort); err != nil {
+		if err := i.commitFirewallPorts(ctx, host, saga.allOldPorts(), saga.NewPort); err != nil {
 			return pluginsdk.Result{}, err
 		}
 	}
@@ -338,16 +386,14 @@ func (i *instance) handleSSHDChangePortCommit(ctx context.Context, req pluginsdk
 	}
 	i.setOverviewSagaPending(ctx, host, false)
 
-	listening := make([]uint32, 0, len(commitResp.GetListeningPorts()))
-	listening = append(listening, commitResp.GetListeningPorts()...)
 	return marshalResult(sshdPortSagaResponse{
 		Stage:           "committed",
 		TransactionRef:  saga.TransactionRef,
 		OldPort:         saga.OldPort,
 		NewPort:         saga.NewPort,
 		ListeningPorts:  listening,
-		Banner:          verifyResp.GetBanner(),
-		Revision:        commitResp.GetRevision(),
+		Banner:          banner,
+		Revision:        finalRev,
 		FirewallManaged: saga.FirewallManaged,
 	})
 }
@@ -408,7 +454,7 @@ func (i *instance) executePortRollbackLocked(ctx context.Context, host *pluginsd
 		return sshdPortSagaResponse{}, err
 	}
 	if saga.FirewallManaged {
-		if err := i.restoreFirewallPorts(ctx, host, saga.OldPort, saga.NewPort); err != nil {
+		if err := i.restoreFirewallPorts(ctx, host, saga.allOldPorts(), saga.NewPort); err != nil {
 			return sshdPortSagaResponse{}, err
 		}
 	}
@@ -458,14 +504,32 @@ func (i *instance) checkExpiredPortSaga(ctx context.Context) {
 	if err != nil || !found {
 		return
 	}
-	if i.nowTime().Unix() < saga.DeadlineUnix {
+	if saga.Stage != sagaStageSSHDCommitted && i.nowTime().Unix() < saga.DeadlineUnix {
 		return
 	}
 	i.sagaMu.Lock()
 	defer i.sagaMu.Unlock()
 	// 加锁后二次读取，避免与并发 commit/rollback 重复执行。
 	saga, found, err = i.loadPortSaga(ctx, host)
-	if err != nil || !found || i.nowTime().Unix() < saga.DeadlineUnix {
+	if err != nil || !found {
+		return
+	}
+	if saga.Stage == sagaStageSSHDCommitted {
+		// sshd 已完成 COMMIT_NEW，仅重试防火墙收敛与清理 KV，绝不再发 ROLLBACK 形成死循环。
+		if saga.FirewallManaged {
+			if err := i.commitFirewallPorts(ctx, host, saga.allOldPorts(), saga.NewPort); err != nil {
+				i.Logger().Warn("SSH 改端口已提交，重试防火墙收敛失败", "transaction_ref", saga.TransactionRef, "error", err.Error())
+				return
+			}
+		}
+		if err := host.DeleteState(ctx, kvKeyPortSaga, ""); err != nil {
+			i.Logger().Warn("SSH 改端口已提交，清理 KV 失败", "transaction_ref", saga.TransactionRef, "error", err.Error())
+			return
+		}
+		i.setOverviewSagaPending(ctx, host, false)
+		return
+	}
+	if saga.Stage != sagaStageSSHDCommitted && i.nowTime().Unix() < saga.DeadlineUnix {
 		return
 	}
 	if _, err := i.executePortRollbackLocked(ctx, host, saga, ""); err != nil {
@@ -504,7 +568,7 @@ func (i *instance) savePortSaga(ctx context.Context, host *pluginsdk.Host, saga 
 	return err
 }
 
-func (i *instance) commitFirewallPorts(ctx context.Context, host *pluginsdk.Host, oldPort, newPort uint32) error {
+func (i *instance) commitFirewallPorts(ctx context.Context, host *pluginsdk.Host, oldPorts []uint32, newPort uint32) error {
 	fwRead, fwReadMeta, err := firewallClientReadOnly(ctx, host)
 	if err != nil {
 		return err
@@ -520,7 +584,13 @@ func (i *instance) commitFirewallPorts(ctx context.Context, host *pluginsdk.Host
 	if err != nil {
 		return err
 	}
-	ports := mergePorts(removePort(snap.GetPreservedPorts(), oldPort), newPort)
+	ports := snap.GetPreservedPorts()
+	for _, oldPort := range oldPorts {
+		if oldPort != newPort {
+			ports = removePort(ports, oldPort)
+		}
+	}
+	ports = mergePorts(ports, newPort)
 	resp, err := fwWrite.ApplyRuleset(ctx, &firewallv1.ApplyRulesetRequest{
 		Context:          fwWriteMeta,
 		RulesetJson:      rulesetOrMinimal(snap.GetRulesetJson()),
@@ -533,7 +603,7 @@ func (i *instance) commitFirewallPorts(ctx context.Context, host *pluginsdk.Host
 	return protoError(resp.GetError())
 }
 
-func (i *instance) restoreFirewallPorts(ctx context.Context, host *pluginsdk.Host, oldPort, newPort uint32) error {
+func (i *instance) restoreFirewallPorts(ctx context.Context, host *pluginsdk.Host, oldPorts []uint32, newPort uint32) error {
 	fwRead, fwReadMeta, err := firewallClientReadOnly(ctx, host)
 	if err != nil {
 		return err
@@ -549,7 +619,7 @@ func (i *instance) restoreFirewallPorts(ctx context.Context, host *pluginsdk.Hos
 	if err != nil {
 		return err
 	}
-	ports := mergePorts(removePort(snap.GetPreservedPorts(), newPort), oldPort)
+	ports := mergePorts(removePort(snap.GetPreservedPorts(), newPort), oldPorts...)
 	resp, err := fwWrite.ApplyRuleset(ctx, &firewallv1.ApplyRulesetRequest{
 		Context:          fwWriteMeta,
 		RulesetJson:      rulesetOrMinimal(snap.GetRulesetJson()),
@@ -560,6 +630,92 @@ func (i *instance) restoreFirewallPorts(ctx context.Context, host *pluginsdk.Hos
 		return err
 	}
 	return protoError(resp.GetError())
+}
+
+// hasExternalEstablishedTCP 检查 Linux /proc/net/tcp{,6} 是否在目标端口存在非回环外部 ESTABLISHED 连接。
+func hasExternalEstablishedTCP(port uint32) bool {
+	if port == 0 || port > 65535 {
+		return false
+	}
+	for _, spec := range []struct {
+		path string
+		ipv6 bool
+	}{
+		{path: "/proc/net/tcp", ipv6: false},
+		{path: "/proc/net/tcp6", ipv6: true},
+	} {
+		if scanProcNetTCPForExternal(spec.path, port, spec.ipv6) {
+			return true
+		}
+	}
+	return false
+}
+
+func scanProcNetTCPForExternal(path string, port uint32, ipv6 bool) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	first := true
+	for sc.Scan() {
+		if first {
+			first = false
+			continue
+		}
+		fields := strings.Fields(sc.Text())
+		if len(fields) < 4 || fields[3] != "01" { // 01 = TCP_ESTABLISHED
+			continue
+		}
+		_, localPortHex, ok := strings.Cut(fields[1], ":")
+		if !ok {
+			continue
+		}
+		lp, err := strconv.ParseUint(localPortHex, 16, 32)
+		if err != nil || uint32(lp) != port {
+			continue
+		}
+		remIPHex, _, ok := strings.Cut(fields[2], ":")
+		if !ok {
+			continue
+		}
+		addr, ok := parseProcNetHexIP(remIPHex, ipv6)
+		if !ok {
+			continue
+		}
+		u := addr.Unmap()
+		if !u.IsLoopback() && !u.IsUnspecified() {
+			return true
+		}
+	}
+	return false
+}
+
+func parseProcNetHexIP(hexStr string, ipv6 bool) (netip.Addr, bool) {
+	raw, err := hex.DecodeString(hexStr)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	if !ipv6 {
+		if len(raw) != 4 {
+			return netip.Addr{}, false
+		}
+		return netip.AddrFrom4([4]byte{raw[3], raw[2], raw[1], raw[0]}), true
+	}
+	if len(raw) != 16 {
+		return netip.Addr{}, false
+	}
+	var b [16]byte
+	for w := 0; w < 4; w++ {
+		off := w * 4
+		b[off+0] = raw[off+3]
+		b[off+1] = raw[off+2]
+		b[off+2] = raw[off+1]
+		b[off+3] = raw[off+0]
+	}
+	return netip.AddrFrom16(b), true
 }
 
 func extractListeningPorts(settings []*sshdv1.Setting) []uint32 {

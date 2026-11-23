@@ -1,0 +1,300 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>qwq Probe · 独立管理后台 (/admin)</title>
+  <link rel="stylesheet" href="admin.css">
+  <script src="admin.js" defer></script>
+</head>
+<body>
+  <div class="admin-shell">
+    <header class="topbar">
+      <div class="brand">
+        <strong>qwq Probe · 官方隔离后台</strong>
+        <span class="badge-isolated">永久隔离保护 · 第三方主题无法劫持</span>
+      </div>
+      <div class="top-actions">
+        <button type="button" class="btn ghost" id="theme-mode-btn">深浅色</button>
+        <a class="btn ghost" id="back-portal-link" href="./">返回展示前台</a>
+        <button type="button" class="btn danger" id="logout-btn" hidden>退出登录</button>
+      </div>
+    </header>
+
+    <div id="toast-bar" class="toast-bar" hidden></div>
+
+    <!-- 登录解锁区 -->
+    <section id="login-view" class="login-card card">
+      <h1>解锁探针独立管理后台</h1>
+      <p class="muted">输入探针专属管理口令（通过 <code>X-Probe-Admin-Token</code> 鉴权，与 qwq 主面板会话 100% 物理隔离）。即使前台安装了损坏的第三方主题，本页仍随时可用并可一键切回官方风格。</p>
+      <form id="login-form" class="stack">
+        <label class="field">
+          <span>探针管理口令</span>
+          <input id="login-password" type="password" placeholder="请输入 standalone_admin_password" autocomplete="current-password" required>
+        </label>
+        <p id="login-error" class="err-text" hidden></p>
+        <div class="row-end">
+          <button type="submit" class="btn berry">验证并进入后台</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- 管理主控制台 -->
+    <section id="console-view" hidden>
+      <nav class="tabs" role="tablist" aria-label="后台分区">
+        <button type="button" class="tab active" data-tab="themes">主题中心</button>
+        <button type="button" class="tab" data-tab="glass">水玻璃与智能背景</button>
+        <button type="button" class="tab" data-tab="nodes">节点与 Agent</button>
+        <button type="button" class="tab" data-tab="domain">域名与站点</button>
+      </nav>
+
+      <!-- Tab 1: 主题中心 -->
+      <div class="tab-panel" id="panel-themes">
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h2>已安装前台主题</h2>
+              <p class="muted">前台展示风格可自由切换为官方经典卡片、动态透明水玻璃或任意第三方 <code>.qwqtheme.zip</code> 主题包。</p>
+            </div>
+            <button type="button" class="btn ghost" id="download-starter-btn">下载官方主题模板 .zip</button>
+          </div>
+          <div id="theme-list" class="theme-grid"></div>
+        </article>
+
+        <article class="card" id="theme-settings-card" hidden>
+          <div class="card-head">
+            <div>
+              <h2>当前主题专属配置</h2>
+              <p class="muted" id="theme-settings-desc">根据主题包 <code>theme.json</code> 中声明的 <code>settings_schema</code> 自动生成。</p>
+            </div>
+            <button type="button" class="btn primary" id="save-theme-settings-btn">保存主题参数</button>
+          </div>
+          <div id="theme-settings-form" class="form-grid"></div>
+        </article>
+
+        <article class="card">
+          <h2>安装第三方主题包（.qwqtheme.zip / HTTPS 链接）</h2>
+          <div class="install-split">
+            <div id="theme-dropzone" class="dropzone" tabindex="0" role="button" aria-label="上传主题压缩包">
+              <strong>拖拽 <code>.qwqtheme.zip</code> 到此处，或点击选择文件</strong>
+              <span class="muted">严格校验：≤ 16 MiB · 仅允许静态前端文件 · 防 Zip-Slip 穿越</span>
+              <input id="theme-file-input" type="file" accept=".zip,.qwqtheme.zip" hidden>
+            </div>
+            <div class="url-install-box">
+              <label class="field">
+                <span>从 HTTPS URL 一键远程拉取主题包</span>
+                <input id="theme-url-input" type="url" placeholder="https://example.com/my-theme.qwqtheme.zip">
+              </label>
+              <button type="button" class="btn berry" id="theme-url-install-btn">拉取并安装主题</button>
+              <p class="muted small">仅允许公网 HTTPS，内置防 SSRF / DNS Rebinding 拨号校验。</p>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <!-- Tab 2: 水玻璃与智能背景引擎 -->
+      <div class="tab-panel" id="panel-glass" hidden>
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h2>浏览器端 Canvas 智能背景优化器</h2>
+              <p class="muted">本地自动缩放至 ≤ 1920px、计算亮度与主色调、压缩 WebP/JPEG（约 150~400 KB）并生成 32px LQIP 零闪烁占位图。</p>
+            </div>
+            <button type="button" class="btn danger" id="clear-bg-btn">一键清除背景</button>
+          </div>
+
+          <div class="bg-workbench">
+            <div class="bg-controls-col">
+              <div id="bg-dropzone" class="dropzone" tabindex="0" role="button" aria-label="上传背景壁纸">
+                <strong>拖拽或选择任意壁纸图片（JPG / PNG / WebP）</strong>
+                <span class="muted">支持 15MB 4K 原图，浏览器本地极速转码，不拖慢 1C1G 小鸡</span>
+                <input id="bg-file-input" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+              </div>
+
+              <div id="bg-analysis-badge" class="analysis-badge" hidden></div>
+
+              <div class="field-inline">
+                <input id="bg-external-url" type="url" placeholder="或使用外链 HTTPS 壁纸 URL（https://...）">
+                <button type="button" class="btn ghost" id="apply-bg-url-btn">应用外链壁纸</button>
+              </div>
+            </div>
+
+            <div class="bg-preview-col">
+              <div class="preview-stage" id="mini-preview-stage">
+                <img id="bg-preview-img" class="bg-preview-img" data-fx="50" data-fy="50" alt="壁纸焦点预览" hidden>
+                <div class="preview-veil" id="mini-preview-veil"></div>
+                <div class="mini-glass-card" id="mini-glass-card">
+                  <strong>[HK] 香港 CN2 GIA</strong>
+                  <span>CPU 18.4% · 99.98% SLA</span>
+                </div>
+              </div>
+              <div class="focal-panel">
+                <span class="focal-title">9 宫格构图焦点（避免竖图/人像裁切偏移）</span>
+                <div class="focal-grid" id="focal-grid" role="group" aria-label="九宫格焦点选择">
+                  <button type="button" class="focal-dot" data-fx="0" data-fy="0" title="左上"></button>
+                  <button type="button" class="focal-dot" data-fx="50" data-fy="0" title="中上"></button>
+                  <button type="button" class="focal-dot" data-fx="100" data-fy="0" title="右上"></button>
+                  <button type="button" class="focal-dot" data-fx="0" data-fy="50" title="左中"></button>
+                  <button type="button" class="focal-dot active" data-fx="50" data-fy="50" title="居中"></button>
+                  <button type="button" class="focal-dot" data-fx="100" data-fy="50" title="右中"></button>
+                  <button type="button" class="focal-dot" data-fx="0" data-fy="100" title="左下"></button>
+                  <button type="button" class="focal-dot" data-fx="50" data-fy="100" title="中下"></button>
+                  <button type="button" class="focal-dot" data-fx="100" data-fy="100" title="右下"></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h2>动态透明水玻璃光学参数</h2>
+              <p class="muted">实时调节毛玻璃透明度、模糊半径、护眼遮罩与流动高光，点击保存立即同步到公开前台。</p>
+            </div>
+            <div class="row-gap">
+              <button type="button" class="btn ghost" id="activate-liquid-btn">切到水玻璃风格</button>
+              <button type="button" class="btn berry" id="save-appearance-btn">保存外观配置</button>
+            </div>
+          </div>
+
+          <div class="slider-grid">
+            <label class="slider-field">
+              <span class="slider-label">玻璃透明度 <strong id="val-glass-opacity">26%</strong></span>
+              <input id="opt-glass-opacity" type="range" min="8" max="85" step="1" value="26">
+            </label>
+            <label class="slider-field">
+              <span class="slider-label">磨砂模糊度 <strong id="val-glass-blur">20px</strong></span>
+              <input id="opt-glass-blur" type="range" min="0" max="40" step="1" value="20">
+            </label>
+            <label class="slider-field">
+              <span class="slider-label">护眼遮罩浓度 <strong id="val-veil-opacity">22%</strong></span>
+              <input id="opt-veil-opacity" type="range" min="0" max="75" step="1" value="22">
+            </label>
+            <label class="field">
+              <span>玻璃色调策略</span>
+              <select id="opt-glass-tint">
+                <option value="auto">自动适配（按壁纸亮度自动选择浅冰/深曜）</option>
+                <option value="light">强制浅冰玻璃（Light Ice）</option>
+                <option value="dark">强制深曜玻璃（Dark Obsidian）</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>自定义强调色（可选）</span>
+              <div class="color-row">
+                <input id="opt-accent-color" type="color" value="#b83b6a">
+                <label class="check-inline"><input id="opt-accent-enable" type="checkbox"> 启用自定义强调色</label>
+              </div>
+            </label>
+            <label class="field check-box-card">
+              <input id="opt-motion-enabled" type="checkbox" checked>
+              <span>开启动态极光与指针微光折射动效</span>
+            </label>
+          </div>
+
+          <label class="field css-field">
+            <span>自定义 CSS（高级微调，上限 16 KiB，仅作用于公开展示页）</span>
+            <textarea id="opt-custom-css" rows="4" placeholder="/* 例：.card { border-radius: 28px; } */"></textarea>
+          </label>
+        </article>
+      </div>
+
+      <!-- Tab 3: 节点与 Agent -->
+      <div class="tab-panel" id="panel-nodes" hidden>
+        <article class="card">
+          <h2>新增监控服务器 &amp; 生成单向 Agent 安装命令</h2>
+          <div class="form-grid">
+            <label class="field">
+              <span>节点名称</span>
+              <input id="adm-node-name" type="text" placeholder="如：法兰克福 9929 · 01">
+            </label>
+            <label class="field">
+              <span>地区代码</span>
+              <input id="adm-node-region" type="text" value="HK" placeholder="HK / JP / US / DE">
+            </label>
+            <label class="field">
+              <span>流量计费口径</span>
+              <select id="adm-node-quota-mode">
+                <option value="both">双向合计 (rx + tx)</option>
+                <option value="max">单向取大 max(rx, tx)</option>
+                <option value="out_only">仅计出站 (tx)</option>
+              </select>
+            </label>
+          </div>
+          <div class="row-end">
+            <button type="button" class="btn primary" id="adm-add-node">生成单向安全探针命令</button>
+          </div>
+          <pre id="adm-install-cmd" class="code-box" hidden></pre>
+        </article>
+
+        <article class="card">
+          <h2>当前纳管节点列表</h2>
+          <div id="adm-nodes-list" class="node-grid"></div>
+        </article>
+      </div>
+
+      <!-- Tab 4: 域名与站点 -->
+      <div class="tab-panel" id="panel-domain" hidden>
+        <article class="card">
+          <h2>站点标题与访客隐私设置</h2>
+          <div class="form-grid">
+            <label class="field">
+              <span>站点主标题</span>
+              <input id="set-site-title" type="text" maxlength="80">
+            </label>
+            <label class="field">
+              <span>站点副标题</span>
+              <input id="set-site-sub" type="text" maxlength="140">
+            </label>
+            <label class="field">
+              <span>默认视图</span>
+              <select id="set-default-view">
+                <option value="orb-cards">卡片视图</option>
+                <option value="compact-list">极简列表</option>
+                <option value="tty-terminal">极客 TTY</option>
+              </select>
+            </label>
+          </div>
+          <div class="check-row">
+            <label class="check-inline"><input id="set-mask-ip" type="checkbox"> 隐藏/脱敏节点 IP</label>
+            <label class="check-inline"><input id="set-expose-billing" type="checkbox"> 对外展示续费价格徽章</label>
+            <label class="check-inline"><input id="set-expose-isp" type="checkbox"> 对外展示商家名称</label>
+          </div>
+          <div class="row-end">
+            <button type="button" class="btn primary" id="save-site-settings-btn">保存站点配置</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2>独立域名与 HTTPS 双轨绑定</h2>
+          <p id="standalone-dnc-msg" class="muted"></p>
+          <div class="form-grid">
+            <label class="field">
+              <span>探针独立域名</span>
+              <input id="adm-domain" type="text" placeholder="status.example.com">
+            </label>
+            <label class="field">
+              <span>绑定轨道</span>
+              <select id="adm-track">
+                <option value="auto">自动探测</option>
+                <option value="builtin_acme">内置 Let's Encrypt ACME</option>
+                <option value="builtin_pem">导入 PEM / Cloudflare 源站证书</option>
+                <option value="reverse_proxy">反向代理 / 宝塔共存 / CF Tunnel</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>ACME 通知邮箱</span>
+              <input id="adm-email" type="email" placeholder="ops@example.com">
+            </label>
+          </div>
+          <div class="row-end">
+            <button type="button" class="btn berry" id="adm-save-domain">立即绑定域名</button>
+          </div>
+          <pre id="adm-snippet" class="code-box" hidden></pre>
+        </article>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

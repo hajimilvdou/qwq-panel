@@ -20,7 +20,7 @@ func ValidSS2022Key(value []byte, method string) bool {
 	switch method {
 	case corev2.MethodAES128:
 		length = 16
-	case corev2.MethodAES256:
+	case corev2.MethodAES256, corev2.MethodChaCha20:
 		length = 32
 	default:
 		return false

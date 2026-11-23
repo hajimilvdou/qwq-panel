@@ -1,0 +1,231 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f3ed;
+  --surface: #fdfbf8;
+  --surface-2: #f1ece3;
+  --line: #e8e1d6;
+  --line-strong: #d5cbbe;
+  --text: #2a211b;
+  --text-2: #685a50;
+  --text-3: #96887d;
+  --cocoa: #6b4c3b;
+  --on-cocoa: #fdfbf8;
+  --jade: #1e9c8b;
+  --jade-soft: #e2f5f2;
+  --amber: #d99422;
+  --amber-soft: #fbf0db;
+  --brick: #b5352b;
+  --brick-soft: #fae5e3;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #151210;
+  --surface: #1e1a17;
+  --surface-2: #28221e;
+  --line: #312923;
+  --line-strong: #463b32;
+  --text: #f3ede6;
+  --text-2: #b5a89d;
+  --text-3: #83766c;
+  --cocoa: #9d755d;
+  --on-cocoa: #17120e;
+  --jade: #32c2ae;
+  --jade-soft: rgba(50, 194, 174, 0.16);
+  --amber: #ebb044;
+  --amber-soft: rgba(235, 176, 68, 0.16);
+  --brick: #ef6b61;
+  --brick-soft: rgba(239, 107, 97, 0.18);
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  padding: 20px;
+  background: var(--bg);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+.sub {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 3px;
+}
+.tabs {
+  display: flex;
+  gap: 6px;
+  background: var(--surface);
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.tabs button {
+  background: transparent;
+  color: var(--text-2);
+  border: 0;
+  padding: 7px 14px;
+  border-radius: 7px;
+  font-weight: 550;
+  cursor: pointer;
+  font-size: 13px;
+}
+.tabs button.active {
+  background: var(--cocoa);
+  color: var(--on-cocoa);
+}
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+.stat .k {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.stat .v {
+  font-size: 20px;
+  font-weight: 700;
+  margin-top: 4px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 16px;
+}
+.card h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+.form-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-top: 12px;
+}
+.mt-10 {
+  margin-top: 10px;
+}
+.mt-16 {
+  margin-top: 16px;
+}
+.section-subhead {
+  margin: 16px 0 6px;
+  font-size: 13px;
+}
+.btn-gap {
+  margin-left: 6px;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+input,
+textarea,
+pre {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+textarea,
+pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+pre {
+  overflow-x: auto;
+  max-height: 260px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--cocoa);
+  color: var(--on-cocoa);
+  font-weight: 550;
+  cursor: pointer;
+  font-size: 13px;
+}
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+}
+.btn.danger {
+  background: var(--brick-soft);
+  color: var(--brick);
+}
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge.ok {
+  background: var(--jade-soft);
+  color: var(--jade);
+}
+.badge.warn {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+.badge.err {
+  background: var(--brick-soft);
+  color: var(--brick);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 12px;
+}
+th,
+td {
+  text-align: left;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--line);
+}
+th {
+  font-size: 12px;
+  color: var(--text-2);
+  font-weight: 600;
+}

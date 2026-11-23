@@ -24,21 +24,30 @@
     "schemas/config.schema.json": "sha256:c1c2ddc16a8afa41adcaaff41701a6b24e5d92b64270c7ba4c497aa3410a74d9",
     "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
     "schemas/probe.ai.digest.response.json": "sha256:827985ce08b49d30fc1e0bba4de0d739bd1c76aa7fb41b0f14cb46b3361b4974",
+    "schemas/probe.background.set.request.json": "sha256:7f11797c84b172cde3829eecc2ea68e58ca88c3fca5c3c82257b43f110f43a64",
+    "schemas/probe.background.set.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
     "schemas/probe.domain.bind.request.json": "sha256:b5878ab037141f1c614a771a88a527dfdfb92be9d765aa73f3785b9207e0e063",
     "schemas/probe.domain.bind.response.json": "sha256:e7ba8dfa1fcad25c393c9e71962aa2502ad243a2b27405bb749c845bf2af00ef",
     "schemas/probe.nodes.remove.request.json": "sha256:94b6382be7e0bb471952ea5e274d039c44640acecec4fcfd8dd7c05421e476f8",
     "schemas/probe.nodes.remove.response.json": "sha256:1069e4313449ff4b62fc4415c2d13e7c13ba4c1560e495be8f60ddb33c2468a4",
     "schemas/probe.nodes.upsert.request.json": "sha256:1678cc0786a715df39c586a2bc00f31afe2b64b5e2cdcaf1e3afea6a27814349",
     "schemas/probe.nodes.upsert.response.json": "sha256:e7033478158883cc7c0731d9490b737449bafb76b5abc64772f6570b61f51d0a",
-    "schemas/probe.overview.response.json": "sha256:8af51b090679a0f9cdc9de2cb15405d020def052cafe35e9d5fe289e4350beed",
+    "schemas/probe.overview.response.json": "sha256:a711ee1a28ae7d6fec161701317fe57bdfa6acd9d63c158baadb47f3b5ca5bfc",
     "schemas/probe.settings.rollback.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
     "schemas/probe.settings.update.request.json": "sha256:920767c032d970282eebbd5e4d0f83d9d7e16848510aa8288ee78816e602bb9c",
     "schemas/probe.settings.update.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
+    "schemas/probe.themes.activate.request.json": "sha256:107c2eaf21d52e41d954b6a0a21f7fc932700ff3dbfc333858bf21bd9624b9f4",
+    "schemas/probe.themes.activate.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
+    "schemas/probe.themes.delete.request.json": "sha256:41ba237f831314a745d6e35209846cb8412634406b93e8485fa5880695f13788",
+    "schemas/probe.themes.delete.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
+    "schemas/probe.themes.install.request.json": "sha256:f0c4708964e43acf4d3da5b4095fec37c4e7a0c4ff3d6a3be56d6057efe72395",
+    "schemas/probe.themes.install.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
+    "schemas/probe.themes.list.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
     "schemas/series.response.json": "sha256:86977b76b12b7ea46a896e25369cda90bd52f030baad418056113daae519ce2a",
     "schemas/stat.response.json": "sha256:9dbcaeb1ff5098999b6b92c85076137faa4dae34b0c886994669a1115d038745",
-    "ui/index.html": "sha256:a3b22916c606f91d20d32d0d87f67b0d10de7489a299e81428f15e4eeb86943f",
-    "ui/probe-panel.css": "sha256:c34a9052e7bfecf438f26b6ac1469181025f4a524c0c65821404d9e2efcf2c6c",
-    "ui/probe-panel.js": "sha256:042af880ecc6fc88814ed2729b6875a031ca277ee4ff496f28577cfb5002c9e9",
+    "ui/index.html": "sha256:1719ac9c4951a83562882564c2fff6232aca27e33d97c2f912b660b1bb545d4a",
+    "ui/probe-panel.css": "sha256:7ad8bfeb26022fd161069090e7cd070773f44aba8dc08e845ca3ba36686a6ba9",
+    "ui/probe-panel.js": "sha256:636440d9818e61215f89e6822c43dd43851401d40c87cf5d4e74bc015a6f9700",
     "ui/tokens.css": "sha256:4c6de5c9232e4461bfc32497ff7ba097abbe542328fdc3443e876a74d12004e2"
   },
   "provenance": {
@@ -301,6 +310,118 @@
       ],
       "request_schema": "schemas/probe.domain.bind.request.json",
       "response_schema": "schemas/probe.domain.bind.response.json"
+    },
+    {
+      "name": "probe.themes.list",
+      "api_version": "v1",
+      "permission": "server.probe:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "ui_route": "/probe",
+      "summary": "列出内置与已安装的探针前台主题、当前水玻璃外观及壁纸状态",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/probe.themes.list.response.json"
+    },
+    {
+      "name": "probe.themes.install",
+      "api_version": "v1",
+      "permission": "server.probe:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "ui_route": "/probe",
+      "timeout_ms": 30000,
+      "approval": "confirm",
+      "approval_summary": "安装第三方 .qwqtheme.zip 前台主题包（支持本地上传或 HTTPS 远程拉取，不影响隔离的 /admin 后台）",
+      "summary": "安装探针前台主题包",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.egress",
+          "scope": "probe"
+        }
+      ],
+      "request_schema": "schemas/probe.themes.install.request.json",
+      "response_schema": "schemas/probe.themes.install.response.json"
+    },
+    {
+      "name": "probe.themes.activate",
+      "api_version": "v1",
+      "permission": "server.probe:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "low",
+      "idempotent": true,
+      "ui_route": "/probe",
+      "timeout_ms": 10000,
+      "approval": "confirm",
+      "approval_summary": "切换探针前台激活主题并保存水玻璃光学参数与主题专属配置",
+      "summary": "启用前台主题与水玻璃外观配置",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/probe.themes.activate.request.json",
+      "response_schema": "schemas/probe.themes.activate.response.json"
+    },
+    {
+      "name": "probe.themes.delete",
+      "api_version": "v1",
+      "permission": "server.probe:manage",
+      "mode": "job",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "ui_route": "/probe",
+      "timeout_ms": 10000,
+      "approval": "confirm",
+      "approval_summary": "删除指定自定义前台主题包（如正在使用将自动切回经典内置风格）",
+      "summary": "删除已安装的自定义前台主题",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/probe.themes.delete.request.json",
+      "response_schema": "schemas/probe.themes.delete.response.json"
+    },
+    {
+      "name": "probe.background.set",
+      "api_version": "v1",
+      "permission": "server.probe:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "low",
+      "idempotent": true,
+      "ui_route": "/probe",
+      "timeout_ms": 20000,
+      "approval": "confirm",
+      "approval_summary": "设置或清除探针动态透明水玻璃壁纸、LQIP 占位图与 9 宫格构图焦点",
+      "summary": "设置探针背景壁纸与构图焦点",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/probe.background.set.request.json",
+      "response_schema": "schemas/probe.background.set.response.json"
     }
   ],
   "capabilities": [

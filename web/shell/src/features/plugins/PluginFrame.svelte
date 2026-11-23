@@ -1,15 +1,16 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!--
-  PluginFrame · 单个插件 iframe + 宿主桥（ENG §9）
+  PluginFrame · 单个插件 iframe + 宿主桥（ENG §9 + STEP-16）
   ───────────────────────────────────────────────────────────────
   attempt 每 +1：重建 <iframe>（{#key}）并重新 attach，等于全新握手。
-  设置变化（主题 / 动效 / 密度 / 可见性）即推 ui.settings；path 变化推 ui.route。
+  设置变化（主题 / 动效 / 密度 / 可见性 / public_origin）即推 ui.settings；path 变化推 ui.route。
+  沙箱内 ui.confirm 由本宿主组件弹出统一风格的 <ConfirmDialog>，绝不开启 allow-modals。
 -->
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
-  import { Button, ErrorState, Skeleton } from '$ui';
+  import { Button, ConfirmDialog, ErrorState, Skeleton } from '$ui';
   import type { Plugin } from '$api/types';
-  import { PluginBridge, HEIGHT_MIN } from '$lib/plugin-host';
+  import { PluginBridge, HEIGHT_MIN, type BridgeConfirmRequest } from '$lib/plugin-host';
   import { bridgeDeps, hostSettings, pluginFrameSrc } from '$lib/plugin-host/wiring';
   import { prefs } from '$lib/prefs.svelte';
   import { navigate } from '$lib/router.svelte';
@@ -31,6 +32,28 @@
   let visible = $state(typeof document === 'undefined' || document.visibilityState === 'visible');
   let frame = $state<HTMLIFrameElement>();
 
+  /* 宿主受控确认弹窗（代理沙箱内 ui.confirm） */
+  interface PendingConfirm extends BridgeConfirmRequest {
+    resolve: (ok: boolean) => void;
+  }
+  let confirmOpen = $state(false);
+  let confirmReq = $state<PendingConfirm | null>(null);
+
+  function settleConfirm(ok: boolean) {
+    const req = confirmReq;
+    confirmReq = null;
+    confirmOpen = false;
+    req?.resolve(ok);
+  }
+
+  $effect(() => {
+    if (!confirmOpen && confirmReq) {
+      const req = confirmReq;
+      confirmReq = null;
+      req.resolve(false);
+    }
+  });
+
   const bridge = new PluginBridge(
     bridgeDeps(p, {
       onReady: () => (phase = 'ready'),
@@ -38,6 +61,11 @@
       onToast: (text) => toasts.info(`${p.name}：${text}`),
       onNavigate: (to) => navigate(`/plugins/${encodeURIComponent(p.plugin_id)}${to === '/' ? '' : to}`),
       onTimeout: () => (phase = 'timeout'),
+      onConfirm: (req) =>
+        new Promise<boolean>((resolve) => {
+          confirmReq = { ...req, resolve };
+          confirmOpen = true;
+        }),
     }),
   );
 
@@ -57,6 +85,7 @@
   });
 
   function retry() {
+    settleConfirm(false);
     phase = 'loading';
     attempt++;
   }
@@ -83,6 +112,7 @@
   window.addEventListener('message', bridge.onWindowMessage);
   document.addEventListener('visibilitychange', onVisibility);
   onDestroy(() => {
+    settleConfirm(false);
     window.removeEventListener('message', bridge.onWindowMessage);
     document.removeEventListener('visibilitychange', onVisibility);
     bridge.dispose();
@@ -113,6 +143,17 @@
     {/key}
   {/if}
 </div>
+
+<ConfirmDialog
+  bind:open={confirmOpen}
+  title={confirmReq?.title ?? '确认操作'}
+  tone={confirmReq?.danger ? 'danger' : 'primary'}
+  confirmLabel={confirmReq?.confirmLabel || '确定'}
+  onconfirm={() => settleConfirm(true)}
+  oncancel={() => settleConfirm(false)}
+>
+  {#if confirmReq?.body}<p class="confirm-body">{confirmReq.body}</p>{/if}
+</ConfirmDialog>
 
 <style>
   .host {
@@ -145,5 +186,9 @@
     padding: var(--s-6);
     border-radius: var(--r-lg);
     background: var(--surface);
+  }
+  .confirm-body {
+    margin: 0;
+    white-space: pre-line;
   }
 </style>

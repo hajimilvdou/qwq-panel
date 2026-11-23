@@ -25,6 +25,8 @@ class PageMeta {
 
 class Health {
   level = $state<HealthLevel>('ok');
+  /** 与事件总线 offline 状态同步，避免首页直接引入 SSE 栈 */
+  offline = $state(false);
 }
 
 export const page = new PageMeta();

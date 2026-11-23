@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -34,8 +35,20 @@ const (
 	trafficMarkMin          = 20736 // 0x5100
 	trafficMarkMax          = 20991 // 0x51FF
 	maxSubAccessLogsPerUser = 20
+	maxPendingSubAccessLogs = 256
+	subAccessFlushBatchSize = 64
+	subAccessFlushInterval  = 30 * time.Second
+	maxListUsersLimit       = 10000
 	rollupRetentionDays     = 90
 )
+
+type subAccessEntry struct {
+	userID     string
+	accessedAt int64
+	format     string
+	uaSummary  string
+	statusCode int
+}
 
 type planRecord struct {
 	ID              string `json:"id"`
@@ -111,10 +124,24 @@ type overviewStats struct {
 }
 
 type proxyStore struct {
-	db        *sql.DB
+	db        *sql.DB // 1 Writer (BEGIN IMMEDIATE + WAL)
+	reader    *sql.DB // 4 Readers (query_only=1)
 	masterKey []byte
 	now       func() time.Time
 	closeOnce sync.Once
+
+	subLogMu       sync.Mutex
+	pendingSubLogs []subAccessEntry
+	subFlushWake   chan struct{}
+	subFlushStop   chan struct{}
+	subFlushDone   chan struct{}
+}
+
+func (s *proxyStore) readDB() *sql.DB {
+	if s.reader != nil {
+		return s.reader
+	}
+	return s.db
 }
 
 func ensureColumnExists(db *sql.DB, table, col, ddl string) error {
@@ -136,44 +163,103 @@ func ensureColumnExists(db *sql.DB, table, col, ddl string) error {
 	return err
 }
 
+func openDualSQLiteLocal(dbFilePath string, maxReaders int) (writer *sql.DB, reader *sql.DB, err error) {
+	if maxReaders <= 0 {
+		maxReaders = 4
+	}
+	if dbFilePath == ":memory:" {
+		wdb, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			return nil, nil, fmt.Errorf("open sqlite memory: %w", err)
+		}
+		wdb.SetMaxOpenConns(1)
+		wdb.SetMaxIdleConns(1)
+		for _, p := range []string{
+			"PRAGMA foreign_keys=ON;",
+			"PRAGMA busy_timeout=5000;",
+			"PRAGMA cache_size=-2048;",
+			"PRAGMA temp_store=MEMORY;",
+		} {
+			if _, err := wdb.Exec(p); err != nil {
+				_ = wdb.Close()
+				return nil, nil, fmt.Errorf("apply pragma %q: %w", p, err)
+			}
+		}
+		return wdb, wdb, nil
+	}
+
+	u := url.URL{
+		Scheme: "file",
+		Path:   filepath.ToSlash(dbFilePath),
+	}
+	writeQ := url.Values{}
+	writeQ.Add("_txlock", "immediate")
+	writeQ.Add("_pragma", "journal_mode(WAL)")
+	writeQ.Add("_pragma", "synchronous(NORMAL)")
+	writeQ.Add("_pragma", "busy_timeout(5000)")
+	writeQ.Add("_pragma", "foreign_keys(1)")
+	writeQ.Add("_pragma", "journal_size_limit(8388608)")
+	writeQ.Add("_pragma", "cache_size(-2048)")
+	writeQ.Add("_pragma", "temp_store(MEMORY)")
+	u.RawQuery = writeQ.Encode()
+
+	wdb, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, nil, fmt.Errorf("open sqlite writer: %w", err)
+	}
+	wdb.SetMaxOpenConns(1)
+	wdb.SetMaxIdleConns(1)
+	if err := wdb.Ping(); err != nil {
+		_ = wdb.Close()
+		return nil, nil, fmt.Errorf("ping sqlite writer: %w", err)
+	}
+
+	readQ := url.Values{}
+	readQ.Add("_pragma", "query_only(1)")
+	readQ.Add("_pragma", "busy_timeout(5000)")
+	readQ.Add("_pragma", "cache_size(-2048)")
+	readQ.Add("_pragma", "temp_store(MEMORY)")
+	u.RawQuery = readQ.Encode()
+
+	rdb, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		_ = wdb.Close()
+		return nil, nil, fmt.Errorf("open sqlite reader: %w", err)
+	}
+	rdb.SetMaxOpenConns(maxReaders)
+	rdb.SetMaxIdleConns(min(2, maxReaders))
+	if err := rdb.Ping(); err != nil {
+		_ = rdb.Close()
+		_ = wdb.Close()
+		return nil, nil, fmt.Errorf("ping sqlite reader: %w", err)
+	}
+	return wdb, rdb, nil
+}
+
 func openStore(dataDir string, now func() time.Time) (*proxyStore, error) {
 	if now == nil {
 		now = time.Now
 	}
-	dsn := ":memory:"
+	dbPath := ":memory:"
 	if strings.TrimSpace(dataDir) != "" {
 		if err := os.MkdirAll(dataDir, 0o700); err != nil {
 			return nil, fmt.Errorf("create proxy data dir: %w", err)
 		}
-		dsn = filepath.Join(dataDir, "proxy.db")
+		dbPath = filepath.Join(dataDir, "proxy.db")
 	}
 	masterKey, err := loadOrCreateMasterKey(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("init proxy key: %w", err)
 	}
-	db, err := sql.Open("sqlite", dsn)
+	wdb, rdb, err := openDualSQLiteLocal(dbPath, 4)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+		return nil, err
 	}
-	// 单写连接避免并发写事务 SQLITE_BUSY，同时开启 WAL 与外键约束。
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL;",
-		"PRAGMA synchronous=NORMAL;",
-		"PRAGMA cache_size=-2048;",
-		"PRAGMA busy_timeout=5000;",
-		"PRAGMA foreign_keys=ON;",
-	}
-	for _, p := range pragmas {
-		if _, err := db.Exec(p); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("apply pragma %q: %w", p, err)
+	if _, err := wdb.Exec(schemaSQL); err != nil {
+		if rdb != nil && rdb != wdb {
+			_ = rdb.Close()
 		}
-	}
-	if _, err := db.Exec(schemaSQL); err != nil {
-		_ = db.Close()
+		_ = wdb.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 	// 幂等升级既有 proxy.db 表结构，保留历史数据零丢失。
@@ -183,21 +269,49 @@ func openStore(dataDir string, now func() time.Time) (*proxyStore, error) {
 		{"proxy_users", "max_connections_override", "max_connections_override INTEGER NOT NULL DEFAULT -1"},
 		{"proxy_users", "max_ips_override", "max_ips_override INTEGER NOT NULL DEFAULT -1"},
 		{"proxy_users", "chain_id", "chain_id TEXT NOT NULL DEFAULT ''"},
+		{"tuning_snapshots", "pinned", "pinned INTEGER NOT NULL DEFAULT 0"},
+		{"brutal_bindings", "proxy_protocol_v2", "proxy_protocol_v2 INTEGER NOT NULL DEFAULT 0"},
 	} {
-		if err := ensureColumnExists(db, colSpec[0], colSpec[1], colSpec[2]); err != nil {
-			_ = db.Close()
+		if err := ensureColumnExists(wdb, colSpec[0], colSpec[1], colSpec[2]); err != nil {
+			if rdb != nil && rdb != wdb {
+				_ = rdb.Close()
+			}
+			_ = wdb.Close()
 			return nil, fmt.Errorf("migrate %s.%s: %w", colSpec[0], colSpec[1], err)
 		}
 	}
-	return &proxyStore{db: db, masterKey: masterKey, now: now}, nil
+	st := &proxyStore{
+		db:           wdb,
+		reader:       rdb,
+		masterKey:    masterKey,
+		now:          now,
+		subFlushWake: make(chan struct{}, 1),
+		subFlushStop: make(chan struct{}),
+		subFlushDone: make(chan struct{}),
+	}
+	go st.subAccessFlushLoop()
+	return st, nil
 }
 
 func (s *proxyStore) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
-		if s.db != nil {
-			err = s.db.Close()
+		if s.subFlushStop != nil {
+			close(s.subFlushStop)
+			if s.subFlushDone != nil {
+				<-s.subFlushDone
+			}
 		}
+		_ = s.FlushSubscriptionAccessLogs(context.Background())
+		var errR, errW error
+		if s.reader != nil && s.reader != s.db {
+			errR = s.reader.Close()
+		}
+		if s.db != nil {
+			_, _ = s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+			errW = s.db.Close()
+		}
+		err = errors.Join(errR, errW)
 	})
 	return err
 }
@@ -208,7 +322,7 @@ func (s *proxyStore) ListPlans(ctx context.Context, limit int) ([]planRecord, er
 	if limit <= 0 || limit > 256 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB().QueryContext(ctx, `
 		SELECT id, name, quota_bytes, down_limit_kbps, up_limit_kbps, max_connections, max_ips,
 		       billing_reset_day, validity_days, created_at, updated_at, revision
 		FROM plans
@@ -326,8 +440,8 @@ func (s *proxyStore) UpsertPlan(ctx context.Context, in plansUpsertRequest, expe
 }
 
 func (s *proxyStore) ListUsers(ctx context.Context, statusFilter, planFilter string, limit int) ([]userRecord, error) {
-	if limit <= 0 || limit > 256 {
-		limit = 256
+	if limit <= 0 || limit > maxListUsersLimit {
+		limit = maxListUsersLimit
 	}
 	var args []any
 	var conds []string
@@ -355,7 +469,7 @@ func (s *proxyStore) ListUsers(ctx context.Context, statusFilter, planFilter str
 	query += " ORDER BY u.id ASC LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.readDB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -553,16 +667,7 @@ func (s *proxyStore) SetUserLimits(ctx context.Context, userID string, maxConnsO
 	if err := tx.Commit(); err != nil {
 		return userRecord{}, err
 	}
-	users, err := s.ListUsers(ctx, "", "", 256)
-	if err != nil {
-		return userRecord{}, err
-	}
-	for _, u := range users {
-		if u.ID == userID {
-			return u, nil
-		}
-	}
-	return userRecord{}, pluginsdk.Errorf("NOT_FOUND", "代理用户 %s 不存在", userID)
+	return s.getUserByID(ctx, userID)
 }
 
 func (s *proxyStore) RotateSubscriptionToken(ctx context.Context, userID, expectedRev string) (string, int64, error) {
@@ -630,60 +735,151 @@ func (s *proxyStore) SetUserStatus(ctx context.Context, userID, status, expected
 	if err := tx.Commit(); err != nil {
 		return userRecord{}, err
 	}
-	users, err := s.ListUsers(ctx, "", "", 256)
+	return s.getUserByID(ctx, userID)
+}
+
+func (s *proxyStore) getUserByID(ctx context.Context, userID string) (userRecord, error) {
+	rows, err := s.readDB().QueryContext(ctx, `
+		SELECT u.id, u.display_name, u.plan_id, u.vless_uuid, u.hy2_password, u.ss2022_user_key,
+		       u.traffic_mark, u.status, u.expires_at, u.sub_token_sha256,
+		       p.quota_bytes, p.down_limit_kbps, p.up_limit_kbps,
+		       p.max_connections, p.max_ips, u.max_connections_override, u.max_ips_override, u.chain_id,
+		       c.period_up_bytes, c.period_down_bytes, c.total_up_bytes, c.total_down_bytes,
+		       u.created_at, u.updated_at, u.revision
+		FROM proxy_users u
+		JOIN plans p ON p.id = u.plan_id
+		JOIN usage_counters c ON c.user_id = u.id
+		WHERE u.id = ?
+		LIMIT 1`, userID)
 	if err != nil {
 		return userRecord{}, err
 	}
-	for _, u := range users {
-		if u.ID == userID {
-			return u, nil
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return userRecord{}, err
 		}
+		return userRecord{}, pluginsdk.Errorf("NOT_FOUND", "代理用户 %s 不存在", userID)
 	}
-	return userRecord{}, pluginsdk.Errorf("NOT_FOUND", "代理用户 %s 不存在", userID)
+	return scanUserRecord(rows)
 }
 
-// FindUserBySubscriptionToken 使用 SHA-256 与常量时间比对匹配唯一订阅用户，避免时序侧信道。
+// FindUserBySubscriptionToken 使用 sub_token_sha256 唯一索引 O(1) 精确查询，并用常量时间比对核验摘要。
 func (s *proxyStore) FindUserBySubscriptionToken(ctx context.Context, rawToken string) (userRecord, bool, error) {
-	targetHash := []byte(hashTokenSHA256(rawToken))
-	users, err := s.ListUsers(ctx, "", "", 256)
+	targetHash := hashTokenSHA256(rawToken)
+	rows, err := s.readDB().QueryContext(ctx, `
+		SELECT u.id, u.display_name, u.plan_id, u.vless_uuid, u.hy2_password, u.ss2022_user_key,
+		       u.traffic_mark, u.status, u.expires_at, u.sub_token_sha256,
+		       p.quota_bytes, p.down_limit_kbps, p.up_limit_kbps,
+		       p.max_connections, p.max_ips, u.max_connections_override, u.max_ips_override, u.chain_id,
+		       c.period_up_bytes, c.period_down_bytes, c.total_up_bytes, c.total_down_bytes,
+		       u.created_at, u.updated_at, u.revision
+		FROM proxy_users u
+		JOIN plans p ON p.id = u.plan_id
+		JOIN usage_counters c ON c.user_id = u.id
+		WHERE u.sub_token_sha256 = ?
+		LIMIT 1`, targetHash)
 	if err != nil {
 		return userRecord{}, false, err
 	}
-	var matched userRecord
-	found := false
-	for _, u := range users {
-		if len(u.SubTokenSHA256) == len(targetHash) && subtle.ConstantTimeCompare([]byte(u.SubTokenSHA256), targetHash) == 1 {
-			matched = u
-			found = true
-		}
+	defer rows.Close()
+	if !rows.Next() {
+		return userRecord{}, false, rows.Err()
 	}
-	return matched, found, nil
+	u, err := scanUserRecord(rows)
+	if err != nil {
+		return userRecord{}, false, err
+	}
+	if len(u.SubTokenSHA256) != len(targetHash) || subtle.ConstantTimeCompare([]byte(u.SubTokenSHA256), []byte(targetHash)) != 1 {
+		return userRecord{}, false, nil
+	}
+	return u, true, nil
 }
 
-func (s *proxyStore) RecordSubscriptionAccess(ctx context.Context, userID, format, uaSummary string, statusCode int) error {
+// RecordSubscriptionAccess 将公开订阅访问记录缓冲到内存并按 30 秒周期或批量阈值异步落库，避免公网高频拉订阅造成 SQLite 写放大。
+func (s *proxyStore) RecordSubscriptionAccess(_ context.Context, userID, format, uaSummary string, statusCode int) error {
+	entry := subAccessEntry{
+		userID:     userID,
+		accessedAt: s.now().UTC().UnixMilli(),
+		format:     format,
+		uaSummary:  uaSummary,
+		statusCode: statusCode,
+	}
+	s.subLogMu.Lock()
+	if len(s.pendingSubLogs) >= maxPendingSubAccessLogs {
+		copy(s.pendingSubLogs, s.pendingSubLogs[1:])
+		s.pendingSubLogs[len(s.pendingSubLogs)-1] = entry
+	} else {
+		s.pendingSubLogs = append(s.pendingSubLogs, entry)
+	}
+	shouldWake := len(s.pendingSubLogs) >= subAccessFlushBatchSize
+	s.subLogMu.Unlock()
+
+	if shouldWake && s.subFlushWake != nil {
+		select {
+		case s.subFlushWake <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+func (s *proxyStore) subAccessFlushLoop() {
+	defer close(s.subFlushDone)
+	ticker := time.NewTicker(subAccessFlushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.subFlushStop:
+			return
+		case <-ticker.C:
+			_ = s.FlushSubscriptionAccessLogs(context.Background())
+		case <-s.subFlushWake:
+			_ = s.FlushSubscriptionAccessLogs(context.Background())
+		}
+	}
+}
+
+// FlushSubscriptionAccessLogs 将内存中聚合的订阅访问记录在单个事务中批量写入并按用户裁剪至上限。
+func (s *proxyStore) FlushSubscriptionAccessLogs(ctx context.Context) error {
+	s.subLogMu.Lock()
+	if len(s.pendingSubLogs) == 0 {
+		s.subLogMu.Unlock()
+		return nil
+	}
+	batch := s.pendingSubLogs
+	s.pendingSubLogs = nil
+	s.subLogMu.Unlock()
+
+	if s.db == nil {
+		return nil
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	nowMs := s.now().UTC().UnixMilli()
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO subscription_access_logs(user_id, accessed_at, format, ua_summary, status_code)
-		VALUES(?, ?, ?, ?, ?)`,
-		userID, nowMs, format, uaSummary, statusCode); err != nil {
-		return err
+	touchedUsers := make(map[string]struct{}, 8)
+	for _, entry := range batch {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO subscription_access_logs(user_id, accessed_at, format, ua_summary, status_code)
+			VALUES(?, ?, ?, ?, ?)`,
+			entry.userID, entry.accessedAt, entry.format, entry.uaSummary, entry.statusCode); err != nil {
+			continue
+		}
+		touchedUsers[entry.userID] = struct{}{}
 	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM subscription_access_logs
-		WHERE user_id = ?
-		  AND id NOT IN (
-			SELECT id FROM subscription_access_logs
+	for uid := range touchedUsers {
+		_, _ = tx.ExecContext(ctx, `
+			DELETE FROM subscription_access_logs
 			WHERE user_id = ?
-			ORDER BY accessed_at DESC, id DESC
-			LIMIT ?
-		  )`, userID, userID, maxSubAccessLogsPerUser); err != nil {
-		return err
+			  AND id NOT IN (
+				SELECT id FROM subscription_access_logs
+				WHERE user_id = ?
+				ORDER BY accessed_at DESC, id DESC
+				LIMIT ?
+			  )`, uid, uid, maxSubAccessLogsPerUser)
 	}
 	return tx.Commit()
 }
@@ -696,14 +892,14 @@ func (s *proxyStore) GetUsageHistory(ctx context.Context, userID string, hours i
 		hours = 2160
 	}
 	var exists int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM proxy_users WHERE id = ?`, userID).Scan(&exists); err != nil {
+	if err := s.readDB().QueryRowContext(ctx, `SELECT COUNT(1) FROM proxy_users WHERE id = ?`, userID).Scan(&exists); err != nil {
 		return nil, err
 	}
 	if exists == 0 {
 		return nil, pluginsdk.Errorf("NOT_FOUND", "代理用户 %s 不存在", userID)
 	}
 	cutoff := s.now().UTC().Truncate(time.Hour).Add(-time.Duration(hours) * time.Hour).UnixMilli()
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB().QueryContext(ctx, `
 		SELECT bucket_hour_ms, up_bytes, down_bytes
 		FROM usage_hourly_rollups
 		WHERE user_id = ? AND bucket_hour_ms >= ?
@@ -726,10 +922,10 @@ func (s *proxyStore) GetUsageHistory(ctx context.Context, userID string, hours i
 
 func (s *proxyStore) GetOverviewStats(ctx context.Context) (overviewStats, error) {
 	var st overviewStats
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM plans`).Scan(&st.TotalPlans); err != nil {
+	if err := s.readDB().QueryRowContext(ctx, `SELECT COUNT(1) FROM plans`).Scan(&st.TotalPlans); err != nil {
 		return st, err
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB().QueryContext(ctx, `
 		SELECT u.status, u.traffic_mark, c.period_up_bytes, c.period_down_bytes
 		FROM proxy_users u
 		JOIN usage_counters c ON c.user_id = u.id`)
@@ -831,7 +1027,67 @@ func (s *proxyStore) IngestXrayObservation(ctx context.Context, resetEpoch strin
 	statusDirty := make(map[string]string)
 	counterDirty := make(map[string]bool)
 
-	// 第 1 步：月度账单重置与到期检查。
+	// 第 1 步：先处理 resetEpoch 切换（对所有用户统一归零旧 epoch 原始基线，防止空闲用户残留过期 lastRaw）
+	// 并结算上一周期末尾 / 当前采样增量，确保跨账期前的尾量归入历史总计而不污染新账期。
+	if resetEpoch != "" {
+		for _, st := range states {
+			if st.lastEpoch != resetEpoch {
+				st.lastEpoch = resetEpoch
+				st.lastRawUp = 0
+				st.lastRawDown = 0
+				counterDirty[st.userID] = true
+			}
+		}
+	}
+
+	for _, sample := range samples {
+		st, ok := states[sample.UserID]
+		if !ok {
+			continue
+		}
+		rawUp := max(sample.RawUp, int64(0))
+		rawDown := max(sample.RawDown, int64(0))
+
+		var deltaUp int64
+		if sample.HasUp {
+			if rawUp >= st.lastRawUp {
+				deltaUp = rawUp - st.lastRawUp
+			} else {
+				deltaUp = rawUp
+			}
+			st.lastRawUp = rawUp
+		}
+
+		var deltaDown int64
+		if sample.HasDown {
+			if rawDown >= st.lastRawDown {
+				deltaDown = rawDown - st.lastRawDown
+			} else {
+				deltaDown = rawDown
+			}
+			st.lastRawDown = rawDown
+		}
+
+		st.periodUp += deltaUp
+		st.periodDown += deltaDown
+		st.totalUp += deltaUp
+		st.totalDown += deltaDown
+		counterDirty[st.userID] = true
+
+		if deltaUp > 0 || deltaDown > 0 {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO usage_hourly_rollups(user_id, bucket_hour_ms, up_bytes, down_bytes)
+				VALUES(?, ?, ?, ?)
+				ON CONFLICT(user_id, bucket_hour_ms) DO UPDATE SET
+					up_bytes = up_bytes + excluded.up_bytes,
+					down_bytes = down_bytes + excluded.down_bytes`,
+				st.userID, bucketHourMs, deltaUp, deltaDown); err != nil {
+				return false, err
+			}
+		}
+	}
+
+	// 第 2 步：执行跨账期清零与恢复 suspended_quota -> active，随后检查到期与新周期超配额熔断。
 	for _, st := range states {
 		if st.billingResetDay >= 1 && st.billingResetDay <= 28 {
 			cycleStartMs := billingCycleStart(now, st.billingResetDay).UnixMilli()
@@ -852,63 +1108,6 @@ func (s *proxyStore) IngestXrayObservation(ctx context.Context, resetEpoch strin
 			statusDirty[st.userID] = "expired"
 			needsCoreSync = true
 		}
-	}
-
-	// 第 2 步：按 Reset-Epoch 吸收 Xray 计数器增量并更新小时桶与超额熔断。
-	for _, sample := range samples {
-		st, ok := states[sample.UserID]
-		if !ok {
-			continue
-		}
-		rawUp := max(sample.RawUp, int64(0))
-		rawDown := max(sample.RawDown, int64(0))
-		sameEpoch := resetEpoch != "" && st.lastEpoch == resetEpoch
-
-		var deltaUp int64
-		if sample.HasUp {
-			if sameEpoch && rawUp >= st.lastRawUp {
-				deltaUp = rawUp - st.lastRawUp
-			} else {
-				deltaUp = rawUp
-			}
-			st.lastRawUp = rawUp
-		} else if !sameEpoch && resetEpoch != "" {
-			st.lastRawUp = 0
-		}
-
-		var deltaDown int64
-		if sample.HasDown {
-			if sameEpoch && rawDown >= st.lastRawDown {
-				deltaDown = rawDown - st.lastRawDown
-			} else {
-				deltaDown = rawDown
-			}
-			st.lastRawDown = rawDown
-		} else if !sameEpoch && resetEpoch != "" {
-			st.lastRawDown = 0
-		}
-
-		if resetEpoch != "" {
-			st.lastEpoch = resetEpoch
-		}
-		st.periodUp += deltaUp
-		st.periodDown += deltaDown
-		st.totalUp += deltaUp
-		st.totalDown += deltaDown
-		counterDirty[st.userID] = true
-
-		if deltaUp > 0 || deltaDown > 0 {
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO usage_hourly_rollups(user_id, bucket_hour_ms, up_bytes, down_bytes)
-				VALUES(?, ?, ?, ?)
-				ON CONFLICT(user_id, bucket_hour_ms) DO UPDATE SET
-					up_bytes = up_bytes + excluded.up_bytes,
-					down_bytes = down_bytes + excluded.down_bytes`,
-				st.userID, bucketHourMs, deltaUp, deltaDown); err != nil {
-				return false, err
-			}
-		}
-
 		if st.quotaBytes > 0 && st.periodUp+st.periodDown >= st.quotaBytes && st.status == "active" {
 			st.status = "suspended_quota"
 			statusDirty[st.userID] = "suspended_quota"

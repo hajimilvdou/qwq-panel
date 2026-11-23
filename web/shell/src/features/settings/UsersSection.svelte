@@ -7,8 +7,8 @@
   新建成功（enrollment_pending）后直接引导生成注册链接。
 -->
 <script lang="ts">
-  import { Alert, Avatar, Button, Card, Chip, ConfirmDialog, CopyButton, DataTable, Dialog, EmptyState, ErrorState, IconButton, Input, Menu, Select } from '$ui';
-  import { users } from '$api/endpoints';
+  import { Alert, Avatar, Button, Card, Chip, ConfirmDialog, CopyButton, DataTable, Dialog, EmptyState, ErrorState, IconButton, Input, Menu, OtpInput, Select } from '$ui';
+  import { system, users } from '$api/endpoints';
   import type { Role, User } from '$api/types';
   import { describeError, reportError, type ErrorView } from '$lib/errors';
   import { dateTime, relativeTime } from '$lib/format';
@@ -133,18 +133,66 @@
   /* ---------------------------------------------------------------- 注册链接（只显示一次） */
   let link = $state<{ user: User; url: string; expires: string } | null>(null);
   let linkErr = $state<{ user: User; message: string } | null>(null);
+  let mfaTarget = $state<User | null>(null);
+  let mfaCode = $state('');
+  let mfaBusy = $state(false);
+  let mfaErr = $state('');
+  let mfaIntent: Intent = createIntent();
 
-  async function issueLink(u: User) {
+  async function buildEnrollUrl(token: string): Promise<string> {
+    let entryPath = '';
+    try {
+      const acc = await system.access();
+      entryPath = (acc.effective_entry_path ?? '').replace(/^\/+|\/+$/g, '');
+    } catch {
+      /* 非管理员或接口不可达时回退默认根路径 */
+    }
+    const prefix = entryPath ? `/${encodeURIComponent(entryPath)}` : '';
+    return `${location.origin}${prefix}/enroll#token=${encodeURIComponent(token)}`;
+  }
+
+  async function issueLink(u: User, mfa?: string) {
     linkErr = null;
     try {
-      const r = await users.createEnrollmentToken(u.user_id, createIntent().key);
-      link = { user: u, url: `${location.origin}/enroll#token=${encodeURIComponent(r.enrollment_token!)}`, expires: r.expires_at };
+      const key = mfa ? mfaIntent.key : createIntent().key;
+      const r = await users.createEnrollmentToken(u.user_id, key, mfa);
+      const url = await buildEnrollUrl(r.enrollment_token!);
+      link = { user: u, url, expires: r.expires_at };
+      mfaTarget = null;
+      mfaCode = '';
+      mfaErr = '';
     } catch (err) {
       const v = describeError(err);
-      linkErr = {
-        user: u,
-        message: v.code === 'MFA_REQUIRED' ? '生成注册链接需要最近验证过两步验证：请退出后重新登录再试' : v.message,
-      };
+      if (v.code === 'MFA_REQUIRED') {
+        if (mfaTarget && mfa) {
+          mfaErr = '验证码不对或已过期，请重试';
+          mfaIntent = createIntent();
+        } else {
+          mfaTarget = u;
+          mfaCode = '';
+          mfaErr = '';
+          mfaIntent = createIntent();
+        }
+        return;
+      }
+      if (mfaTarget) {
+        mfaErr = v.message;
+        return;
+      }
+      linkErr = { user: u, message: v.message };
+    }
+  }
+
+  async function submitMfaLink(code?: string) {
+    const u = mfaTarget;
+    const c = (code ?? mfaCode).trim();
+    if (!u || mfaBusy || c.length < 6) return;
+    mfaBusy = true;
+    mfaErr = '';
+    try {
+      await issueLink(u, c);
+    } finally {
+      mfaBusy = false;
     }
   }
 
@@ -263,6 +311,44 @@
 >
   {#if removeTarget}确定删除 <strong>{nameOf(removeTarget)}</strong>？对方名下的 AI 令牌也会一并失效。{/if}
 </ConfirmDialog>
+
+<!-- ---------------------------------------------------------------- 生成注册链接：两步验证 -->
+<Dialog
+  open={!!mfaTarget}
+  title="验证两步验证码"
+  description={mfaTarget ? `为 ${nameOf(mfaTarget)} 生成一次性注册链接需要验证你的 6 位两步验证码。` : undefined}
+  size="sm"
+  onclose={() => {
+    mfaTarget = null;
+    mfaCode = '';
+    mfaErr = '';
+  }}
+>
+  <form
+    id="user-link-mfa"
+    class="stack"
+    onsubmit={(e) => {
+      e.preventDefault();
+      void submitMfaLink();
+    }}
+    novalidate
+  >
+    <OtpInput label="6 位两步验证码" bind:value={mfaCode} oncomplete={(c) => void submitMfaLink(c)} error={mfaErr} autofocus />
+  </form>
+  {#snippet footer()}
+    <Button
+      variant="plain"
+      onclick={() => {
+        mfaTarget = null;
+        mfaCode = '';
+        mfaErr = '';
+      }}
+    >
+      取消
+    </Button>
+    <Button type="submit" form="user-link-mfa" variant="primary" loading={mfaBusy} disabled={mfaCode.trim().length < 6}>验证并生成</Button>
+  {/snippet}
+</Dialog>
 
 <style>
   .stack {

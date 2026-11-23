@@ -32,14 +32,14 @@ import (
 // Security: qwq's PermissionMode + PlanMode + ApprovalRouter remain authoritative.
 
 type CodexConfig struct {
-	Binary           string   `json:"binary,omitempty"`      // default "codex"
+	Binary           string   `json:"-"`                     // host-controlled only; default "codex"
 	Transport        string   `json:"transport,omitempty"`   // app-server (default) | exec-json
 	AuthMode         string   `json:"auth_mode,omitempty"`   // oauth | provider | "" (auto)
 	ProviderID       string   `json:"provider_id,omitempty"` // optional global AIProvider key bridge
 	Model            string   `json:"model,omitempty"`
 	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`   // none | low | medium | high | xhigh
 	MaxContextTokens int64    `json:"max_context_tokens,omitempty"` // optional context budget override
-	WorkDir          string   `json:"work_dir,omitempty"`
+	WorkDir          string   `json:"-"`                            // host-controlled only; isolated workspace used
 	ThreadID         string   `json:"external_thread_id,omitempty"`
 	PlanMode         bool     `json:"plan_mode,omitempty"`
 	ActiveSkills     []string `json:"active_skills,omitempty"`
@@ -140,15 +140,11 @@ func (c *CodexCore) Preflight(_ context.Context, rawConfig json.RawMessage) erro
 	if err := refusePlaintextSecrets(rawConfig); err != nil {
 		return err
 	}
-	cfg := CodexConfig{Binary: c.bin}
-	if len(rawConfig) > 0 {
-		_ = json.Unmarshal(rawConfig, &cfg)
-		if cfg.Binary == "" {
-			cfg.Binary = c.bin
-		}
+	if _, err := ValidateExternalSessionConfig(rawConfig); err != nil {
+		return err
 	}
 	if _, isReal := c.effectiveLauncher().(OSProcessLauncher); isReal {
-		if ok, reason := probeBinary(cfg.Binary); !ok {
+		if ok, reason := probeBinary(c.bin); !ok {
 			return problem.New(problem.Unavailable, "Codex CLI is not installed on this host (%s).", reason)
 		}
 	}
@@ -167,12 +163,14 @@ func (c *CodexCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 	if err := refusePlaintextSecrets(turn.Config); err != nil {
 		return err
 	}
+	if _, err := ValidateExternalSessionConfig(turn.Config); err != nil {
+		return err
+	}
 	cfg := CodexConfig{Binary: c.bin, Transport: "app-server"}
 	if len(turn.Config) > 0 {
 		_ = json.Unmarshal(turn.Config, &cfg)
-		if cfg.Binary == "" {
-			cfg.Binary = c.bin
-		}
+		cfg.Binary = c.bin
+		cfg.WorkDir = ""
 		if cfg.Transport == "" {
 			cfg.Transport = "app-server"
 		}
@@ -531,9 +529,9 @@ func (c *CodexCore) runExecJSONL(ctx context.Context, cfg CodexConfig, turn Turn
 	if eff, _, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort); !IsReasoningEffortDisabled(eff) {
 		args = append(args, "-c", "model_reasoning_effort="+eff)
 	}
-	args = append(args, latestUserMessage(turn.Messages))
+	args = AppendPosixPromptArg(args, latestUserMessage(turn.Messages))
 
-	proc, err := c.effectiveLauncher().Start(ctx, cfg.Binary, args, extraEnv, cfg.WorkDir)
+	proc, err := c.effectiveLauncher().Start(ctx, cfg.Binary, args, extraEnv, "")
 	if err != nil {
 		return err
 	}

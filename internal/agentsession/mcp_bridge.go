@@ -389,7 +389,7 @@ func StartLoopbackMCPServerWithContext(parentCtx context.Context, bridge *MCPBri
 		Handler:           mux,
 		ReadHeaderTimeout: 3 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      0, // Approval waits can exceed 30s; per-request ctx bounds handler lifetime.
 		IdleTimeout:       15 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 		BaseContext:       func(net.Listener) context.Context { return serverCtx },

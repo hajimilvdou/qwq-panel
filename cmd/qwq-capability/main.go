@@ -17,6 +17,7 @@ import (
 
 	"github.com/qwq-panel/qwq/internal/buildinfo"
 	"github.com/qwq-panel/qwq/internal/capability"
+	"github.com/qwq-panel/qwq/internal/capability/sysctl"
 	"github.com/qwq-panel/qwq/internal/sandbox"
 )
 
@@ -53,7 +54,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 		return 1
 	}
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
-	runner := capability.SystemRunner()
+	runner := newSysctlDispatchRunner(capability.SystemRunner(), sysctl.NewService())
 	listener, activated, err := sandbox.ListenHelperSocket(socket, group, getenv)
 	if err != nil {
 		fmt.Fprintln(stderr, "qwq-capability: could not open the controlled Unix socket")

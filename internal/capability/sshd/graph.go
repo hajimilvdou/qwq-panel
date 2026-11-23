@@ -20,6 +20,37 @@ const maxConfigFiles = 64
 const maxConfigBytes = 512 << 10
 const ownedDropIn = "sshd_config.d/00-qwq.conf"
 
+var externalIncludeRoots = []string{"/etc/crypto-policies/back-ends"}
+var externalSymlinkTargetRoots = []string{"/usr/share/crypto-policies", "/etc/crypto-policies"}
+
+func isAllowedExternalInclude(p string) bool {
+	if !filepath.IsAbs(p) || strings.ContainsAny(p, "\x00\\") {
+		return false
+	}
+	clean := filepath.Clean(p)
+	for _, root := range externalIncludeRoots {
+		rel, err := filepath.Rel(root, clean)
+		if err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			return true
+		}
+	}
+	return false
+}
+
+func isAllowedExternalSymlinkTarget(p string) bool {
+	if !filepath.IsAbs(p) || strings.ContainsAny(p, "\x00\\") {
+		return false
+	}
+	clean := filepath.Clean(p)
+	for _, root := range externalSymlinkTargetRoots {
+		rel, err := filepath.Rel(root, clean)
+		if err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			return true
+		}
+	}
+	return false
+}
+
 type origin struct {
 	File string
 	Line int
@@ -106,19 +137,33 @@ func (r FileRepository) expand(graph *configGraph, relative string, replacement 
 		}
 		graph.flat.WriteString(line)
 		graph.flat.WriteByte('\n')
-		graph.lines = append(graph.lines, origin{File: filepath.Join(r.ConfigDir, relative), Line: index + 1})
+		originFile := relative
+		if !filepath.IsAbs(originFile) {
+			originFile = filepath.Join(r.ConfigDir, originFile)
+		}
+		graph.lines = append(graph.lines, origin{File: originFile, Line: index + 1})
 	}
 	return nil
 }
 
 func (r FileRepository) readConfig(relative string) ([]byte, error) {
-	if relative != "sshd_config" && filepath.Ext(relative) != ".conf" {
+	ext := filepath.Ext(relative)
+	if relative != "sshd_config" && ext != ".conf" && ext != ".config" {
 		return nil, errors.New("sshd: Include target is not a configuration file")
 	}
 	if r.cached != nil {
 		return slices.Clone(r.cached[relative]), nil
 	}
-	parent := filepath.Join(r.ConfigDir, filepath.Dir(relative))
+	isExternal := filepath.IsAbs(relative)
+	var parent string
+	if isExternal {
+		if !isAllowedExternalInclude(relative) {
+			return nil, errors.New("sshd: Include escapes config root")
+		}
+		parent = filepath.Dir(relative)
+	} else {
+		parent = filepath.Join(r.ConfigDir, filepath.Dir(relative))
+	}
 	root, err := r.Trust.Open(parent)
 	if err != nil {
 		return nil, err
@@ -128,6 +173,23 @@ func (r FileRepository) readConfig(relative string) ([]byte, error) {
 	info, err := root.Lstat(name)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
+	}
+	if err == nil && isExternal && info.Mode()&os.ModeSymlink != 0 {
+		resolved, rerr := filepath.EvalSymlinks(relative)
+		if rerr != nil || !isAllowedExternalSymlinkTarget(resolved) {
+			return nil, errors.New("sshd: untrusted config symlink target")
+		}
+		resolvedRoot, oerr := r.Trust.Open(filepath.Dir(resolved))
+		if oerr != nil {
+			return nil, oerr
+		}
+		defer resolvedRoot.Close()
+		root = resolvedRoot
+		name = filepath.Base(resolved)
+		info, err = root.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
 	}
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 {
 		return nil, errors.New("sshd: untrusted config file")
@@ -152,11 +214,15 @@ func (r FileRepository) readConfig(relative string) ([]byte, error) {
 	return raw, nil
 }
 
-// Include 只允许可信 /etc/ssh 内的配置；不读取用户文件、私钥或任意 glob 根。
+// Include 只允许可信 /etc/ssh 内的配置以及受控系统只读目录 /etc/crypto-policies/back-ends/；
+// 不读取用户文件、私钥或任意 glob 根。
 func (r FileRepository) includePaths(pattern string, replacement []byte, replace bool) ([]string, bool, error) {
 	absolute := pattern
 	if !filepath.IsAbs(absolute) {
 		absolute = filepath.Join(r.ConfigDir, absolute)
+	}
+	if filepath.IsAbs(pattern) && isAllowedExternalInclude(pattern) {
+		return r.externalIncludePaths(filepath.Clean(pattern))
 	}
 	relative, err := filepath.Rel(r.ConfigDir, absolute)
 	if err != nil || relative == "." || strings.HasPrefix(relative, "..") || strings.ContainsAny(relative, "\x00\\") {
@@ -230,6 +296,69 @@ func (r FileRepository) includePaths(pattern string, replacement []byte, replace
 	}
 	slices.Sort(paths)
 	return paths, covers, nil
+}
+
+func (r FileRepository) externalIncludePaths(cleanPattern string) ([]string, bool, error) {
+	parent := filepath.Dir(cleanPattern)
+	if strings.ContainsAny(parent, "*?[") {
+		return nil, false, errors.New("sshd: glob directory is unsupported")
+	}
+	if r.cached != nil {
+		var paths []string
+		for p := range r.cached {
+			if !filepath.IsAbs(p) {
+				continue
+			}
+			matched, err := filepath.Match(cleanPattern, p)
+			if err != nil {
+				return nil, false, err
+			}
+			if matched {
+				paths = append(paths, p)
+			}
+		}
+		slices.Sort(paths)
+		return paths, false, nil
+	}
+	root, err := r.Trust.Open(parent)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	defer root.Close()
+	entries, err := root.FS().Open(".")
+	if err != nil {
+		return nil, false, err
+	}
+	defer entries.Close()
+	directory, ok := entries.(interface {
+		ReadDir(int) ([]os.DirEntry, error)
+	})
+	if !ok {
+		return nil, false, errors.New("sshd: Include directory cannot be enumerated")
+	}
+	items, err := directory.ReadDir(maxConfigFiles + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, false, err
+	}
+	if len(items) > maxConfigFiles {
+		return nil, false, errors.New("sshd: Include directory exceeds limit")
+	}
+	var paths []string
+	for _, item := range items {
+		candidate := filepath.Join(parent, item.Name())
+		matched, err := filepath.Match(cleanPattern, candidate)
+		if err != nil {
+			return nil, false, err
+		}
+		if matched {
+			paths = append(paths, candidate)
+		}
+	}
+	slices.Sort(paths)
+	return paths, false, nil
 }
 
 // configFields 保留 OpenSSH 的引用与注释语义；不支持的转义明确拒绝。

@@ -87,12 +87,16 @@ func newSafeHTTPClient(allowPrivate bool, timeout time.Duration) *http.Client {
 	}
 }
 
+var notifyCGNATPrefix = netip.MustParsePrefix("100.64.0.0/10")
+
 func isDisallowedIP(ip netip.Addr) bool {
 	if !ip.IsValid() {
 		return true
 	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
+	u := ip.Unmap()
+	return u.IsLoopback() || u.IsPrivate() || u.IsLinkLocalUnicast() ||
+		u.IsLinkLocalMulticast() || u.IsMulticast() || u.IsUnspecified() ||
+		notifyCGNATPrefix.Contains(u)
 }
 
 func validateChannelConfig(kind string, cfg ChannelConfig) error {
@@ -374,21 +378,38 @@ func sendSMTP(ctx context.Context, allowPrivate bool, cfg ChannelConfig, ev Noti
 	if err != nil {
 		return SendOutcome{Err: err}
 	}
-	for _, ip := range ips {
-		if !allowPrivate && isDisallowedIP(ip.Unmap()) {
-			return SendOutcome{Err: fmt.Errorf("smtp egress blocked to %s", ip.Unmap())}
-		}
+	if len(ips) == 0 {
+		return SendOutcome{Err: errors.New("smtp host resolved to no addresses")}
 	}
-	addr := net.JoinHostPort(cfg.SMTPHost, strconv.Itoa(cfg.SMTPPort))
+	verifiedIPs := make([]netip.Addr, 0, len(ips))
+	for _, ip := range ips {
+		u := ip.Unmap()
+		if !allowPrivate && isDisallowedIP(u) {
+			return SendOutcome{Err: fmt.Errorf("smtp egress blocked to %s", u)}
+		}
+		verifiedIPs = append(verifiedIPs, u)
+	}
+	portStr := strconv.Itoa(cfg.SMTPPort)
 	dialer := &net.Dialer{Timeout: 8 * time.Second}
 	var conn net.Conn
-	if cfg.SMTPTLS || cfg.SMTPPort == 465 {
-		conn, err = tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{ServerName: cfg.SMTPHost, MinVersion: tls.VersionTLS12})
-	} else {
-		conn, err = dialer.DialContext(ctx, "tcp", addr)
+	var dialErr error
+	for _, verifiedIP := range verifiedIPs {
+		targetAddr := net.JoinHostPort(verifiedIP.String(), portStr)
+		if cfg.SMTPTLS || cfg.SMTPPort == 465 {
+			td := &tls.Dialer{
+				NetDialer: dialer,
+				Config:    &tls.Config{ServerName: cfg.SMTPHost, MinVersion: tls.VersionTLS12},
+			}
+			conn, dialErr = td.DialContext(ctx, "tcp", targetAddr)
+		} else {
+			conn, dialErr = dialer.DialContext(ctx, "tcp", targetAddr)
+		}
+		if dialErr == nil {
+			break
+		}
 	}
-	if err != nil {
-		return SendOutcome{Err: err}
+	if dialErr != nil {
+		return SendOutcome{Err: dialErr}
 	}
 	c, err := smtp.NewClient(conn, cfg.SMTPHost)
 	if err != nil {

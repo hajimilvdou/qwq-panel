@@ -22,14 +22,13 @@ func Validate(intent *Intent) error {
 	v := validator{}
 	v.require(intent.SchemaVersion == "2", "/schema_version", "VERSION", "契约版本必须为 2")
 	v.require(intent.Enabled != nil, "/enabled", "REQUIRED", "必须显式声明 enabled")
-	v.require(len(intent.Profiles) >= 1 && len(intent.Profiles) <= MaxProfiles, "/profiles", "SIZE", "profile 数量必须在 1 至 8 之间")
+	v.require(len(intent.Profiles) >= 1 && len(intent.Profiles) <= MaxProfiles, "/profiles", "SIZE", "profile 数量必须在 1 至 32 之间")
 	if intent.Outbound == nil {
 		v.require(false, "/outbound", "REQUIRED", "必须提供出站")
 	} else {
 		v.require(intent.Outbound.Type == "direct", "/outbound/type", "ENUM", "首版只支持 direct 出站")
 	}
 	seenProfiles := make(map[string]bool, min(len(intent.Profiles), MaxProfiles))
-	seenUsers := make(map[string]bool)
 	seenMarks := make(map[uint32]string)
 	totalUsers := 0
 	for index := range min(len(intent.Profiles), MaxProfiles) {
@@ -41,15 +40,16 @@ func Validate(intent *Intent) error {
 		v.require(profile.Enabled != nil, path+"/enabled", "REQUIRED", "必须显式声明 profile enabled")
 		_, listenOK := validListen(profile.Listen)
 		v.require(listenOK, path+"/listen", "IP", "监听地址必须是无 zone 的 IPv4 或 IPv6")
-		v.require(profile.Port >= 1024 && profile.Port <= 65535, path+"/port", "RANGE", "入站端口必须在 1024 至 65535 之间")
+		v.require(profile.Port >= 1 && profile.Port <= 65535, path+"/port", "RANGE", "入站端口必须在 1 至 65535 之间")
 		v.protocol(profile, path)
 		v.require(len(profile.Users) >= 1 && len(profile.Users) <= MaxUsers, path+"/users", "SIZE", "每个 profile 必须有 1 至 256 个用户")
 		totalUsers += len(profile.Users)
+		seenUsers := make(map[string]bool, min(len(profile.Users), MaxUsers))
 		for userIndex := range min(len(profile.Users), MaxUsers) {
 			user := &profile.Users[userIndex]
 			userPath := strictjson.Pointer(path+"/users", strconv.Itoa(userIndex))
 			v.require(v1.ValidID(user.ID), userPath+"/id", "ID", "用户 ID 必须是小写稳定标识")
-			v.require(!seenUsers[user.ID], userPath+"/id", "DUPLICATE", "用户 ID 在完整快照内不能重复")
+			v.require(!seenUsers[user.ID], userPath+"/id", "DUPLICATE", "用户 ID 在同一 profile 内不能重复")
 			seenUsers[user.ID] = true
 			if user.TrafficMark != 0 {
 				v.require(user.TrafficMark >= MinTrafficMark && user.TrafficMark <= MaxTrafficMark, userPath+"/traffic_mark", "RANGE", "traffic_mark 必须为 0 或位于 0x5100..0x51FF 保留段内")

@@ -11,10 +11,35 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/qwq-panel/qwq/internal/capability/sysctl"
 	"github.com/qwq-panel/qwq/internal/sandbox"
 )
 
 const capabilityRequestTimeout = 30 * time.Second
+
+// sysctlDispatchRunner 将 sysctl.apply / sysctl.rollback 路由到受控白名单 sysctl 服务，
+// 其余能力 verb 继续委派给基础 runner。
+type sysctlDispatchRunner struct {
+	base   sandbox.CapabilityRunner
+	sysctl *sysctl.Service
+}
+
+func newSysctlDispatchRunner(base sandbox.CapabilityRunner, svc *sysctl.Service) sandbox.CapabilityRunner {
+	return sysctlDispatchRunner{base: base, sysctl: svc}
+}
+
+func (r sysctlDispatchRunner) Run(ctx context.Context, request sandbox.CapabilityRequest) (sandbox.CapabilityResponse, error) {
+	switch request.Op {
+	case "sysctl.apply", "sysctl.rollback":
+		if r.sysctl != nil {
+			return r.sysctl.Run(ctx, request)
+		}
+	}
+	if r.base != nil {
+		return r.base.Run(ctx, request)
+	}
+	return sandbox.CapabilityResponse{Code: "UNIMPLEMENTED", Error: "该能力执行器尚未接入"}, nil
+}
 
 type capabilityServer struct {
 	runner         sandbox.CapabilityRunner

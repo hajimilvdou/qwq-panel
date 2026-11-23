@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/anytls"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/coreproc"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/secretmap"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
@@ -50,6 +51,8 @@ type transaction struct {
 	restarted       bool
 	oldObfsPlans    []xrayconfig.ObfsPlan
 	nextObfsPlans   []xrayconfig.ObfsPlan
+	oldAnyTLSSpecs  []anytls.ProfileSpec
+	nextAnyTLSSpecs []anytls.ProfileSpec
 	// 恢复证明只在私有快照和原进程代次均已确认后设置。
 	recovered *state.Metadata
 }
@@ -66,20 +69,24 @@ func (e *Engine) Execute(parent context.Context, request Request) (result Result
 	e.mu.Lock()
 	active, lifetime := e.active, e.lifetime
 	prevObfs := append([]xrayconfig.ObfsPlan(nil), e.obfsPlans...)
+	prevAnyTLS := cloneAnyTLSSpecs(e.anytlsSpecs)
 	e.mu.Unlock()
 	if !active || request.Host == nil || !state.ValidRevision(request.ConfigRevision) || !validOperation(request.OperationID) || request.Attempt == 0 {
+		clearAnyTLSSpecs(prevAnyTLS)
 		return result, failure("INSTANCE_NOT_ACTIVE", nil)
 	}
 	ctx, cancel := context.WithCancel(parent)
 	stopLifetime := context.AfterFunc(lifetime, cancel)
 	defer stopLifetime()
 	defer cancel()
-	tx := &transaction{engine: e, request: request, oldObfsPlans: prevObfs}
+	tx := &transaction{engine: e, request: request, oldObfsPlans: prevObfs, oldAnyTLSSpecs: prevAnyTLS}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = failure("INTERNAL", nil)
 		}
 		if err != nil {
+			clearAnyTLSSpecs(tx.nextAnyTLSSpecs)
+			tx.nextAnyTLSSpecs = nil
 			original := ErrorCode(err)
 			if original == "" {
 				original = "APPLY_FAILED"
@@ -90,6 +97,8 @@ func (e *Engine) Execute(parent context.Context, request Request) (result Result
 				e.persistRecoveryFailure(cleanup, tx.recovered)
 			}
 			stop()
+			clearAnyTLSSpecs(tx.oldAnyTLSSpecs)
+			tx.oldAnyTLSSpecs = nil
 			code := original
 			if recoveryErr != nil {
 				code = "RECOVERY_FAILED"
@@ -214,6 +223,7 @@ func (e *Engine) Execute(parent context.Context, request Request) (result Result
 		}
 		if *desired.v2.Enabled {
 			tx.nextObfsPlans = obfsPlans
+			tx.nextAnyTLSSpecs = buildAnyTLSSpecs(desired.v2, materialsV2)
 		}
 		native, err = e.options.RenderV2(desired.v2, materialsV2, v2Opts)
 		materialsV2.Clear()
@@ -309,12 +319,21 @@ func (e *Engine) Execute(parent context.Context, request Request) (result Result
 				return result, failure("OBFS_START_FAILED", err)
 			}
 		}
+		if e.options.AnyTLS != nil && (!keepProcess || !reflect.DeepEqual(tx.oldAnyTLSSpecs, tx.nextAnyTLSSpecs)) {
+			if len(tx.nextAnyTLSSpecs) > 0 || len(tx.oldAnyTLSSpecs) > 0 {
+				tx.processTouched = true
+				if err = e.options.AnyTLS.StartAll(lifetime, tx.nextAnyTLSSpecs); err != nil {
+					return result, failure("CORE_START_FAILED", err)
+				}
+			}
+		}
 		tx.next.State, tx.next.ResetEpoch = "RUNNING", observed.Epoch
 	}
 	if err = e.step(ctx, request, CommitState); err != nil {
 		return result, err
 	}
 	tx.stateAttempted = true
+	e.persistAnyTLSSpecs(tx.nextAnyTLSSpecs)
 	if err = e.options.Store.Commit(ctx, tx.next); err != nil {
 		return result, failure("STATE_COMMIT_FAILED", contextCause(ctx))
 	}
@@ -349,6 +368,8 @@ func (e *Engine) Execute(parent context.Context, request Request) (result Result
 	}
 	e.mu.Lock()
 	e.obfsPlans = append([]xrayconfig.ObfsPlan(nil), tx.nextObfsPlans...)
+	oldStoredAnyTLS := e.anytlsSpecs
+	e.anytlsSpecs = cloneAnyTLSSpecs(tx.nextAnyTLSSpecs)
 	if len(loadedTLS) > 0 {
 		if e.tlsBindings == nil {
 			e.tlsBindings = make(map[string]TLSBindingStatus, len(loadedTLS))
@@ -358,6 +379,9 @@ func (e *Engine) Execute(parent context.Context, request Request) (result Result
 		}
 	}
 	e.mu.Unlock()
+	clearAnyTLSSpecs(oldStoredAnyTLS)
+	clearAnyTLSSpecs(tx.oldAnyTLSSpecs)
+	clearAnyTLSSpecs(tx.nextAnyTLSSpecs)
 	result = e.result(tx.next, tx.started, tx.restarted)
 	// 指针与进程已经提交，GC 失败只保留显式维护警告，不虚构二次回滚。
 	e.maintain(ctx, tx.next, &result)

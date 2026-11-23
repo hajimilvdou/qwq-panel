@@ -104,10 +104,28 @@ func (d *driverRuntime) observe(parent context.Context, filter metrics.Filter) (
 	if after.Busy || before.Serial != after.Serial || !after.Active || snapshot.Digest != metadata.Current.Digest || snapshot.Epoch != metadata.ResetEpoch {
 		return metrics.Result{}, unavailable
 	}
-	if metadata.Current.Summary == nil {
+	var result metrics.Result
+	switch {
+	case metadata.Current.Summary != nil:
+		result, err = metrics.Normalize(metadata.Current.Summary, snapshot.Values, filter, snapshot.Epoch, time.Now())
+	case metadata.Current.SummaryV2 != nil:
+		values := snapshot.Values
+		if d.anytls != nil {
+			if extra := d.anytls.Counters(); len(extra) > 0 {
+				merged := make(map[string]int64, len(values)+len(extra))
+				for k, v := range values {
+					merged[k] = v
+				}
+				for k, v := range extra {
+					merged[k] += v
+				}
+				values = merged
+			}
+		}
+		result, err = metrics.NormalizeV2(metadata.Current.SummaryV2, values, filter, snapshot.Epoch, time.Now())
+	default:
 		return metrics.Result{}, unavailable
 	}
-	result, err := metrics.Normalize(metadata.Current.Summary, snapshot.Values, filter, snapshot.Epoch, time.Now())
 	if err != nil {
 		return metrics.Result{}, unavailable
 	}

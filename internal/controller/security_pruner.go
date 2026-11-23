@@ -30,8 +30,8 @@ func (p hostSecurityPruner) Prune(ctx context.Context, now time.Time) error {
 		}
 	}
 	if p.db != nil {
-		// OPT-05: 周期性 PASSIVE WAL Checkpoint，防止长期运行后 qwq.db-wal 膨胀。
-		_ = p.db.Checkpoint(ctx)
+		// OPT-05: 周期性 PASSIVE WAL Checkpoint，防止长期运行后 qwq.db-wal 膨胀且不阻塞并发读写。
+		_ = p.db.CheckpointPassive(ctx)
 	}
 	return nil
 }

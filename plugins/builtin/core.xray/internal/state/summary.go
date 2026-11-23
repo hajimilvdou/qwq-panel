@@ -80,7 +80,7 @@ func (s IntentSummary) Validate() error {
 	if _, err := coreapi.InboundTag(s.InboundID); err != nil {
 		return ErrCorrupt
 	}
-	if _, err := netip.ParseAddr(s.Listen); err != nil || s.Port < 1024 || s.Port > 65535 {
+	if _, err := netip.ParseAddr(s.Listen); err != nil || s.Port < 1 || s.Port > 65535 {
 		return ErrCorrupt
 	}
 	if s.Protocol != "vless" || s.Transport != "raw" || s.Flow != "xtls-rprx-vision" || s.SecurityMode != "reality" || s.OutboundType != "direct" {

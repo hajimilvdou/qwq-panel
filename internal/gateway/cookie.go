@@ -39,8 +39,29 @@ func (g *Gateway) SetSessionCookie(w http.ResponseWriter, value string, ttl time
 	http.SetCookie(w, c)
 }
 
-// ClearSessionCookie expires the session cookie.
+// GateCookieName matches panelaccess.GateCookieName so explicit logout clears
+// the stealth entry-gate cookie alongside the session cookie.
+const GateCookieName = "_g"
+
+// ClearSessionCookie expires both the session cookie and the stealth entry-gate
+// cookie on explicit user logout.
 func (g *Gateway) ClearSessionCookie(w http.ResponseWriter) {
+	g.clearSessionCookieOnly(w)
+	http.SetCookie(w, &http.Cookie{
+		Name:     GateCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   !g.cfg.InsecureCookies,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(1, 0).UTC(),
+	})
+}
+
+// clearSessionCookieOnly expires only the session cookie (used on 401 for stale
+// sessions so the browser can stay on /login without losing the entry gate).
+func (g *Gateway) clearSessionCookieOnly(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    "",

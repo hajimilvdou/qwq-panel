@@ -142,13 +142,15 @@ func TestFakeSDKApplyPlanLifecycleAndPendingState(t *testing.T) {
 	}
 }
 
-func TestSupervisedDriverFailureReturnsOnlySafeCause(t *testing.T) {
+func TestSupervisedDriverFailureKeepsRPCAlive(t *testing.T) {
 	err := superviseDriver(t.Context(), func(ctx context.Context, plugin *Plugin) error {
 		plugin.onFailure(errors.New("unsafe native diagnostic"))
-		<-ctx.Done()
+		if ctx.Err() != nil {
+			t.Fatal("driver failure unexpectedly cancelled RPC server context")
+		}
 		return nil
 	})
-	if !errors.Is(err, errRuntimeFailure) || strings.Contains(err.Error(), "unsafe") {
-		t.Fatal("driver failure did not produce a safe nonzero cause")
+	if err != nil {
+		t.Fatalf("superviseDriver should stay alive after core degradation, got: %v", err)
 	}
 }

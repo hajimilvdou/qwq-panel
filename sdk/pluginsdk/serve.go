@@ -51,6 +51,15 @@ type Options struct {
 	// operation answers INTERNAL, a lifecycle hook or tracked goroutine fails its
 	// instance, and the other instances of the process keep serving.
 	CrashOnPanic bool
+	// IdleTTL configures optional scale-to-zero hibernation. When > 0 and
+	// OnIdleDrain is set, the server starts an IdleDrainer and calls OnIdleDrain
+	// once no requests are in flight for IdleTTL. When 0 and the manifest sets
+	// lifecycle.startup="on_demand", QWQ_PLUGIN_IDLE_TTL is consulted.
+	IdleTTL time.Duration
+	// OnIdleDrain is called once when idle hibernation triggers. If nil, idle
+	// hibernation is not enabled by Serve (ServeSystemd installs a graceful
+	// shutdown callback automatically).
+	OnIdleDrain func()
 }
 
 // Serve validates the embedded manifest, builds the descriptor derived from it
@@ -102,18 +111,26 @@ func Serve(ctx context.Context, opts Options) (*Server, error) {
 	if relGrace <= 0 {
 		relGrace = DefaultReleaseGracePeriod
 	}
+	idleTTL := opts.IdleTTL
+	if idleTTL <= 0 && m.Lifecycle.Startup == "on_demand" {
+		idleTTL = IdleTTLFromEnv()
+	}
+	var drainer *IdleDrainer
+	if idleTTL > 0 && opts.OnIdleDrain != nil {
+		drainer = NewIdleDrainer(idleTTL, opts.OnIdleDrain)
+	}
 	s := &Server{
-		plugin:     opts.Plugin,
-		manifest:   m,
-		descriptor: desc,
-		hostConn:   opts.Host,
-		log:        log,
-		baseCtx:    ctx,
-		grace:      grace,
-		relGrace:   relGrace,
-		memory:     mem,
-		instances:  map[string]*instance{},
-
+		plugin:       opts.Plugin,
+		manifest:     m,
+		descriptor:   desc,
+		hostConn:     opts.Host,
+		log:          log,
+		baseCtx:      ctx,
+		grace:        grace,
+		relGrace:     relGrace,
+		memory:       mem,
+		drainer:      drainer,
+		instances:    map[string]*instance{},
 		crashOnPanic: opts.CrashOnPanic,
 	}
 	s.checkMemoryLimit()
@@ -122,7 +139,8 @@ func Serve(ctx context.Context, opts Options) (*Server, error) {
 	log.Info("plugin serving",
 		slog.String("version", m.Version),
 		slog.Uint64("abi_major", uint64(m.ABI.Major)),
-		slog.Uint64("abi_minimum_minor", uint64(m.ABI.MinimumMinor)))
+		slog.Uint64("abi_minimum_minor", uint64(m.ABI.MinimumMinor)),
+		slog.Duration("idle_ttl", idleTTL))
 	return s, nil
 }
 
@@ -158,6 +176,7 @@ func (s *Server) Close() {
 		return
 	}
 	s.closed = true
+	s.drainer.Close()
 	instances := make([]*instance, 0, len(s.instances))
 	for id, in := range s.instances {
 		instances = append(instances, in)

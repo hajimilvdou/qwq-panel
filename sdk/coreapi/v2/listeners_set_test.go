@@ -37,7 +37,7 @@ func TestCheckListenerConflictsRejectsMalformedClaim(t *testing.T) {
 		func(l *Listener) { l.Network = "all" },
 		func(l *Listener) { l.Listen = "localhost" },
 		func(l *Listener) { l.Listen = "::1%lo" },
-		func(l *Listener) { l.Port = 443 },
+		func(l *Listener) { l.Port = 0 },
 		func(l *Listener) { l.Port = 65536 },
 	} {
 		listener := Listener{ProfileID: "outer", Network: "tcp", Listen: "127.0.0.1", Port: 18443}
@@ -45,5 +45,8 @@ func TestCheckListenerConflictsRejectsMalformedClaim(t *testing.T) {
 		if err := CheckListenerConflicts([]Listener{listener}); err == nil {
 			t.Fatal("畸形监听声明不能进入共用冲突校验")
 		}
+	}
+	if err := CheckListenerConflicts([]Listener{{ProfileID: "outer", Network: "tcp", Listen: "0.0.0.0", Port: 443}}); err != nil {
+		t.Fatalf("443 端口监听声明应合法: %v", err)
 	}
 }

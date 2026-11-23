@@ -19,6 +19,7 @@
 
   const appItems = $derived([...pluginNav(plugins.data ?? []), APP_CENTER].filter((i) => session.can(i.perm)));
   const primary = $derived(PRIMARY.filter((i) => session.can(i.perm)));
+  const allNavItems = $derived([...primary, ...appItems, SETTINGS]);
   const node = $derived(nodes.data?.[0]);
   /* 事件流断开时节点状态是旧快照，不能继续宣称"在线" */
   const lost = $derived(events.offline);
@@ -27,7 +28,7 @@
 </script>
 
 {#snippet item(it: NavItem)}
-  <a href={it.href} class="item" aria-current={isActive(it.href, router.path) ? 'page' : undefined}>
+  <a href={it.href} class="item" aria-current={isActive(it.href, router.path, allNavItems) ? 'page' : undefined}>
     <Tile icon={it.icon} color={it.color} size="sm" />
     <span class="ellipsis">{it.label}</span>
   </a>

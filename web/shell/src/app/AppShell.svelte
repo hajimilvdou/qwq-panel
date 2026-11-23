@@ -11,6 +11,7 @@
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import { palette } from '$lib/palette.svelte';
   import { prefs } from '$lib/prefs.svelte';
   import ConnectionBar from './ConnectionBar.svelte';
   import Sidebar from './Sidebar.svelte';
@@ -18,6 +19,16 @@
   import Topbar from './Topbar.svelte';
 
   let { children }: { children: Snippet } = $props();
+
+  /* 悬浮窗与命令面板均动态按需加载，避免拖慢首屏 */
+  const dockMod = import('../features/dock/AiDock.svelte');
+  let paletteMounted = $state(false);
+  let paletteMod: Promise<typeof import('../features/palette/CommandPalette.svelte')> | null = null;
+  const loadPalette = () => (paletteMod ??= import('../features/palette/CommandPalette.svelte'));
+
+  $effect(() => {
+    if (palette.opened) paletteMounted = true;
+  });
 </script>
 
 <a class="skip" href="#main">跳到主要内容</a>
@@ -34,6 +45,15 @@
   </div>
 </div>
 <TabBar />
+
+{#await dockMod then mod}
+  <mod.default />
+{/await}
+{#if paletteMounted}
+  {#await loadPalette() then mod}
+    <mod.default />
+  {/await}
+{/if}
 
 <style>
   .app {

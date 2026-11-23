@@ -19,8 +19,18 @@ type Caller = bridge.Caller
 
 // Forwarder 仅处理经过能力门的四个 RPC，保留端口来自宿主配置及 helper 事实。
 type Forwarder struct {
-	Helper    Caller
-	HostPorts []uint32
+	Helper        Caller
+	HostPorts     []uint32
+	HostPortsFunc func() []uint32
+}
+
+func (f Forwarder) hostPorts() []uint32 {
+	if f.HostPortsFunc != nil {
+		if dynamic := f.HostPortsFunc(); len(dynamic) > 0 {
+			return mergePorts(f.HostPorts, dynamic)
+		}
+	}
+	return f.HostPorts
 }
 
 func (f Forwarder) Forward(ctx context.Context, call hostsvc.CapabilityCall) (hostsvc.CapabilityResult, error) {
@@ -35,7 +45,7 @@ func (f Forwarder) Forward(ctx context.Context, call hostsvc.CapabilityCall) (ho
 		response := new(firewallv1.GetRulesetResponse)
 		result, err := f.invoke(ctx, call.PluginID, "firewall.get", struct{}{}, response)
 		if err == nil && result.Error == nil {
-			response.PreservedPorts = mergePorts(response.PreservedPorts, f.HostPorts)
+			response.PreservedPorts = mergePorts(response.PreservedPorts, f.hostPorts())
 		}
 		return result, err
 	case "DetectManagers":
@@ -48,7 +58,8 @@ func (f Forwarder) Forward(ctx context.Context, call hostsvc.CapabilityCall) (ho
 		if !ok || req == nil {
 			return invalidCall()
 		}
-		if _, err := preservedPorts(f.HostPorts, f.HostPorts); err != nil {
+		hostPorts := f.hostPorts()
+		if _, err := preservedPorts(hostPorts, hostPorts); err != nil {
 			return hostsvc.CapabilityResult{}, status.Error(codes.Unavailable, "宿主管理端口未配置")
 		}
 		observed := new(firewallv1.GetRulesetResponse)
@@ -56,7 +67,7 @@ func (f Forwarder) Forward(ctx context.Context, call hostsvc.CapabilityCall) (ho
 		if err != nil || result.Error != nil {
 			return result, err
 		}
-		required := mergePorts(observed.PreservedPorts, f.HostPorts)
+		required := mergePorts(observed.PreservedPorts, hostPorts)
 		if _, err := Normalize(req.RulesetJson, required, req.PreservedPorts); err != nil {
 			return hostsvc.CapabilityResult{Error: &hostsvc.DomainError{Code: "VALIDATION_FAILED", Message: "规则集不符合安全白名单或缺少管理端口"}}, nil
 		}
@@ -67,10 +78,11 @@ func (f Forwarder) Forward(ctx context.Context, call hostsvc.CapabilityCall) (ho
 		if !ok || req == nil {
 			return invalidCall()
 		}
-		if _, err := preservedPorts(f.HostPorts, f.HostPorts); err != nil {
+		hostPorts := f.hostPorts()
+		if _, err := preservedPorts(hostPorts, hostPorts); err != nil {
 			return hostsvc.CapabilityResult{}, status.Error(codes.Unavailable, "宿主管理端口未配置")
 		}
-		return f.invoke(ctx, call.PluginID, "firewall.reset", Mutation{ExpectedRevision: req.ExpectedRevision, HostPorts: append([]uint32(nil), f.HostPorts...)}, new(firewallv1.ResetRulesetResponse))
+		return f.invoke(ctx, call.PluginID, "firewall.reset", Mutation{ExpectedRevision: req.ExpectedRevision, HostPorts: append([]uint32(nil), hostPorts...)}, new(firewallv1.ResetRulesetResponse))
 	default:
 		return hostsvc.CapabilityResult{}, status.Error(codes.Unimplemented, "防火墙方法不受支持")
 	}

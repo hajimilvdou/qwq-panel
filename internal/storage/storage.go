@@ -266,6 +266,13 @@ func (db *DB) Checkpoint(ctx context.Context) error {
 	return err
 }
 
+// CheckpointPassive runs a non-blocking PASSIVE WAL checkpoint suitable for
+// periodic background sweeps without stalling concurrent readers or writers.
+func (db *DB) CheckpointPassive(ctx context.Context) error {
+	_, err := db.w.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`)
+	return err
+}
+
 // QuickCheck runs PRAGMA quick_check.
 func (db *DB) QuickCheck(ctx context.Context) error {
 	rows, err := db.r.QueryContext(ctx, `PRAGMA quick_check`)

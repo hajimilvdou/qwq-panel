@@ -51,6 +51,9 @@ type fakeUpdater struct {
 	enabledValue bool
 	enabledErr   error
 
+	ensureActiveID  string
+	ensureActiveErr error
+
 	logResult sandbox.LogResult
 	logErr    error
 }
@@ -69,6 +72,11 @@ func (f *fakeUpdater) Logs(context.Context, string, string, string, int) (sandbo
 func (f *fakeUpdater) SetEnabled(_ context.Context, pluginID string, enabled bool) error {
 	f.enabledID, f.enabledValue = pluginID, enabled
 	return f.enabledErr
+}
+
+func (f *fakeUpdater) EnsureActive(_ context.Context, pluginID string) error {
+	f.ensureActiveID = pluginID
+	return f.ensureActiveErr
 }
 
 func (f *fakeUpdater) Install(_ context.Context, req updater.InstallRequest) (*updater.Version, error) {

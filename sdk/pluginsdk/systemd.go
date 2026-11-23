@@ -90,6 +90,8 @@ type SystemdOptions struct {
 	// ShutdownGrace bounds the graceful drain when the process stops. 0 means
 	// DefaultShutdownGrace.
 	ShutdownGrace time.Duration
+	// IdleTTL overrides serveOptions.IdleTTL when > 0.
+	IdleTTL time.Duration
 	// Logger receives transport diagnostics. Nil uses Options.Logger from
 	// serveOptions, or the SDK default.
 	Logger *slog.Logger
@@ -174,6 +176,19 @@ func ServeSystemd(ctx context.Context, opts SystemdOptions, serveOptions Options
 	healthSrv := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(srv, healthSrv)
 
+	idleDrainCh := make(chan struct{})
+	var idleDrainOnce sync.Once
+	onIdleDrain := serveOptions.OnIdleDrain
+	if onIdleDrain == nil {
+		onIdleDrain = func() {
+			idleDrainOnce.Do(func() { close(idleDrainCh) })
+		}
+	}
+	idleTTL := opts.IdleTTL
+	if idleTTL <= 0 {
+		idleTTL = serveOptions.IdleTTL
+	}
+
 	pluginServer, err := Serve(ctx, Options{
 		Plugin:             serveOptions.Plugin,
 		Manifest:           serveOptions.Manifest,
@@ -183,6 +198,8 @@ func ServeSystemd(ctx context.Context, opts SystemdOptions, serveOptions Options
 		DefaultGracePeriod: serveOptions.DefaultGracePeriod,
 		ReleaseGracePeriod: serveOptions.ReleaseGracePeriod,
 		CrashOnPanic:       serveOptions.CrashOnPanic,
+		IdleTTL:            idleTTL,
+		OnIdleDrain:        onIdleDrain,
 	})
 	if err != nil {
 		return err
@@ -209,6 +226,8 @@ func ServeSystemd(ctx context.Context, opts SystemdOptions, serveOptions Options
 		return fmt.Errorf("pluginsdk: serve: %w", err)
 	case sig := <-sigs:
 		log.Info("signal received, shutting down", slog.String("signal", sig.String()))
+	case <-idleDrainCh:
+		log.Info("idle TTL expired, hibernating plugin process")
 	case <-ctx.Done():
 		log.Info("context canceled, shutting down", slog.String("error", ctx.Err().Error()))
 	}

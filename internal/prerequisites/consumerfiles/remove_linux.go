@@ -60,9 +60,20 @@ func (s *Store) Remove(ctx context.Context, bindingID string) error {
 	if err != nil {
 		return err
 	}
+	var tempMetadata []string
 	for _, name := range entries {
-		if name != currentName && name != "generations" {
-			return fault.New("CONSUMER_FILES_UNSAFE", "消费者绑定目录包含未知条目")
+		if name == currentName || name == "generations" {
+			continue
+		}
+		if isMetadataTempName(name) {
+			tempMetadata = append(tempMetadata, name)
+			continue
+		}
+		return fault.New("CONSUMER_FILES_UNSAFE", "消费者绑定目录包含未知条目")
+	}
+	for _, tmpName := range tempMetadata {
+		if err := s.removeVerifiedFile(ctx, bindingDir, tmpName, maxMetadataBytes); err != nil {
+			return err
 		}
 	}
 	if err := s.removeVerifiedFile(ctx, bindingDir, currentName, maxMetadataBytes); err != nil {
@@ -100,7 +111,7 @@ func (s *Store) removeGenerations(ctx context.Context, bindingDir *os.File) erro
 		return err
 	}
 	for _, name := range names {
-		if !isGenerationDirName(name) {
+		if !isGenerationDirName(name) && !isStageDirName(name) {
 			return fault.New("CONSUMER_FILES_UNSAFE", "消费者 generations 目录包含未知条目")
 		}
 	}
@@ -183,7 +194,7 @@ func (s *Store) removeProofs(ctx context.Context, generation *os.File) error {
 		return err
 	}
 	for _, name := range names {
-		if !isProofFileName(name) {
+		if !isProofFileName(name) && !isMetadataTempName(name) {
 			return fault.New("CONSUMER_FILES_UNSAFE", "消费者许可目录包含未知条目")
 		}
 	}
@@ -304,4 +315,31 @@ func isProofFileName(name string) bool {
 		return false
 	}
 	return digestValid(name[len("p-") : len(name)-len(".json")])
+}
+
+func isLowerHexNonce(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func isMetadataTempName(name string) bool {
+	rest, ok := strings.CutPrefix(name, ".metadata-")
+	return ok && isLowerHexNonce(rest)
+}
+
+func isStageDirName(name string) bool {
+	rest, ok := strings.CutPrefix(name, ".stage-")
+	if !ok {
+		return false
+	}
+	gen, nonce, ok := strings.Cut(rest, "-")
+	return ok && isGenerationDirName(gen) && isLowerHexNonce(nonce)
 }

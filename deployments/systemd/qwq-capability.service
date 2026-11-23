@@ -22,21 +22,21 @@ UMask=0022
 PrivateNetwork=no
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 ProtectSystem=strict
-ReadWritePaths=-/etc/ssh/sshd_config.d -/etc/nftables.d /run/qwq /var/lib/qwq-capability -/etc/shadow -/etc/gshadow
+ReadWritePaths=/etc -/run/qwq /var/lib/qwq-capability /root /home
 ReadOnlyPaths=-/var/log/journal -/run/log/journal
 ProtectKernelLogs=no
 PrivateTmp=yes
 PrivateDevices=yes
 DevicePolicy=closed
-ProtectHome=yes
-ProtectKernelTunables=yes
+ProtectHome=no
+ProtectKernelTunables=no
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
-# --- ss 通过 /proc 核验常驻 SSH 监听归属；仍只挂载 PID 视图 ----------------------
+# --- ss 通过 /proc 核验常驻 SSH 监听归属；sysctl 需要读写 /proc/sys ---
 ProtectProc=default
-ProcSubset=pid
+ProcSubset=all
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

@@ -25,7 +25,7 @@ type listeningSocket struct {
 	inode    uint64
 }
 
-func verifyOwnedPortConflict(ctx context.Context, target, previous netip.AddrPort, pid int) error {
+func verifyOwnedPortConflict(ctx context.Context, target, previous netip.AddrPort, pids ...int) error {
 	inodes := make(map[uint64]bool)
 	for _, path := range []string{"/proc/self/net/tcp", "/proc/self/net/tcp6"} {
 		sockets, err := conflictingSockets(ctx, path, target)
@@ -47,7 +47,7 @@ func verifyOwnedPortConflict(ctx context.Context, target, previous netip.AddrPor
 	if len(inodes) == 0 {
 		return errPortIdentity
 	}
-	return verifySocketOwner(ctx, pid, inodes)
+	return verifySocketOwner(ctx, pids, inodes)
 }
 
 func conflictingSockets(ctx context.Context, path string, target netip.AddrPort) (sockets []listeningSocket, err error) {
@@ -119,8 +119,29 @@ func procSocketEndpoint(text string) (netip.AddrPort, error) {
 	return netip.AddrPortFrom(addr.Unmap(), uint16(port)), nil
 }
 
-// verifySocketOwner 只保留少量相关监听 inode；按批扫描 fd，不缓存连接或整个 fd 表。
-func verifySocketOwner(ctx context.Context, pid int, inodes map[uint64]bool) (err error) {
+// verifySocketOwner 只保留少量相关监听 inode；依次扫描 Xray 与 ObfsSupervisor 等托管 PID 的 fd，不缓存连接或整个 fd 表。
+func verifySocketOwner(ctx context.Context, pids []int, inodes map[uint64]bool) error {
+	seenPID := make(map[int]bool, len(pids))
+	var lastErr error
+	for _, pid := range pids {
+		if pid <= 0 || seenPID[pid] {
+			continue
+		}
+		seenPID[pid] = true
+		if err := scanPIDSocketInodes(ctx, pid, inodes); err != nil {
+			lastErr = err
+		}
+		if len(inodes) == 0 {
+			return nil
+		}
+	}
+	if lastErr != nil && !errors.Is(lastErr, os.ErrNotExist) {
+		return lastErr
+	}
+	return errPortIdentity
+}
+
+func scanPIDSocketInodes(ctx context.Context, pid int, inodes map[uint64]bool) (err error) {
 	directory := filepath.Join("/proc", strconv.Itoa(pid), "fd")
 	fds, err := os.Open(directory)
 	if err != nil {
@@ -153,8 +174,8 @@ func verifySocketOwner(ctx context.Context, pid int, inodes map[uint64]bool) (er
 			}
 			delete(inodes, inode)
 		}
-		if errors.Is(readErr, io.EOF) && len(inodes) != 0 {
-			return errPortIdentity
+		if errors.Is(readErr, io.EOF) {
+			break
 		}
 	}
 	return nil

@@ -185,7 +185,7 @@ func (s *proxyStore) GetWARP(ctx context.Context) (*warpWithSecrets, error) {
 		domainsRaw      string
 		enabledInt      int
 	)
-	err := s.db.QueryRowContext(ctx, `
+	err := s.readDB().QueryRowContext(ctx, `
 		SELECT account_id, account_type, private_key_enc, access_token_enc, public_key, peer_public_key,
 		       endpoint, address_v4, address_v6, client_id, reserved_json, mtu, enabled,
 		       routing_mode, bound_ports_json, domains_json, license_key_masked, last_synced_rev,

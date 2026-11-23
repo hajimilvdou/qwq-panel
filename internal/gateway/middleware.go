@@ -342,7 +342,7 @@ func (g *Gateway) checkHostAndOrigin(r *http.Request) error {
 			}
 		}
 	}
-	if !g.hostAllowed(host) && !isLoopbackHost(host) {
+	if !g.hostAllowed(host) && !(isLoopbackHost(host) && isLoopbackRemoteAddr(r.RemoteAddr)) {
 		return csrfFailed("The Host header is not one of the configured public origins.")
 	}
 	// The plugin static prefix serves public content to the sandboxed plugin
@@ -384,58 +384,81 @@ func isPublicPluginPath(p string) bool {
 	return p == "/p" || strings.HasPrefix(p, "/p/")
 }
 
+func isLoopbackRemoteAddr(remoteAddr string) bool {
+	a, err := netip.ParseAddr(hostOnly(remoteAddr))
+	return err == nil && a.Unmap().IsLoopback()
+}
+
 func (g *Gateway) hostAllowed(host string) bool {
 	g.hostMu.RLock()
 	defer g.hostMu.RUnlock()
 	if len(g.hosts) == 0 {
 		return true
 	}
-	_, ok := g.hosts[strings.ToLower(host)]
-	if ok {
+	lh := strings.ToLower(host)
+	if _, ok := g.hosts[lh]; ok {
+		return true
+	}
+	if g.dynamicPanelHost != "" && lh == g.dynamicPanelHost {
 		return true
 	}
 	// When the configured origin has no explicit port (e.g. panel.example.com),
 	// also accept host:port for the same hostname.
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		_, ok = g.hosts[strings.ToLower(h)]
+	if h, _, err := net.SplitHostPort(lh); err == nil {
+		if _, ok := g.hosts[h]; ok {
+			return true
+		}
+		if g.dynamicPanelHost != "" && h == g.dynamicPanelHost {
+			return true
+		}
 	}
-	return ok
+	return false
 }
 
 func (g *Gateway) originAllowed(origin, host string) bool {
-	norm, originHost, ok := normalizeOrigin(origin)
+	norm, scheme, originHost, originHostname, ok := normalizeOrigin(origin)
 	if !ok {
 		return false
 	}
 	g.hostMu.RLock()
 	hasOrigins := len(g.origins) > 0
 	_, allowed := g.origins[norm]
+	dynHost := g.dynamicPanelHost
 	g.hostMu.RUnlock()
 	if hasOrigins {
-		return allowed
+		if allowed {
+			return true
+		}
+		if dynHost != "" && strings.EqualFold(scheme, "https") && strings.EqualFold(originHostname, dynHost) {
+			return true
+		}
+		return false
 	}
 	// Without a configured allow-list only same-origin requests are accepted,
 	// plus loopback, which the setup flow uses over an SSH tunnel.
-	return originHost == host || isLoopbackHost(originHost)
+	return originHost == host || (dynHost != "" && strings.EqualFold(originHostname, dynHost)) || isLoopbackHost(originHost)
 }
 
-// normalizeOrigin returns "scheme://host[:port]" with default ports removed.
-func normalizeOrigin(v string) (origin, host string, ok bool) {
+// normalizeOrigin returns "scheme://host[:port]" (with default ports removed),
+// lower-case scheme, normalized host[:port], and lower-case hostname without port.
+func normalizeOrigin(v string) (origin, scheme, host, hostname string, ok bool) {
 	u, err := url.Parse(v)
 	if err != nil || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-		return "", "", false
+		return "", "", "", "", false
 	}
+	scheme = strings.ToLower(u.Scheme)
 	host = strings.ToLower(u.Host)
-	if strings.HasSuffix(host, ":443") && u.Scheme == "https" {
+	if strings.HasSuffix(host, ":443") && scheme == "https" {
 		host = strings.TrimSuffix(host, ":443")
 	}
-	if strings.HasSuffix(host, ":80") && u.Scheme == "http" {
+	if strings.HasSuffix(host, ":80") && scheme == "http" {
 		host = strings.TrimSuffix(host, ":80")
 	}
-	if host == "" {
-		return "", "", false
+	hostname = strings.ToLower(u.Hostname())
+	if host == "" || hostname == "" {
+		return "", "", "", "", false
 	}
-	return u.Scheme + "://" + host, host, true
+	return scheme + "://" + host, scheme, host, hostname, true
 }
 
 // normalizeHost lower-cases a Host header value and rejects anything that is
@@ -590,7 +613,7 @@ func (g *Gateway) authenticate(rt *route, next http.Handler) http.Handler {
 			}
 			// A dead session cookie is expired so the browser stops replaying it.
 			if creds.Session != "" && problem.HasCode(err, problem.Unauthenticated) {
-				g.ClearSessionCookie(w)
+				g.clearSessionCookieOnly(w)
 			}
 			g.writeProblem(w, r, err)
 			return
@@ -709,7 +732,7 @@ func (g *Gateway) rateLimit(rt *route, next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := "ip:" + ClientIP(r.Context())
+		key := ipKey(ClientIP(r.Context()))
 		if p, ok := PrincipalFrom(r.Context()); ok {
 			key = "principal:" + string(p.Scheme) + ":" + string(p.Actor.Kind) + ":" + p.Actor.ID
 		}

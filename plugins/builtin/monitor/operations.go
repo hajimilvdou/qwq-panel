@@ -172,30 +172,23 @@ func (i *instance) stat(_ context.Context, metric string) (statResponse, error) 
 func (i *instance) series(_ context.Context, metric string) (seriesResponse, error) {
 	i.samples.mu.Lock()
 	defer i.samples.mu.Unlock()
-	lines := []seriesLine{{Name: "入", Color: "teal", Points: [][2]float64{}}, {Name: "出", Color: "violet", Points: [][2]float64{}}}
-	unit := "Mbps"
 	if metric == "load" {
-		lines[0].Name, lines[1].Name, unit = "CPU", "内存", "%"
+		line := seriesLine{Name: "1m 负载", Color: "teal", Points: [][2]float64{}}
+		for _, point := range i.samples.fine.latest(60) {
+			if point.Load != nil {
+				line.Points = append(line.Points, [2]float64{float64(point.T), *point.Load})
+			}
+		}
+		return seriesResponse{Unit: "", Series: []seriesLine{line}}, nil
 	}
+	lines := []seriesLine{{Name: "入", Color: "teal", Points: [][2]float64{}}, {Name: "出", Color: "violet", Points: [][2]float64{}}}
 	for _, point := range i.samples.fine.latest(60) {
 		values := []*float64{point.NetRX, point.NetTX}
-		if metric == "load" {
-			values = []*float64{point.CPU, point.Memory}
-		}
 		for index, value := range values {
 			if value != nil {
-				v := *value
-				if metric == "net" {
-					v /= 1e6
-				}
-				lines[index].Points = append(lines[index].Points, [2]float64{float64(point.T), v})
+				lines[index].Points = append(lines[index].Points, [2]float64{float64(point.T), *value / 1e6})
 			}
 		}
 	}
-	response := seriesResponse{Unit: unit, Series: lines}
-	if metric == "load" {
-		maximum := 100.0
-		response.Max = &maximum
-	}
-	return response, nil
+	return seriesResponse{Unit: "Mbps", Series: lines}, nil
 }

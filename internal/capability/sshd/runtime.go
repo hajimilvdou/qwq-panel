@@ -97,10 +97,15 @@ func (r SystemRuntime) Reload(ctx context.Context) error {
 			service = unit
 		}
 	}
-	commands := [][]string{{"reload", service}}
+	var commands [][]string
 	if socket != "" {
 		commands = [][]string{{"daemon-reload"}, {"restart", socket}}
-	} else if service == "" {
+		if service != "" {
+			commands = append(commands, []string{"reload", service})
+		}
+	} else if service != "" {
+		commands = [][]string{{"reload", service}}
+	} else {
 		return errors.New("sshd: active standard SSH manager missing")
 	}
 	for _, args := range commands {

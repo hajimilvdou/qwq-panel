@@ -21,7 +21,7 @@ set -euo pipefail
 
 # 发布公钥（PEM，Ed25519）由 release.sh 在打包时写入；为空时只允许 --offline。
 RELEASE_PUBKEY_PEM=''
-DEFAULT_MIRROR=https://github.com/hajimilvdou/qwq-panel/releases/download
+DEFAULT_MIRROR=https://github.com/qwq-panel/qwq/releases/download
 
 PREFIX=/opt/qwq
 UNIT_DIR=/etc/systemd/system
@@ -203,7 +203,7 @@ if [[ -n $version ]]; then
   command -v openssl >/dev/null || die "在线安装需要 openssl（验签）"
   name=qwq-$version-linux-$ARCH.tar.gz
   for f in "$name" SHA256SUMS SHA256SUMS.sig; do
-    curl -fsSL --proto '=https' --retry 3 -o "$T/$f" "$mirror/$version/$f" || die "下载 $f 失败"
+    curl -fsSL --proto '=https' --connect-timeout 10 --speed-limit 10240 --speed-time 15 --retry 3 -o "$T/$f" "$mirror/$version/$f" || die "下载 $f 失败"
   done
   printf '%s\n' "$RELEASE_PUBKEY_PEM" >"$T/release.pub"
   openssl pkeyutl -verify -pubin -inkey "$T/release.pub" -rawin \
@@ -348,8 +348,8 @@ for u in "$R"/share/systemd/*; do
   put 0644 "$u" "$UNIT_DIR/${u##*/}"
 done
 if [[ -f $R/share/polkit/qwq-plugin.rules ]]; then
-  install -d -m0755 /etc/polkit-1/rules.d
-  put 0644 "$R/share/polkit/qwq-plugin.rules" /etc/polkit-1/rules.d/60-qwq-plugin.rules
+  [[ -d "/etc/polkit-1/rules.d" ]] || install -d -m0755 "/etc/polkit-1/rules.d"
+  put 0644 "$R/share/polkit/qwq-plugin.rules" "/etc/polkit-1/rules.d/60-qwq-plugin.rules"
 fi
 install -d -m0750 -o root -g qwq "$ETC"
 install -d -m0755 -o root -g root "$ETC/trust"
@@ -385,8 +385,12 @@ EOF
   fi
 fi
 
+if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+  chcon -R -t bin_t "$PREFIX" 2>/dev/null || true
+  [[ -d /var/lib/qwq-plugins ]] && chcon -R -t bin_t /var/lib/qwq-plugins 2>/dev/null || true
+fi
 if command -v getenforce >/dev/null && [[ $(getenforce) == Enforcing ]]; then
-  echo "注意：SELinux 为 Enforcing，qwq 不提供策略模块；qwq 与插件的单元可能因文件标签被拒绝执行（203/EXEC）。排查：qwq doctor、journalctl -u qwq-controller、ausearch -m avc -ts recent" >&2
+  echo "注意：SELinux 为 Enforcing，已尝试为 $PREFIX 与 /var/lib/qwq-plugins 恢复 bin_t 标签；若仍遇 203/EXEC 请排查：qwq doctor、journalctl -u qwq-controller、ausearch -m avc -ts recent" >&2
 fi
 
 # ── 切换版本 ─────────────────────────────────────────────────────────────────
@@ -438,7 +442,7 @@ apply_polkit_compat_if_needed() {
   elif [[ -n $version ]]; then
     log "检测到当前系统缺少 polkit >= 0.106（不支持原生 JS 规则），自动下载兼容补丁 $cfname …"
     ctar="$T/$cfname"
-    curl -fsSL --proto '=https' --retry 3 -o "$ctar" "$mirror/$rel_tag/$cfname" ||
+    curl -fsSL --proto '=https' --connect-timeout 10 --speed-limit 10240 --speed-time 15 --retry 3 -o "$ctar" "$mirror/$rel_tag/$cfname" ||
       die "下载兼容补丁 $cfname 失败"
     if ! (cd "$T" && awk -v f="$cfname" '$2 == f { found = 1; print } END { exit !found }' SHA256SUMS | sha256sum --strict -c - >/dev/null); then
       die "兼容补丁 $cfname SHA-256 校验失败"
@@ -488,11 +492,23 @@ for _ in $(seq 30); do
 done
 systemctl is-active --quiet qwq-controller.service ||
   die "qwq-controller 未能启动；查看 journalctl -u qwq-controller -n 50 与 qwq doctor"
-# 从 /etc/qwq/qwq.json 解析当前监听端口、安全密道与 TLS 模式，用于健康探测与接入指引
+# 从运行时数据库或 /etc/qwq/qwq.json 解析当前监听端口、安全密道与 TLS 模式，用于健康探测与接入指引
 cfg_listen=$(sed -nE 's/.*"listen"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$ETC/qwq.json" | head -n 1 || true)
 cfg_entry_path=$(sed -nE 's/.*"entry_path"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' "$ETC/qwq.json" | head -n 1 || true)
 cfg_panel_domain=$(sed -nE 's/.*"panel_domain"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' "$ETC/qwq.json" | head -n 1 || true)
 cfg_tls_mode=$(sed -nE 's/.*"mode"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$ETC/qwq.json" | head -n 1 || true)
+if [[ -f /var/lib/qwq/qwq.db ]] && command -v sqlite3 >/dev/null 2>&1; then
+  db_row=$(sqlite3 -readonly -separator '|' /var/lib/qwq/qwq.db "SELECT listen_port, entry_path, panel_domain FROM panel_access_settings WHERE id = 1;" 2>/dev/null || true)
+  if [[ -n $db_row ]]; then
+    IFS='|' read -r db_port db_entry db_domain <<<"$db_row"
+    if [[ $db_port =~ ^[0-9]+$ ]] && ((db_port >= 1 && db_port <= 65535)); then
+      cfg_host=${cfg_listen%:*}
+      cfg_listen="${cfg_host:-127.0.0.1}:${db_port}"
+    fi
+    cfg_entry_path=$db_entry
+    cfg_panel_domain=$db_domain
+  fi
+fi
 cfg_listen=${cfg_listen:-127.0.0.1:8443}
 cfg_port=${cfg_listen##*:}
 [[ $cfg_port =~ ^[0-9]+$ ]] || cfg_port=8443
@@ -500,18 +516,22 @@ cfg_scheme=https
 [[ $cfg_tls_mode == "proxy" ]] && cfg_scheme=http
 cfg_entry_path=${cfg_entry_path#/}
 cfg_entry_path=${cfg_entry_path%/}
+probe_host="127.0.0.1"
+if [[ $cfg_listen == \[*\]* ]]; then
+  probe_host="[::1]"
+fi
 if [[ -n $cfg_entry_path && $cfg_tls_mode != "proxy" && -z $cfg_panel_domain ]]; then
-  LISTEN_CHECK="${cfg_scheme}://127.0.0.1:${cfg_port}/${cfg_entry_path}/readyz"
+  LISTEN_CHECK="${cfg_scheme}://${probe_host}:${cfg_port}/${cfg_entry_path}/readyz"
 else
-  LISTEN_CHECK="${cfg_scheme}://127.0.0.1:${cfg_port}/readyz"
+  LISTEN_CHECK="${cfg_scheme}://${probe_host}:${cfg_port}/readyz"
 fi
 
 if command -v curl >/dev/null; then
   for _ in $(seq 30); do
-    curl -skf --max-time 2 "$LISTEN_CHECK" >/dev/null && break
+    curl -skf --connect-timeout 2 --max-time 3 "$LISTEN_CHECK" >/dev/null && break
     sleep 1
   done || true
-  curl -skf --max-time 2 "$LISTEN_CHECK" >/dev/null || echo "提示：$LISTEN_CHECK 暂无响应（若已在面板内修改过端口或密道可忽略）" >&2
+  curl -skf --connect-timeout 2 --max-time 3 "$LISTEN_CHECK" >/dev/null || echo "提示：$LISTEN_CHECK 暂无响应（若已在面板内修改过端口或密道可忽略）" >&2
 fi
 
 # ── 激活默认必装安全插件（security.basic）与用户按需选装的官方插件 ──────────
@@ -540,7 +560,7 @@ if ((${#SELECTED_PLUGINS[@]} > 0)); then
     else
       target_pkg="$T/$fname"
       log "下载可选插件 $pid ($fname) …"
-      curl -fsSL --proto '=https' --retry 3 -o "$target_pkg" "$mirror/$rel_tag/$fname" ||
+      curl -fsSL --proto '=https' --connect-timeout 10 --speed-limit 10240 --speed-time 15 --retry 3 -o "$target_pkg" "$mirror/$rel_tag/$fname" ||
         die "下载可选插件 $fname 失败"
       if ! (cd "$T" && awk -v f="$fname" '$2 == f { found = 1; print } END { exit !found }' SHA256SUMS | sha256sum --strict -c - >/dev/null); then
         die "可选插件 $fname SHA-256 校验失败"
@@ -554,7 +574,7 @@ if ((${#bootstrap_pkgs[@]} > 0)); then
   "$PREFIX/current/bin/qwq" plugin bootstrap --config "$ETC/qwq.json" "${bootstrap_pkgs[@]}"
 fi
 
-rc=0; qwq setup-token || rc=$?
+rc=0; "$PREFIX/current/bin/qwq" setup-token --config "$ETC/qwq.json" || rc=$?
 case $rc in
   0) ;;
   3) log "已初始化；忘记密码请用 sudo qwq recover" ;;

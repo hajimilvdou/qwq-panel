@@ -62,6 +62,11 @@ secret rows in bounded transactions. Retired keys remain on disk unless
 		return 1
 	}
 
+	if *dropRetired && controllerActive() {
+		fmt.Fprintln(stderr, "qwq rotate-master-key: refusing --drop-retired while qwq-controller is running; run `qwq rotate-master-key` without --drop-retired first so the live controller hot-reloads the new key, then stop qwq-controller or re-run --drop-retired once safe")
+		return 1
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -73,6 +78,16 @@ secret rows in bounded transactions. Retired keys remain on disk unless
 		return 1
 	}
 	defer closeDB()
+
+	// Acquire the rotation lock AFTER openLocalDatabase drops privileges from
+	// root to the DataDir owner (qwq) so <DataDir>/keys and .lock are never
+	// created owned by root:root.
+	unlock, err := acquireKeyRotationLock(cfg.DataDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "qwq rotate-master-key: %v\n", err)
+		return 1
+	}
+	defer unlock()
 
 	res, err := executeMasterKeyRotation(ctx, local, *batch, *dropRetired)
 	if err != nil {

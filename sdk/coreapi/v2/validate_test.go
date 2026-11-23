@@ -26,13 +26,13 @@ func TestValidateProtocolAndCredentialUnion(t *testing.T) {
 		{"缺 profile enabled", "/profiles/0/enabled", "REQUIRED", func(i *Intent) { i.Profiles[0].Enabled = nil }},
 		{"listen 域名", "/profiles/0/listen", "IP", func(i *Intent) { i.Profiles[0].Listen = "proxy.example.test" }},
 		{"listen zone", "/profiles/0/listen", "IP", func(i *Intent) { i.Profiles[0].Listen = "fe80::1%eth0" }},
-		{"特权端口", "/profiles/0/port", "RANGE", func(i *Intent) { i.Profiles[0].Port = 1023 }},
+		{"端口为 0", "/profiles/0/port", "RANGE", func(i *Intent) { i.Profiles[0].Port = 0 }},
 		{"端口超界", "/profiles/0/port", "RANGE", func(i *Intent) { i.Profiles[0].Port = 65536 }},
 		{"协议大小写", "/profiles/0/protocol", "ENUM", func(i *Intent) { i.Profiles[0].Protocol = "VLESS" }},
 		{"缺选定成员", "/profiles/0/vless", "REQUIRED", func(i *Intent) { i.Profiles[0].VLESS = nil }},
 		{"混入空成员", "/profiles/0/hysteria2", "FORBIDDEN", func(i *Intent) { i.Profiles[0].Hysteria2 = &Hysteria2{} }},
-		{"VLESS 不接受 TCP 别名", "/profiles/0/vless/transport", "ENUM", func(i *Intent) { i.Profiles[0].VLESS.Transport = "tcp" }},
-		{"VLESS flow", "/profiles/0/vless/flow", "ENUM", func(i *Intent) { i.Profiles[0].VLESS.Flow = "" }},
+		{"VLESS 非法传输", "/profiles/0/vless/transport", "ENUM", func(i *Intent) { i.Profiles[0].VLESS.Transport = "kcp" }},
+		{"VLESS 非法 flow", "/profiles/0/vless/flow", "ENUM", func(i *Intent) { i.Profiles[0].VLESS.Flow = "xtls-rprx-direct" }},
 		{"缺 REALITY", "/profiles/0/vless/security", "REQUIRED", func(i *Intent) { i.Profiles[0].VLESS.Security = nil }},
 		{"REALITY mode", "/profiles/0/vless/security/mode", "ENUM", func(i *Intent) { i.Profiles[0].VLESS.Security.Mode = "tls" }},
 		{"REALITY 目标 URL", "/profiles/0/vless/security/target", "TARGET", func(i *Intent) { i.Profiles[0].VLESS.Security.Target = "https://example.test:443/path" }},
@@ -40,7 +40,10 @@ func TestValidateProtocolAndCredentialUnion(t *testing.T) {
 		{"REALITY short ID 按字节去重", "/profiles/0/vless/security/short_ids/1", "DUPLICATE", func(i *Intent) { i.Profiles[0].VLESS.Security.ShortIDs = []string{"ab", "AB"} }},
 		{"缺 VLESS UUID", "/profiles/0/users/0/uuid", "REQUIRED", func(i *Intent) { i.Profiles[0].Users[0].UUID = nil }},
 		{"混入 VLESS auth", "/profiles/0/users/0/auth", "FORBIDDEN", func(i *Intent) { i.Profiles[0].Users[0].Auth = i.Profiles[0].Users[0].UUID }},
-		{"跨 profile 用户重复", "/profiles/2/users/0/id", "DUPLICATE", func(i *Intent) { i.Profiles[2].Users[0].ID = i.Profiles[1].Users[0].ID }},
+		{"单 profile 内用户重复", "/profiles/0/users/1/id", "DUPLICATE", func(i *Intent) {
+			dup := i.Profiles[0].Users[0]
+			i.Profiles[0].Users = append(i.Profiles[0].Users, dup)
+		}},
 		{"空用户", "/profiles/0/users", "SIZE", func(i *Intent) { i.Profiles[0].Users = nil }},
 		{"非法用户 ID", "/profiles/0/users/0/id", "ID", func(i *Intent) { i.Profiles[0].Users[0].ID = "alice@example.test" }},
 		{"缺 H2 TLS", "/profiles/1/hysteria2/tls", "REQUIRED", func(i *Intent) { i.Profiles[1].Hysteria2.TLS = nil }},
@@ -54,7 +57,7 @@ func TestValidateProtocolAndCredentialUnion(t *testing.T) {
 		{"H2 auth 引用溢出", "/profiles/1/users/0/auth/$secret", "SECRET_REF", func(i *Intent) { i.Profiles[1].Users[0].Auth.ID = "sec_80000000000000000000000000" }},
 		{"H2 不接受 UUID", "/profiles/1/users/0/uuid", "FORBIDDEN", func(i *Intent) { i.Profiles[1].Users[0].UUID = i.Profiles[1].Users[0].Auth }},
 		{"旧 SS 方法", "/profiles/2/shadowsocks2022/method", "ENUM", func(i *Intent) { i.Profiles[2].Shadowsocks2022.Method = "aes-256-gcm" }},
-		{"SS2022 多用户不支持 chacha", "/profiles/2/shadowsocks2022/method", "ENUM", func(i *Intent) { i.Profiles[2].Shadowsocks2022.Method = "2022-blake3-chacha20-poly1305" }},
+		{"SS2022 非法方法", "/profiles/2/shadowsocks2022/method", "ENUM", func(i *Intent) { i.Profiles[2].Shadowsocks2022.Method = "2022-blake3-invalid" }},
 		{"服务端 key 引用", "/profiles/2/shadowsocks2022/server_key/$secret", "SECRET_REF", func(i *Intent) { i.Profiles[2].Shadowsocks2022.ServerKey = SecretRef{} }},
 		{"缺用户 PSK", "/profiles/2/users/0/psk", "REQUIRED", func(i *Intent) { i.Profiles[2].Users[0].PSK = nil }},
 		{"缺混淆选择", "/profiles/2/shadowsocks2022/obfs", "REQUIRED", func(i *Intent) { i.Profiles[2].Shadowsocks2022.Obfs = nil }},
@@ -154,6 +157,11 @@ func TestValidateSingleProfileMaximumUsers(t *testing.T) {
 	if err := Validate(intent); err != nil {
 		t.Fatal("单 profile 的 256 用户和 REALITY 数组上限被拒绝")
 	}
+	intent.Profiles[0].Port = 443
+	intent.Profiles[0].VLESS.Security.ShortIDs = []string{"", "0123456789abcdef"}
+	if err := Validate(intent); err != nil {
+		t.Fatalf("443 端口与空 short_id 应合法: %v", err)
+	}
 	intent.Profiles[0].Users = append(intent.Profiles[0].Users, User{ID: "overflow", UUID: &ref})
 	requireViolation(t, Validate(intent), "/profiles/0/users", "SIZE")
 }
@@ -207,5 +215,18 @@ func TestValidateTrafficMarkBoundsAndUniqueness(t *testing.T) {
 		dup.Profiles[0].Users[0].TrafficMark = MinTrafficMark + 1
 		dup.Profiles[1].Users[0].TrafficMark = MinTrafficMark + 1
 		requireViolation(t, Validate(dup), "/profiles/1/users/0/traffic_mark", "DUPLICATE")
+	}
+}
+
+func TestValidateSharedUserAcrossProfiles(t *testing.T) {
+	intent := validIntent(t)
+	sharedID := intent.Profiles[0].Users[0].ID
+	intent.Profiles[0].Users[0].TrafficMark = MinTrafficMark + 2
+	intent.Profiles[1].Users[0].ID = sharedID
+	intent.Profiles[1].Users[0].TrafficMark = MinTrafficMark + 2
+	intent.Profiles[2].Users[0].ID = sharedID
+	intent.Profiles[2].Users[0].TrafficMark = MinTrafficMark + 2
+	if err := Validate(intent); err != nil {
+		t.Fatalf("跨多个 profile 共享同一用户 ID（含相同 traffic_mark）应被接受: %v", err)
 	}
 }

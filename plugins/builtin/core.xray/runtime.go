@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/anytls"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/apply"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/coreproc"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
@@ -20,6 +21,7 @@ type driverRuntime struct {
 	store       *state.Store
 	process     apply.Process
 	obfs        apply.ObfsManager
+	anytls      apply.AnyTLSManager
 	controller  *apply.Engine
 	coreVersion string
 	trusted     bool
@@ -67,7 +69,8 @@ func newDriverRuntime(i *instance) (*driverRuntime, error) {
 		return nil, pluginsdk.Errorf("DATA_DIR_UNAVAILABLE", "私有运行目录不可用")
 	}
 	driver.process = process
-	driver.controller, err = apply.New(apply.Options{Store: store, Process: process, Binary: binary, Obfs: driver.obfs, Socket: socket, DataDir: i.DataDir()})
+	driver.anytls = anytls.NewSupervisor()
+	driver.controller, err = apply.New(apply.Options{Store: store, Process: process, Binary: binary, Obfs: driver.obfs, AnyTLS: driver.anytls, Socket: socket, DataDir: i.DataDir()})
 	if err != nil {
 		return nil, mapApplyError(err)
 	}
@@ -122,6 +125,11 @@ func (d *driverRuntime) Snapshot(ctx context.Context) (runtimeSnapshot, error) {
 		if d.obfs != nil {
 			if healthy, _ := d.obfs.Status(); !healthy && result.lastError == "" {
 				result.lastError = "OBFS_DEGRADED"
+			}
+		}
+		if d.anytls != nil {
+			if healthy, _ := d.anytls.Status(); !healthy && result.lastError == "" {
+				result.lastError = "ANYTLS_DEGRADED"
 			}
 		}
 		return result, nil

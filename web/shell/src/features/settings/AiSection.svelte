@@ -14,6 +14,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { Alert, Button, Card, Checkbox, Chip, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, IconButton, Input, Menu, Select, Skeleton } from '$ui';
+  import { safeExternalHref } from '$ui/safe-url';
   import { agent, ai } from '$api/endpoints';
   import type {
     AgentCoreAuthStatus,
@@ -580,10 +581,13 @@
               <span class="small">{al.message}</span>
             </div>
             {#if al.verification_url}
-              <div class="auth-row">
-                <a class="auth-url" href={al.verification_url} target="_blank" rel="noopener noreferrer">{al.verification_url}</a>
-                <CopyButton text={al.verification_url} label="复制链接" />
-              </div>
+              {@const verifyHref = safeExternalHref(al.verification_url)}
+              {#if verifyHref}
+                <div class="auth-row">
+                  <a class="auth-url" href={verifyHref} target="_blank" rel="noopener noreferrer">{verifyHref}</a>
+                  <CopyButton text={verifyHref} label="复制链接" />
+                </div>
+              {/if}
             {/if}
             {#if al.user_code}
               <div class="auth-row">

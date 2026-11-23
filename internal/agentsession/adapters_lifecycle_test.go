@@ -316,10 +316,30 @@ func TestPersistenceAndSlashCommandsAllSQLCores(t *testing.T) {
 		t.Fatal("expected >32KiB config_json to be rejected")
 	}
 
-	// 5. Unmigrated cores (dsh/acp) remain honestly rejected at Create until post-0020 migration.
-	if _, err := h.svc.Create(context.Background(), ownerHuman, CreateRequest{
-		Core: CoreDSH,
-	}); err == nil {
-		t.Fatal("expected CoreDSH to remain gated by CoreName.Valid until post-0020 migration")
+	// 5. Post-0024 migration: dsh and acp are valid cores and persist cleanly; RCE config keys are rejected.
+	for _, coreName := range []CoreName{CoreDSH, CoreACP} {
+		created, err := h.svc.Create(context.Background(), ownerHuman, CreateRequest{
+			Core:   coreName,
+			Config: json.RawMessage(`{"plan_mode":true}`),
+		})
+		if err != nil {
+			t.Fatalf("Create %s after migration 0024 failed: %v", coreName, err)
+		}
+		if created.Core != coreName {
+			t.Fatalf("expected core %s, got %s", coreName, created.Core)
+		}
+	}
+	for _, badCfg := range []string{
+		`{"binary":"/bin/sh"}`,
+		`{"args":["-c","id"]}`,
+		`{"work_dir":"/etc"}`,
+		`{"server_url":"http://127.0.0.1:9999"}`,
+	} {
+		if _, err := h.svc.Create(context.Background(), ownerHuman, CreateRequest{
+			Core:   CoreCodex,
+			Config: json.RawMessage(badCfg),
+		}); err == nil {
+			t.Fatalf("expected dangerous config %s to be rejected", badCfg)
+		}
 	}
 }

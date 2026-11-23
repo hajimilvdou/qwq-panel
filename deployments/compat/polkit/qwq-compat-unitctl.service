@@ -28,7 +28,7 @@ Environment=GOMAXPROCS=2
 PrivateNetwork=yes
 RestrictAddressFamilies=AF_UNIX
 ProtectSystem=strict
-BindPaths=-/run/credentials:/run/qwq/compat-creds
+BindPaths=/run/credentials:/run/qwq/compat-creds
 PrivateTmp=yes
 PrivateDevices=yes
 DevicePolicy=closed

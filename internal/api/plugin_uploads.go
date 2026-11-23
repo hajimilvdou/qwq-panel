@@ -204,6 +204,43 @@ func (s *PluginUploads) Receive(ctx context.Context, r *http.Request, principal 
 	return received, nil
 }
 
+// Stage copies a package stream from r (such as a verified remote HTTPS fetch)
+// into the private staging directory using the exact same quota, disk-reserve,
+// size-limit, and hashing checks as Receive. When expectedSHA256 is non-empty,
+// it must match the lowercase hex SHA-256 digest of the staged bytes.
+func (s *PluginUploads) Stage(ctx context.Context, r io.Reader, principal, expectedSHA256 string) (PluginUpload, error) {
+	if err := ctx.Err(); err != nil {
+		return PluginUpload{}, problem.From(err)
+	}
+	if r == nil {
+		return PluginUpload{}, problem.Validation(problem.Violation{
+			Pointer: "/url", Code: "EMPTY", Message: "The remote package stream is empty.",
+		})
+	}
+	release, err := s.reserve(principal)
+	if err != nil {
+		return PluginUpload{}, err
+	}
+	defer release()
+	staged, err := s.store(r, principal)
+	if err != nil {
+		return PluginUpload{}, err
+	}
+	if expectedSHA256 != "" && !strings.EqualFold(staged.SHA256, expectedSHA256) {
+		_ = s.removeFile(staged.path)
+		return PluginUpload{}, problem.Validation(problem.Violation{
+			Pointer: "/expected_sha256",
+			Code:    "DIGEST_MISMATCH",
+			Message: fmt.Sprintf("Downloaded package sha256 %s does not match expected_sha256.", staged.SHA256),
+		})
+	}
+	if err := s.register(&staged); err != nil {
+		_ = s.removeFile(staged.path)
+		return PluginUpload{}, err
+	}
+	return staged, nil
+}
+
 // store copies one part to a 0600 file, hashing while it writes. The
 // filesystem must have room for the whole package plus the host's reserve
 // before a single byte is written (GW-07).

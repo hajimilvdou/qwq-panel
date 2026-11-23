@@ -4,11 +4,15 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,7 +21,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const maxRateLimitIPs = 4096
+const (
+	maxRateLimitIPs   = 4096
+	maxBasicAuthCache = 512
+	basicAuthCacheTTL = 60 * time.Second
+)
 
 type tokenBucket struct {
 	tokens   float64
@@ -95,14 +103,67 @@ type compiledRoute struct {
 }
 
 type routeTable struct {
-	byHost map[string]*compiledRoute
-	loaded time.Time
+	byHost      map[string][]*compiledRoute
+	totalRoutes int
+	loaded      time.Time
+}
+
+type basicAuthCache struct {
+	mu      sync.Mutex
+	entries map[[32]byte]time.Time
+}
+
+func newBasicAuthCache() *basicAuthCache {
+	return &basicAuthCache{entries: make(map[[32]byte]time.Time, 64)}
+}
+
+func basicAuthCacheKey(siteID, hash, authHeader string) [32]byte {
+	h := sha256.New()
+	_, _ = h.Write([]byte(siteID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(hash))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(authHeader))
+	var out [32]byte
+	h.Sum(out[:0])
+	return out
+}
+
+func (c *basicAuthCache) HasValid(key [32]byte, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	exp, ok := c.entries[key]
+	if !ok {
+		return false
+	}
+	if !now.Before(exp) {
+		delete(c.entries, key)
+		return false
+	}
+	return true
+}
+
+func (c *basicAuthCache) Put(key [32]byte, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) >= maxBasicAuthCache {
+		for k, exp := range c.entries {
+			if !now.Before(exp) {
+				delete(c.entries, k)
+			}
+		}
+		if len(c.entries) >= maxBasicAuthCache {
+			clear(c.entries)
+		}
+	}
+	c.entries[key] = now.Add(basicAuthCacheTTL)
 }
 
 // BuiltinProxy 实现零外部依赖、低内存占用的内置 Go 反向代理路由器（支持无锁原子热重载、WebSocket、限流与 BasicAuth）。
 type BuiltinProxy struct {
 	table     atomic.Pointer[routeTable]
 	transport *http.Transport
+	authCache *basicAuthCache
 	now       func() time.Time
 }
 
@@ -118,8 +179,8 @@ func newBuiltinProxy(nowFn func() time.Time) *BuiltinProxy {
 		IdleConnTimeout:     60 * time.Second,
 		TLSHandshakeTimeout: 5 * time.Second,
 	}
-	p := &BuiltinProxy{transport: tr, now: nowFn}
-	p.table.Store(&routeTable{byHost: map[string]*compiledRoute{}, loaded: nowFn()})
+	p := &BuiltinProxy{transport: tr, authCache: newBasicAuthCache(), now: nowFn}
+	p.table.Store(&routeTable{byHost: map[string][]*compiledRoute{}, loaded: nowFn()})
 	return p
 }
 
@@ -133,7 +194,7 @@ func (p *BuiltinProxy) Close() {
 // Reload 无锁原子替换路由表，所有在途请求不受影响且复用有界传输池避免 FD 泄漏。
 func (p *BuiltinProxy) Reload(sites []SiteRecord) int {
 	next := &routeTable{
-		byHost: make(map[string]*compiledRoute, len(sites)),
+		byHost: make(map[string][]*compiledRoute, len(sites)),
 		loaded: p.now(),
 	}
 	for _, s := range sites {
@@ -161,14 +222,25 @@ func (p *BuiltinProxy) Reload(sites []SiteRecord) int {
 				return nil
 			},
 		}
-		next.byHost[strings.ToLower(s.Domain)] = &compiledRoute{
+		hostKey := strings.ToLower(s.Domain)
+		next.byHost[hostKey] = append(next.byHost[hostKey], &compiledRoute{
 			site:    siteCopy,
 			proxy:   rp,
 			limiter: newSiteLimiter(s.RateLimitRPS, s.RateLimitBurst),
-		}
+		})
+		next.totalRoutes++
+	}
+	// 同域名多路径按 PathPrefix 长度降序排列，最长前缀优先匹配。
+	for _, routes := range next.byHost {
+		slices.SortFunc(routes, func(a, b *compiledRoute) int {
+			if len(a.site.PathPrefix) != len(b.site.PathPrefix) {
+				return len(b.site.PathPrefix) - len(a.site.PathPrefix)
+			}
+			return strings.Compare(a.site.PathPrefix, b.site.PathPrefix)
+		})
 	}
 	p.table.Store(next)
-	return len(next.byHost)
+	return next.totalRoutes
 }
 
 func (p *BuiltinProxy) ActiveCount() int {
@@ -176,10 +248,10 @@ func (p *BuiltinProxy) ActiveCount() int {
 	if t == nil {
 		return 0
 	}
-	return len(t.byHost)
+	return t.totalRoutes
 }
 
-// ServeHTTP 实现标准 http.Handler，按 Host 分发并执行强制 HTTPS、BasicAuth、令牌桶限流与反代转发。
+// ServeHTTP 实现标准 http.Handler，按 Host + 最长 PathPrefix 分发并执行强制 HTTPS、BasicAuth 快表校验、令牌桶限流与反代转发。
 func (p *BuiltinProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
@@ -191,12 +263,19 @@ func (p *BuiltinProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ingress route table unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	rt, ok := t.byHost[host]
-	if !ok {
+	candidates := t.byHost[host]
+	if len(candidates) == 0 {
 		http.NotFound(w, r)
 		return
 	}
-	if rt.site.PathPrefix != "/" && !strings.HasPrefix(r.URL.Path, rt.site.PathPrefix) {
+	var rt *compiledRoute
+	for _, cand := range candidates {
+		if cand.site.PathPrefix == "/" || strings.HasPrefix(r.URL.Path, cand.site.PathPrefix) {
+			rt = cand
+			break
+		}
+	}
+	if rt == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -205,24 +284,30 @@ func (p *BuiltinProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, target, http.StatusPermanentRedirect)
 		return
 	}
-	// 先做 O(1) 令牌桶限流再校验 bcrypt BasicAuth，防止暴力口令请求耗尽 1C1G CPU。
+	now := p.now()
+	// 先做 O(1) 令牌桶限流再校验 BasicAuth，防止暴力口令请求耗尽 1C1G CPU。
 	if rt.limiter != nil {
 		ip, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil {
 			ip = r.RemoteAddr
 		}
-		if !rt.limiter.Allow(ip, p.now()) {
+		if !rt.limiter.Allow(ip, now) {
 			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 			return
 		}
 	}
 	if rt.site.HasBasicAuth {
-		user, pass, ok := r.BasicAuth()
-		userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(rt.site.BasicAuthUser)) == 1
-		if !ok || !userMatch || bcrypt.CompareHashAndPassword([]byte(rt.site.BasicAuthHash), []byte(pass)) != nil {
-			w.Header().Set("WWW-Authenticate", `Basic realm="qwq-ingress"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+		authHdr := r.Header.Get("Authorization")
+		cacheKey := basicAuthCacheKey(rt.site.ID, rt.site.BasicAuthHash, authHdr)
+		if authHdr == "" || !p.authCache.HasValid(cacheKey, now) {
+			user, pass, ok := r.BasicAuth()
+			userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(rt.site.BasicAuthUser)) == 1
+			if !ok || !userMatch || bcrypt.CompareHashAndPassword([]byte(rt.site.BasicAuthHash), []byte(pass)) != nil {
+				w.Header().Set("WWW-Authenticate", `Basic realm="qwq-ingress"`)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			p.authCache.Put(cacheKey, now)
 		}
 	}
 	rt.proxy.ServeHTTP(w, r)
@@ -239,6 +324,68 @@ type UpstreamProbeResult struct {
 	Error       string `json:"error,omitempty"`
 }
 
+func isBlockedUpstreamMetadataIP(ip netip.Addr) bool {
+	u := ip.Unmap()
+	return !u.IsValid() || u.IsLinkLocalUnicast() || linkLocalV4.Contains(u) || cgnatPrefix.Contains(u) || u == ec2MetadataV6
+}
+
+func dialSafeUpstreamProbe(ctx context.Context, network, address string) (net.Conn, error) {
+	host, portStr, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "metadata.google.internal") {
+		return nil, errors.New("blocked cloud metadata host")
+	}
+	portNum, err := net.LookupPort(network, portStr)
+	if err != nil || portNum <= 0 || portNum > 65535 {
+		return nil, errors.New("invalid upstream port")
+	}
+	var addrs []netip.Addr
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if isBlockedUpstreamMetadataIP(ip) {
+			return nil, errors.New("blocked metadata or 100.64.0.0/10 upstream IP")
+		}
+		addrs = []netip.Addr{ip.Unmap()}
+	} else {
+		ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		if err != nil || len(ips) == 0 {
+			return nil, err
+		}
+		for _, ip := range ips {
+			if isBlockedUpstreamMetadataIP(ip) {
+				return nil, errors.New("blocked metadata or 100.64.0.0/10 upstream IP")
+			}
+			addrs = append(addrs, ip.Unmap())
+		}
+	}
+	d := net.Dialer{Timeout: 3 * time.Second}
+	var lastErr error
+	for _, ip := range addrs {
+		conn, err := d.DialContext(ctx, network, netip.AddrPortFrom(ip, uint16(portNum)).String())
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+var sharedUpstreamProbeClient = &http.Client{
+	Timeout: 3 * time.Second,
+	Transport: &http.Transport{
+		DialContext:         dialSafeUpstreamProbe,
+		MaxIdleConns:        16,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     30 * time.Second,
+		TLSHandshakeTimeout: 3 * time.Second,
+	},
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 func probeUpstream(ctx context.Context, s SiteRecord) UpstreamProbeResult {
 	res := UpstreamProbeResult{SiteID: s.ID, Domain: s.Domain, UpstreamURL: s.UpstreamURL}
 	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -249,13 +396,7 @@ func probeUpstream(ctx context.Context, s SiteRecord) UpstreamProbeResult {
 		res.Error = err.Error()
 		return res
 	}
-	client := &http.Client{
-		Timeout: 3 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	resp, err := client.Do(req)
+	resp, err := sharedUpstreamProbeClient.Do(req)
 	res.LatencyMS = time.Since(start).Milliseconds()
 	if err != nil {
 		res.Error = err.Error()

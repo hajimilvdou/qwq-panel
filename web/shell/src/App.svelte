@@ -6,10 +6,8 @@
   /login?next= → perm 不满足渲染权限态（在 Outlet 里）。
 -->
 <script lang="ts">
-  import AppShell from './app/AppShell.svelte';
   import Outlet from './app/Outlet.svelte';
   import Splash from './app/Splash.svelte';
-  import { ErrorState, Toaster } from '$ui';
   import { page } from '$lib/page.svelte';
   import { prefs } from '$lib/prefs.svelte';
   import { loginUrl, navigate, router, safeNext } from '$lib/router.svelte';
@@ -44,8 +42,13 @@
     document.title = page.title ? `${page.title} · qwq` : 'qwq';
   });
 
-  /* 悬浮窗与命令面板不参与首屏：壳渲染后再拉取（模块只加载一次，登出重进不重复下载） */
-  const extras = () => Promise.all([import('./features/dock/AiDock.svelte'), import('./features/palette/CommandPalette.svelte')]);
+  /* 登录后再加载主壳：匿名登录页 / 启动画面不拉取侧栏、顶栏与悬浮浮层 */
+  let shellPromise: Promise<typeof import('./app/AppShell.svelte')> | null = null;
+  const loadShell = () => (shellPromise ??= import('./app/AppShell.svelte'));
+  let errorStatePromise: Promise<typeof import('$ui/ErrorState.svelte')> | null = null;
+  const loadErrorState = () => (errorStatePromise ??= import('$ui/ErrorState.svelte'));
+  let toasterPromise: Promise<typeof import('$ui/Toaster.svelte')> | null = null;
+  const loadToaster = () => (toasterPromise ??= import('$ui/Toaster.svelte'));
 
   const ready = $derived(
     !!route &&
@@ -56,23 +59,29 @@
 
 {#if session.status === 'error'}
   <main class="center">
-    <ErrorState message="连不上服务器" onretry={() => location.reload()} />
+    {#await loadErrorState() then mod}
+      <mod.default message="连不上服务器" onretry={() => location.reload()} />
+    {/await}
   </main>
 {:else if !ready || !match}
   <Splash />
 {:else if match.route.bare}
   <Outlet {match} />
 {:else}
-  <AppShell>
-    <Outlet {match} />
-  </AppShell>
-  {#await extras() then [dock, palette]}
-    <dock.default />
-    <palette.default />
+  {#await loadShell()}
+    <Splash />
+  {:then shell}
+    <shell.default>
+      <Outlet {match} />
+    </shell.default>
   {/await}
 {/if}
 
-<Toaster items={toasts.items} ondismiss={(id) => toasts.dismiss(id)} />
+{#if toasts.items.length > 0}
+  {#await loadToaster() then mod}
+    <mod.default items={toasts.items} ondismiss={(id) => toasts.dismiss(id)} />
+  {/await}
+{/if}
 
 <style>
   .center {

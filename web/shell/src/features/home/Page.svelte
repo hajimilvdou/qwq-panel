@@ -9,23 +9,31 @@
 -->
 <script lang="ts">
   import type { Level } from '$api/additions';
-  import { pluginsResource } from '../../app/nav';
-  import { describeError } from '$lib/errors';
+  import { listPlugins } from '$api/endpoints-core';
   import { health } from '$lib/page.svelte';
   import { useResource } from '$lib/resource.svelte';
   import { session } from '$lib/session.svelte';
-  import { collectWidgets } from '$lib/widgets';
-  import WidgetGrid from '$lib/widgets/WidgetGrid.svelte';
-  import { Button, Card, ErrorState, Mood, Skeleton } from '$ui';
-  import AppsCard from './AppsCard.svelte';
+  import { collectWidgets } from '$lib/widgets/collect';
+  import Mood from '$ui/Mood.svelte';
+  import Skeleton from '$ui/Skeleton.svelte';
   import Greeting from './Greeting.svelte';
-  import RecentCard from './RecentCard.svelte';
+
+  let widgetGridMod: Promise<typeof import('$lib/widgets/WidgetGrid.svelte')> | null = null;
+  const loadWidgetGrid = () => (widgetGridMod ??= import('$lib/widgets/WidgetGrid.svelte'));
+  let bottomMod: Promise<typeof import('./HomeBottom.svelte')> | null = null;
+  const loadBottom = () => (bottomMod ??= import('./HomeBottom.svelte'));
 
   let { params: _params }: { params: Record<string, string> } = $props();
 
   const canPlugins = session.can('host.plugins:read');
   const canOps = session.can('host.operations:read');
-  const plugins = canPlugins ? useResource(pluginsResource) : null;
+  const plugins = canPlugins
+    ? useResource({
+        key: 'plugins',
+        load: () => listPlugins().then((p) => p.items),
+        subjects: ['plugins/'],
+      })
+    : null;
 
   const slots = $derived(collectWidgets(plugins?.data));
   let level = $state<Level>('ok');
@@ -36,45 +44,53 @@
     if (!slots.length) health.level = 'ok';
   });
 
-  const pluginsErr = $derived(plugins?.status === 'error' ? describeError(plugins.error) : null);
+  const pluginsFailed = $derived(plugins?.status === 'error');
 </script>
+
+{#snippet skGrid()}
+  <div class="sk-grid" aria-hidden="true">
+    {#each [0, 1, 2, 3] as i (i)}<div class="panel"><Skeleton lines={3} /></div>{/each}
+  </div>
+{/snippet}
 
 <div class="home">
   <Greeting level={shown} />
 
   {#if plugins}
-    {#if pluginsErr}
-      <Card>
-        <ErrorState compact message={pluginsErr.message} requestId={pluginsErr.requestId} onretry={plugins.refresh} />
-      </Card>
-    {:else if !plugins.data}
-      <div class="sk-grid" aria-hidden="true">
-        {#each [0, 1, 2, 3] as i (i)}<Card><Skeleton lines={3} /></Card>{/each}
+    {#if pluginsFailed}
+      <div class="panel err">
+        <p>没能加载应用概览，请稍后重试。</p>
+        <button type="button" class="guide-btn" onclick={() => void plugins.refresh()}>重试</button>
       </div>
+    {:else if !plugins.data}
+      {@render skGrid()}
     {:else if slots.length}
-      <WidgetGrid {slots} label="服务器概览" onlevel={(l) => (level = l)} />
+      {#await loadWidgetGrid()}
+        {@render skGrid()}
+      {:then mod}
+        <mod.default {slots} label="服务器概览" onlevel={(l) => (level = l)} />
+      {/await}
     {:else}
-      <Card>
+      <div class="panel">
         <div class="guide">
           <Mood mood="ok" size="md" />
           <div>
             <h2>装上系统监控，这里就能看到服务器状态</h2>
             <p>CPU、内存、磁盘和网络都由应用提供，装好后会自动出现在主页。</p>
           </div>
-          <Button variant="primary" href="/apps">去应用中心</Button>
+          <a class="guide-btn" href="/apps">去应用中心</a>
         </div>
-      </Card>
+      </div>
     {/if}
   {/if}
 
-  <div class="bottom">
-    {#if canOps}
-      <div class="recent"><RecentCard plugins={plugins?.data} /></div>
-    {/if}
-    {#if plugins?.data}
-      <div class="apps" class:full={!canOps}><AppsCard plugins={plugins.data} /></div>
-    {/if}
-  </div>
+  {#if canOps || plugins?.data}
+    {#await loadBottom()}
+      <div class="panel"><Skeleton lines={5} height={18} /></div>
+    {:then mod}
+      <mod.default {canOps} plugins={plugins?.data} />
+    {/await}
+  {/if}
 </div>
 
 <style>
@@ -83,13 +99,25 @@
     flex-direction: column;
     gap: var(--gap);
   }
+  .panel {
+    padding: var(--s-5);
+    border-radius: var(--r-lg);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow-1);
+  }
+  .err {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    color: var(--text-2);
+  }
   .sk-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: var(--gap);
   }
-
-  /* ---------------------------------------------------------------- 引导卡 */
   .guide {
     display: flex;
     align-items: center;
@@ -108,31 +136,22 @@
     color: var(--text-3);
     font-size: var(--fs-sm);
   }
-
-  /* ---------------------------------------------------------------- 底部两栏 */
-  .bottom {
-    display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
-    gap: var(--gap);
-    align-items: start;
-  }
-  .recent {
-    grid-column: span 7;
-  }
-  .apps {
-    grid-column: span 5;
-  }
-  .apps.full {
-    grid-column: span 12;
+  .guide-btn {
+    display: inline-flex;
+    align-items: center;
+    height: 40px;
+    padding: 0 18px;
+    border-radius: var(--r-pill);
+    background: var(--accent-strong);
+    color: var(--on-accent);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semibold);
+    white-space: nowrap;
   }
 
   @media (max-width: 1180px) {
     .sk-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .recent,
-    .apps {
-      grid-column: span 12;
     }
   }
   @media (max-width: 860px) {

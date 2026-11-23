@@ -1103,6 +1103,25 @@ func (i *instance) handleBansRemove(ctx context.Context, req pluginsdk.Request, 
 	if err != nil {
 		return pluginsdk.Result{}, invalidField("/ip", "INVALID_IP", "待解封 IP 地址无效")
 	}
+	// 先检查该 IP 是否确实存在于活跃封禁集合，避免对不存在条目重复递减 activeBanCount。
+	var (
+		checkedBefore bool
+		wasPresent    bool
+		beforeCount   int
+	)
+	if banRead, banReadMeta, rErr := banClientReadOnly(ctx, req.Host()); rErr == nil {
+		if listResp, lErr := banRead.ListBans(ctx, &banv1.ListBansRequest{Context: banReadMeta}); lErr == nil && listResp.GetError() == nil {
+			checkedBefore = true
+			beforeCount = len(listResp.GetBans())
+			for _, b := range listResp.GetBans() {
+				if b != nil && b.GetIp() == addr.String() {
+					wasPresent = true
+					break
+				}
+			}
+		}
+	}
+
 	client, meta, err := banClientWrite(ctx, req.Host())
 	if err != nil {
 		return pluginsdk.Result{}, err
@@ -1119,8 +1138,12 @@ func (i *instance) handleBansRemove(ctx context.Context, req pluginsdk.Request, 
 		return pluginsdk.Result{}, err
 	}
 	i.mu.Lock()
-	if i.activeBanCount > 0 {
-		i.activeBanCount--
+	if checkedBefore {
+		if wasPresent && beforeCount > 0 {
+			i.activeBanCount = beforeCount - 1
+		} else {
+			i.activeBanCount = beforeCount
+		}
 	}
 	nextCount := i.activeBanCount
 	i.mu.Unlock()

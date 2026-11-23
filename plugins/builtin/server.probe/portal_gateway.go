@@ -3,6 +3,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +13,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"html"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -32,6 +36,7 @@ type PortalGateway struct {
 	store            *ProbeStore
 	domains          *DomainBindingCoordinator
 	ai               *AINativeController
+	themes           *ThemeManager
 	adminSalt        [16]byte
 	adminSecretKey   [32]byte
 	hasAdminPassword bool
@@ -82,10 +87,15 @@ func NewPortalGateway(store *ProbeStore, domains *DomainBindingCoordinator, ai *
 	if hasPW {
 		key = stretchAdminPassword(salt, initialAdminPassword)
 	}
+	dataDir := ""
+	if store != nil {
+		dataDir = store.dataDir
+	}
 	return &PortalGateway{
 		store:            store,
 		domains:          domains,
 		ai:               ai,
+		themes:           NewThemeManager(dataDir),
 		adminSalt:        salt,
 		adminSecretKey:   key,
 		hasAdminPassword: hasPW,
@@ -97,9 +107,19 @@ func NewPortalGateway(store *ProbeStore, domains *DomainBindingCoordinator, ai *
 	}
 }
 
-// ServePortalHTTP 处理独立探针页（公开展示 + 独立管理 API）与 Agent 单向上报。
+func (g *PortalGateway) Close() error {
+	if g == nil || g.themes == nil {
+		return nil
+	}
+	return g.themes.Close()
+}
+
+// ServePortalHTTP 处理独立探针页（公开展示 + 严格隔离的 /admin 后台 + 管理 API）与 Agent 单向上报。
 func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string, headers map[string]string, body []byte) (status int, respHeaders map[string]string, respBody []byte) {
 	now := g.now()
+	if q := strings.IndexByte(subpath, '?'); q >= 0 {
+		subpath = subpath[:q]
+	}
 	cleanSub := "/" + strings.TrimPrefix(subpath, "/")
 
 	// 通道 1：外部小鸡单向零指令上报端点
@@ -142,6 +162,14 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 			})
 		}
 
+		activeTheme := cfg.ActiveThemeID
+		if activeTheme == "" {
+			activeTheme = BuiltinThemeClassic
+		}
+		themeSettings := cfg.ThemeSettings
+		if themeSettings == nil {
+			themeSettings = map[string]any{}
+		}
 		return jsonResp(http.StatusOK, map[string]any{
 			"server_time_unix": now.Unix(),
 			"site_title":       cfg.SiteTitle,
@@ -151,9 +179,34 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 			"allow_theme":      cfg.AllowVisitorThemeSwitch,
 			"banner_level":     cfg.StatusBannerLevel,
 			"banner_text":      cfg.StatusBannerText,
+			"active_theme":     activeTheme,
+			"appearance":       SanitizeAppearanceConfig(cfg.Appearance),
+			"theme_settings":   themeSettings,
+			"bg_url":           BackgroundURL(cfg),
+			"admin_path":       "./admin",
 			"nodes":            g.store.BuildPublicNodes(now),
 			"service_monitors": mons,
 		})
+	}
+
+	// 通道 2.5：公开本地高清壁纸静态输出（严格按魔数验证后的扩展名输出，附带缓存与 nosniff）
+	if cleanSub == "/api/public/bg" && (method == http.MethodGet || method == http.MethodHead) {
+		g.store.mu.RLock()
+		bg := g.store.settings.Appearance.Background
+		g.store.mu.RUnlock()
+		if bg.Mode != "local" || bg.LocalFile == "" {
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "BACKGROUND_NOT_FOUND"})
+		}
+		data, mimeType, etag, err := g.themes.ReadBackground(bg.LocalFile)
+		if err != nil {
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "BACKGROUND_NOT_FOUND"})
+		}
+		return http.StatusOK, map[string]string{
+			"Content-Type":           mimeType,
+			"X-Content-Type-Options": "nosniff",
+			"Cache-Control":          "public, max-age=3600",
+			"ETag":                   etag,
+		}, data
 	}
 
 	// 通道 3：私有探针访客口令解锁
@@ -184,15 +237,33 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 		return g.handleStandaloneAINative(now, method, cleanSub, headers, body)
 	}
 
-	// 通道 5：受 prb_adm_* 保护的独立探针管理 API（节点增删、一键安装脚本生成、隐私与双轨域名绑定）
+	// 通道 5：受 prb_adm_* 保护的独立探针管理 API（节点增删、主题包/壁纸管理、隐私与双轨域名绑定）
 	if strings.HasPrefix(cleanSub, "/api/admin/") {
 		if !g.verifyAdminToken(extractHeaderCI(headers, "X-Probe-Admin-Token"), now) {
 			return jsonResp(http.StatusUnauthorized, map[string]any{"error": "ADMIN_AUTH_REQUIRED"})
 		}
-		return g.handleStandaloneAdminAction(now, method, cleanSub, body)
+		return g.handleStandaloneAdminAction(now, method, cleanSub, headers, body)
 	}
 
-	// 通道 6：静态门户 SPA 资源（index.html / portal.css / portal.js）
+	// 通道 5.5：严格物理隔离的官方独立管理后台 /admin 与 /admin/*（永不被第三方自定义主题接管！）
+	if cleanSub == "/admin" || strings.HasPrefix(cleanSub, "/admin/") || cleanSub == "/admin.css" || cleanSub == "/admin.js" {
+		return serveIsolatedAdminAsset(cleanSub)
+	}
+
+	// 通道 5.8：第三方自定义主题不透明源沙箱路由 /theme-frame/*（始终附带 X-QWQ-Theme-Sandbox: 1）
+	if cleanSub == "/theme-frame" || strings.HasPrefix(cleanSub, "/theme-frame/") {
+		return g.serveSandboxedThemeFrame(method, cleanSub)
+	}
+
+	// 通道 6：前台展示静态资源（自定义主题由官方 theme-sandbox.html 沙箱宿主挂载，缺失/损坏时无缝回退内置门户）
+	g.store.mu.RLock()
+	activeTheme := g.store.settings.ActiveThemeID
+	g.store.mu.RUnlock()
+	if activeTheme != "" && !strings.HasPrefix(activeTheme, "builtin:") && g.themes != nil {
+		if entry, ok := g.themes.EntryFile(activeTheme); ok {
+			return serveThemeSandboxHostAsset(cleanSub, entry)
+		}
+	}
 	return serveEmbeddedPortalAsset(cleanSub)
 }
 
@@ -328,7 +399,203 @@ func (g *PortalGateway) handleStandaloneAINative(now time.Time, method, path str
 	return jsonResp(http.StatusNotFound, map[string]any{"error": "UNKNOWN_AI_ENDPOINT"})
 }
 
-func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path string, body []byte) (int, map[string]string, []byte) {
+// BackgroundSetRequest 是独立后台与插件 RPC 共用的背景图配置载荷。
+type BackgroundSetRequest struct {
+	Mode        string `json:"mode"`
+	ImageBase64 string `json:"image_base64,omitempty"`
+	MimeType    string `json:"mime_type,omitempty"`
+	LQIPDataURL string `json:"lqip_data_url,omitempty"`
+	FocalX      *int   `json:"focal_x,omitempty"`
+	FocalY      *int   `json:"focal_y,omitempty"`
+	Luminance   *int   `json:"luminance,omitempty"`
+	DominantRGB string `json:"dominant_rgb,omitempty"`
+	ExternalURL string `json:"external_url,omitempty"`
+}
+
+// ThemeActivateRequest 是启用主题并同步水玻璃光学外观与主题自定义参数的载荷。
+type ThemeActivateRequest struct {
+	ThemeID       string            `json:"theme_id,omitempty"`
+	Appearance    *AppearanceConfig `json:"appearance,omitempty"`
+	ThemeSettings map[string]any    `json:"theme_settings,omitempty"`
+}
+
+// ApplyThemeActivation 校验并原子激活主题及外观参数，同步落盘 SQLite。
+func (g *PortalGateway) ApplyThemeActivation(req ThemeActivateRequest) (PortalSettings, error) {
+	themeID := strings.TrimSpace(req.ThemeID)
+	if themeID != "" && (g.themes == nil || !g.themes.Exists(themeID)) {
+		return PortalSettings{}, ErrThemeNotFound
+	}
+	if req.ThemeSettings != nil {
+		raw, err := json.Marshal(req.ThemeSettings)
+		if err != nil || len(raw) > 16384 {
+			return PortalSettings{}, errors.New("THEME_SETTINGS_TOO_LARGE")
+		}
+	}
+
+	g.store.mu.Lock()
+	if themeID != "" {
+		g.store.settings.ActiveThemeID = themeID
+	}
+	if req.Appearance != nil {
+		// 保留既有本地壁纸文件（若请求未显式覆盖 Background 字段）
+		nextApp := *req.Appearance
+		if nextApp.Background.Mode == "" && nextApp.Background.LocalFile == "" && nextApp.Background.ExternalURL == "" {
+			nextApp.Background = g.store.settings.Appearance.Background
+		} else if nextApp.Background.Mode == "local" && nextApp.Background.LocalFile == "" {
+			nextApp.Background.LocalFile = g.store.settings.Appearance.Background.LocalFile
+		}
+		g.store.settings.Appearance = SanitizeAppearanceConfig(nextApp)
+	}
+	if req.ThemeSettings != nil {
+		cloned := make(map[string]any, len(req.ThemeSettings))
+		for k, v := range req.ThemeSettings {
+			if isValidSettingKey(k) {
+				cloned[k] = v
+			}
+		}
+		g.store.settings.ThemeSettings = cloned
+	}
+	g.store.settings.Revision = nextRevision(g.store.settings.Revision)
+	saved := g.store.settings
+	g.store.mu.Unlock()
+
+	_ = g.store.PersistSettings(context.Background(), saved)
+	return saved, nil
+}
+
+// DeleteCustomTheme 删除第三方主题；若当前正激活则自动安全回退至 builtin:classic。
+func (g *PortalGateway) DeleteCustomTheme(themeID string) (PortalSettings, error) {
+	if g.themes == nil {
+		return PortalSettings{}, ErrThemeNotFound
+	}
+	if err := g.themes.DeleteTheme(themeID); err != nil {
+		return PortalSettings{}, err
+	}
+	g.store.mu.Lock()
+	if g.store.settings.ActiveThemeID == themeID {
+		g.store.settings.ActiveThemeID = BuiltinThemeClassic
+		g.store.settings.Revision = nextRevision(g.store.settings.Revision)
+	}
+	saved := g.store.settings
+	g.store.mu.Unlock()
+	_ = g.store.PersistSettings(context.Background(), saved)
+	return saved, nil
+}
+
+// ApplyBackground 保存本地壁纸（魔数校验）或外链 HTTPS 壁纸，或清空背景。
+func (g *PortalGateway) ApplyBackground(req BackgroundSetRequest) (PortalSettings, error) {
+	mode := strings.TrimSpace(req.Mode)
+	if mode == "" {
+		if strings.TrimSpace(req.ImageBase64) != "" {
+			mode = "local"
+		} else if strings.TrimSpace(req.ExternalURL) != "" {
+			mode = "url"
+		} else {
+			mode = "none"
+		}
+	}
+
+	g.store.mu.RLock()
+	curBG := g.store.settings.Appearance.Background
+	g.store.mu.RUnlock()
+
+	nextBG := curBG
+	nextBG.Mode = mode
+	if req.FocalX != nil {
+		nextBG.FocalX = *req.FocalX
+	}
+	if req.FocalY != nil {
+		nextBG.FocalY = *req.FocalY
+	}
+	if req.Luminance != nil {
+		nextBG.Luminance = *req.Luminance
+	}
+	if req.DominantRGB != "" {
+		nextBG.DominantRGB = req.DominantRGB
+	}
+	if req.LQIPDataURL != "" {
+		nextBG.LQIPDataURL = req.LQIPDataURL
+	}
+
+	switch mode {
+	case "none":
+		if g.themes != nil {
+			g.themes.DeleteBackground()
+		}
+		nextBG = BackgroundConfig{Mode: "none", FocalX: 50, FocalY: 50, Luminance: -1}
+	case "local":
+		if strings.TrimSpace(req.ImageBase64) != "" {
+			raw, err := DecodeBase64Payload(req.ImageBase64)
+			if err != nil {
+				return PortalSettings{}, ErrUnsupportedImage
+			}
+			fname, _, err := g.themes.SaveBackground(raw)
+			if err != nil {
+				return PortalSettings{}, err
+			}
+			nextBG.LocalFile = fname
+			nextBG.ExternalURL = ""
+		} else if nextBG.LocalFile == "" {
+			return PortalSettings{}, errors.New("BACKGROUND_IMAGE_REQUIRED")
+		}
+	case "url":
+		extURL := strings.TrimSpace(req.ExternalURL)
+		sanitized := SanitizeBackgroundConfig(BackgroundConfig{Mode: "url", ExternalURL: extURL})
+		if sanitized.ExternalURL == "" {
+			return PortalSettings{}, errors.New("INVALID_BACKGROUND_URL")
+		}
+		nextBG.ExternalURL = sanitized.ExternalURL
+		nextBG.LocalFile = ""
+	default:
+		return PortalSettings{}, errors.New("INVALID_BACKGROUND_MODE")
+	}
+
+	g.store.mu.Lock()
+	g.store.settings.Appearance.Background = SanitizeBackgroundConfig(nextBG)
+	g.store.settings.Appearance = SanitizeAppearanceConfig(g.store.settings.Appearance)
+	g.store.settings.Revision = nextRevision(g.store.settings.Revision)
+	saved := g.store.settings
+	g.store.mu.Unlock()
+
+	_ = g.store.PersistSettings(context.Background(), saved)
+	return saved, nil
+}
+
+// ClearBackground 清除背景图并重置背景元数据。
+func (g *PortalGateway) ClearBackground() PortalSettings {
+	saved, _ := g.ApplyBackground(BackgroundSetRequest{Mode: "none"})
+	return saved
+}
+
+func (g *PortalGateway) themeStatePayload() map[string]any {
+	g.store.mu.RLock()
+	cfg := g.store.settings
+	g.store.mu.RUnlock()
+	active := cfg.ActiveThemeID
+	if active == "" {
+		active = BuiltinThemeClassic
+	}
+	ts := cfg.ThemeSettings
+	if ts == nil {
+		ts = map[string]any{}
+	}
+	var list []ThemeManifest
+	if g.themes != nil {
+		list = g.themes.ListThemes()
+	} else {
+		list = BuiltinThemes()
+	}
+	return map[string]any{
+		"active_theme_id": active,
+		"appearance":      SanitizeAppearanceConfig(cfg.Appearance),
+		"theme_settings":  ts,
+		"bg_url":          BackgroundURL(cfg),
+		"themes":          list,
+		"revision":        cfg.Revision,
+	}
+}
+
+func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path string, headers map[string]string, body []byte) (int, map[string]string, []byte) {
 	switch {
 	case path == "/api/admin/state" && method == http.MethodGet:
 		g.store.mu.RLock()
@@ -340,11 +607,158 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 		}
 		cfg := g.store.settings
 		g.store.mu.RUnlock()
+		var themes []ThemeManifest
+		if g.themes != nil {
+			themes = g.themes.ListThemes()
+		} else {
+			themes = BuiltinThemes()
+		}
 		return jsonResp(http.StatusOK, map[string]any{
 			"nodes":            nodes,
 			"settings":         cfg,
+			"themes":           themes,
+			"active_theme_id":  cfg.ActiveThemeID,
+			"appearance":       SanitizeAppearanceConfig(cfg.Appearance),
+			"theme_settings":   cfg.ThemeSettings,
+			"bg_url":           BackgroundURL(cfg),
 			"dnc_capabilities": g.domains.InspectEnvironment(),
 			"proxy_snippets":   BuildReverseProxySnippets(cfg.CustomDomain, cfg.BuiltinListenAddr),
+		})
+
+	case path == "/api/admin/settings" && method == http.MethodPost:
+		var patch PortalSettingsPatch
+		if err := json.Unmarshal(body, &patch); err != nil {
+			return jsonResp(http.StatusBadRequest, map[string]any{"error": "INVALID_JSON"})
+		}
+		g.store.mu.Lock()
+		applySettingsPatch(&g.store.settings, patch)
+		g.store.settings.Revision = nextRevision(g.store.settings.Revision)
+		saved := g.store.settings
+		g.store.mu.Unlock()
+		_ = g.store.PersistSettings(context.Background(), saved)
+		return jsonResp(http.StatusOK, saved)
+
+	case path == "/api/admin/themes" && method == http.MethodGet:
+		return jsonResp(http.StatusOK, g.themeStatePayload())
+
+	case path == "/api/admin/themes/starter.zip" && method == http.MethodGet:
+		rawZip, err := BuildStarterThemeZip()
+		if err != nil {
+			return jsonResp(http.StatusInternalServerError, map[string]any{"error": "STARTER_BUILD_FAILED"})
+		}
+		return http.StatusOK, map[string]string{
+			"Content-Type":        "application/zip",
+			"Content-Disposition": `attachment; filename="qwq-probe-theme-starter.zip"`,
+			"Cache-Control":       "no-store",
+		}, rawZip
+
+	case path == "/api/admin/themes/upload" && method == http.MethodPost:
+		var zipBytes []byte
+		ct := strings.ToLower(extractHeaderCI(headers, "Content-Type"))
+		isRawBinary := strings.Contains(ct, "application/zip") || strings.Contains(ct, "application/octet-stream")
+		if isRawBinary || (len(body) >= 4 && bytes.Equal(body[:2], []byte{'P', 'K'})) {
+			zipBytes = body
+		} else {
+			var req struct {
+				Filename  string `json:"filename"`
+				ZipBase64 string `json:"zip_base64"`
+			}
+			if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.ZipBase64) == "" {
+				return jsonResp(http.StatusBadRequest, map[string]any{"error": "INVALID_THEME_UPLOAD_PAYLOAD"})
+			}
+			decoded, err := DecodeBase64Payload(req.ZipBase64)
+			if err != nil {
+				return jsonResp(http.StatusBadRequest, map[string]any{"error": "INVALID_BASE64"})
+			}
+			zipBytes = decoded
+		}
+		manifest, err := g.themes.InstallZip(zipBytes)
+		if err != nil {
+			return jsonResp(http.StatusUnprocessableEntity, map[string]any{"error": err.Error()})
+		}
+		return jsonResp(http.StatusCreated, map[string]any{
+			"installed": manifest,
+			"themes":    g.themes.ListThemes(),
+		})
+
+	case path == "/api/admin/themes/install-url" && method == http.MethodPost:
+		var req struct {
+			URL string `json:"url"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.URL) == "" {
+			return jsonResp(http.StatusBadRequest, map[string]any{"error": "INVALID_JSON"})
+		}
+		manifest, err := g.themes.InstallFromURL(context.Background(), req.URL)
+		if err != nil {
+			code := http.StatusUnprocessableEntity
+			if errors.Is(err, ErrSSRFTargetBlocked) || errors.Is(err, ErrInvalidThemeURL) {
+				code = http.StatusBadRequest
+			}
+			return jsonResp(code, map[string]any{"error": err.Error()})
+		}
+		return jsonResp(http.StatusCreated, map[string]any{
+			"installed": manifest,
+			"themes":    g.themes.ListThemes(),
+		})
+
+	case path == "/api/admin/themes/activate" && method == http.MethodPost:
+		var req ThemeActivateRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return jsonResp(http.StatusBadRequest, map[string]any{"error": "INVALID_JSON"})
+		}
+		saved, err := g.ApplyThemeActivation(req)
+		if err != nil {
+			code := http.StatusUnprocessableEntity
+			if errors.Is(err, ErrThemeNotFound) {
+				code = http.StatusNotFound
+			}
+			return jsonResp(code, map[string]any{"error": err.Error()})
+		}
+		return jsonResp(http.StatusOK, map[string]any{
+			"active_theme_id": saved.ActiveThemeID,
+			"appearance":      saved.Appearance,
+			"theme_settings":  saved.ThemeSettings,
+			"bg_url":          BackgroundURL(saved),
+			"revision":        saved.Revision,
+		})
+
+	case strings.HasPrefix(path, "/api/admin/themes/") && method == http.MethodDelete:
+		themeID := strings.TrimPrefix(path, "/api/admin/themes/")
+		saved, err := g.DeleteCustomTheme(themeID)
+		if err != nil {
+			code := http.StatusNotFound
+			if errors.Is(err, ErrBuiltinThemeLocked) {
+				code = http.StatusBadRequest
+			}
+			return jsonResp(code, map[string]any{"error": err.Error()})
+		}
+		return jsonResp(http.StatusOK, map[string]any{
+			"deleted":         themeID,
+			"active_theme_id": saved.ActiveThemeID,
+			"themes":          g.themes.ListThemes(),
+		})
+
+	case path == "/api/admin/background" && method == http.MethodPost:
+		var req BackgroundSetRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return jsonResp(http.StatusBadRequest, map[string]any{"error": "INVALID_JSON"})
+		}
+		saved, err := g.ApplyBackground(req)
+		if err != nil {
+			return jsonResp(http.StatusUnprocessableEntity, map[string]any{"error": err.Error()})
+		}
+		return jsonResp(http.StatusOK, map[string]any{
+			"appearance": saved.Appearance,
+			"bg_url":     BackgroundURL(saved),
+			"revision":   saved.Revision,
+		})
+
+	case path == "/api/admin/background" && method == http.MethodDelete:
+		saved := g.ClearBackground()
+		return jsonResp(http.StatusOK, map[string]any{
+			"appearance": saved.Appearance,
+			"bg_url":     BackgroundURL(saved),
+			"revision":   saved.Revision,
 		})
 
 	case path == "/api/admin/nodes" && method == http.MethodPost:
@@ -360,15 +774,8 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 		if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Name) == "" {
 			return jsonResp(http.StatusBadRequest, map[string]any{"error": "VALIDATION_FAILED"})
 		}
-		plainTok, shaHex, prefix, err := GenerateAgentToken()
-		if err != nil {
-			return jsonResp(http.StatusInternalServerError, map[string]any{"error": "TOKEN_GEN_FAILED"})
-		}
 		id := strings.TrimSpace(req.ID)
-		if id == "" {
-			id = "node_" + strings.ToLower(hex.EncodeToString([]byte(plainTok[8:14])))
-		}
-		if !isValidNodeID(id) {
+		if id != "" && !isValidNodeID(id) {
 			return jsonResp(http.StatusBadRequest, map[string]any{"error": "INVALID_NODE_ID"})
 		}
 		if req.ResetDay < 1 || req.ResetDay > 31 {
@@ -377,31 +784,81 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 		if req.QuotaMode == "" {
 			req.QuotaMode = QuotaBoth
 		}
+
 		g.store.mu.Lock()
-		if _, exists := g.store.nodes[id]; !exists && len(g.store.nodes) >= 512 {
+		existing, exists := g.store.nodes[id]
+		if !exists && len(g.store.nodes) >= 512 {
 			g.store.mu.Unlock()
 			return jsonResp(http.StatusUnprocessableEntity, map[string]any{"error": "NODE_LIMIT_EXCEEDED"})
 		}
-		g.store.nodes[id] = &NodeRecord{
-			ID:               id,
-			Name:             truncateSafe(req.Name, 64),
-			RegionCode:       truncateSafe(strings.ToUpper(req.RegionCode), 8),
-			GroupName:        truncateSafe(req.GroupName, 32),
-			AgentTokenSHA256: shaHex,
-			AgentTokenPrefix: prefix,
-			ReportInterval:   2,
-			QuotaBytes:       req.QuotaBytes,
-			QuotaMode:        req.QuotaMode,
-			ResetDay:         req.ResetDay,
-			OnlineState:      "pending",
-			Revision:         "r1",
+		var (
+			plainTok string
+			saved    NodeRecord
+			created  bool
+		)
+		if exists && existing != nil {
+			// 编辑已有节点：严格保留原有 AgentTokenSHA256 / Prefix、当月已累计 PeriodRx/TxBytes 与运行态字段！
+			existing.Name = truncateSafe(req.Name, 64)
+			if strings.TrimSpace(req.RegionCode) != "" {
+				existing.RegionCode = truncateSafe(strings.ToUpper(req.RegionCode), 8)
+			}
+			if strings.TrimSpace(req.GroupName) != "" {
+				existing.GroupName = truncateSafe(req.GroupName, 32)
+			}
+			existing.QuotaBytes = req.QuotaBytes
+			existing.QuotaMode = req.QuotaMode
+			existing.ResetDay = req.ResetDay
+			existing.Revision = nextRevision(existing.Revision)
+			saved = *existing
+		} else {
+			var shaHex, prefix string
+			var err error
+			plainTok, shaHex, prefix, err = GenerateAgentToken()
+			if err != nil {
+				g.store.mu.Unlock()
+				return jsonResp(http.StatusInternalServerError, map[string]any{"error": "TOKEN_GEN_FAILED"})
+			}
+			if id == "" {
+				id = "node_" + strings.ToLower(hex.EncodeToString([]byte(plainTok[8:14])))
+			}
+			if !isValidNodeID(id) {
+				g.store.mu.Unlock()
+				return jsonResp(http.StatusBadRequest, map[string]any{"error": "INVALID_NODE_ID"})
+			}
+			rec := &NodeRecord{
+				ID:               id,
+				Name:             truncateSafe(req.Name, 64),
+				RegionCode:       truncateSafe(strings.ToUpper(req.RegionCode), 8),
+				GroupName:        truncateSafe(req.GroupName, 32),
+				AgentTokenSHA256: shaHex,
+				AgentTokenPrefix: prefix,
+				ReportInterval:   2,
+				QuotaBytes:       req.QuotaBytes,
+				QuotaMode:        req.QuotaMode,
+				ResetDay:         req.ResetDay,
+				OnlineState:      "pending",
+				Revision:         "r1",
+			}
+			g.store.nodes[id] = rec
+			saved = *rec
+			created = true
 		}
 		dom := g.store.settings.CustomDomain
 		g.store.mu.Unlock()
 
+		_ = g.store.PersistNode(context.Background(), &saved)
+
 		endpoint := "/p/server.probe/agent/v1/report"
 		if dom != "" {
 			endpoint = "https://" + dom + "/api/probe/v1/report"
+		}
+		if !created {
+			return jsonResp(http.StatusOK, map[string]any{
+				"node_id":         id,
+				"updated":         true,
+				"revision":        saved.Revision,
+				"report_endpoint": endpoint,
+			})
 		}
 		return jsonResp(http.StatusCreated, map[string]any{
 			"node_id":         id,
@@ -438,6 +895,7 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 		}
 		g.store.settings = candidate
 		g.store.mu.Unlock()
+		_ = g.store.PersistSettings(context.Background(), candidate)
 		return jsonResp(http.StatusOK, map[string]any{
 			"bound":          summary,
 			"proxy_snippets": BuildReverseProxySnippets(candidate.CustomDomain, candidate.BuiltinListenAddr),
@@ -526,6 +984,132 @@ func (g *PortalGateway) verifyVisitorToken(tok string, now time.Time) bool {
 	return err == nil && now.Before(t)
 }
 
+func (g *PortalGateway) serveSandboxedThemeFrame(method, cleanSub string) (int, map[string]string, []byte) {
+	inner := strings.TrimPrefix(cleanSub, "/theme-frame")
+	if inner == "" {
+		inner = "/"
+	}
+	if inner == "/__qwq_bridge.js" {
+		data, err := fs.ReadFile(embeddedPortalFS, "portal_ui/theme-bridge.js")
+		if err != nil {
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "BRIDGE_NOT_FOUND"})
+		}
+		return http.StatusOK, map[string]string{
+			"Content-Type":        "application/javascript; charset=utf-8",
+			"Cache-Control":       "public, max-age=3600",
+			"X-QWQ-Theme-Sandbox": "1",
+		}, data
+	}
+	if inner == "/api/public/bg" && (method == http.MethodGet || method == http.MethodHead) {
+		g.store.mu.RLock()
+		bg := g.store.settings.Appearance.Background
+		g.store.mu.RUnlock()
+		if bg.Mode != "local" || bg.LocalFile == "" {
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "BACKGROUND_NOT_FOUND"})
+		}
+		data, mimeType, etag, err := g.themes.ReadBackground(bg.LocalFile)
+		if err != nil {
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "BACKGROUND_NOT_FOUND"})
+		}
+		return http.StatusOK, map[string]string{
+			"Content-Type":           mimeType,
+			"X-Content-Type-Options": "nosniff",
+			"Cache-Control":          "public, max-age=3600",
+			"ETag":                   etag,
+			"X-QWQ-Theme-Sandbox":    "1",
+		}, data
+	}
+
+	g.store.mu.RLock()
+	activeTheme := g.store.settings.ActiveThemeID
+	g.store.mu.RUnlock()
+	if activeTheme == "" || strings.HasPrefix(activeTheme, "builtin:") || g.themes == nil {
+		return jsonResp(http.StatusNotFound, map[string]any{"error": "NO_ACTIVE_CUSTOM_THEME"})
+	}
+	code, hdrs, data, fallback := g.themes.ServeThemeAsset(activeTheme, inner)
+	if fallback {
+		return jsonResp(http.StatusNotFound, map[string]any{"error": "THEME_ASSET_UNAVAILABLE"})
+	}
+	if hdrs == nil {
+		hdrs = map[string]string{}
+	}
+	hdrs["X-QWQ-Theme-Sandbox"] = "1"
+	return code, hdrs, data
+}
+
+func serveThemeSandboxHostAsset(cleanSub, entry string) (int, map[string]string, []byte) {
+	rel := strings.TrimPrefix(cleanSub, "/")
+	if rel == "" || rel == "index.html" || (!strings.Contains(rel, ".") && !strings.Contains(rel, "..")) {
+		raw, err := fs.ReadFile(embeddedPortalFS, "portal_ui/theme-sandbox.html")
+		if err != nil {
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "SANDBOX_HOST_NOT_FOUND"})
+		}
+		rendered := bytes.ReplaceAll(raw, []byte("__QWQ_THEME_ENTRY__"), []byte(html.EscapeString(entry)))
+		return http.StatusOK, map[string]string{
+			"Content-Type":  "text/html; charset=utf-8",
+			"Cache-Control": "no-cache",
+		}, rendered
+	}
+	switch rel {
+	case "theme-sandbox.css":
+		raw, err := fs.ReadFile(embeddedPortalFS, "portal_ui/theme-sandbox.css")
+		if err != nil {
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "ASSET_NOT_FOUND"})
+		}
+		return http.StatusOK, map[string]string{
+			"Content-Type":  "text/css; charset=utf-8",
+			"Cache-Control": "public, max-age=3600",
+		}, raw
+	case "theme-sandbox.js":
+		raw, err := fs.ReadFile(embeddedPortalFS, "portal_ui/theme-sandbox.js")
+		if err != nil {
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "ASSET_NOT_FOUND"})
+		}
+		return http.StatusOK, map[string]string{
+			"Content-Type":  "application/javascript; charset=utf-8",
+			"Cache-Control": "public, max-age=3600",
+		}, raw
+	default:
+		return jsonResp(http.StatusNotFound, map[string]any{"error": "ASSET_NOT_FOUND"})
+	}
+}
+
+func serveIsolatedAdminAsset(cleanSub string) (int, map[string]string, []byte) {
+	var rel string
+	switch cleanSub {
+	case "/admin", "/admin/", "/admin/index.html":
+		rel = "admin.html"
+	case "/admin.css", "/admin/admin.css":
+		rel = "admin.css"
+	case "/admin.js", "/admin/admin.js":
+		rel = "admin.js"
+	default:
+		if rest, ok := strings.CutPrefix(cleanSub, "/admin/"); ok && !strings.Contains(rest, ".") && !strings.Contains(rest, "..") {
+			rel = "admin.html"
+		} else {
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "ADMIN_ASSET_NOT_FOUND"})
+		}
+	}
+	data, err := fs.ReadFile(embeddedPortalFS, "portal_ui/"+rel)
+	if err != nil {
+		return jsonResp(http.StatusNotFound, map[string]any{"error": "ADMIN_ASSET_NOT_FOUND"})
+	}
+	ctype := "text/html; charset=utf-8"
+	cacheCtl := "no-cache"
+	switch rel {
+	case "admin.css":
+		ctype = "text/css; charset=utf-8"
+		cacheCtl = "public, max-age=3600"
+	case "admin.js":
+		ctype = "application/javascript; charset=utf-8"
+		cacheCtl = "public, max-age=3600"
+	}
+	return http.StatusOK, map[string]string{
+		"Content-Type":  ctype,
+		"Cache-Control": cacheCtl,
+	}, data
+}
+
 func serveEmbeddedPortalAsset(cleanSub string) (int, map[string]string, []byte) {
 	rel := strings.TrimPrefix(cleanSub, "/")
 	if strings.Contains(rel, "..") || strings.Contains(rel, "/") || strings.Contains(rel, "\\") {
@@ -534,18 +1118,30 @@ func serveEmbeddedPortalAsset(cleanSub string) (int, map[string]string, []byte) 
 	if rel == "" || !strings.Contains(rel, ".") {
 		rel = "index.html"
 	}
+	// 公开前台静态通道绝不输出 admin.* 文件（由 /admin 严格隔离通道独占）
+	switch rel {
+	case "index.html", "portal.css", "portal.js":
+	default:
+		return jsonResp(http.StatusNotFound, map[string]any{"error": "ASSET_NOT_FOUND"})
+	}
 	data, err := fs.ReadFile(embeddedPortalFS, "portal_ui/"+rel)
 	if err != nil {
 		return jsonResp(http.StatusNotFound, map[string]any{"error": "ASSET_NOT_FOUND"})
 	}
 	ctype := "text/html; charset=utf-8"
+	cacheCtl := "no-cache"
 	switch {
 	case strings.HasSuffix(rel, ".css"):
 		ctype = "text/css; charset=utf-8"
+		cacheCtl = "public, max-age=3600"
 	case strings.HasSuffix(rel, ".js"):
 		ctype = "application/javascript; charset=utf-8"
+		cacheCtl = "public, max-age=3600"
 	}
-	return http.StatusOK, map[string]string{"Content-Type": ctype}, data
+	return http.StatusOK, map[string]string{
+		"Content-Type":  ctype,
+		"Cache-Control": cacheCtl,
+	}, data
 }
 
 func extractHeaderCI(headers map[string]string, want string) string {

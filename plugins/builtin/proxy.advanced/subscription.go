@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qwq-panel/qwq/internal/routingrules"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
 
@@ -55,7 +56,8 @@ func (i *instance) ServePublicRoute(ctx context.Context, req pluginsdk.PublicRou
 	cfg := i.configSnapshot()
 	chains, _ := i.store.ListChainsWithSecrets(ctx)
 	brutals, _ := i.store.ListBrutalBindings(ctx)
-	body, contentType, err := renderSubscriptionPayloadWithExtras(cfg, user, format, chains, brutals)
+	dbNodes, _ := i.store.ListNodes(ctx, "", "", "", "", true)
+	body, contentType, err := renderSubscriptionPayloadFull(cfg, user, format, chains, brutals, dbNodes)
 	if err != nil {
 		return plainTextResponse(503, "subscription endpoint not configured"), nil
 	}
@@ -72,6 +74,7 @@ func (i *instance) ServePublicRoute(ctx context.Context, req pluginsdk.PublicRou
 	headers := []pluginsdk.HTTPHeader{
 		{Name: "Content-Type", Value: contentType},
 		{Name: "Subscription-Userinfo", Value: userInfoHeader},
+		{Name: "Profile-Update-Interval", Value: "24"},
 		{Name: "Cache-Control", Value: "no-store"},
 	}
 	if method == "HEAD" {
@@ -101,7 +104,7 @@ func resolveSubscriptionFormat(rawQuery string, headers []pluginsdk.HTTPHeader) 
 		}
 		if explicit := strings.ToLower(strings.TrimSpace(values.Get("format"))); explicit != "" {
 			switch explicit {
-			case "clash", "singbox", "v2ray":
+			case "clash", "singbox", "v2ray", "raw":
 				return explicit, true
 			default:
 				return "", false
@@ -110,9 +113,9 @@ func resolveSubscriptionFormat(rawQuery string, headers []pluginsdk.HTTPHeader) 
 	}
 	ua := strings.ToLower(headerValue(headers, "user-agent"))
 	switch {
-	case strings.Contains(ua, "clash") || strings.Contains(ua, "mihomo"):
+	case strings.Contains(ua, "clash") || strings.Contains(ua, "mihomo") || strings.Contains(ua, "stash") || strings.Contains(ua, "verge"):
 		return "clash", true
-	case strings.Contains(ua, "sing-box") || strings.Contains(ua, "sfa") || strings.Contains(ua, "sfi"):
+	case strings.Contains(ua, "sing-box") || strings.Contains(ua, "sfa") || strings.Contains(ua, "sfi") || strings.Contains(ua, "sfm"):
 		return "singbox", true
 	default:
 		return "v2ray", true
@@ -164,9 +167,39 @@ type subNode struct {
 	SingboxOutbound map[string]any
 }
 
-func renderSubscriptionPayloadWithExtras(cfg proxyConfig, user userRecord, format string, chains []chainWithSecret, brutals []brutalBindingRecord) ([]byte, string, error) {
+func renderSubscriptionPayloadFull(cfg proxyConfig, user userRecord, format string, chains []chainWithSecret, brutals []brutalBindingRecord, dbNodes []proxyNodeRecord) ([]byte, string, error) {
 	effCfg := applyBrutalSubPortOverrides(cfg, brutals)
 	nodes := buildUserSubscriptionNodes(effCfg, user)
+
+	seenNames := make(map[string]bool, len(nodes)+len(dbNodes))
+	for _, n := range nodes {
+		seenNames[n.Name] = true
+	}
+	for _, rec := range dbNodes {
+		if !rec.Enabled {
+			continue
+		}
+		// 托管节点若未配置 server 且缺少 public_host，仅当存在外部节点或显式 server 时才加入。
+		if rec.Source == "managed" && strings.TrimSpace(rec.Server) == "" && strings.TrimSpace(effCfg.PublicHost) == "" {
+			continue
+		}
+		sn, ok := buildSubNodeFromRecord(rec, effCfg.PublicHost, &user)
+		if !ok {
+			continue
+		}
+		if seenNames[sn.Name] {
+			sn.Name = sn.Name + "-" + rec.ID
+			if sn.ClashNode != nil {
+				sn.ClashNode["name"] = sn.Name
+			}
+			if sn.SingboxOutbound != nil {
+				sn.SingboxOutbound["tag"] = sn.Name
+			}
+		}
+		seenNames[sn.Name] = true
+		nodes = append(nodes, sn)
+	}
+
 	if len(nodes) == 0 {
 		return nil, "", fmt.Errorf("no public endpoints configured")
 	}
@@ -176,7 +209,7 @@ func renderSubscriptionPayloadWithExtras(cfg proxyConfig, user userRecord, forma
 	case "clash":
 		return []byte(renderClashSubscription(nodes)), "text/yaml; charset=utf-8", nil
 	case "singbox":
-		raw, err := renderSingboxSubscription(nodes)
+		raw, err := renderSingboxSubscription(nodes, effCfg.PublicHost)
 		if err != nil {
 			return nil, "", err
 		}
@@ -273,10 +306,19 @@ func appendClientDialerChainNodes(nodes []subNode, user userRecord, chains []cha
 	return nodes
 }
 
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 func buildChainSubEntry(name, dialer string, c chainWithSecret) (map[string]any, map[string]any) {
 	switch c.Protocol {
 	case "socks5":
-		cn := map[string]any{"name": name, "type": "socks5", "server": c.Server, "port": c.Port, "dialer-proxy": dialer}
+		cn := map[string]any{"name": name, "type": "socks5", "server": c.Server, "port": c.Port, "udp": true, "dialer-proxy": dialer}
 		sb := map[string]any{"type": "socks", "tag": name, "server": c.Server, "server_port": c.Port, "detour": dialer}
 		if c.Secret.Username != "" {
 			cn["username"] = c.Secret.Username
@@ -286,7 +328,7 @@ func buildChainSubEntry(name, dialer string, c chainWithSecret) (map[string]any,
 		}
 		return cn, sb
 	case "http":
-		cn := map[string]any{"name": name, "type": "http", "server": c.Server, "port": c.Port, "dialer-proxy": dialer}
+		cn := map[string]any{"name": name, "type": "http", "server": c.Server, "port": c.Port, "udp": true, "dialer-proxy": dialer}
 		sb := map[string]any{"type": "http", "tag": name, "server": c.Server, "server_port": c.Port, "detour": dialer}
 		if c.Secret.Username != "" {
 			cn["username"] = c.Secret.Username
@@ -296,19 +338,28 @@ func buildChainSubEntry(name, dialer string, c chainWithSecret) (map[string]any,
 		}
 		return cn, sb
 	case "vless":
-		cn := map[string]any{"name": name, "type": "vless", "server": c.Server, "port": c.Port, "uuid": c.Secret.UUID, "tls": c.Secret.TLS, "dialer-proxy": dialer}
+		cn := map[string]any{"name": name, "type": "vless", "server": c.Server, "port": c.Port, "uuid": c.Secret.UUID, "tls": c.Secret.TLS, "udp": true, "dialer-proxy": dialer}
 		sb := map[string]any{"type": "vless", "tag": name, "server": c.Server, "server_port": c.Port, "uuid": c.Secret.UUID, "detour": dialer}
-		if c.Secret.SNI != "" {
+		if c.Secret.Flow != "" {
+			cn["flow"] = c.Secret.Flow
+			sb["flow"] = c.Secret.Flow
+		}
+		if c.Secret.TLS {
+			sni := firstNonEmpty(c.Secret.SNI, c.Server)
+			cn["servername"] = sni
+			cn["skip-cert-verify"] = c.Secret.SkipVerify
+			sb["tls"] = map[string]any{"enabled": true, "server_name": sni, "insecure": c.Secret.SkipVerify}
+		} else if c.Secret.SNI != "" {
 			cn["servername"] = c.Secret.SNI
-			sb["tls"] = map[string]any{"enabled": c.Secret.TLS, "server_name": c.Secret.SNI, "insecure": c.Secret.SkipVerify}
 		}
 		return cn, sb
 	case "trojan":
-		cn := map[string]any{"name": name, "type": "trojan", "server": c.Server, "port": c.Port, "password": c.Secret.Password, "sni": c.Secret.SNI, "skip-cert-verify": c.Secret.SkipVerify, "dialer-proxy": dialer}
-		sb := map[string]any{"type": "trojan", "tag": name, "server": c.Server, "server_port": c.Port, "password": c.Secret.Password, "detour": dialer, "tls": map[string]any{"enabled": true, "server_name": c.Secret.SNI, "insecure": c.Secret.SkipVerify}}
+		sni := firstNonEmpty(c.Secret.SNI, c.Server)
+		cn := map[string]any{"name": name, "type": "trojan", "server": c.Server, "port": c.Port, "password": c.Secret.Password, "sni": sni, "skip-cert-verify": c.Secret.SkipVerify, "udp": true, "dialer-proxy": dialer}
+		sb := map[string]any{"type": "trojan", "tag": name, "server": c.Server, "server_port": c.Port, "password": c.Secret.Password, "detour": dialer, "tls": map[string]any{"enabled": true, "server_name": sni, "insecure": c.Secret.SkipVerify}}
 		return cn, sb
 	case "shadowsocks":
-		cn := map[string]any{"name": name, "type": "ss", "server": c.Server, "port": c.Port, "cipher": c.Secret.Method, "password": c.Secret.Password, "dialer-proxy": dialer}
+		cn := map[string]any{"name": name, "type": "ss", "server": c.Server, "port": c.Port, "cipher": c.Secret.Method, "password": c.Secret.Password, "udp": true, "dialer-proxy": dialer}
 		sb := map[string]any{"type": "shadowsocks", "tag": name, "server": c.Server, "server_port": c.Port, "method": c.Secret.Method, "password": c.Secret.Password, "detour": dialer}
 		return cn, sb
 	default:
@@ -508,7 +559,14 @@ func renderClashSubscription(nodes []subNode) string {
 	return b.String()
 }
 
-func renderSingboxSubscription(nodes []subNode) ([]byte, error) {
+func firstStringFromAnySlice(v any, fallback string) string {
+	if s, ok := v.([]string); ok && len(s) > 0 && strings.TrimSpace(s[0]) != "" {
+		return strings.TrimSpace(s[0])
+	}
+	return fallback
+}
+
+func renderSingboxSubscription(nodes []subNode, publicHost string) ([]byte, error) {
 	tags := make([]string, 0, len(nodes))
 	outbounds := make([]any, 0, len(nodes)+2)
 	for _, n := range nodes {
@@ -526,10 +584,49 @@ func renderSingboxSubscription(nodes []subNode) ([]byte, error) {
 		"type": "direct",
 		"tag":  "direct",
 	})
+
+	antiPoison := routingrules.BuildAntiPoisonDNSConfig(publicHost, nil)
+	bootstrapAddr := firstStringFromAnySlice(antiPoison["bootstrap_dns"], "223.5.5.5")
+	domesticAddr := firstStringFromAnySlice(antiPoison["domestic_doh"], "https://dns.alidns.com/dns-query")
+	remoteAddr := firstStringFromAnySlice(antiPoison["remote_doh"], "https://1.1.1.1/dns-query")
+	vpsBypass, _ := antiPoison["vps_bypass_domains"].([]string)
+
+	dnsRules := make([]any, 0, 2)
+	if len(vpsBypass) > 0 {
+		dnsRules = append(dnsRules, map[string]any{
+			"domain": vpsBypass,
+			"server": "bootstrap_dns",
+		})
+	}
+	dnsRules = append(dnsRules, map[string]any{
+		"outbound": []string{"any"},
+		"server":   "bootstrap_dns",
+	})
+
 	doc := map[string]any{
+		"inbounds": []any{
+			map[string]any{
+				"type":        "mixed",
+				"tag":         "mixed-in",
+				"listen":      "127.0.0.1",
+				"listen_port": 2080,
+				"sniff":       true,
+			},
+		},
+		"dns": map[string]any{
+			"servers": []any{
+				map[string]any{"tag": "remote_doh", "address": remoteAddr, "detour": "proxy"},
+				map[string]any{"tag": "domestic_doh", "address": domesticAddr, "address_resolver": "bootstrap_dns", "detour": "direct"},
+				map[string]any{"tag": "bootstrap_dns", "address": bootstrapAddr, "detour": "direct"},
+			},
+			"rules":    dnsRules,
+			"final":    "remote_doh",
+			"strategy": "prefer_ipv4",
+		},
 		"outbounds": outbounds,
 		"route": map[string]any{
-			"final": "proxy",
+			"final":                 "proxy",
+			"auto_detect_interface": true,
 		},
 	}
 	return json.MarshalIndent(doc, "", "  ")
@@ -549,18 +646,33 @@ func writeYAMLListItemMap(b *strings.Builder, m map[string]any, indent int) {
 			prefix = lead + "- "
 		}
 		v := m[k]
-		if sub, ok := v.(map[string]any); ok {
+		switch val := v.(type) {
+		case map[string]any:
 			b.WriteString(prefix)
 			b.WriteString(k)
 			b.WriteString(":\n")
-			writeYAMLMap(b, sub, indent+4)
-			continue
+			writeYAMLMap(b, val, indent+4)
+		case []string:
+			b.WriteString(prefix)
+			b.WriteString(k)
+			if len(val) == 0 {
+				b.WriteString(": []\n")
+				continue
+			}
+			b.WriteString(":\n")
+			itemPrefix := strings.Repeat(" ", indent+4) + "- "
+			for _, item := range val {
+				b.WriteString(itemPrefix)
+				b.WriteString(formatYAMLScalar(item))
+				b.WriteByte('\n')
+			}
+		default:
+			b.WriteString(prefix)
+			b.WriteString(k)
+			b.WriteString(": ")
+			b.WriteString(formatYAMLScalar(v))
+			b.WriteByte('\n')
 		}
-		b.WriteString(prefix)
-		b.WriteString(k)
-		b.WriteString(": ")
-		b.WriteString(formatYAMLScalar(v))
-		b.WriteByte('\n')
 	}
 }
 
@@ -573,18 +685,33 @@ func writeYAMLMap(b *strings.Builder, m map[string]any, indent int) {
 	prefix := strings.Repeat(" ", indent)
 	for _, k := range keys {
 		v := m[k]
-		if sub, ok := v.(map[string]any); ok {
+		switch val := v.(type) {
+		case map[string]any:
 			b.WriteString(prefix)
 			b.WriteString(k)
 			b.WriteString(":\n")
-			writeYAMLMap(b, sub, indent+2)
-			continue
+			writeYAMLMap(b, val, indent+2)
+		case []string:
+			b.WriteString(prefix)
+			b.WriteString(k)
+			if len(val) == 0 {
+				b.WriteString(": []\n")
+				continue
+			}
+			b.WriteString(":\n")
+			itemPrefix := strings.Repeat(" ", indent+2) + "- "
+			for _, item := range val {
+				b.WriteString(itemPrefix)
+				b.WriteString(formatYAMLScalar(item))
+				b.WriteByte('\n')
+			}
+		default:
+			b.WriteString(prefix)
+			b.WriteString(k)
+			b.WriteString(": ")
+			b.WriteString(formatYAMLScalar(v))
+			b.WriteByte('\n')
 		}
-		b.WriteString(prefix)
-		b.WriteString(k)
-		b.WriteString(": ")
-		b.WriteString(formatYAMLScalar(v))
-		b.WriteByte('\n')
 	}
 }
 

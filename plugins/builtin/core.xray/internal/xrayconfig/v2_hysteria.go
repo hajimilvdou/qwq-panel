@@ -20,24 +20,59 @@ func hysteriaInbound(profile corev2.Profile, materials HysteriaMaterials, option
 	if err != nil {
 		return nativeInbound{}, err
 	}
-	tls, err := hysteriaTLS(profile.Hysteria2.TLS, materials.TLS, options)
+	tls, err := buildNativeTLS(profile.Hysteria2.TLS, materials.TLS, options, []string{"h3"}, "1.3")
 	if err != nil {
 		return nativeInbound{}, err
+	}
+	if profile.Hysteria2.ObfsPassword != nil && !ValidPasswordMaterial(materials.ObfsPassword, 1) {
+		return nativeInbound{}, ErrV2Materials
+	}
+	if profile.Hysteria2.ObfsPassword == nil && len(materials.ObfsPassword) != 0 {
+		return nativeInbound{}, ErrV2Materials
 	}
 	tag, err := corev1.InboundTag(profile.ID)
 	if err != nil {
 		return nativeInbound{}, err
 	}
+	stream := &nativeStream{
+		Network:  "hysteria",
+		Security: "tls",
+		Hysteria: &nativeHysteriaTransport{Version: 2},
+		TLS:      tls,
+	}
+	if len(materials.ObfsPassword) > 0 {
+		stream.FinalMask = &nativeFinalMask{
+			UDP: []nativeFinalMaskEntry{{
+				Type: "salamander",
+				Settings: map[string]any{
+					"password": string(materials.ObfsPassword),
+				},
+			}},
+		}
+	}
 	port := profile.Port
-	return nativeInbound{Tag: tag, Listen: profile.Listen, Port: &port, Protocol: "hysteria",
+	return nativeInbound{
+		Tag:      tag,
+		Listen:   profile.Listen,
+		Port:     &port,
+		Protocol: "hysteria",
 		Settings: hysteriaSettings{Version: 2, Users: users},
-		Stream:   &nativeStream{Network: "hysteria", Security: "tls", Hysteria: &nativeHysteriaTransport{Version: 2}, TLS: tls}}, nil
+		Stream:   stream,
+	}, nil
 }
 
 // ValidHysteriaAuth 限定 16 至 256 字节 UTF-8 认证值，拒绝空白和控制字符。
 // 高熵凭据由生成入口产生；此处不声称从口令长度推算真实熵。
 func ValidHysteriaAuth(value []byte) bool {
-	if len(value) < 16 || len(value) > 256 || !utf8.Valid(value) {
+	return ValidPasswordMaterial(value, 16)
+}
+
+// ValidPasswordMaterial 检查口令类密钥（Trojan / Shadowsocks / AnyTLS / SOCKS5 / HTTP / Hysteria2 Obfs）。
+func ValidPasswordMaterial(value []byte, minLen int) bool {
+	if minLen < 1 {
+		minLen = 1
+	}
+	if len(value) < minLen || len(value) > 256 || !utf8.Valid(value) {
 		return false
 	}
 	for _, char := range string(value) {
@@ -71,32 +106,49 @@ func hysteriaUsers(profile corev2.Profile, auth map[string][]byte) ([]hysteriaUs
 	return result, nil
 }
 
-func hysteriaTLS(binding *corev2.TLSBinding, materials TLSMaterials, options V2Options) (*nativeTLS, error) {
+func validateBoundTLS(binding *corev2.TLSBinding, materials TLSMaterials, options V2Options) error {
+	if binding == nil {
+		return ErrV2Materials
+	}
 	if materials.BindingRef != binding.BindingRef || materials.Generation == 0 || materials.PolicyRevision == "" ||
 		len(materials.PolicyRevision) > 256 || strings.ContainsAny(materials.PolicyRevision, "\x00\r\n") || options.Now.IsZero() {
-		return nil, ErrV2Materials
+		return ErrV2Materials
 	}
 	if materials.Trust == tlsmgr.TestTrust {
 		if !options.PermitTestCertificates || materials.Purpose != tlsmgr.TestServerTLS {
-			return nil, ErrV2Materials
+			return ErrV2Materials
 		}
 	} else if materials.Roots == nil {
 		// 纯渲染不能触发 ValidateMaterial 的系统根读取；根在宿主启动时准备。
-		return nil, ErrV2Materials
+		return ErrV2Materials
 	}
 	metadata, err := tlsmgr.ValidateMaterial(materials.Material, tlsmgr.MaterialOptions{SANs: materials.SANs, Now: options.Now,
 		Purpose: materials.Purpose, Trust: materials.Trust, Roots: materials.Roots})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := tlsmgr.Covers(metadata, binding.ServerName); err != nil {
+	return tlsmgr.Covers(metadata, binding.ServerName)
+}
+
+func buildNativeTLS(binding *corev2.TLSBinding, materials TLSMaterials, options V2Options, alpn []string, minVersion string) (*nativeTLS, error) {
+	if err := validateBoundTLS(binding, materials, options); err != nil {
 		return nil, err
 	}
 	chain, key := materials.Material.CertificatePEM(), materials.Material.PrivateKeyPEM()
 	defer clear(chain)
 	defer clear(key)
-	return &nativeTLS{ServerName: binding.ServerName, ALPN: []string{"h3"}, MinVersion: "1.3", RejectUnknownSNI: true,
-		Certificates: []nativeTLSCertificate{{Certificate: pemLines(chain), Key: pemLines(key), Usage: "encipherment", OneTimeLoading: true}}}, nil
+	return &nativeTLS{
+		ServerName:       binding.ServerName,
+		ALPN:             slices.Clone(alpn),
+		MinVersion:       minVersion,
+		RejectUnknownSNI: true,
+		Certificates: []nativeTLSCertificate{{
+			Certificate:    pemLines(chain),
+			Key:            pemLines(key),
+			Usage:          "encipherment",
+			OneTimeLoading: true,
+		}},
+	}, nil
 }
 
 func pemLines(raw []byte) []string {

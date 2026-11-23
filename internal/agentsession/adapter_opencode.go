@@ -25,8 +25,8 @@ import (
 //  3. Fallback: `opencode run --format json` (NDJSON event stream)
 
 type OpenCodeConfig struct {
-	ServerURL        string   `json:"server_url,omitempty"`         // e.g. http://127.0.0.1:4096
-	Binary           string   `json:"binary,omitempty"`             // default "opencode"
+	ServerURL        string   `json:"-"`                            // host-controlled only; e.g. http://127.0.0.1:4096
+	Binary           string   `json:"-"`                            // host-controlled only; default "opencode"
 	Transport        string   `json:"transport,omitempty"`          // auto (default: serve if up else acp) | serve-http | acp | run-json
 	AuthMode         string   `json:"auth_mode,omitempty"`          // oauth | provider | "" (auto)
 	ProviderID       string   `json:"provider_id,omitempty"`        // optional global AIProvider key bridge
@@ -37,7 +37,7 @@ type OpenCodeConfig struct {
 	SessionID        string   `json:"external_thread_id,omitempty"`
 	PlanMode         bool     `json:"plan_mode,omitempty"`
 	ActiveSkills     []string `json:"active_skills,omitempty"`
-	WorkDir          string   `json:"work_dir,omitempty"`
+	WorkDir          string   `json:"-"` // host-controlled only; isolated workspace used
 }
 
 // OpenCodeOptions configures OpenCodeCore.
@@ -50,6 +50,7 @@ type OpenCodeOptions struct {
 	Skills    *SkillRegistry
 	Auth      *CLIAuthManager
 	Binary    string
+	ServerURL string
 }
 
 // OpenCodeCore implements Core, CapableCore, PreflightableCore, and CompactableCore.
@@ -62,6 +63,7 @@ type OpenCodeCore struct {
 	skills    *SkillRegistry
 	auth      *CLIAuthManager
 	bin       string
+	serverURL string
 }
 
 // NewOpenCodeCore constructs the OpenCode adapter.
@@ -78,13 +80,17 @@ func NewOpenCodeCore(opts OpenCodeOptions) *OpenCodeCore {
 	if bin == "" {
 		bin = "opencode"
 	}
+	serverURL := strings.TrimRight(strings.TrimSpace(opts.ServerURL), "/")
+	if serverURL == "" {
+		serverURL = "http://127.0.0.1:4096"
+	}
 	skills := opts.Skills
 	if skills == nil {
 		skills = NewSkillRegistry()
 	}
 	return &OpenCodeCore{
 		client: cl, launcher: launcher, minter: opts.Minter, bridge: opts.Bridge,
-		providers: opts.Providers, skills: skills, auth: opts.Auth, bin: bin,
+		providers: opts.Providers, skills: skills, auth: opts.Auth, bin: bin, serverURL: serverURL,
 	}
 }
 
@@ -132,18 +138,14 @@ func (c *OpenCodeCore) Preflight(ctx context.Context, rawConfig json.RawMessage)
 	if err := refusePlaintextSecrets(rawConfig); err != nil {
 		return err
 	}
-	cfg := OpenCodeConfig{Binary: c.bin, Transport: "auto", ServerURL: "http://127.0.0.1:4096"}
-	if len(rawConfig) > 0 {
-		_ = json.Unmarshal(rawConfig, &cfg)
-		if cfg.Binary == "" {
-			cfg.Binary = c.bin
-		}
+	if _, err := ValidateExternalSessionConfig(rawConfig); err != nil {
+		return err
 	}
-	if cfg.ServerURL != "" && c.probeHTTP(ctx, strings.TrimRight(cfg.ServerURL, "/")) {
+	if c.serverURL != "" && c.probeHTTP(ctx, c.serverURL) {
 		return nil
 	}
 	if _, isReal := c.launcher.(OSProcessLauncher); isReal {
-		if ok, reason := probeBinary(cfg.Binary); !ok {
+		if ok, reason := probeBinary(c.bin); !ok {
 			return problem.New(problem.Unavailable, "OpenCode CLI is not installed and no opencode serve daemon is reachable (%s).", reason)
 		}
 	}
@@ -170,19 +172,18 @@ func (c *OpenCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 	if err := refusePlaintextSecrets(turn.Config); err != nil {
 		return err
 	}
-	cfg := OpenCodeConfig{Binary: c.bin, Transport: "auto"}
+	if _, err := ValidateExternalSessionConfig(turn.Config); err != nil {
+		return err
+	}
+	cfg := OpenCodeConfig{Binary: c.bin, ServerURL: c.serverURL, Transport: "auto"}
 	if len(turn.Config) > 0 {
 		_ = json.Unmarshal(turn.Config, &cfg)
-		if cfg.Binary == "" {
-			cfg.Binary = c.bin
-		}
-		if cfg.Transport == "" {
-			if cfg.ServerURL != "" {
-				cfg.Transport = "serve-http"
-			} else {
-				cfg.Transport = "auto"
-			}
-		}
+	}
+	cfg.Binary = c.bin
+	cfg.ServerURL = c.serverURL
+	cfg.WorkDir = ""
+	if cfg.Transport == "" {
+		cfg.Transport = "auto"
 	}
 	if cfg.ServerURL == "" {
 		cfg.ServerURL = "http://127.0.0.1:4096"
@@ -491,8 +492,8 @@ func (c *OpenCodeCore) runCLIJSON(ctx context.Context, cfg OpenCodeConfig, turn 
 	if eff, _, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort); !IsReasoningEffortDisabled(eff) {
 		extraEnv = append(extraEnv, "OPENCODE_REASONING_EFFORT="+eff)
 	}
-	args = append(args, latestUserMessage(turn.Messages))
-	proc, err := c.launcher.Start(ctx, cfg.Binary, args, extraEnv, cfg.WorkDir)
+	args = AppendPosixPromptArg(args, latestUserMessage(turn.Messages))
+	proc, err := c.launcher.Start(ctx, cfg.Binary, args, extraEnv, "")
 	if err != nil {
 		return err
 	}

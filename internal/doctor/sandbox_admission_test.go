@@ -76,3 +76,21 @@ func TestSandboxAdmissionRequiresRegularReadOnlyRule(t *testing.T) {
 		t.Fatalf("directory as rule=%+v", result)
 	}
 }
+
+func TestSandboxPolkitAllowsUnprivilegedPermissionDeniedOnRuleDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("test checks non-root unprivileged EACCES behavior")
+	}
+	f := targetHost()
+	env := f.env()
+	stat := env.Stat
+	env.Stat = func(path string) (os.FileInfo, error) {
+		if path == PluginPolkitRulePath {
+			return nil, os.ErrPermission
+		}
+		return stat(path)
+	}
+	if result := sandboxPolkit(t.Context(), env); result.Status != OK {
+		t.Fatalf("unprivileged EACCES on polkit rule=%+v; want OK", result)
+	}
+}

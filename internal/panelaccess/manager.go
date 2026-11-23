@@ -12,10 +12,13 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +34,10 @@ import (
 // GateCookieName is the neutral HttpOnly cookie name granted only after a
 // browser enters through the valid secret entry path.
 const GateCookieName = "_g"
+
+// DefaultCapabilityPanelPortFile is the runtime file read by qwq-capability's
+// SystemGuard.ManagementPorts() to preserve the live panel port in firewall/sshd guards.
+const DefaultCapabilityPanelPortFile = "/var/lib/qwq-capability/panel-port.json"
 
 // Snapshot is an immutable point-in-time view of the panel's live access config.
 type Snapshot struct {
@@ -93,9 +100,16 @@ func (s Snapshot) EffectiveDisguise() string {
 }
 
 // GateToken computes the expected HMAC-SHA256 cookie token for the current
-// secret entry path. Rotating EntryPath immediately invalidates old cookies.
+// effective secret entry path. Rotating EntryPath immediately invalidates old cookies.
 func (s Snapshot) GateToken() string {
-	ep := s.EffectiveEntryPath()
+	return s.GateTokenForPath(s.EffectiveEntryPath())
+}
+
+// GateTokenForPath computes the expected HMAC-SHA256 cookie token for rawEntry
+// even when DomainAutoBypassReason is non-empty (so emergency bare-IP access via
+// https://IP:Port/<rawEntry> still works cleanly).
+func (s Snapshot) GateTokenForPath(rawEntry string) string {
+	ep := config.NormalizeEntryPath(rawEntry)
 	if ep == "" || s.GateSecret == "" {
 		return ""
 	}
@@ -105,18 +119,28 @@ func (s Snapshot) GateToken() string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// ValidGateCookie verifies cookieVal in constant time.
+// ValidGateCookie verifies cookieVal in constant time against the effective entry path.
 func (s Snapshot) ValidGateCookie(cookieVal string) bool {
-	want := s.GateToken()
+	return s.ValidGateCookieForPath(s.EffectiveEntryPath(), cookieVal)
+}
+
+// ValidGateCookieForPath verifies cookieVal in constant time against rawEntry.
+func (s Snapshot) ValidGateCookieForPath(rawEntry, cookieVal string) bool {
+	want := s.GateTokenForPath(rawEntry)
 	if want == "" || cookieVal == "" {
 		return false
 	}
 	return hmac.Equal([]byte(want), []byte(cookieVal))
 }
 
-// SetGateCookie writes the HttpOnly gate cookie when the secret entry path is active.
+// SetGateCookie writes the HttpOnly gate cookie when the effective secret entry path is active.
 func (s Snapshot) SetGateCookie(w http.ResponseWriter, secure bool) {
-	tok := s.GateToken()
+	s.SetGateCookieForPath(w, s.EffectiveEntryPath(), secure)
+}
+
+// SetGateCookieForPath writes the HttpOnly gate cookie for rawEntry.
+func (s Snapshot) SetGateCookieForPath(w http.ResponseWriter, rawEntry string, secure bool) {
+	tok := s.GateTokenForPath(rawEntry)
 	if tok == "" {
 		return
 	}
@@ -131,6 +155,20 @@ func (s Snapshot) SetGateCookie(w http.ResponseWriter, secure bool) {
 	})
 }
 
+// ClearGateCookie expires the HttpOnly gate cookie on logout.
+func ClearGateCookie(w http.ResponseWriter, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     GateCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0).UTC(),
+	})
+}
+
 // UpdateInput carries the desired live access configuration from PUT /api/v1/system/access.
 type UpdateInput struct {
 	Port                    *int
@@ -141,29 +179,47 @@ type UpdateInput struct {
 	PanelDomain             *string
 	AutoDisableOnDomain     *bool
 	ExpectedRevision        *int64
+	// AuditTx optionally runs inside the same SQLite write transaction after updating panel_access_settings.
+	AuditTx func(ctx context.Context, tx *storage.Tx, next Snapshot, portChanged bool) error
 }
 
+// BindHandle represents a two-phase TCP listener pre-bind returned by PrepareBindFunc.
+// Commit activates serving on the new port after SQLite persistence succeeds;
+// Abort closes the pre-bound listener if persistence fails so no split-brain occurs.
+type BindHandle interface {
+	Commit()
+	Abort()
+}
+
+// PrepareBindFunc pre-binds newListenAddr before persisting the port change.
+type PrepareBindFunc func(newListenAddr string) (BindHandle, error)
+
 // RebindFunc is called by Manager.Update when the operator changes the TCP
-// listening port. Returning a non-nil error aborts the update before saving.
+// listening port and PrepareBind is not configured. Returning a non-nil error
+// aborts the update before saving.
 type RebindFunc func(newListenAddr string) error
 
 // Manager owns the live panel access Snapshot backed by SQLite.
 type Manager struct {
-	db      *storage.DB
-	clock   clock.Clock
-	mu      sync.Mutex
-	snap    atomic.Pointer[Snapshot]
-	rebind  RebindFunc
-	onAllow func(domain string)
+	db           *storage.DB
+	clock        clock.Clock
+	mu           sync.Mutex
+	snap         atomic.Pointer[Snapshot]
+	prepareBind  PrepareBindFunc
+	rebind       RebindFunc
+	onAllow      func(domain string)
+	onPortChange func(port int)
 }
 
 // Options configure a Manager.
 type Options struct {
-	DB          *storage.DB
-	Clock       clock.Clock
-	Bootstrap   config.HTTP
-	Rebind      RebindFunc
-	OnAllowHost func(domain string)
+	DB           *storage.DB
+	Clock        clock.Clock
+	Bootstrap    config.HTTP
+	PrepareBind  PrepareBindFunc
+	Rebind       RebindFunc
+	OnAllowHost  func(domain string)
+	OnPortChange func(port int)
 }
 
 // NewManager loads or seeds panel_access_settings from DB and cfg.HTTP.
@@ -191,10 +247,12 @@ func NewManager(ctx context.Context, opts Options) (*Manager, error) {
 	}
 
 	m := &Manager{
-		db:      opts.DB,
-		clock:   clk,
-		rebind:  opts.Rebind,
-		onAllow: opts.OnAllowHost,
+		db:           opts.DB,
+		clock:        clk,
+		prepareBind:  opts.PrepareBind,
+		rebind:       opts.Rebind,
+		onAllow:      opts.OnAllowHost,
+		onPortChange: opts.OnPortChange,
 	}
 
 	seed := Snapshot{
@@ -218,6 +276,9 @@ func NewManager(ctx context.Context, opts Options) (*Manager, error) {
 		}
 		seed.GateSecret = sec
 		m.snap.Store(&seed)
+		if seed.Port > 0 && m.onPortChange != nil {
+			m.onPortChange(seed.Port)
+		}
 		return m, nil
 	}
 
@@ -228,6 +289,9 @@ func NewManager(ctx context.Context, opts Options) (*Manager, error) {
 	m.snap.Store(&loaded)
 	if loaded.PanelDomain != "" && m.onAllow != nil {
 		m.onAllow(loaded.PanelDomain)
+	}
+	if loaded.Port > 0 && m.onPortChange != nil {
+		m.onPortChange(loaded.Port)
 	}
 	return m, nil
 }
@@ -281,6 +345,13 @@ func ReadEffectiveFromDB(ctx context.Context, db *storage.DB, bootstrap config.H
 	bypassReason = s.DomainAutoBypassReason()
 	effectiveEntryPath = s.EffectiveEntryPath()
 	return
+}
+
+// SetPrepareBind installs the two-phase port pre-bind callback after the HTTP server is wired.
+func (m *Manager) SetPrepareBind(fn PrepareBindFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prepareBind = fn
 }
 
 // SetRebind installs the live port rebind callback after the HTTP server is wired.
@@ -365,10 +436,20 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 	}
 
 	portChanged := next.Port != cur.Port
-	if portChanged && m.rebind != nil {
-		if err := m.rebind(next.ListenAddr()); err != nil {
-			return cur, false, problem.New(problem.StateConflict,
-				"Could not bind new port %d: %v", next.Port, err)
+	var stagedBind BindHandle
+	if portChanged {
+		if m.prepareBind != nil {
+			h, err := m.prepareBind(next.ListenAddr())
+			if err != nil {
+				return cur, false, problem.New(problem.StateConflict,
+					"Could not bind new port %d: %v", next.Port, err)
+			}
+			stagedBind = h
+		} else if m.rebind != nil {
+			if err := m.rebind(next.ListenAddr()); err != nil {
+				return cur, false, problem.New(problem.StateConflict,
+					"Could not bind new port %d: %v", next.Port, err)
+			}
 		}
 	}
 
@@ -389,18 +470,79 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 				next.Port, next.EntryPath, next.Disguise, next.DisguiseHTML,
 				next.PanelDomain, autoInt, next.Revision, storage.FormatTime(next.UpdatedAt),
 			)
-			return uerr
+			if uerr != nil {
+				return uerr
+			}
+			if in.AuditTx != nil {
+				return in.AuditTx(ctx, tx, next, portChanged)
+			}
+			return nil
 		})
 		if err != nil {
+			if stagedBind != nil {
+				stagedBind.Abort()
+			}
 			return cur, false, problem.Wrap(err)
 		}
 	}
 
 	m.snap.Store(&next)
-	if next.PanelDomain != "" && m.onAllow != nil {
+	if stagedBind != nil {
+		stagedBind.Commit()
+	}
+	if m.onAllow != nil {
 		m.onAllow(next.PanelDomain)
 	}
+	if portChanged && m.onPortChange != nil {
+		m.onPortChange(next.Port)
+	}
 	return next, portChanged, nil
+}
+
+// WriteCapabilityPanelPort atomically writes {"port": <n>} to targetPath so
+// qwq-capability's SystemGuard.ManagementPorts() preserves the live panel port.
+func WriteCapabilityPanelPort(targetPath string, port int) error {
+	if targetPath == "" || port < 1 || port > 65535 {
+		return fmt.Errorf("panelaccess: invalid capability panel port target")
+	}
+	raw, err := json.Marshal(struct {
+		Port int `json:"port"`
+	}{Port: port})
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	dir := filepath.Dir(filepath.Clean(targetPath))
+	tmp, err := os.CreateTemp(dir, ".panel-port-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, targetPath); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func loadOrSeed(ctx context.Context, db *storage.DB, seed Snapshot) (Snapshot, error) {

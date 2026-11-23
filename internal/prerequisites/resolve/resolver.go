@@ -55,9 +55,15 @@ func New(options Options) (*Resolver, error) {
 		options.Clock = clock.System{}
 	}
 	if len(options.Recursive) == 0 {
-		options.Recursive = []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("8.8.8.8")}
+		options.Recursive = []netip.Addr{
+			netip.MustParseAddr("223.5.5.5"),
+			netip.MustParseAddr("119.29.29.29"),
+			netip.MustParseAddr("1.1.1.1"),
+			netip.MustParseAddr("2606:4700:4700::1111"),
+			netip.MustParseAddr("2400:3200::1"),
+		}
 	}
-	if len(options.Recursive) < 1 || len(options.Recursive) > 4 {
+	if len(options.Recursive) < 1 || len(options.Recursive) > 8 {
 		return nil, fault.New("VALIDATION_FAILED", "递归 DNS 来源数量无效")
 	}
 	seen := map[netip.Addr]bool{}
@@ -251,14 +257,37 @@ func (r *Resolver) Observe(ctx context.Context, scope dns.Scope, name string, ki
 			}
 			return a.Compare(b)
 		})
-		if err := sample(addresses[0], host, dns.Authoritative); err != nil {
-			return nil, err
+		var lastAuthErr error
+		authOK := false
+		for _, address := range addresses {
+			if err := sample(address, host, dns.Authoritative); err == nil {
+				authOK = true
+				break
+			} else {
+				if fault.Code(err) == "DNS_INVALID_RESPONSE" {
+					return nil, err
+				}
+				lastAuthErr = err
+			}
+		}
+		if !authOK {
+			return nil, lastAuthErr
 		}
 	}
+	var lastRecErr error
+	recOK := 0
 	for _, server := range r.recursive {
-		if err := sample(server, "recursive/"+server.String(), dns.Recursive); err != nil {
-			return nil, err
+		if err := sample(server, "recursive/"+server.String(), dns.Recursive); err == nil {
+			recOK++
+		} else {
+			if fault.Code(err) == "DNS_INVALID_RESPONSE" {
+				return nil, err
+			}
+			lastRecErr = err
 		}
+	}
+	if recOK == 0 {
+		return nil, lastRecErr
 	}
 	return observations, nil
 }

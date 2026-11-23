@@ -17,14 +17,15 @@
       <p id="conn-status">正在通过 MessageChannel 连接宿主插件运行时…</p>
     </div>
     <div class="seg" role="group" aria-label="前后台模式切换">
-      <button type="button" data-mode="admin" aria-pressed="true">探针操作后台</button>
-      <button type="button" data-mode="visitor-preview" aria-pressed="false">展示给外人的前端预览</button>
+      <button type="button" data-mode="admin" aria-pressed="true">节点与域名</button>
+      <button type="button" data-mode="themes" aria-pressed="false">主题与水玻璃</button>
+      <button type="button" data-mode="visitor-preview" aria-pressed="false">访客前端预览</button>
     </div>
   </header>
 
   <section id="admin-pane">
     <article class="card">
-      <div class="head" style="margin-bottom:8px">
+      <div class="head head-sm">
         <div>
           <strong>双轨域名与 HTTPS 绑定中心</strong>
           <p id="dnc-track-hint">正在检测面板 domain.dns 与 tls.certificates 插件状态…</p>
@@ -42,11 +43,14 @@
         </select>
         <button type="button" class="btn berry" id="bind-domain-btn">应用域名绑定</button>
       </div>
+      <div class="snippet-bar" id="proxy-snippet-actions" hidden>
+        <button type="button" class="btn ghost" id="copy-proxy-snippet-btn">复制反代配置</button>
+      </div>
       <pre class="code" id="proxy-snippet-box" hidden></pre>
     </article>
 
     <article class="card">
-      <div class="head" style="margin-bottom:8px">
+      <div class="head head-sm">
         <div>
           <strong>纳管服务器与一键单向 Agent 部署</strong>
           <p>本机已免装 Agent 自动复用 metrics.read:self；外部小鸡使用零入站、零远程执行安全上报。</p>
@@ -62,19 +66,146 @@
         </select>
         <button type="button" class="btn primary" id="add-node-btn">添加节点并生成安装命令</button>
       </div>
+      <div class="snippet-bar" id="install-cmd-actions" hidden>
+        <button type="button" class="btn ghost" id="copy-install-cmd-btn">复制安装命令</button>
+      </div>
       <pre class="code" id="install-cmd-box" hidden></pre>
       <div class="grid" id="admin-nodes-grid"></div>
     </article>
   </section>
 
+  <!-- 主题中心与动态透明水玻璃工作台 -->
+  <section id="themes-pane" hidden>
+    <article class="card">
+      <div class="head head-sm">
+        <div>
+          <strong>主题中心（可插拔前台风格 · 后台 /admin 永久隔离）</strong>
+          <p>内置经典暖润卡片与动态透明水玻璃，支持拖拽 <code>.qwqtheme.zip</code> 或 HTTPS 链接安装第三方前台主题。</p>
+        </div>
+        <button type="button" class="btn ghost" id="panel-starter-zip-btn">下载官方主题模板 .zip</button>
+      </div>
+      <div class="grid" id="panel-theme-grid"></div>
+
+      <div id="panel-theme-settings-wrap" class="sub-box" hidden>
+        <div class="head head-sm">
+          <div>
+            <strong>当前主题专属配置</strong>
+            <p>由主题包 <code>theme.json</code> 的 <code>settings_schema</code> 自动生成</p>
+          </div>
+          <button type="button" class="btn primary" id="panel-save-ts-btn">保存主题参数</button>
+        </div>
+        <div class="field-row" id="panel-theme-settings-form"></div>
+      </div>
+
+      <div class="install-grid">
+        <div id="panel-theme-dropzone" class="dropzone" tabindex="0" role="button" aria-label="上传主题压缩包">
+          <strong>拖拽 .qwqtheme.zip 到此或点击选择</strong>
+          <span>上限 16 MiB · 仅允许静态前端资源 · 严格防穿越校验</span>
+          <input id="panel-theme-file" type="file" accept=".zip,.qwqtheme.zip" hidden>
+        </div>
+        <div class="url-box">
+          <input id="panel-theme-url" type="url" placeholder="HTTPS 主题包链接：https://.../theme.qwqtheme.zip">
+          <button type="button" class="btn berry" id="panel-theme-url-btn">从 HTTPS URL 一键安装主题</button>
+        </div>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="head head-sm">
+        <div>
+          <strong>动态透明水玻璃（Liquid Glass）与 Canvas 智能背景优化</strong>
+          <p>浏览器本地自动缩放到 ≤ 1920px、计算亮度推荐玻璃色调、转码 WebP/JPEG 并生成 32px LQIP 零闪烁占位图。</p>
+        </div>
+        <div class="btn-group">
+          <button type="button" class="btn ghost" id="panel-clear-bg-btn">一键清除背景</button>
+          <button type="button" class="btn primary" id="panel-use-glass-btn">启用水玻璃风格</button>
+        </div>
+      </div>
+
+      <div class="bg-grid">
+        <div class="bg-col">
+          <div id="panel-bg-dropzone" class="dropzone" tabindex="0" role="button" aria-label="上传背景图片">
+            <strong>拖拽或选择任意壁纸图片（JPG / PNG / WebP）</strong>
+            <span>支持 4K 大图，本地转码约 150~400 KB，保护 1C1G 小鸡内存与带宽</span>
+            <input id="panel-bg-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+          </div>
+          <div id="panel-bg-badge" class="badge-box" hidden></div>
+          <div class="inline-row">
+            <input id="panel-bg-url" type="url" placeholder="或输入外链 HTTPS 背景图 URL">
+            <button type="button" class="btn ghost" id="panel-bg-url-btn">应用外链</button>
+          </div>
+        </div>
+
+        <div class="bg-col">
+          <div class="preview-frame" id="panel-preview-frame" data-tint="dark">
+            <img id="panel-bg-preview" class="bg-preview-img" data-fx="50" data-fy="50" alt="壁纸焦点预览" hidden>
+            <div class="preview-chip">
+              <strong>[HK] 香港 CN2 GIA</strong>
+              <span>CPU 16.2% · 99.99% SLA</span>
+            </div>
+          </div>
+          <div class="focal-row">
+            <span>9 宫格构图焦点</span>
+            <div class="focal-grid" id="panel-focal-grid" role="group" aria-label="九宫格焦点">
+              <button type="button" class="focal-dot" data-fx="0" data-fy="0" title="左上"></button>
+              <button type="button" class="focal-dot" data-fx="50" data-fy="0" title="中上"></button>
+              <button type="button" class="focal-dot" data-fx="100" data-fy="0" title="右上"></button>
+              <button type="button" class="focal-dot" data-fx="0" data-fy="50" title="左中"></button>
+              <button type="button" class="focal-dot active" data-fx="50" data-fy="50" title="居中"></button>
+              <button type="button" class="focal-dot" data-fx="100" data-fy="50" title="右中"></button>
+              <button type="button" class="focal-dot" data-fx="0" data-fy="100" title="左下"></button>
+              <button type="button" class="focal-dot" data-fx="50" data-fy="100" title="中下"></button>
+              <button type="button" class="focal-dot" data-fx="100" data-fy="100" title="右下"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sliders-grid">
+        <label class="slider-item">
+          <span>玻璃透明度 <strong id="p-val-opacity">26%</strong></span>
+          <input id="p-opt-opacity" type="range" min="8" max="85" step="1" value="26">
+        </label>
+        <label class="slider-item">
+          <span>磨砂模糊度 <strong id="p-val-blur">20px</strong></span>
+          <input id="p-opt-blur" type="range" min="0" max="40" step="1" value="20">
+        </label>
+        <label class="slider-item">
+          <span>护眼遮罩 <strong id="p-val-veil">22%</strong></span>
+          <input id="p-opt-veil" type="range" min="0" max="75" step="1" value="22">
+        </label>
+        <label class="slider-item">
+          <span>玻璃色调</span>
+          <select id="p-opt-tint">
+            <option value="auto">自动（按壁纸亮度推荐）</option>
+            <option value="light">浅冰玻璃（Light）</option>
+            <option value="dark">深曜玻璃（Dark）</option>
+          </select>
+        </label>
+        <label class="slider-item check-item">
+          <input id="p-opt-motion" type="checkbox" checked>
+          <span>开启动态光效与悬浮高光</span>
+        </label>
+      </div>
+
+      <div class="css-wrap">
+        <label for="p-opt-css">自定义 CSS（可选，上限 16 KiB，仅作用于公开探针页）</label>
+        <textarea id="p-opt-css" rows="3" placeholder="/* 例：.card { border-radius: 26px; } */"></textarea>
+      </div>
+      <div class="snippet-bar">
+        <button type="button" class="btn berry" id="panel-save-appearance-btn">保存水玻璃外观配置</button>
+      </div>
+    </article>
+  </section>
+
   <section id="visitor-pane" hidden>
     <article class="card">
-      <div class="head" style="margin-bottom:10px">
+      <div class="head head-md">
         <div>
           <strong id="preview-title">qwq Probe · 全球服务器实时探针</strong>
           <p>当前为【外人实际可见脱敏视图】——真实 IP、SSH 备注与节点密钥已物理剥离</p>
         </div>
-        <span class="badge">All Systems Operational</span>
+        <span class="badge" id="preview-style-badge">Classic</span>
       </div>
       <div class="grid" id="visitor-nodes-grid"></div>
     </article>

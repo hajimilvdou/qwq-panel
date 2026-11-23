@@ -78,17 +78,22 @@ export default defineConfig({
     target: 'es2022',
     /* 字体与图片一律输出为文件：CSP 的 font-src 不允许 data: */
     assetsInlineLimit: 0,
+    modulePreload: { polyfill: false },
     sourcemap: false,
     /* .vite/manifest.json：postbuild 据此计算首屏预算，读完即删，不随产物发布 */
     manifest: true,
     reportCompressedSize: false,
     chunkSizeWarningLimit: 400,
-    /* 单一 CSS（gzip 后约 20 KiB）：按 chunk 拆成几十个小文件时，每个都要单独压缩与请求，总量反而更大 */
-    cssCodeSplit: false,
+    /* 按 chunk 拆分 CSS，避免首屏携带全部二级页面的样式 */
+    cssCodeSplit: true,
     rollupOptions: {
-      /* $ui 是纯 re-export 桶文件：声明无副作用，打包器才会把各组件分给真正用到它的 chunk，
-         而不是整桶塞进首屏 */
-      treeshake: { moduleSideEffects: (id: string) => !id.endsWith('/shell/src/ui/index.ts') },
+      /* $ui 与 endpoints 是纯 re-export 桶文件：声明无副作用（兼容 Windows 反斜杠路径），打包器才会把各模块分给真正用到它的 chunk */
+      treeshake: {
+        moduleSideEffects: (id: string) => {
+          const norm = id.replace(/\\/g, '/');
+          return !norm.endsWith('/shell/src/ui/index.ts') && !norm.endsWith('/shell/src/api/endpoints.ts');
+        },
+      },
     },
   },
 });

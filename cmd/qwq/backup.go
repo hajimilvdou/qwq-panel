@@ -56,13 +56,14 @@ const (
 	archiveConfig     = "config/qwq.json"
 	archiveDataPrefix = "data/"
 	maxManifestBytes  = 4 << 20
+	maxRestoreBytes   = 4 << 30 // 4 GiB total decompressed archive budget
 	restoreStaging    = ".restore-tmp"
 	restoreOld        = ".restore-old"
 )
 
 // backupItems 是数据目录中纳入备份、恢复时整体替换的条目。backups/ 与
 // staging/ 不在其列：前者是备份本身，后者是安装过程的暂存。
-var backupItems = []string{backupDBName, "keys", "tls", "acme", "plugin-state"}
+var backupItems = []string{backupDBName, "keys", "tls", "acme", "cluster", "trust", "plugin-state", "qwq-cn-rules.bundle"}
 
 // backupManifest 是归档内 manifest.json 的内容。
 type backupManifest struct {
@@ -185,8 +186,24 @@ func writeBackup(ctx context.Context, dataDir string, rawConfig []byte, outDir s
 			return err
 		}
 		for _, item := range backupItems[1:] {
-			if err := a.addTree(archiveDataPrefix+item, filepath.Join(dataDir, item)); err != nil {
-				return err
+			full := filepath.Join(dataDir, item)
+			fi, serr := os.Lstat(full)
+			if errors.Is(serr, fs.ErrNotExist) {
+				continue
+			}
+			if serr != nil {
+				return serr
+			}
+			if fi.Mode().IsRegular() {
+				if err := a.addFile(archiveDataPrefix+item, full); err != nil {
+					return err
+				}
+				continue
+			}
+			if fi.IsDir() {
+				if err := a.addTree(archiveDataPrefix+item, full); err != nil {
+					return err
+				}
 			}
 		}
 		if err := a.add(archiveConfig, 0o640, int64(len(rawConfig)), bytes.NewReader(rawConfig)); err != nil {
@@ -463,6 +480,7 @@ func extractBackup(archive string, staging *os.Root) (backupManifest, error) {
 	tr := tar.NewReader(gz)
 	got := map[string]string{}
 	haveManifest := false
+	var totalBytes int64
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -484,10 +502,15 @@ func extractBackup(archive string, staging *os.Root) (backupManifest, error) {
 		if _, dup := got[hdr.Name]; dup {
 			return m, fmt.Errorf("duplicate archive entry %q", hdr.Name)
 		}
-		sum, err := extractFile(staging, hdr.Name, tr, fs.FileMode(hdr.Mode).Perm())
+		remaining := maxRestoreBytes - totalBytes
+		if remaining < 0 || hdr.Size < 0 || hdr.Size > remaining {
+			return m, fmt.Errorf("backup archive exceeds maximum extraction size (%d bytes)", maxRestoreBytes)
+		}
+		sum, n, err := extractFile(staging, hdr.Name, tr, fs.FileMode(hdr.Mode).Perm()&0o700, remaining)
 		if err != nil {
 			return m, fmt.Errorf("%s: %w", hdr.Name, err)
 		}
+		totalBytes += n
 		got[hdr.Name] = sum
 	}
 	switch {
@@ -522,23 +545,30 @@ func validArchivePath(name string) bool {
 		return false
 	}
 	item, sub, nested := strings.Cut(rest, "/")
-	if item == backupDBName {
+	if item == backupDBName || item == "qwq-cn-rules.bundle" {
 		return !nested
 	}
 	return nested && sub != "" && slices.Contains(backupItems[1:], item)
 }
 
-// extractFile 把 r 写成 staging 下的新文件 name（不覆盖已有文件），返回其 sha256。
-func extractFile(staging *os.Root, name string, r io.Reader, mode fs.FileMode) (string, error) {
+// extractFile 把 r 写成 staging 下的新文件 name（不覆盖已有文件），返回其 sha256 与写入字节数。
+func extractFile(staging *os.Root, name string, r io.Reader, mode fs.FileMode, maxBytes int64) (string, int64, error) {
+	mode = mode.Perm() & 0o700
+	if mode&0o600 == 0 {
+		mode |= 0o600
+	}
 	if err := staging.MkdirAll(path.Dir(name), 0o700); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	out, err := staging.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	h := sha256.New()
-	_, err = io.Copy(io.MultiWriter(out, h), r)
+	n, err := io.Copy(io.MultiWriter(out, h), io.LimitReader(r, maxBytes+1))
+	if err == nil && n > maxBytes {
+		err = fmt.Errorf("backup archive exceeds maximum extraction size (%d bytes)", maxRestoreBytes)
+	}
 	if err == nil {
 		err = out.Sync()
 	}
@@ -548,7 +578,7 @@ func extractFile(staging *os.Root, name string, r io.Reader, mode fs.FileMode) (
 	if err == nil {
 		err = staging.Chmod(name, mode)
 	}
-	return hex.EncodeToString(h.Sum(nil)), err
+	return hex.EncodeToString(h.Sum(nil)), n, err
 }
 
 // replaceConfig 原子替换配置文件，保留现有文件的属主与权限；不存在时

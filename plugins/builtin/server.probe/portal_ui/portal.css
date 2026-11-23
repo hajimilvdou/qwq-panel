@@ -9,7 +9,28 @@
   --cocoa: #6b4c3b;
   --berry: #b83b6a;
   --jade: #1e9c8b;
+  --amber: #d99422;
+  --brick: #c53b31;
+  --accent: #b83b6a;
+
+  /* 动态透明水玻璃光学变量（由 portal.js 实时注入） */
+  --glass-opacity: 0.26;
+  --glass-blur: 20px;
+  --veil-opacity: 0.22;
+  --bg-fx: 50%;
+  --bg-fy: 50%;
+  --glass-rgb: 255, 255, 255;
+  --glass-border: rgba(255, 255, 255, 0.42);
+  --glass-highlight: rgba(255, 255, 255, 0.55);
+  --glass-shadow: 0 12px 34px rgba(15, 23, 42, 0.14);
+  --chip-bg: rgba(255, 255, 255, 0.46);
+  --chip-border: rgba(255, 255, 255, 0.48);
+  --veil-rgb: 245, 248, 255;
+  --text-shadow: none;
+  --mx: 50%;
+  --my: 50%;
 }
+
 [data-theme="dark"] {
   --bg: #151210;
   --surface: #1e1a17;
@@ -20,45 +41,498 @@
   --cocoa: #9d755d;
   --berry: #e05d8e;
   --jade: #32c2ae;
+  --amber: #ebb044;
+  --brick: #ef6b61;
 }
+
+/* ===== Liquid Glass 色调变量（浅冰 / 深曜自动或手动适配） ===== */
+[data-style="liquid-glass"][data-glass-tint="light"] {
+  --glass-rgb: 255, 255, 255;
+  --glass-border: rgba(255, 255, 255, 0.52);
+  --glass-highlight: rgba(255, 255, 255, 0.72);
+  --glass-shadow: 0 14px 36px rgba(15, 23, 42, 0.13);
+  --chip-bg: rgba(255, 255, 255, 0.58);
+  --chip-border: rgba(255, 255, 255, 0.62);
+  --veil-rgb: 244, 248, 255;
+  --text: #101828;
+  --text-2: #344054;
+  --surface-2: rgba(255, 255, 255, 0.56);
+  --line: rgba(255, 255, 255, 0.46);
+  --text-shadow: 0 1px 2px rgba(255, 255, 255, 0.65);
+}
+
+[data-style="liquid-glass"][data-glass-tint="dark"] {
+  --glass-rgb: 15, 23, 42;
+  --glass-border: rgba(255, 255, 255, 0.22);
+  --glass-highlight: rgba(255, 255, 255, 0.34);
+  --glass-shadow: 0 16px 40px rgba(2, 6, 23, 0.42);
+  --chip-bg: rgba(15, 23, 42, 0.48);
+  --chip-border: rgba(255, 255, 255, 0.18);
+  --veil-rgb: 8, 13, 28;
+  --text: #f8fafc;
+  --text-2: #cbd5e1;
+  --surface-2: rgba(15, 23, 42, 0.52);
+  --line: rgba(255, 255, 255, 0.2);
+  --jade: #4ade80;
+  --amber: #fbbf24;
+  --brick: #fb7185;
+  --text-shadow: 0 1px 3px rgba(2, 6, 23, 0.55);
+}
+
 * { box-sizing: border-box; }
+
 body {
   margin: 0;
+  min-height: 100vh;
   background: var(--bg);
   color: var(--text);
   font-family: "Segoe UI Variable Text", -apple-system, "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
-.wrap { max-width: 1180px; margin: 0 auto; padding: 24px 18px 48px; }
+
+/* ===== 光学背景层（Classic 隐藏，Liquid Glass 开启） ===== */
+.bg-stage, .bg-veil, .bg-caustic {
+  display: none;
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+[data-style="liquid-glass"] .bg-stage,
+[data-style="liquid-glass"] .bg-veil,
+[data-style="liquid-glass"] .bg-caustic {
+  display: block;
+}
+
+.bg-stage {
+  z-index: -3;
+  overflow: hidden;
+  background: #0b1224;
+}
+
+.aurora-layer {
+  position: absolute;
+  inset: -18%;
+  background:
+    radial-gradient(45% 45% at 18% 22%, rgba(56, 189, 248, 0.72), transparent 68%),
+    radial-gradient(50% 50% at 82% 24%, rgba(168, 85, 247, 0.65), transparent 70%),
+    radial-gradient(48% 52% at 62% 84%, rgba(45, 212, 191, 0.58), transparent 68%),
+    radial-gradient(42% 42% at 24% 82%, rgba(244, 114, 182, 0.52), transparent 66%),
+    linear-gradient(135deg, #0f172a 0%, #172554 50%, #0f172a 100%);
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+  animation: auroraDrift 22s ease-in-out infinite alternate;
+}
+
+[data-glass-tint="light"] .aurora-layer {
+  background:
+    radial-gradient(45% 45% at 18% 22%, rgba(56, 189, 248, 0.48), transparent 68%),
+    radial-gradient(50% 50% at 82% 24%, rgba(192, 132, 252, 0.44), transparent 70%),
+    radial-gradient(48% 52% at 62% 84%, rgba(94, 234, 212, 0.45), transparent 68%),
+    radial-gradient(42% 42% at 24% 82%, rgba(251, 182, 206, 0.46), transparent 66%),
+    linear-gradient(135deg, #e0f2fe 0%, #f5f3ff 52%, #ecfeff 100%);
+}
+
+@keyframes auroraDrift {
+  0% { transform: translate3d(-2%, -1.5%, 0) scale(1.02); }
+  50% { transform: translate3d(2%, 1.5%, 0) scale(1.06); }
+  100% { transform: translate3d(-1%, 2%, 0) scale(1.03); }
+}
+
+.bg-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: var(--bg-fx) var(--bg-fy);
+}
+
+.bg-lqip {
+  filter: blur(22px) saturate(130%);
+  transform: scale(1.08);
+  opacity: 1;
+  transition: opacity 0.4s ease;
+}
+
+.bg-hd {
+  opacity: 0;
+  transition: opacity 0.42s ease;
+}
+
+.bg-hd.is-loaded {
+  opacity: 1;
+}
+
+.bg-veil {
+  z-index: -2;
+  background: rgba(var(--veil-rgb), var(--veil-opacity));
+}
+
+.bg-caustic {
+  z-index: -1;
+  opacity: 0.45;
+  background:
+    radial-gradient(520px circle at 20% 10%, rgba(255, 255, 255, 0.24), transparent 62%),
+    radial-gradient(460px circle at 84% 78%, rgba(56, 189, 248, 0.18), transparent 60%);
+  animation: causticFloat 16s ease-in-out infinite alternate;
+}
+
+@keyframes causticFloat {
+  0% { transform: translate3d(0, 0, 0); }
+  100% { transform: translate3d(18px, -14px, 0); }
+}
+
+[data-motion="off"] .aurora-layer,
+[data-motion="off"] .bg-caustic {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-layer, .bg-caustic { animation: none; }
+}
+
+/* ===== 主体布局与水玻璃表面 ===== */
+.wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 18px 56px;
+}
+
 .topbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
-  padding: 14px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 26px;
+  margin-bottom: 18px;
 }
+
+.brand-group {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.site-title { font-size: 16.5px; letter-spacing: -0.01em; }
+.site-sub { font-size: 12.5px; color: var(--text-2); }
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .pill {
-  height: 32px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line);
-  background: var(--surface-2); color: var(--text); font-size: 12.5px; font-weight: 600; cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 0.15s ease, background-color 0.2s ease;
 }
+
+.pill:hover { transform: translateY(-1px); }
 .pill.active { background: var(--cocoa); color: #fff; border-color: transparent; }
-.pill.berry { background: var(--berry); color: #fff; border-color: transparent; }
+.pill.berry { background: var(--accent, var(--berry)); color: #fff; border-color: transparent; }
+
 .banner {
-  padding: 12px 18px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line);
-  display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; font-size: 13.5px;
+  padding: 12px 18px;
+  border-radius: 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  font-size: 13.5px;
 }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 18px; }
-.sla-bar { display: grid; grid-template-columns: repeat(45, 1fr); gap: 2px; margin-top: 10px; }
-.sla-bar i { display: block; height: 14px; border-radius: 3px; background: var(--jade); }
+
+.banner-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 500;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--jade);
+  box-shadow: 0 0 0 4px rgba(30, 156, 139, 0.2);
+}
+
+.banner[data-level="degraded"] .status-dot { background: var(--amber); }
+.banner[data-level="maintenance"] .status-dot { background: var(--berry); }
+
+.fleet-summary {
+  font-size: 12.5px;
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.cards.compact-list {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.card {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 18px;
+  transition: transform 0.18s ease, box-shadow 0.2s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+}
+
+/* Liquid Glass 光学卡片质感 */
+[data-style="liquid-glass"] .glass-surface,
+[data-style="liquid-glass"] .card {
+  background: rgba(var(--glass-rgb), var(--glass-opacity));
+  backdrop-filter: blur(var(--glass-blur)) saturate(170%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(170%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
+  text-shadow: var(--text-shadow);
+}
+
+[data-style="liquid-glass"][data-motion="on"] .card::after,
+[data-style="liquid-glass"][data-motion="on"] .topbar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: radial-gradient(280px circle at var(--mx) var(--my), rgba(255, 255, 255, 0.22), transparent 62%);
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+
+[data-style="liquid-glass"][data-motion="on"] .card:hover::after,
+[data-style="liquid-glass"][data-motion="on"] .topbar:hover::after {
+  opacity: 1;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.node-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.region-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 7px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.state-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: rgba(30, 156, 139, 0.16);
+  color: var(--jade);
+}
+
+.state-pill.offline {
+  background: rgba(239, 107, 97, 0.18);
+  color: var(--brick);
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cards.compact-list .metric-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.metric-chip {
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+[data-style="liquid-glass"] .metric-chip {
+  background: var(--chip-bg);
+  border-color: var(--chip-border);
+}
+
+.metric-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-2);
+  margin-bottom: 2px;
+}
+
+.metric-val {
+  font-size: 13.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.node-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.sla-bar {
+  display: grid;
+  grid-template-columns: repeat(45, 1fr);
+  gap: 2px;
+  margin-top: 10px;
+}
+
+.sla-bar i {
+  display: block;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--jade);
+  opacity: 0.88;
+}
+
+.sla-bar i.sla-warn { background: var(--amber); }
+.sla-bar i.sla-down { background: var(--brick); }
+.sla-bar i.sla-empty { background: var(--line); opacity: 0.55; }
+
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+/* 极客 TTY 视图 */
 .tty {
-  background: #131110; color: #e7f6ee; border-radius: 18px; padding: 18px;
-  font-family: Consolas, "Cascadia Code", monospace; font-size: 13px; line-height: 1.55;
+  background: #11151b;
+  color: #e7f6ee;
+  border-radius: 20px;
+  padding: 18px;
+  font-family: Consolas, "Cascadia Code", monospace;
+  font-size: 13px;
+  line-height: 1.55;
 }
+
+.tty-output {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+}
+
+.tty-prompt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .tty input {
-  background: transparent; border: 0; color: #6de2d1; font: inherit; outline: none; width: 75%;
+  background: transparent;
+  border: 0;
+  color: #6de2d1;
+  font: inherit;
+  outline: none;
+  flex: 1;
 }
+
+/* 访客锁屏弹窗 */
 .modal-mask {
-  position: fixed; inset: 0; background: rgba(24, 16, 12, 0.45); display: grid; place-items: center; padding: 16px;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(15, 23, 42, 0.52);
+  backdrop-filter: blur(8px);
+  display: grid;
+  place-items: center;
+  padding: 16px;
 }
+
 .modal-mask[hidden] { display: none; }
-.modal { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 22px; width: min(460px, 100%); }
-.modal input, .card input, .card select {
-  width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); margin: 6px 0;
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 24px;
+  width: min(440px, 100%);
+}
+
+.modal-title { margin: 0 0 6px; font-size: 18px; }
+.modal-desc { margin: 0 0 14px; font-size: 13px; color: var(--text-2); }
+.modal-err { margin: 6px 0 0; font-size: 12.5px; color: var(--brick); }
+
+.modal input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+@media (max-width: 640px) {
+  .cards { grid-template-columns: 1fr; }
+  .cards.compact-list .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

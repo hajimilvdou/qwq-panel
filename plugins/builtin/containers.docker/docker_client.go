@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,9 +25,93 @@ const (
 	defaultDockerSocket = "/var/run/docker.sock"
 	dockerAPIVersion    = "v1.41"
 	maxLogBytes         = 64 * 1024
+	maxLogStreamRead    = 8 * 1024 * 1024
 	maxLogLines         = 500
 	maxRespBytes        = 4 * 1024 * 1024
 )
+
+// tailRingBuffer 是一个并发安全的固定容量环形尾部缓冲区（默认 64 KiB），
+// 既可防止镜像拉取/大日志流撑爆 1C1G 内存，又能确保始终保留最新的崩溃尾部而非最早头部。
+type tailRingBuffer struct {
+	mu        sync.Mutex
+	buf       []byte
+	cap       int
+	writePos  int
+	full      bool
+	truncated bool
+}
+
+func newTailRingBuffer(capacity int) *tailRingBuffer {
+	if capacity <= 0 {
+		capacity = maxLogBytes
+	}
+	return &tailRingBuffer{
+		buf: make([]byte, capacity),
+		cap: capacity,
+	}
+}
+
+func (r *tailRingBuffer) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := len(p)
+	if n == 0 {
+		return 0, nil
+	}
+	if n >= r.cap {
+		if n > r.cap || r.full || r.writePos > 0 {
+			r.truncated = true
+		}
+		copy(r.buf, p[n-r.cap:])
+		r.writePos = 0
+		r.full = true
+		return n, nil
+	}
+	if r.full {
+		r.truncated = true
+	}
+	rem := r.cap - r.writePos
+	if n <= rem {
+		copy(r.buf[r.writePos:], p)
+		r.writePos += n
+		if r.writePos == r.cap {
+			r.writePos = 0
+			r.full = true
+		}
+		return n, nil
+	}
+	copy(r.buf[r.writePos:], p[:rem])
+	copy(r.buf[0:], p[rem:])
+	r.writePos = n - rem
+	r.full = true
+	r.truncated = true
+	return n, nil
+}
+
+func (r *tailRingBuffer) Bytes() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.full {
+		out := make([]byte, r.writePos)
+		copy(out, r.buf[:r.writePos])
+		return out
+	}
+	out := make([]byte, r.cap)
+	tailLen := r.cap - r.writePos
+	copy(out, r.buf[r.writePos:])
+	copy(out[tailLen:], r.buf[:r.writePos])
+	return out
+}
+
+func (r *tailRingBuffer) String() string {
+	return string(r.Bytes())
+}
+
+func (r *tailRingBuffer) Truncated() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.truncated
+}
 
 var containerIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
@@ -330,42 +415,66 @@ func (c *dockerClient) containerLogs(ctx context.Context, id string, tail int) (
 		return "", false, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxLogBytes+1))
-	if err != nil {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errRaw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", false, fmt.Errorf("docker logs %d: %s", resp.StatusCode, strings.TrimSpace(string(errRaw)))
+	}
+	ring := newTailRingBuffer(maxLogBytes)
+	if err := demuxDockerStreamToRing(io.LimitReader(resp.Body, maxLogStreamRead), ring); err != nil {
 		return "", false, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", false, fmt.Errorf("docker logs %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-	truncated := len(raw) > maxLogBytes
-	if truncated {
-		raw = raw[:maxLogBytes]
-	}
-	return demuxDockerStream(raw), truncated, nil
+	return ring.String(), ring.Truncated(), nil
 }
 
-// demuxDockerStream 解析 Docker Engine 8 字节多路复用日志帧（若为 TTY 纯文本流则原样返回）。
-func demuxDockerStream(raw []byte) string {
-	if len(raw) < 8 || (raw[0] != 1 && raw[0] != 2) || raw[1] != 0 || raw[2] != 0 || raw[3] != 0 {
-		return string(raw)
+// demuxDockerStreamToRing 流式解析 Docker Engine 8 字节多路复用日志帧并写入 64 KiB 环形尾部缓冲区；
+// 若为 TTY 纯文本流则直接流式写入环形缓冲区，确保保留最新日志尾部且内存恒定有界。
+func demuxDockerStreamToRing(r io.Reader, ring *tailRingBuffer) error {
+	var first [8]byte
+	n, err := io.ReadFull(r, first[:])
+	if err == io.EOF {
+		return nil
 	}
-	var out bytes.Buffer
-	pos := 0
-	for pos+8 <= len(raw) {
-		streamType := raw[pos]
-		if (streamType != 1 && streamType != 2) || raw[pos+1] != 0 || raw[pos+2] != 0 || raw[pos+3] != 0 {
-			return string(raw)
-		}
-		sz := int(binary.BigEndian.Uint32(raw[pos+4 : pos+8]))
-		pos += 8
-		if sz < 0 || pos+sz > len(raw) {
-			out.Write(raw[pos:])
-			break
-		}
-		out.Write(raw[pos : pos+sz])
-		pos += sz
+	if err == io.ErrUnexpectedEOF {
+		_, _ = ring.Write(first[:n])
+		return nil
 	}
-	return out.String()
+	if err != nil {
+		return err
+	}
+	isMux := (first[0] == 1 || first[0] == 2) && first[1] == 0 && first[2] == 0 && first[3] == 0
+	if !isMux {
+		_, _ = ring.Write(first[:n])
+		_, err = io.Copy(ring, r)
+		return err
+	}
+	hdr := first
+	for {
+		sz := int64(binary.BigEndian.Uint32(hdr[4:8]))
+		if sz > 0 {
+			if _, err := io.CopyN(ring, r, sz); err != nil {
+				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+					return nil
+				}
+				return err
+			}
+		}
+		n, err := io.ReadFull(r, hdr[:])
+		if err == io.EOF {
+			return nil
+		}
+		if err == io.ErrUnexpectedEOF {
+			_, _ = ring.Write(hdr[:n])
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if (hdr[0] != 1 && hdr[0] != 2) || hdr[1] != 0 || hdr[2] != 0 || hdr[3] != 0 {
+			_, _ = ring.Write(hdr[:n])
+			_, err = io.Copy(ring, r)
+			return err
+		}
+	}
 }
 
 func (c *dockerClient) containerAction(ctx context.Context, id, action string) error {

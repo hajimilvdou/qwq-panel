@@ -115,9 +115,11 @@ func (i *instance) runBanCycle(ctx context.Context) {
 
 	// 第 4 步：有候选封禁源时读取当前集合，超 4096 上限前先按最早过期裁剪再下发 ApplyBans。
 	activeCount := i.readBanCountBestEffort(ctx, host)
+	applyOK := true
 	if len(candidates) > 0 {
 		appliedCount, applyErr := i.applyCandidateBans(ctx, host, candidates, cfg.BanTTLSeconds)
 		if applyErr != nil {
+			applyOK = false
 			i.setBanError(applyErr.Error())
 		} else {
 			activeCount = appliedCount
@@ -125,9 +127,11 @@ func (i *instance) runBanCycle(ctx context.Context) {
 		}
 	}
 
-	// 第 5 步：更新游标与首页安全概览缓存。
-	if nextCur := strings.TrimSpace(scanResp.GetNextCursor()); nextCur != "" && nextCur != cursor {
-		i.saveBanCursor(ctx, host, nextCur)
+	// 第 5 步：仅在封禁下发成功（applyOK）后才推进游标，防止短暂失败永久丢失爆破事件。
+	if applyOK {
+		if nextCur := strings.TrimSpace(scanResp.GetNextCursor()); nextCur != "" && nextCur != cursor {
+			i.saveBanCursor(ctx, host, nextCur)
+		}
 	}
 	i.persistOverview(ctx, host, activeCount, false, activeConflicts)
 }

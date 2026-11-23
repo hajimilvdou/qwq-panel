@@ -22,6 +22,9 @@ type peerHandle struct {
 // close releases nothing on this platform.
 func (h *peerHandle) close() {}
 
+// verifyAlive is a no-op on non-Linux platforms where readPeerCredentials fails.
+func (h *peerHandle) verifyAlive() error { return nil }
+
 // readPeerCredentials fails: a host socket without kernel-verified peer
 // identity would accept every local process.
 func readPeerCredentials(net.Conn) (*peerHandle, error) {

@@ -90,9 +90,11 @@ func TestBanScanApplyListRemoveAndProtectedIPGuard(t *testing.T) {
 		v4: make(map[string]uint32),
 		v6: make(map[string]uint32),
 		journal: strings.Join([]string{
-			`{"__CURSOR":"cur-1","__REALTIME_TIMESTAMP":"1795265100000000","MESSAGE":"Failed password for invalid user admin from 203.0.113.10 port 44123 ssh2"}`,
-			`{"__CURSOR":"cur-2","__REALTIME_TIMESTAMP":"1795265105000000","MESSAGE":"Failed password for invalid user admin from 203.0.113.10 port 44124 ssh2"}`,
-			`{"__CURSOR":"cur-3","__REALTIME_TIMESTAMP":"1795265110000000","MESSAGE":"Invalid user root from 2001:db8::99 port 51234"}`,
+			`{"__CURSOR":"cur-1","__REALTIME_TIMESTAMP":"1795265100000000","SYSLOG_IDENTIFIER":"sshd","_UID":"0","MESSAGE":"Failed password for invalid user admin from 203.0.113.10 port 44123 ssh2"}`,
+			`{"__CURSOR":"cur-2","__REALTIME_TIMESTAMP":"1795265105000000","SYSLOG_IDENTIFIER":"sshd","_UID":"0","MESSAGE":"Failed password for invalid user admin from 203.0.113.10 port 44124 ssh2"}`,
+			`{"__CURSOR":"cur-2b","__REALTIME_TIMESTAMP":"1795265106000000","SYSLOG_IDENTIFIER":"logger","_UID":"1000","MESSAGE":"Failed password for invalid user root from 198.51.100.250 port 1234 ssh2"}`,
+			`{"__CURSOR":"cur-2c","__REALTIME_TIMESTAMP":"1795265107000000","SYSLOG_IDENTIFIER":"sshd","_UID":"0","MESSAGE":"pam_unix(sshd:auth): Invalid user fake from 198.51.100.251 port 2222"}`,
+			`{"__CURSOR":"cur-3","__REALTIME_TIMESTAMP":"1795265110000000","SYSLOG_IDENTIFIER":"sshd","_UID":"0","MESSAGE":"Invalid user root from 2001:db8::99 port 51234"}`,
 		}, "\n"),
 	}
 	svc := NewService()

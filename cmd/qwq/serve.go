@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/qwq-panel/qwq/internal/platform/config"
 	"github.com/qwq-panel/qwq/internal/platform/logging"
 	"github.com/qwq-panel/qwq/internal/pluginhost/install"
+	"github.com/qwq-panel/qwq/internal/pluginhost/trust"
 	"github.com/qwq-panel/qwq/internal/pluginhost/updater"
 	"github.com/qwq-panel/qwq/internal/pluginpublic"
 	"github.com/qwq-panel/qwq/internal/pluginui"
@@ -143,10 +145,19 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// Build the dynamic composite publisher trust root combining read-only
+	// official keys (--trust-dir) with administrator-managed developer keys
+	// (<DataDir>/trust/publishers) so keys added in Web UI take effect immediately.
+	trustStore := trust.NewCompositeTrustStore(
+		filepath.Clean(*trustDir),
+		filepath.Join(c.Config().DataDir, "trust", "publishers"),
+		c.Clock(),
+	)
+
 	// The updater needs the open database, so it is built after the controller
 	// and installed with SetUpdater. Recover runs before requests are served:
 	// it resolves unfinished sagas and republishes the routes.
-	up, err := newUpdater(c, *pluginsDir, *trustDir, *stagingDir, helper, logger)
+	up, err := newUpdater(c, *pluginsDir, *trustDir, *stagingDir, trustStore, helper, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "qwq serve-controller: %v\n", err)
 		return 1
@@ -196,16 +207,29 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		DB:          c.DB(),
 		Clock:       c.Clock(),
 		Bootstrap:   cfg.HTTP,
-		OnAllowHost: c.Gateway().AllowHost,
+		OnAllowHost: c.Gateway().SetDynamicPanelHost,
+		OnPortChange: func(port int) {
+			if werr := panelaccess.WriteCapabilityPanelPort(panelaccess.DefaultCapabilityPanelPortFile, port); werr != nil {
+				logger.Debug("best-effort capability panel-port.json sync skipped", "port", port, "error", werr)
+			}
+		},
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "qwq serve-controller: init panel access settings: %v\n", err)
 		return 1
 	}
+	if rt != nil {
+		rt.SetManagementPortsFunc(func() []uint32 {
+			if p := accessMgr.Snapshot().Port; p > 0 && p <= 65535 {
+				return []uint32{uint32(p)}
+			}
+			return nil
+		})
+	}
 
 	// Routes are registered before the listener exists: a duplicate or invalid
 	// route must fail startup, not the first request that hits it.
-	routes, err := registerPublicRoutesWithAccess(c, pluginAPI, uploads, accessMgr, logger)
+	routes, err := registerPublicRoutesWithAccess(c, pluginAPI, uploads, trustStore, accessMgr, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "qwq serve-controller: %v\n", err)
 		return 1
@@ -226,21 +250,37 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		logger.Warn("certificate renewal run failed", "error", err)
 	})
 
-	rootHandler := c.Handler()
-	if rt != nil {
-		var trustedPrefixes []netip.Prefix
-		for _, raw := range cfg.HTTP.TrustedProxies {
-			if pfx, err := netip.ParsePrefix(raw); err == nil {
-				trustedPrefixes = append(trustedPrefixes, pfx)
-			} else if addr, err := netip.ParseAddr(raw); err == nil {
-				trustedPrefixes = append(trustedPrefixes, netip.PrefixFrom(addr.Unmap(), addr.Unmap().BitLen()))
-			}
+	var trustedPrefixes []netip.Prefix
+	for _, raw := range cfg.HTTP.TrustedProxies {
+		if pfx, err := netip.ParsePrefix(raw); err == nil {
+			trustedPrefixes = append(trustedPrefixes, pfx)
+		} else if addr, err := netip.ParseAddr(raw); err == nil {
+			trustedPrefixes = append(trustedPrefixes, netip.PrefixFrom(addr.Unmap(), addr.Unmap().BitLen()))
 		}
-		rootHandler = pluginpublic.NewCustomDomainRouter(cfg.HTTP.PublicOrigins, trustedPrefixes, rt.PublicGateway(), rootHandler)
 	}
-	// Wrap the outermost HTTP handler with the stealth secret-entry-path gate &
-	// disguise handler so wrong-path probes emit zero qwq headers or fingerprints.
-	rootHandler = accessMgr.Wrap(rootHandler)
+
+	// Wrap order (outermost -> innermost):
+	//   CustomDomainRouter (routes plugin custom domains like status.example.com first)
+	//     -> panelaccess.WrapWithOptions (stealth gate & disguise for panel traffic,
+	//        exempting /p/* public plugin routes and loopback /healthz,/readyz)
+	//     -> Gateway (c.Handler())
+	var panelHandler http.Handler = c.Handler()
+	if accessMgr != nil {
+		panelHandler = accessMgr.WrapWithOptions(panelHandler, panelaccess.WrapOptions{
+			TrustedProxies:           trustedPrefixes,
+			ExemptPublicPluginRoutes: true,
+			ExemptLoopbackHealth:     true,
+		})
+	}
+	rootHandler := panelHandler
+	if rt != nil {
+		rt.PublicGateway().SetTrustedProxies(trustedPrefixes)
+		cdr := pluginpublic.NewCustomDomainRouter(cfg.HTTP.PublicOrigins, trustedPrefixes, rt.PublicGateway(), panelHandler)
+		cdr.SetPanelDomainChecker(func(h string) bool {
+			return accessMgr != nil && strings.EqualFold(accessMgr.Snapshot().PanelDomain, h)
+		})
+		rootHandler = cdr
+	}
 
 	listenSnap := accessMgr.Snapshot()
 	useTLS := cfg.HTTP.TLS.Mode != config.TLSProxy
@@ -269,7 +309,9 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	})
 
 	liveLn := newLiveHTTPListener(srv, useTLS, logger)
-	accessMgr.SetRebind(liveLn.Rebind)
+	accessMgr.SetPrepareBind(func(addr string) (panelaccess.BindHandle, error) {
+		return liveLn.PrepareBind(addr)
+	})
 	boundAddr, err := liveLn.Start(listenSnap.ListenAddr())
 	if err != nil {
 		fmt.Fprintf(stderr, "qwq serve-controller: %v\n", err)
@@ -452,7 +494,7 @@ func newPluginRuntime(cfg config.Config, pluginsDir string, logger *slog.Logger)
 // with a warning. A construction failure is fatal: the database is migrated by
 // then, so failing to open the updater means the wiring or the schema is wrong
 // and updates must not silently do nothing.
-func newUpdater(c *controller.Controller, pluginsDir, trustDir, stagingDir string, helper *sandbox.HelperClient, logger *slog.Logger) (*updater.Updater, error) {
+func newUpdater(c *controller.Controller, pluginsDir, trustDir, stagingDir string, trustStore *trust.CompositeTrustStore, helper *sandbox.HelperClient, logger *slog.Logger) (*updater.Updater, error) {
 	if c.PluginRuntime() == nil {
 		logger.Info("plugin updater disabled", "reason", "the plugin runtime is not enabled")
 		return nil, nil
@@ -463,10 +505,10 @@ func newUpdater(c *controller.Controller, pluginsDir, trustDir, stagingDir strin
 			"plugins_dir", plugins, "error", err)
 		return nil, nil
 	}
-	trust := filepath.Clean(trustDir)
-	if info, err := os.Stat(trust); err != nil || !info.IsDir() {
+	trustPath := filepath.Clean(trustDir)
+	if info, err := os.Stat(trustPath); err != nil || !info.IsDir() {
 		logger.Warn("plugin updater disabled: the trust directory is not available",
-			"trust_dir", trust, "error", err)
+			"trust_dir", trustPath, "error", err)
 		return nil, nil
 	}
 	systemd := sandbox.NewSystemctl(sandbox.ExecRunner{})
@@ -475,7 +517,8 @@ func newUpdater(c *controller.Controller, pluginsDir, trustDir, stagingDir strin
 		DataRoot:    sandbox.DefaultPluginDataRoot,
 		StateDir:    filepath.Join(c.Config().DataDir, "plugin-state"),
 		StagingRoot: filepath.Clean(stagingDir),
-		TrustDir:    trust,
+		TrustDir:    trustPath,
+		TrustStore:  trustStore,
 		HostBinary:  sandbox.DefaultHostBinary,
 		Sandbox:     sandbox.DefaultInstaller(sandbox.ExecRunner{}),
 		Helper:      helper,
@@ -519,7 +562,7 @@ func newUpdater(c *controller.Controller, pluginsDir, trustDir, stagingDir strin
 		return nil, fmt.Errorf("build the plugin updater: %w", err)
 	}
 	logger.Info("plugin updater enabled",
-		"plugins_dir", plugins, "staging_dir", installer.StagingRoot, "trust_dir", trust,
+		"plugins_dir", plugins, "staging_dir", installer.StagingRoot, "trust_dir", trustPath,
 		"privileged_helper", installer.Helper != nil)
 	return up, nil
 }
@@ -558,10 +601,10 @@ func newPrivilegedHelper(socket string, euid int, logger *slog.Logger) (*sandbox
 // controller's gateway and returns the number of routes. It must run before the
 // listener starts. plugins and uploads are nil on a host without an updater.
 func registerPublicRoutes(c *controller.Controller, plugins api.PluginManager, uploads *api.PluginUploads, logger *slog.Logger) (int, error) {
-	return registerPublicRoutesWithAccess(c, plugins, uploads, nil, logger)
+	return registerPublicRoutesWithAccess(c, plugins, uploads, nil, nil, logger)
 }
 
-func registerPublicRoutesWithAccess(c *controller.Controller, plugins api.PluginManager, uploads *api.PluginUploads, accessMgr *panelaccess.Manager, logger *slog.Logger) (int, error) {
+func registerPublicRoutesWithAccess(c *controller.Controller, plugins api.PluginManager, uploads *api.PluginUploads, trustStore *trust.CompositeTrustStore, accessMgr *panelaccess.Manager, logger *slog.Logger) (int, error) {
 	if c == nil || c.Gateway() == nil {
 		return 0, errors.New("the controller has no gateway")
 	}
@@ -589,6 +632,7 @@ func registerPublicRoutesWithAccess(c *controller.Controller, plugins api.Plugin
 		AgentSessions:  agentSessions,
 		Plugins:        plugins,
 		PluginUploads:  uploads,
+		PluginTrust:    trustStore,
 		Access:         accessMgr,
 	}); err != nil {
 		return 0, fmt.Errorf("register the public API: %w", err)

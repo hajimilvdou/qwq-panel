@@ -50,6 +50,13 @@ func (i *instance) exportClient(ctx context.Context, request pluginsdk.Request) 
 	if len(req.Host) > 253 || len(req.LabelPrefix) > 64 {
 		return pluginsdk.Response{}, pluginsdk.Errorf("VALIDATION_FAILED", "host 或 label_prefix 超出长度限制")
 	}
+	if req.Host != "" {
+		cleanHost, herr := ResolveExportHostStrict(req.Host, "")
+		if herr != nil {
+			return pluginsdk.Response{}, pluginsdk.Errorf("VALIDATION_FAILED", "host 必须是合法域名或非通配公网 IP，禁止包含 URI 注入字符")
+		}
+		req.Host = cleanHost
+	}
 
 	snap, err := i.runtime.Snapshot(ctx)
 	if err != nil {
@@ -108,15 +115,29 @@ func revealExportSecret(ctx context.Context, revealer secretmap.Revealer, ref st
 	return string(raw), nil
 }
 
-func resolveExportHost(overrideHost, listen string) (string, error) {
-	if overrideHost != "" {
-		return overrideHost, nil
+// ResolveExportHostStrict 严格校验客户端导出时的覆盖域名或公网 IP，彻底阻断 ?allowInsecure=1# 等 URI 参数劫持注入。
+func ResolveExportHostStrict(overrideHost, fallbackListen string) (string, error) {
+	trimmedOverride := strings.TrimSpace(overrideHost)
+	raw := strings.Trim(trimmedOverride, "[]")
+	if raw == "" {
+		raw = strings.Trim(strings.TrimSpace(fallbackListen), "[]")
 	}
-	addr, err := netip.ParseAddr(strings.Trim(listen, "[]"))
-	if err == nil && !addr.IsUnspecified() && !addr.IsLoopback() {
-		return addr.String(), nil
+	if raw == "" || len(raw) > 253 {
+		return "", pluginsdk.Errorf("VALIDATION_FAILED", "当前监听地址为通配或回环地址，请在请求中显式指定合法 host")
 	}
-	return "", pluginsdk.Errorf("VALIDATION_FAILED", "当前监听地址为通配或回环地址，请在请求中显式指定公网 host")
+	if strings.ContainsAny(raw, "?#@/\\ \t\r\n%&=") {
+		return "", pluginsdk.Errorf("VALIDATION_FAILED", "导出 host 包含非法字符")
+	}
+	if ip, err := netip.ParseAddr(raw); err == nil {
+		if ip.Zone() != "" || ip.IsUnspecified() || (trimmedOverride == "" && ip.IsLoopback()) {
+			return "", pluginsdk.Errorf("VALIDATION_FAILED", "当前监听地址为通配或回环地址，请在请求中显式指定合法 host")
+		}
+		return ip.Unmap().String(), nil
+	}
+	if !coreapi.ValidDNSName(raw) {
+		return "", pluginsdk.Errorf("VALIDATION_FAILED", "导出 host 必须是合法 DNS 域名或 IP 地址")
+	}
+	return strings.ToLower(raw), nil
 }
 
 func formatExportLabel(prefix, profileID, userID string) string {
@@ -131,7 +152,7 @@ func (i *instance) exportV1(ctx context.Context, host secretmap.Revealer, intent
 	if intent.Inbound == nil || (req.ProfileID != "" && req.ProfileID != intent.Inbound.ID) {
 		return []export.ExportBundle{}, nil
 	}
-	epHost, err := resolveExportHost(req.Host, intent.Inbound.Listen)
+	epHost, err := ResolveExportHostStrict(req.Host, intent.Inbound.Listen)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +203,7 @@ func (i *instance) exportV2(ctx context.Context, host secretmap.Revealer, intent
 		if req.ProfileID != "" && req.ProfileID != p.ID {
 			continue
 		}
-		epHost, err := resolveExportHost(req.Host, p.Listen)
+		epHost, err := ResolveExportHostStrict(req.Host, p.Listen)
 		if err != nil {
 			return nil, err
 		}
@@ -191,18 +212,30 @@ func (i *instance) exportV2(ctx context.Context, host secretmap.Revealer, intent
 
 		switch p.Protocol {
 		case corev2.ProtocolVLESS:
-			privKey, err := revealExportSecret(ctx, host, p.VLESS.Security.PrivateKey.ID)
-			if err != nil {
-				return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 REALITY 私钥以派生公钥")
-			}
-			pubKey, derr := xrayconfig.DeriveRealityPublicKey(privKey)
-			if derr != nil {
-				return nil, pluginsdk.Errorf("CORE_CONFIG_INVALID", "无法派生 REALITY 公钥")
-			}
-			serverName := p.VLESS.Security.ServerNames[0]
-			shortID := ""
-			if len(p.VLESS.Security.ShortIDs) > 0 {
-				shortID = p.VLESS.Security.ShortIDs[0]
+			secMode := p.VLESS.EffectiveSecurityMode()
+			var serverName, pubKey, shortID string
+			publicTrusted := false
+			switch secMode {
+			case "reality":
+				privKey, err := revealExportSecret(ctx, host, p.VLESS.Security.PrivateKey.ID)
+				if err != nil {
+					return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 REALITY 私钥以派生公钥")
+				}
+				pubKey, err = xrayconfig.DeriveRealityPublicKey(privKey)
+				if err != nil {
+					return nil, pluginsdk.Errorf("CORE_CONFIG_INVALID", "无法派生 REALITY 公钥")
+				}
+				serverName = p.VLESS.Security.ServerNames[0]
+				if len(p.VLESS.Security.ShortIDs) > 0 {
+					shortID = p.VLESS.Security.ShortIDs[0]
+				}
+			case "tls":
+				serverName = p.VLESS.TLS.ServerName
+				if i.driver != nil && i.driver.controller != nil {
+					if st, ok := i.driver.controller.TLSBindingInfo(p.VLESS.TLS.BindingRef); ok {
+						publicTrusted = st.PublicTrusted
+					}
+				}
 			}
 			for _, u := range users {
 				if req.UserID != "" && req.UserID != u.ID {
@@ -217,7 +250,114 @@ func (i *instance) exportV2(ctx context.Context, host secretmap.Revealer, intent
 					Port:  uint16(p.Port),
 					Label: formatExportLabel(req.LabelPrefix, p.ID, u.ID),
 				}
-				items = append(items, export.BuildVLESSReality(ep, p.ID, u.ID, uuidStr, serverName, pubKey, shortID))
+				if p.VLESS.NormalizedTransport() == "raw" && secMode == "reality" && p.VLESS.Flow == "xtls-rprx-vision" && p.VLESS.Encryption == "" {
+					items = append(items, export.BuildVLESSReality(ep, p.ID, u.ID, uuidStr, serverName, pubKey, shortID))
+				} else {
+					items = append(items, export.BuildVLESS(ep, p.ID, u.ID, uuidStr, export.VLESSOptions{
+						Transport:     p.VLESS.NormalizedTransport(),
+						Flow:          p.VLESS.Flow,
+						SecurityMode:  secMode,
+						ServerName:    serverName,
+						PublicKey:     pubKey,
+						ShortID:       shortID,
+						PublicTrusted: publicTrusted,
+						Path:          p.VLESS.Path,
+						Host:          p.VLESS.Host,
+						ServiceName:   p.VLESS.ServiceName,
+						XHTTPMode:     p.VLESS.XHTTPMode,
+						Encryption:    p.VLESS.Encryption,
+					}))
+				}
+			}
+
+		case corev2.ProtocolVMess:
+			serverName := ""
+			publicTrusted := false
+			if p.VMess.SecurityMode == "tls" && p.VMess.TLS != nil {
+				serverName = p.VMess.TLS.ServerName
+				if i.driver != nil && i.driver.controller != nil {
+					if st, ok := i.driver.controller.TLSBindingInfo(p.VMess.TLS.BindingRef); ok {
+						publicTrusted = st.PublicTrusted
+					}
+				}
+			}
+			for _, u := range users {
+				if req.UserID != "" && req.UserID != u.ID {
+					continue
+				}
+				uuidStr, err := revealExportSecret(ctx, host, u.UUID.ID)
+				if err != nil {
+					return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 VMess 用户凭据")
+				}
+				ep := export.ExportEndpoint{Host: epHost, Port: uint16(p.Port), Label: formatExportLabel(req.LabelPrefix, p.ID, u.ID)}
+				items = append(items, export.BuildVMess(ep, p.ID, u.ID, uuidStr, export.VMessOptions{
+					Transport:     p.VMess.NormalizedTransport(),
+					SecurityMode:  p.VMess.SecurityMode,
+					ServerName:    serverName,
+					PublicTrusted: publicTrusted,
+					Path:          p.VMess.Path,
+					Host:          p.VMess.Host,
+					ServiceName:   p.VMess.ServiceName,
+				}))
+			}
+
+		case corev2.ProtocolTrojan:
+			var serverName, pubKey, shortID string
+			publicTrusted := false
+			if p.Trojan.SecurityMode == "reality" && p.Trojan.Reality != nil {
+				privKey, err := revealExportSecret(ctx, host, p.Trojan.Reality.PrivateKey.ID)
+				if err != nil {
+					return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 Trojan REALITY 私钥")
+				}
+				pubKey, err = xrayconfig.DeriveRealityPublicKey(privKey)
+				if err != nil {
+					return nil, pluginsdk.Errorf("CORE_CONFIG_INVALID", "无法派生 REALITY 公钥")
+				}
+				serverName = p.Trojan.Reality.ServerNames[0]
+				if len(p.Trojan.Reality.ShortIDs) > 0 {
+					shortID = p.Trojan.Reality.ShortIDs[0]
+				}
+			} else if p.Trojan.TLS != nil {
+				serverName = p.Trojan.TLS.ServerName
+				if i.driver != nil && i.driver.controller != nil {
+					if st, ok := i.driver.controller.TLSBindingInfo(p.Trojan.TLS.BindingRef); ok {
+						publicTrusted = st.PublicTrusted
+					}
+				}
+			}
+			for _, u := range users {
+				if req.UserID != "" && req.UserID != u.ID {
+					continue
+				}
+				authStr, err := revealExportSecret(ctx, host, u.Auth.ID)
+				if err != nil {
+					return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 Trojan 认证口令")
+				}
+				ep := export.ExportEndpoint{Host: epHost, Port: uint16(p.Port), Label: formatExportLabel(req.LabelPrefix, p.ID, u.ID)}
+				items = append(items, export.BuildTrojan(ep, p.ID, u.ID, authStr, export.TrojanOptions{
+					Transport:     p.Trojan.NormalizedTransport(),
+					SecurityMode:  p.Trojan.SecurityMode,
+					ServerName:    serverName,
+					PublicKey:     pubKey,
+					ShortID:       shortID,
+					PublicTrusted: publicTrusted,
+					Path:          p.Trojan.Path,
+					Host:          p.Trojan.Host,
+					ServiceName:   p.Trojan.ServiceName,
+				}))
+			}
+
+		case corev2.ProtocolShadowsocks:
+			for _, u := range users {
+				if req.UserID != "" && req.UserID != u.ID {
+					continue
+				}
+				authStr, err := revealExportSecret(ctx, host, u.Auth.ID)
+				if err != nil {
+					return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 Shadowsocks 用户密码")
+				}
+				ep := export.ExportEndpoint{Host: epHost, Port: uint16(p.Port), Label: formatExportLabel(req.LabelPrefix, p.ID, u.ID)}
+				items = append(items, export.BuildShadowsocks(ep, p.ID, u.ID, p.Shadowsocks.Method, authStr, p.Shadowsocks.UDP))
 			}
 
 		case corev2.ProtocolHysteria2:
@@ -227,6 +367,14 @@ func (i *instance) exportV2(ctx context.Context, host secretmap.Revealer, intent
 				if st, ok := i.driver.controller.TLSBindingInfo(p.Hysteria2.TLS.BindingRef); ok {
 					publicTrusted = st.PublicTrusted
 					certPin = st.LeafFingerprint
+				}
+			}
+			obfsPwd := ""
+			if p.Hysteria2.ObfsPassword != nil {
+				var oerr error
+				obfsPwd, oerr = revealExportSecret(ctx, host, p.Hysteria2.ObfsPassword.ID)
+				if oerr != nil {
+					return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 Hysteria2 混淆密码")
 				}
 			}
 			serverName := p.Hysteria2.TLS.ServerName
@@ -243,7 +391,7 @@ func (i *instance) exportV2(ctx context.Context, host secretmap.Revealer, intent
 					Port:  uint16(p.Port),
 					Label: formatExportLabel(req.LabelPrefix, p.ID, u.ID),
 				}
-				items = append(items, export.BuildHysteria2(ep, p.ID, u.ID, authStr, serverName, publicTrusted, certPin))
+				items = append(items, export.BuildHysteria2WithOptions(ep, p.ID, u.ID, authStr, serverName, publicTrusted, certPin, obfsPwd, p.Hysteria2.PortHopping))
 			}
 
 		case corev2.ProtocolShadowsocks2022:
@@ -260,9 +408,12 @@ func (i *instance) exportV2(ctx context.Context, host secretmap.Revealer, intent
 				if req.UserID != "" && req.UserID != u.ID {
 					continue
 				}
-				pskStr, err := revealExportSecret(ctx, host, u.PSK.ID)
-				if err != nil {
-					return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 SS2022 用户密钥")
+				pskStr := ""
+				if p.Shadowsocks2022.Method != corev2.MethodChaCha20 {
+					pskStr, err = revealExportSecret(ctx, host, u.PSK.ID)
+					if err != nil {
+						return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 SS2022 用户密钥")
+					}
 				}
 				// 始终使用公网监听端口 p.Port，严禁暴露内部 30000..30999 混淆桥接端口。
 				ep := export.ExportEndpoint{
@@ -271,6 +422,52 @@ func (i *instance) exportV2(ctx context.Context, host secretmap.Revealer, intent
 					Label: formatExportLabel(req.LabelPrefix, p.ID, u.ID),
 				}
 				items = append(items, export.BuildSS2022(ep, p.ID, u.ID, p.Shadowsocks2022.Method, srvKeyStr, pskStr, obfsMode, obfsHost, p.Shadowsocks2022.UDP))
+			}
+
+		case corev2.ProtocolAnyTLS:
+			publicTrusted := false
+			if i.driver != nil && i.driver.controller != nil && p.AnyTLS != nil && p.AnyTLS.TLS != nil {
+				if st, ok := i.driver.controller.TLSBindingInfo(p.AnyTLS.TLS.BindingRef); ok {
+					publicTrusted = st.PublicTrusted
+				}
+			}
+			serverName := p.AnyTLS.TLS.ServerName
+			for _, u := range users {
+				if req.UserID != "" && req.UserID != u.ID {
+					continue
+				}
+				authStr, err := revealExportSecret(ctx, host, u.Auth.ID)
+				if err != nil {
+					return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 AnyTLS 认证口令")
+				}
+				ep := export.ExportEndpoint{Host: epHost, Port: uint16(p.Port), Label: formatExportLabel(req.LabelPrefix, p.ID, u.ID)}
+				items = append(items, export.BuildAnyTLS(ep, p.ID, u.ID, authStr, serverName, publicTrusted))
+			}
+
+		case corev2.ProtocolSOCKS5:
+			for _, u := range users {
+				if req.UserID != "" && req.UserID != u.ID {
+					continue
+				}
+				authStr, err := revealExportSecret(ctx, host, u.Auth.ID)
+				if err != nil {
+					return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 SOCKS5 用户密码")
+				}
+				ep := export.ExportEndpoint{Host: epHost, Port: uint16(p.Port), Label: formatExportLabel(req.LabelPrefix, p.ID, u.ID)}
+				items = append(items, export.BuildSOCKS5(ep, p.ID, u.ID, u.Username, authStr, p.SOCKS5.UDP))
+			}
+
+		case corev2.ProtocolHTTP:
+			for _, u := range users {
+				if req.UserID != "" && req.UserID != u.ID {
+					continue
+				}
+				authStr, err := revealExportSecret(ctx, host, u.Auth.ID)
+				if err != nil {
+					return nil, pluginsdk.Errorf("SECRET_UNAVAILABLE", "无法读取 HTTP 用户密码")
+				}
+				ep := export.ExportEndpoint{Host: epHost, Port: uint16(p.Port), Label: formatExportLabel(req.LabelPrefix, p.ID, u.ID)}
+				items = append(items, export.BuildHTTP(ep, p.ID, u.ID, u.Username, authStr))
 			}
 		}
 	}

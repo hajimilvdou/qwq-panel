@@ -274,6 +274,99 @@ func TestNodeIDValidationAndShellQuoteSafety(t *testing.T) {
 	}
 }
 
+func TestAgentRestartSessionEpochAndUnidirectionalDrop(t *testing.T) {
+	store := NewProbeStore()
+	plainTok, shaHex, prefix, err := GenerateAgentToken()
+	if err != nil {
+		t.Fatalf("GenerateAgentToken: %v", err)
+	}
+	store.nodes["sg-01"] = &NodeRecord{
+		ID:               "sg-01",
+		Name:             "Singapore",
+		RegionCode:       "SG",
+		AgentTokenSHA256: shaHex,
+		AgentTokenPrefix: prefix,
+		ReportInterval:   2,
+		QuotaMode:        QuotaBoth,
+		ResetDay:         1,
+	}
+
+	t0 := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	if _, err := store.IngestAgentReport(t0, "198.51.100.10", plainTok, AgentReportPayload{
+		NodeID:        "sg-01",
+		TimestampUnix: t0.Unix(),
+		TimestampNano: t0.UnixNano(),
+		SessionEpoch:  1000,
+		Sequence:      50,
+		BootEpoch:     777,
+		RawRxBytes:    1000,
+		RawTxBytes:    5000,
+	}); err != nil {
+		t.Fatalf("first report failed: %v", err)
+	}
+
+	// Agent restarted (same BootEpoch=777, Sequence reset to 1, new SessionEpoch=2000, monotonic timestamp)
+	t1 := t0.Add(2 * time.Second)
+	if _, err := store.IngestAgentReport(t1, "198.51.100.10", plainTok, AgentReportPayload{
+		NodeID:        "sg-01",
+		TimestampUnix: t1.Unix(),
+		TimestampNano: t1.UnixNano(),
+		SessionEpoch:  2000,
+		Sequence:      1,
+		BootEpoch:     777,
+		RawRxBytes:    200,  // RX dropped due to veth teardown; must NOT double-count TX!
+		RawTxBytes:    5500, // TX increased by 500
+	}); err != nil {
+		t.Fatalf("post-restart report rejected: %v", err)
+	}
+
+	node := store.nodes["sg-01"]
+	if node.PeriodRxBytes != 0 || node.PeriodTxBytes != 500 {
+		t.Fatalf("expected rx=0 tx=500 after unidirectional drop, got rx=%d tx=%d", node.PeriodRxBytes, node.PeriodTxBytes)
+	}
+}
+
+func TestSQLitePersistenceAndEditPreservesTokenAndTraffic(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenProbeStore(dir)
+	if err != nil {
+		t.Fatalf("OpenProbeStore: %v", err)
+	}
+	gw := NewPortalGateway(store, NewDomainBindingCoordinator(dir, []byte("seed"), nil, nil), nil, "secret", time.Now)
+
+	code, _, body := gw.handleStandaloneAdminAction(time.Now(), "POST", "/api/admin/nodes", nil, []byte(`{"id":"jp-edge","name":"Tokyo 01","region_code":"JP","quota_bytes":1000}`))
+	if code != 201 {
+		t.Fatalf("create node status=%d body=%s", code, string(body))
+	}
+	store.mu.Lock()
+	origHash := store.nodes["jp-edge"].AgentTokenSHA256
+	store.nodes["jp-edge"].PeriodRxBytes = 12345
+	store.nodes["jp-edge"].PeriodTxBytes = 67890
+	store.mu.Unlock()
+
+	// Edit existing node must preserve AgentTokenSHA256 and PeriodRx/TxBytes
+	code, _, body = gw.handleStandaloneAdminAction(time.Now(), "POST", "/api/admin/nodes", nil, []byte(`{"id":"jp-edge","name":"Tokyo 01 Renamed","region_code":"JP","quota_bytes":2000}`))
+	if code != 200 {
+		t.Fatalf("edit node status=%d body=%s", code, string(body))
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := OpenProbeStore(dir)
+	if err != nil {
+		t.Fatalf("reopen OpenProbeStore: %v", err)
+	}
+	defer reopened.Close()
+	got := reopened.nodes["jp-edge"]
+	if got == nil {
+		t.Fatalf("expected persisted node jp-edge after reopen")
+	}
+	if got.Name != "Tokyo 01 Renamed" || got.AgentTokenSHA256 != origHash || got.PeriodRxBytes != 12345 || got.PeriodTxBytes != 67890 {
+		t.Fatalf("persisted node mismatch after edit+reopen: %+v", got)
+	}
+}
+
 func mustGenerateTestCert(t *testing.T, dnsName string, now time.Time) ([]byte, []byte) {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

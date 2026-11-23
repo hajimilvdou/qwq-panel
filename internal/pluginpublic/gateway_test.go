@@ -169,3 +169,111 @@ func TestGatewayEncodedTraversalAndBucketPruning(t *testing.T) {
 		t.Fatal("abuser-ip bucket must NOT be reset during pruning")
 	}
 }
+
+func TestGatewayTrailingSlashRedirectThemeSandboxAndUploadLimit(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	disp := &fakePublicDispatcher{
+		resp: PublicResponse{
+			StatusCode: http.StatusOK,
+			Headers: map[string]string{
+				"Content-Type": "text/html; charset=utf-8",
+			},
+			Body: []byte("<html>ok</html>"),
+		},
+	}
+	gw := NewGateway(disp, func() time.Time { return now })
+	gw.ReplaceRoutes([]RouteSpec{
+		{
+			PluginID:        "server.probe",
+			Route:           "portal",
+			PortalSPA:       true,
+			RateLimitPerMin: 120,
+		},
+	})
+
+	// 1. GET /p/server.probe/portal?tab=nodes (no trailing slash) -> 308 Permanent Redirect preserving query.
+	reqNoSlash := httptest.NewRequest(http.MethodGet, "/p/server.probe/portal?tab=nodes", nil)
+	recNoSlash := httptest.NewRecorder()
+	gw.ServeHTTP(recNoSlash, reqNoSlash)
+	if recNoSlash.Code != http.StatusPermanentRedirect || recNoSlash.Header().Get("Location") != "/p/server.probe/portal/?tab=nodes" {
+		t.Fatalf("no-slash redirect = %d %q, want 308 /p/server.probe/portal/?tab=nodes", recNoSlash.Code, recNoSlash.Header().Get("Location"))
+	}
+
+	// 2. GET /p/server.probe/portal/ -> 200 with external HTTPS wallpaper img-src allowed.
+	reqPortal := httptest.NewRequest(http.MethodGet, "/p/server.probe/portal/", nil)
+	recPortal := httptest.NewRecorder()
+	gw.ServeHTTP(recPortal, reqPortal)
+	if recPortal.Code != http.StatusOK {
+		t.Fatalf("portal root = %d, want 200", recPortal.Code)
+	}
+	if csp := recPortal.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self' data: blob: https:;") {
+		t.Fatalf("server.probe portal CSP = %q, want external HTTPS img-src", csp)
+	}
+
+	// 3. Response header X-QWQ-Theme-Sandbox: 1 upgrades response to opaque sandbox CSP and strips the internal header.
+	disp.resp = PublicResponse{
+		StatusCode: http.StatusOK,
+		Headers: map[string]string{
+			"Content-Type":        "text/html; charset=utf-8",
+			"X-QWQ-Theme-Sandbox": "1",
+		},
+		Body: []byte("<html>theme</html>"),
+	}
+	reqTheme := httptest.NewRequest(http.MethodGet, "/p/server.probe/portal/themes/neon/index.html", nil)
+	recTheme := httptest.NewRecorder()
+	gw.ServeHTTP(recTheme, reqTheme)
+	if recTheme.Code != http.StatusOK {
+		t.Fatalf("theme response = %d, want 200", recTheme.Code)
+	}
+	if recTheme.Header().Get("X-QWQ-Theme-Sandbox") != "" {
+		t.Fatal("X-QWQ-Theme-Sandbox header must be stripped before reaching client")
+	}
+	themeCSP := recTheme.Header().Get("Content-Security-Policy")
+	for _, want := range []string{"sandbox allow-scripts;", "connect-src 'none';"} {
+		if !strings.Contains(themeCSP, want) {
+			t.Fatalf("theme sandbox CSP %q missing %q", themeCSP, want)
+		}
+	}
+
+	// 4. /theme-frame/ subpath always enforces opaque sandbox CSP even without response header.
+	disp.resp = PublicResponse{
+		StatusCode: http.StatusOK,
+		Headers:    map[string]string{"Content-Type": "text/html; charset=utf-8"},
+		Body:       []byte("<html>frame</html>"),
+	}
+	reqFrame := httptest.NewRequest(http.MethodGet, "/p/server.probe/portal/theme-frame/custom/index.html", nil)
+	recFrame := httptest.NewRecorder()
+	gw.ServeHTTP(recFrame, reqFrame)
+	if recFrame.Code != http.StatusOK || !strings.Contains(recFrame.Header().Get("Content-Security-Policy"), "sandbox allow-scripts;") {
+		t.Fatalf("theme-frame CSP = %d %q", recFrame.Code, recFrame.Header().Get("Content-Security-Policy"))
+	}
+
+	// 5. server.probe /api/admin/themes/upload accepts >4 MiB (up to 16 MiB), while other paths stay capped at 4 MiB.
+	bigBody := make([]byte, (5 << 20))
+	reqUpload := httptest.NewRequest(http.MethodPost, "/p/server.probe/portal/api/admin/themes/upload", strings.NewReader(string(bigBody)))
+	recUpload := httptest.NewRecorder()
+	gw.ServeHTTP(recUpload, reqUpload)
+	if recUpload.Code != http.StatusOK || len(disp.lastReq.Body) != len(bigBody) {
+		t.Fatalf("theme upload 5 MiB = %d (len=%d), want 200", recUpload.Code, len(disp.lastReq.Body))
+	}
+
+	reqOtherBig := httptest.NewRequest(http.MethodPost, "/p/server.probe/portal/api/admin/settings", strings.NewReader(string(bigBody)))
+	recOtherBig := httptest.NewRecorder()
+	gw.ServeHTTP(recOtherBig, reqOtherBig)
+	if recOtherBig.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("non-upload 5 MiB = %d, want 413", recOtherBig.Code)
+	}
+
+	// 6. CustomDomainRouter root rewrite does NOT trigger 308 redirect to /p/server.probe/portal/.
+	cdr := NewCustomDomainRouter([]string{"https://panel.example.com"}, nil, gw, http.NotFoundHandler())
+	if err := cdr.ValidateAndReplace([]DomainBinding{{Domain: "status.example.com", PluginID: "server.probe"}}); err != nil {
+		t.Fatalf("ValidateAndReplace: %v", err)
+	}
+	reqCustom := httptest.NewRequest(http.MethodGet, "/", nil)
+	reqCustom.Host = "status.example.com"
+	recCustom := httptest.NewRecorder()
+	cdr.ServeHTTP(recCustom, reqCustom)
+	if recCustom.Code != http.StatusOK {
+		t.Fatalf("custom domain root = %d (loc=%q), want 200", recCustom.Code, recCustom.Header().Get("Location"))
+	}
+}

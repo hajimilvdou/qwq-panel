@@ -114,7 +114,37 @@ func (g SystemGuard) ManagementPorts(ctx context.Context) ([]uint32, error) {
 	if decodeObject(raw, &cfg) != nil {
 		return nil, errors.New("firewall: trusted host configuration is invalid")
 	}
-	return ManagementPorts(cfg.HTTP)
+	ports, err := ManagementPorts(cfg.HTTP)
+	if err != nil {
+		return nil, err
+	}
+	if dynPort := g.readDynamicPanelPort(); dynPort > 0 {
+		ports = mergePorts(ports, []uint32{dynPort})
+	}
+	return ports, nil
+}
+
+const dynamicPanelPortFile = "var/lib/qwq-capability/panel-port.json"
+
+func (g SystemGuard) readDynamicPanelPort() uint32 {
+	rootPath := g.RootPath
+	if rootPath == "" {
+		rootPath = "/"
+	}
+	full := filepath.Join(rootPath, dynamicPanelPortFile)
+	dir, name := filepath.Dir(full), filepath.Base(full)
+	raw, exists, err := (local.FileState{Directory: dir, Name: name, Trust: g.Trust}).Read()
+	if err != nil || !exists || len(raw) == 0 {
+		return 0
+	}
+	defer clear(raw)
+	var doc struct {
+		Port uint32 `json:"port"`
+	}
+	if decodeObject(raw, &doc) != nil || doc.Port == 0 || doc.Port > 65535 {
+		return 0
+	}
+	return doc.Port
 }
 
 func (g SystemGuard) Managers(ctx context.Context) ([]Manager, error) {

@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,6 +45,9 @@ const (
 
 	// DefaultEnrollTokenTTL 为一次性入网令牌默认有效期（15 分钟）。
 	DefaultEnrollTokenTTL = 15 * time.Minute
+
+	// DefaultHeartbeatPersistInterval 节流心跳落盘频率至每节点每 60 秒最多一次，降低 1C1G 写放大。
+	DefaultHeartbeatPersistInterval = 60 * time.Second
 
 	ModeFull      = "full"
 	ModeProbe512M = "probe_512m"
@@ -98,6 +102,12 @@ type activeSession struct {
 	connectedAt time.Time
 }
 
+type pendingCert struct {
+	serialHex   string
+	fingerprint string
+	expiresAt   int64
+}
+
 // Server 同时实现 NodeEnrollmentServiceServer 与 NodeSessionServiceServer，
 // 维护在线节点注册表并提供实时吊销与毫秒级踢断能力。
 type Server struct {
@@ -112,9 +122,10 @@ type Server struct {
 	now               func() time.Time
 	onEvent           func(nodeID string, ev *platformv1.Event)
 
-	mu           sync.RWMutex
-	sessions     map[string]*activeSession
-	nextStreamID atomic.Uint64
+	mu                     sync.RWMutex
+	sessions               map[string]*activeSession
+	lastHeartbeatPersisted map[string]int64
+	nextStreamID           atomic.Uint64
 }
 
 // NewServer 构造集群控制面服务并由独立集群 Root CA 签发服务端 TLS 证书。
@@ -142,14 +153,15 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		nowFn = time.Now
 	}
 	return &Server{
-		db:                opts.DB,
-		ca:                opts.CA,
-		serverCert:        serverCert,
-		certTTL:           ttl,
-		heartbeatInterval: hb,
-		now:               nowFn,
-		onEvent:           opts.OnEvent,
-		sessions:          make(map[string]*activeSession),
+		db:                     opts.DB,
+		ca:                     opts.CA,
+		serverCert:             serverCert,
+		certTTL:                ttl,
+		heartbeatInterval:      hb,
+		now:                    nowFn,
+		onEvent:                opts.OnEvent,
+		sessions:               make(map[string]*activeSession),
+		lastHeartbeatPersisted: make(map[string]int64),
 	}, nil
 }
 
@@ -200,10 +212,10 @@ func (s *Server) verifyClientConnection(cs tls.ConnectionState) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	var state, dbSerial string
+	var state, dbSerial, dbPendingSerial string
 	err = s.db.Reader().QueryRowContext(ctx,
-		`SELECT enrollment_state, cert_serial FROM nodes WHERE id = ?`, nodeID,
-	).Scan(&state, &dbSerial)
+		`SELECT enrollment_state, cert_serial, pending_cert_serial FROM nodes WHERE id = ?`, nodeID,
+	).Scan(&state, &dbSerial, &dbPendingSerial)
 	if errors.Is(err, sql.ErrNoRows) {
 		return errors.New("cluster: unknown node certificate")
 	}
@@ -213,10 +225,14 @@ func (s *Server) verifyClientConnection(cs tls.ConnectionState) error {
 	if state == "revoked" || state != "active" {
 		return fmt.Errorf("cluster: node %s is %s", nodeID, state)
 	}
-	if dbSerial == "" || !strings.EqualFold(dbSerial, serialHex) {
-		return errors.New("cluster: client certificate serial is superseded or mismatched")
+	if dbSerial != "" && strings.EqualFold(dbSerial, serialHex) {
+		return nil
 	}
-	return nil
+	// 允许处于两阶段轮换窗口内（持久化于 SQLite，跨控制面重启有效）的 pending_cert_serial 通过握手并在首次上线时安全晋升。
+	if dbPendingSerial != "" && strings.EqualFold(dbPendingSerial, serialHex) {
+		return nil
+	}
+	return errors.New("cluster: client certificate serial is superseded or mismatched")
 }
 
 // ======================== 入网令牌管理与 NodeEnrollmentService ========================
@@ -377,13 +393,17 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[nodev1.SessionRequest, 
 	}
 
 	var (
-		state      string
-		dbSerial   string
-		lastAckSeq int64
+		state                string
+		dbSerial             string
+		dbPendingSerial      string
+		dbPendingFingerprint string
+		dbPendingExpiresAt   string
+		lastAckSeq           int64
 	)
-	err = s.db.Reader().QueryRowContext(stream.Context(),
-		`SELECT enrollment_state, cert_serial, last_ack_seq FROM nodes WHERE id = ?`, nodeID,
-	).Scan(&state, &dbSerial, &lastAckSeq)
+	err = s.db.Reader().QueryRowContext(stream.Context(), `
+		SELECT enrollment_state, cert_serial, pending_cert_serial, pending_cert_fingerprint, pending_cert_expires_at, last_ack_seq
+		FROM nodes WHERE id = ?`, nodeID,
+	).Scan(&state, &dbSerial, &dbPendingSerial, &dbPendingFingerprint, &dbPendingExpiresAt, &lastAckSeq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return status.Error(codes.Unauthenticated, "unknown node")
 	}
@@ -393,8 +413,18 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[nodev1.SessionRequest, 
 	if state != "active" {
 		return status.Errorf(codes.PermissionDenied, "node is %s", state)
 	}
+	promotedPending := false
+	var pendingToPromote pendingCert
 	if !strings.EqualFold(dbSerial, serialHex) {
-		return status.Error(codes.Unauthenticated, "certificate serial superseded")
+		if dbPendingSerial == "" || !strings.EqualFold(dbPendingSerial, serialHex) {
+			return status.Error(codes.Unauthenticated, "certificate serial superseded")
+		}
+		promotedPending = true
+		pendingToPromote = pendingCert{
+			serialHex:   dbPendingSerial,
+			fingerprint: dbPendingFingerprint,
+			expiresAt:   parsePendingCertExpiresAt(dbPendingExpiresAt),
+		}
 	}
 
 	first, err := stream.Recv()
@@ -413,6 +443,27 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[nodev1.SessionRequest, 
 		arch = strings.TrimSpace(hello.GetFacts().GetArch())
 	}
 	if err := s.db.Update(stream.Context(), func(tx *storage.Tx) error {
+		if promotedPending {
+			rev := tx.NewID("rev")
+			_, err := tx.ExecContext(stream.Context(), `
+				UPDATE nodes
+				SET cert_serial              = ?,
+				    cert_fingerprint         = ?,
+				    cert_expires_at          = ?,
+				    pending_cert_serial      = '',
+				    pending_cert_fingerprint = '',
+				    pending_cert_expires_at  = '',
+				    revision                 = ?,
+				    agent_version            = CASE WHEN ? != '' THEN ? ELSE agent_version END,
+				    arch                     = CASE WHEN ? != '' THEN ? ELSE arch END,
+				    last_heartbeat_at        = ?,
+				    updated_at               = ?
+				WHERE id = ? AND enrollment_state = 'active'`,
+				pendingToPromote.serialHex, pendingToPromote.fingerprint, pendingToPromote.expiresAt, rev,
+				agentVer, agentVer, arch, arch, nowMs, nowMs, nodeID,
+			)
+			return err
+		}
 		_, err := tx.ExecContext(stream.Context(), `
 			UPDATE nodes
 			SET agent_version = CASE WHEN ? != '' THEN ? ELSE agent_version END,
@@ -426,6 +477,9 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[nodev1.SessionRequest, 
 	}); err != nil {
 		return status.Error(codes.Internal, "failed to record node hello")
 	}
+	s.mu.Lock()
+	s.lastHeartbeatPersisted[nodeID] = nowMs
+	s.mu.Unlock()
 
 	sessCtx, cancel := context.WithCancel(stream.Context())
 	defer cancel()
@@ -535,6 +589,9 @@ func (s *Server) handleSessionFrame(
 				return status.Error(codes.Internal, "failed to persist event ack")
 			}
 			*lastAckSeq = maxSeq
+			s.mu.Lock()
+			s.lastHeartbeatPersisted[nodeID] = nowMs
+			s.mu.Unlock()
 		} else {
 			if err := s.touchNodeHeartbeat(ctx, nodeID, nowMs); err != nil {
 				return err
@@ -560,17 +617,30 @@ func (s *Server) handleSessionFrame(
 }
 
 func (s *Server) touchNodeHeartbeat(ctx context.Context, nodeID string, nowMs int64) error {
-	return s.db.Update(ctx, func(tx *storage.Tx) error {
+	s.mu.RLock()
+	lastPersisted := s.lastHeartbeatPersisted[nodeID]
+	s.mu.RUnlock()
+	if lastPersisted > 0 && nowMs-lastPersisted < DefaultHeartbeatPersistInterval.Milliseconds() {
+		return nil
+	}
+	if err := s.db.Update(ctx, func(tx *storage.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			`UPDATE nodes SET last_heartbeat_at = ?, updated_at = ? WHERE id = ?`,
 			nowMs, nowMs, nodeID,
 		)
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.lastHeartbeatPersisted[nodeID] = nowMs
+	s.mu.Unlock()
+	return nil
 }
 
 // RotateCertificate 实现 NodeSessionService.RotateCertificate：
-// 校验活跃 mTLS 节点身份与当前序列号，签发新 30 天客户端证书并更新 nodes 表使旧证书立即失效。
+// 校验活跃 mTLS 节点身份并签发新 30 天客户端证书，先登记为 pending_cert_serial；
+// 待节点使用新证书完成首次 mTLS 握手时再原子晋升覆盖 cert_serial 并令旧证书失效（防断网永久失联）。
 func (s *Server) RotateCertificate(ctx context.Context, req *nodev1.RotateCertificateRequest) (*nodev1.RotateCertificateResponse, error) {
 	nodeID, serialHex, err := peerNodeIdentity(ctx)
 	if err != nil {
@@ -580,49 +650,71 @@ func (s *Server) RotateCertificate(ctx context.Context, req *nodev1.RotateCertif
 		return nil, status.Error(codes.InvalidArgument, "csr_der is required")
 	}
 
-	nowMs := s.now().UTC().UnixMilli()
-	var signed SignedCert
-	err = s.db.Update(ctx, func(tx *storage.Tx) error {
-		var state, dbSerial string
-		err := tx.QueryRowContext(ctx,
-			`SELECT enrollment_state, cert_serial FROM nodes WHERE id = ?`, nodeID,
-		).Scan(&state, &dbSerial)
-		if errors.Is(err, sql.ErrNoRows) {
-			return status.Error(codes.Unauthenticated, "unknown node")
-		}
-		if err != nil {
-			return status.Error(codes.Internal, "failed to load node state")
-		}
-		if state != "active" {
-			return status.Errorf(codes.PermissionDenied, "node is %s", state)
-		}
-		if !strings.EqualFold(dbSerial, serialHex) {
-			return status.Error(codes.Unauthenticated, "certificate serial superseded")
-		}
+	var state, dbSerial, dbPendingSerial string
+	err = s.db.Reader().QueryRowContext(ctx,
+		`SELECT enrollment_state, cert_serial, pending_cert_serial FROM nodes WHERE id = ?`, nodeID,
+	).Scan(&state, &dbSerial, &dbPendingSerial)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.Unauthenticated, "unknown node")
+	}
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to load node state")
+	}
+	if state != "active" {
+		return nil, status.Errorf(codes.PermissionDenied, "node is %s", state)
+	}
+	if !strings.EqualFold(dbSerial, serialHex) && (dbPendingSerial == "" || !strings.EqualFold(dbPendingSerial, serialHex)) {
+		return nil, status.Error(codes.Unauthenticated, "certificate serial superseded")
+	}
 
-		signed, err = s.ca.SignNodeCSR(req.GetCsrDer(), nodeID, s.certTTL)
-		if err != nil {
-			return status.Errorf(codes.InvalidArgument, "invalid csr: %v", err)
-		}
-		rev := tx.NewID("rev")
-		if _, err := tx.ExecContext(ctx, `
+	signed, err := s.ca.SignNodeCSR(req.GetCsrDer(), nodeID, s.certTTL)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid csr: %v", err)
+	}
+	nowMs := s.now().UTC().UnixMilli()
+	pendingExpText := signed.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	if err := s.db.Update(ctx, func(tx *storage.Tx) error {
+		res, uerr := tx.ExecContext(ctx, `
 			UPDATE nodes
-			SET cert_serial = ?, cert_fingerprint = ?, cert_expires_at = ?, revision = ?, updated_at = ?
-			WHERE id = ?`,
-			signed.SerialHex, signed.Fingerprint, signed.ExpiresAt.UnixMilli(), rev, nowMs, nodeID,
-		); err != nil {
-			return status.Error(codes.Internal, "failed to persist rotated certificate")
+			SET pending_cert_serial      = ?,
+			    pending_cert_fingerprint = ?,
+			    pending_cert_expires_at  = ?,
+			    updated_at               = ?
+			WHERE id = ? AND enrollment_state = 'active'`,
+			signed.SerialHex, signed.Fingerprint, pendingExpText, nowMs, nodeID,
+		)
+		if uerr != nil {
+			return uerr
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return status.Error(codes.PermissionDenied, "node is no longer active")
 		}
 		return nil
-	})
-	if err != nil {
-		return nil, err
+	}); err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, status.Error(codes.Internal, "failed to persist pending certificate")
 	}
 
 	return &nodev1.RotateCertificateResponse{
 		CertificateDer:    signed.CertDER,
 		CaCertificatesDer: [][]byte{s.ca.CertDER()},
 	}, nil
+}
+
+func parsePendingCertExpiresAt(raw string) int64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return ts.UnixMilli()
+	}
+	if ms, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return ms
+	}
+	return 0
 }
 
 // ======================== 在线注册表、吊销与管理查询辅助 ========================
@@ -682,8 +774,15 @@ func (s *Server) RevokeNode(ctx context.Context, nodeID string) error {
 	nowMs := s.now().UTC().UnixMilli()
 	err := s.db.Update(ctx, func(tx *storage.Tx) error {
 		rev := tx.NewID("rev")
-		res, err := tx.ExecContext(ctx,
-			`UPDATE nodes SET enrollment_state = 'revoked', revision = ?, updated_at = ? WHERE id = ?`,
+		res, err := tx.ExecContext(ctx, `
+			UPDATE nodes
+			SET enrollment_state         = 'revoked',
+			    pending_cert_serial      = '',
+			    pending_cert_fingerprint = '',
+			    pending_cert_expires_at  = '',
+			    revision                 = ?,
+			    updated_at               = ?
+			WHERE id = ?`,
 			rev, nowMs, nodeID,
 		)
 		if err != nil {
@@ -697,6 +796,9 @@ func (s *Server) RevokeNode(ctx context.Context, nodeID string) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	delete(s.lastHeartbeatPersisted, nodeID)
+	s.mu.Unlock()
 	s.KickNode(nodeID)
 	return nil
 }

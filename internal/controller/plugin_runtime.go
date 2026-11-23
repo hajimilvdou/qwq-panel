@@ -403,6 +403,8 @@ type PluginRuntimeOptions struct {
 	CapabilityForwarder hostsvc.CapabilityForwarder
 	// ManagementPorts 来自宿主实际监听配置，插件消息不能修改。
 	ManagementPorts []uint32
+	// ManagementPortsFunc 可选动态返回宿主当前管理监听端口（如 panelaccess 热换端口后）。
+	ManagementPortsFunc func() []uint32
 }
 
 // PluginRuntime owns the plugin supervisor and the adapters that connect it to
@@ -432,6 +434,9 @@ type PluginRuntime struct {
 	// (serve binds updater.EnsureActive). While it is bound the supervisor
 	// only attaches: starting units and the ABI bootstrap belong to it.
 	restore atomic.Pointer[func(ctx context.Context, pluginID string) error]
+
+	// managementPortsFn 返回宿主当前活跃管理端口，未绑定时回退静态 ManagementPorts。
+	managementPortsFn atomic.Pointer[func() []uint32]
 
 	// publicGateway 负责 ADR-0024 /p/{plugin_id}/{route}/ 公开 HTTP 路由转发。
 	publicGateway *pluginpublic.Gateway
@@ -480,10 +485,24 @@ func NewPluginRuntime(opts PluginRuntimeOptions) (*PluginRuntime, error) {
 	migrateLegacyState(filepath.Join(runDir, "state"), opts.StateDir, opts.Logger)
 
 	rt := &PluginRuntime{opts: opts, hosts: make(map[string]func())}
+	if opts.ManagementPortsFunc != nil {
+		fn := opts.ManagementPortsFunc
+		rt.managementPortsFn.Store(&fn)
+	}
 	if defaultCapabilities {
 		router := rt.opts.CapabilityForwarder.(capability.Forwarder)
 		capClient := sandbox.NewCapabilityClient(sandbox.DefaultCapabilitySocket)
-		router.Services["sshd"] = sshd.Forwarder{Helper: capClient, HostPorts: append([]uint32(nil), opts.ManagementPorts...), Addresses: rt.capabilityAddresses}
+		router.Services["firewall"] = firewall.Forwarder{
+			Helper:        capClient,
+			HostPorts:     append([]uint32(nil), opts.ManagementPorts...),
+			HostPortsFunc: rt.liveManagementPorts,
+		}
+		router.Services["sshd"] = sshd.Forwarder{
+			Helper:        capClient,
+			HostPorts:     append([]uint32(nil), opts.ManagementPorts...),
+			HostPortsFunc: rt.liveManagementPorts,
+			Addresses:     rt.capabilityAddresses,
+		}
 		router.Services["account"] = account.Forwarder{Helper: capClient, RevealSecret: rt.capabilityRevealOperationSecret}
 		router.Services["ban"] = ban.Forwarder{Helper: capClient, Protected: rt.capabilityBanProtectedAddresses}
 		router.Services["traffic"] = traffic.Forwarder{Helper: capClient}
@@ -513,6 +532,30 @@ func NewPluginRuntime(opts PluginRuntimeOptions) (*PluginRuntime, error) {
 	rt.sup = sup
 	rt.dispatcher = &pluginDispatcher{clients: rt}
 	return rt, nil
+}
+
+// SetManagementPortsFunc 绑定实时管理端口查询器（供防火墙与 SSH 能力防失联保留使用）。
+func (rt *PluginRuntime) SetManagementPortsFunc(fn func() []uint32) {
+	if rt == nil {
+		return
+	}
+	if fn == nil {
+		rt.managementPortsFn.Store(nil)
+		return
+	}
+	rt.managementPortsFn.Store(&fn)
+}
+
+func (rt *PluginRuntime) liveManagementPorts() []uint32 {
+	if rt == nil {
+		return nil
+	}
+	if ptr := rt.managementPortsFn.Load(); ptr != nil && *ptr != nil {
+		if ports := (*ptr)(); len(ports) > 0 {
+			return ports
+		}
+	}
+	return append([]uint32(nil), rt.opts.ManagementPorts...)
 }
 
 // RenewalJobHandler 处理宿主内部发起的 tls.certificates/renew_existing 作业。

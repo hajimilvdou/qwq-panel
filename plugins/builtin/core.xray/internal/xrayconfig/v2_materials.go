@@ -30,13 +30,46 @@ type WARPMaterials struct {
 // ProfileMaterials 与期望协议一一对应；其他成员必须完全缺失。
 type ProfileMaterials struct {
 	VLESS           *Secrets
-	Hysteria2       *HysteriaMaterials
+	VLESSTLS        *TLSMaterials
+	VLESSDecryption []byte
+	VMess           *VMessMaterials
+	Trojan          *TrojanMaterials
+	Shadowsocks     *ShadowsocksMaterials
 	Shadowsocks2022 *SS2022Materials
+	Hysteria2       *HysteriaMaterials
+	AnyTLS          *AnyTLSMaterials
+	SOCKS5          *AccountMaterials
+	HTTP            *AccountMaterials
+}
+
+type VMessMaterials struct {
+	UUIDs map[string][]byte
+	TLS   *TLSMaterials
+}
+
+type TrojanMaterials struct {
+	Auth       map[string][]byte
+	TLS        *TLSMaterials
+	PrivateKey []byte
+}
+
+type ShadowsocksMaterials struct {
+	Auth map[string][]byte
+}
+
+type AnyTLSMaterials struct {
+	Auth map[string][]byte
+	TLS  TLSMaterials
+}
+
+type AccountMaterials struct {
+	Auth map[string][]byte
 }
 
 type HysteriaMaterials struct {
-	Auth map[string][]byte
-	TLS  TLSMaterials
+	Auth         map[string][]byte
+	TLS          TLSMaterials
+	ObfsPassword []byte
 }
 
 type TLSMaterials struct {
@@ -91,33 +124,55 @@ type V2Options struct {
 	OutboundPolicy         *OutboundPolicy
 }
 
-func (V2Materials) String() string         { return "V2Materials{[REDACTED]}" }
-func (V2Materials) GoString() string       { return "xrayconfig.V2Materials{[REDACTED]}" }
-func (ProfileMaterials) String() string    { return "ProfileMaterials{[REDACTED]}" }
-func (ProfileMaterials) GoString() string  { return "xrayconfig.ProfileMaterials{[REDACTED]}" }
-func (TLSMaterials) String() string        { return "TLSMaterials{[REDACTED]}" }
-func (TLSMaterials) GoString() string      { return "xrayconfig.TLSMaterials{[REDACTED]}" }
-func (HysteriaMaterials) String() string   { return "HysteriaMaterials{[REDACTED]}" }
-func (HysteriaMaterials) GoString() string { return "xrayconfig.HysteriaMaterials{[REDACTED]}" }
-func (SS2022Materials) String() string     { return "SS2022Materials{[REDACTED]}" }
-func (SS2022Materials) GoString() string   { return "xrayconfig.SS2022Materials{[REDACTED]}" }
-func (WARPMaterials) String() string       { return "WARPMaterials{[REDACTED]}" }
-func (WARPMaterials) GoString() string     { return "xrayconfig.WARPMaterials{[REDACTED]}" }
+func (V2Materials) String() string          { return "V2Materials{[REDACTED]}" }
+func (V2Materials) GoString() string        { return "xrayconfig.V2Materials{[REDACTED]}" }
+func (ProfileMaterials) String() string     { return "ProfileMaterials{[REDACTED]}" }
+func (ProfileMaterials) GoString() string   { return "xrayconfig.ProfileMaterials{[REDACTED]}" }
+func (TLSMaterials) String() string         { return "TLSMaterials{[REDACTED]}" }
+func (TLSMaterials) GoString() string       { return "xrayconfig.TLSMaterials{[REDACTED]}" }
+func (HysteriaMaterials) String() string    { return "HysteriaMaterials{[REDACTED]}" }
+func (HysteriaMaterials) GoString() string  { return "xrayconfig.HysteriaMaterials{[REDACTED]}" }
+func (SS2022Materials) String() string      { return "SS2022Materials{[REDACTED]}" }
+func (SS2022Materials) GoString() string    { return "xrayconfig.SS2022Materials{[REDACTED]}" }
+func (WARPMaterials) String() string        { return "WARPMaterials{[REDACTED]}" }
+func (WARPMaterials) GoString() string      { return "xrayconfig.WARPMaterials{[REDACTED]}" }
+func (VMessMaterials) String() string       { return "VMessMaterials{[REDACTED]}" }
+func (VMessMaterials) GoString() string     { return "xrayconfig.VMessMaterials{[REDACTED]}" }
+func (TrojanMaterials) String() string      { return "TrojanMaterials{[REDACTED]}" }
+func (TrojanMaterials) GoString() string    { return "xrayconfig.TrojanMaterials{[REDACTED]}" }
+func (ShadowsocksMaterials) String() string { return "ShadowsocksMaterials{[REDACTED]}" }
+func (ShadowsocksMaterials) GoString() string {
+	return "xrayconfig.ShadowsocksMaterials{[REDACTED]}"
+}
+func (AnyTLSMaterials) String() string    { return "AnyTLSMaterials{[REDACTED]}" }
+func (AnyTLSMaterials) GoString() string  { return "xrayconfig.AnyTLSMaterials{[REDACTED]}" }
+func (AccountMaterials) String() string   { return "AccountMaterials{[REDACTED]}" }
+func (AccountMaterials) GoString() string { return "xrayconfig.AccountMaterials{[REDACTED]}" }
 
 // 日志走同一脱敏值；JSON 序列化直接拒绝，不让 byte slice 自动编码成秘密字符串。
-func redactedMaterialLog() slog.Value                  { return slog.StringValue("[REDACTED]") }
-func (V2Materials) LogValue() slog.Value               { return redactedMaterialLog() }
-func (ProfileMaterials) LogValue() slog.Value          { return redactedMaterialLog() }
-func (TLSMaterials) LogValue() slog.Value              { return redactedMaterialLog() }
-func (HysteriaMaterials) LogValue() slog.Value         { return redactedMaterialLog() }
-func (SS2022Materials) LogValue() slog.Value           { return redactedMaterialLog() }
-func (WARPMaterials) LogValue() slog.Value             { return redactedMaterialLog() }
-func (V2Materials) MarshalJSON() ([]byte, error)       { return nil, errMaterialSerialization }
-func (ProfileMaterials) MarshalJSON() ([]byte, error)  { return nil, errMaterialSerialization }
-func (TLSMaterials) MarshalJSON() ([]byte, error)      { return nil, errMaterialSerialization }
-func (HysteriaMaterials) MarshalJSON() ([]byte, error) { return nil, errMaterialSerialization }
-func (SS2022Materials) MarshalJSON() ([]byte, error)   { return nil, errMaterialSerialization }
-func (WARPMaterials) MarshalJSON() ([]byte, error)     { return nil, errMaterialSerialization }
+func redactedMaterialLog() slog.Value                     { return slog.StringValue("[REDACTED]") }
+func (V2Materials) LogValue() slog.Value                  { return redactedMaterialLog() }
+func (ProfileMaterials) LogValue() slog.Value             { return redactedMaterialLog() }
+func (TLSMaterials) LogValue() slog.Value                 { return redactedMaterialLog() }
+func (HysteriaMaterials) LogValue() slog.Value            { return redactedMaterialLog() }
+func (SS2022Materials) LogValue() slog.Value              { return redactedMaterialLog() }
+func (WARPMaterials) LogValue() slog.Value                { return redactedMaterialLog() }
+func (VMessMaterials) LogValue() slog.Value               { return redactedMaterialLog() }
+func (TrojanMaterials) LogValue() slog.Value              { return redactedMaterialLog() }
+func (ShadowsocksMaterials) LogValue() slog.Value         { return redactedMaterialLog() }
+func (AnyTLSMaterials) LogValue() slog.Value              { return redactedMaterialLog() }
+func (AccountMaterials) LogValue() slog.Value             { return redactedMaterialLog() }
+func (V2Materials) MarshalJSON() ([]byte, error)          { return nil, errMaterialSerialization }
+func (ProfileMaterials) MarshalJSON() ([]byte, error)     { return nil, errMaterialSerialization }
+func (TLSMaterials) MarshalJSON() ([]byte, error)         { return nil, errMaterialSerialization }
+func (HysteriaMaterials) MarshalJSON() ([]byte, error)    { return nil, errMaterialSerialization }
+func (SS2022Materials) MarshalJSON() ([]byte, error)      { return nil, errMaterialSerialization }
+func (WARPMaterials) MarshalJSON() ([]byte, error)        { return nil, errMaterialSerialization }
+func (VMessMaterials) MarshalJSON() ([]byte, error)       { return nil, errMaterialSerialization }
+func (TrojanMaterials) MarshalJSON() ([]byte, error)      { return nil, errMaterialSerialization }
+func (ShadowsocksMaterials) MarshalJSON() ([]byte, error) { return nil, errMaterialSerialization }
+func (AnyTLSMaterials) MarshalJSON() ([]byte, error)      { return nil, errMaterialSerialization }
+func (AccountMaterials) MarshalJSON() ([]byte, error)     { return nil, errMaterialSerialization }
 
 func clearMaterialMap(values map[string][]byte) {
 	for id, value := range values {
@@ -135,14 +190,47 @@ func (materials *V2Materials) Clear() {
 		if profile.VLESS != nil {
 			profile.VLESS.Clear()
 		}
+		if profile.VLESSTLS != nil {
+			profile.VLESSTLS.Material.Clear()
+		}
+		clear(profile.VLESSDecryption)
+		if profile.VMess != nil {
+			clearMaterialMap(profile.VMess.UUIDs)
+			if profile.VMess.TLS != nil {
+				profile.VMess.TLS.Material.Clear()
+			}
+		}
+		if profile.Trojan != nil {
+			clearMaterialMap(profile.Trojan.Auth)
+			clear(profile.Trojan.PrivateKey)
+			profile.Trojan.PrivateKey = nil
+			if profile.Trojan.TLS != nil {
+				profile.Trojan.TLS.Material.Clear()
+			}
+		}
+		if profile.Shadowsocks != nil {
+			clearMaterialMap(profile.Shadowsocks.Auth)
+		}
 		if profile.Hysteria2 != nil {
 			clearMaterialMap(profile.Hysteria2.Auth)
+			clear(profile.Hysteria2.ObfsPassword)
+			profile.Hysteria2.ObfsPassword = nil
 			profile.Hysteria2.TLS.Material.Clear()
 		}
 		if profile.Shadowsocks2022 != nil {
 			clear(profile.Shadowsocks2022.ServerKey)
 			profile.Shadowsocks2022.ServerKey = nil
 			clearMaterialMap(profile.Shadowsocks2022.PSKs)
+		}
+		if profile.AnyTLS != nil {
+			clearMaterialMap(profile.AnyTLS.Auth)
+			profile.AnyTLS.TLS.Material.Clear()
+		}
+		if profile.SOCKS5 != nil {
+			clearMaterialMap(profile.SOCKS5.Auth)
+		}
+		if profile.HTTP != nil {
+			clearMaterialMap(profile.HTTP.Auth)
 		}
 		delete(materials.Profiles, id)
 	}

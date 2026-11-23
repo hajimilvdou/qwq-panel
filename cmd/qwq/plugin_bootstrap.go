@@ -30,13 +30,7 @@ import (
 	"github.com/qwq-panel/qwq/internal/storage"
 )
 
-func runPlugin(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "bootstrap" {
-		fmt.Fprintln(stderr, "usage: sudo qwq plugin bootstrap [--config FILE] [--timeout 3m] <pkg1.qwqpkg> [pkg2.qwqpkg ...]")
-		return 2
-	}
-	return runPluginBootstrap(args[1:], stdout, stderr, defaultBootstrapSessionFactory)
-}
+// runPlugin is dispatched from cmd/qwq/plugin_dev.go.
 
 type bootstrapSession struct {
 	Client     *http.Client

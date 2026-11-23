@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "theme_id": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "appearance": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "theme_settings": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

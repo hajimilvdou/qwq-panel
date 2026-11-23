@@ -343,23 +343,9 @@ func TestClusterE2EEnrollSessionRotateAndRevoke(t *testing.T) {
 	if formatSerialHex(newLeaf.SerialNumber) == enrollRes.CertSerial {
 		t.Fatal("换证后证书序列号未更新")
 	}
-	recAfterRot, err := h.srv.GetNode(ctx, enrollRes.NodeID)
-	if err != nil || recAfterRot.CertSerial != formatSerialHex(newLeaf.SerialNumber) {
-		t.Fatalf("数据库 cert_serial 未更新: db=%q want=%q err=%v", recAfterRot.CertSerial, formatSerialHex(newLeaf.SerialNumber), err)
-	}
 
-	// 旧证书必须被 VerifyConnection 立即拒连！
-	oldCtx, oldCancel := context.WithTimeout(ctx, 2*time.Second)
-	defer oldCancel()
-	if err := AgentSession(oldCtx, SessionOptions{
-		ControllerAddr: h.sessionAddr,
-		DataDir:        oldDir,
-		Mode:           ModeFull,
-	}); err == nil {
-		t.Fatal("已被替换的旧证书必须无法通过 mTLS 握手建立会话")
-	}
-
-	// 6) 新证书上线后执行 RevokeNode：毫秒级踢断在线流并拦截后续 mTLS 重连。
+	// 6) 新证书首次握手上线原子晋升 pending_cert_serial -> cert_serial，随后旧证书立即被 VerifyConnection 拒连，
+	//    再执行 RevokeNode 毫秒级踢断在线流并拦截后续 mTLS 重连。
 	liveWelcomed := make(chan struct{}, 1)
 	liveCtx, liveCancel := context.WithCancel(ctx)
 	defer liveCancel()
@@ -383,6 +369,22 @@ func TestClusterE2EEnrollSessionRotateAndRevoke(t *testing.T) {
 	case <-liveWelcomed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("换证后新证书未能上线")
+	}
+
+	recAfterRot, err := h.srv.GetNode(ctx, enrollRes.NodeID)
+	if err != nil || recAfterRot.CertSerial != formatSerialHex(newLeaf.SerialNumber) {
+		t.Fatalf("新证书首次握手后数据库 cert_serial 未晋升: db=%q want=%q err=%v", recAfterRot.CertSerial, formatSerialHex(newLeaf.SerialNumber), err)
+	}
+
+	// 新证书晋升后，旧证书必须被 VerifyConnection 立即拒连！
+	oldCtx, oldCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer oldCancel()
+	if err := AgentSession(oldCtx, SessionOptions{
+		ControllerAddr: h.sessionAddr,
+		DataDir:        oldDir,
+		Mode:           ModeFull,
+	}); err == nil {
+		t.Fatal("新证书晋升后，旧证书必须无法通过 mTLS 握手建立会话")
 	}
 
 	if err := h.srv.RevokeNode(ctx, enrollRes.NodeID); err != nil {
@@ -412,6 +414,162 @@ func TestClusterE2EEnrollSessionRotateAndRevoke(t *testing.T) {
 	}); err == nil {
 		t.Fatal("已吊销节点的后续 mTLS 重连应当被拦截")
 	}
+}
+
+func TestClusterPendingCertSurvivesControllerRestart(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	db, err := storage.Open(ctx, storage.Options{
+		Path: filepath.Join(dir, "controller.db"),
+	})
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	ca, err := OpenCA(dir)
+	if err != nil {
+		t.Fatalf("OpenCA: %v", err)
+	}
+
+	startServer := func(t *testing.T) (*Server, string, string, func()) {
+		t.Helper()
+		srv, err := NewServer(ServerOptions{
+			DB:                db,
+			CA:                ca,
+			ServerDNSNames:    []string{"localhost"},
+			ServerIPs:         []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+			HeartbeatInterval: 40 * time.Millisecond,
+		})
+		if err != nil {
+			t.Fatalf("NewServer: %v", err)
+		}
+		enrollLis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen enroll: %v", err)
+		}
+		enrollGRPC := grpc.NewServer(grpc.Creds(credentials.NewTLS(srv.ServerTLSConfig(false))))
+		srv.RegisterEnrollment(enrollGRPC)
+		go func() { _ = enrollGRPC.Serve(enrollLis) }()
+
+		sessLis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen session: %v", err)
+		}
+		sessGRPC := grpc.NewServer(grpc.Creds(credentials.NewTLS(srv.ServerTLSConfig(true))))
+		srv.RegisterSession(sessGRPC)
+		go func() { _ = sessGRPC.Serve(sessLis) }()
+
+		stop := func() {
+			sessGRPC.Stop()
+			_ = sessLis.Close()
+			enrollGRPC.Stop()
+			_ = enrollLis.Close()
+		}
+		return srv, enrollLis.Addr().String(), sessLis.Addr().String(), stop
+	}
+
+	// 1. Start controller #1, enroll agent, and rotate its certificate without reconnecting yet.
+	srv1, enrollAddr1, sessAddr1, stop1 := startServer(t)
+	tok, err := srv1.CreateEnrollmentToken(ctx, "edge-restart-1", ModeFull, "usr_admin", 10*time.Minute)
+	if err != nil {
+		t.Fatalf("CreateEnrollmentToken: %v", err)
+	}
+	agentDir := t.TempDir()
+	enrollRes, err := EnrollAgent(ctx, EnrollOptions{
+		ControllerAddr: enrollAddr1,
+		CAHash:         ca.SPKIPinSHA256(),
+		Token:          tok.Token,
+		DataDir:        agentDir,
+		AgentVersion:   "0.1.0-test",
+		DialTimeout:    5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("EnrollAgent: %v", err)
+	}
+	oldDir := t.TempDir()
+	copyIdentityDir(t, agentDir, oldDir)
+
+	tlsCfg, _, _, err := LoadClientTLSConfig(agentDir, "")
+	if err != nil {
+		t.Fatalf("LoadClientTLSConfig: %v", err)
+	}
+	rotConn, err := dialGRPC(sessAddr1, tlsCfg)
+	if err != nil {
+		t.Fatalf("dial rotate: %v", err)
+	}
+	newLeaf, err := RotateLocalCert(ctx, nodev1.NewNodeSessionServiceClient(rotConn), agentDir)
+	_ = rotConn.Close()
+	if err != nil {
+		t.Fatalf("RotateLocalCert: %v", err)
+	}
+	newSerial := formatSerialHex(newLeaf.SerialNumber)
+
+	// 2. Simulate controller restart before the agent completes its first handshake with the new cert.
+	stop1()
+	srv2, _, sessAddr2, stop2 := startServer(t)
+	t.Cleanup(stop2)
+
+	// Verify pending_cert_serial was persisted in SQLite.
+	var pendingSerial string
+	if err := db.Reader().QueryRowContext(ctx, `SELECT pending_cert_serial FROM nodes WHERE id = ?`, enrollRes.NodeID).Scan(&pendingSerial); err != nil {
+		t.Fatalf("query pending_cert_serial: %v", err)
+	}
+	if !strings.EqualFold(pendingSerial, newSerial) {
+		t.Fatalf("persisted pending_cert_serial = %q, want %q", pendingSerial, newSerial)
+	}
+
+	// 3. Agent connects to the restarted controller #2 with the newly rotated cert -> handshake succeeds & promotes!
+	welcomed := make(chan struct{}, 1)
+	sessCtx, sessCancel := context.WithCancel(ctx)
+	defer sessCancel()
+	sessDone := make(chan error, 1)
+	go func() {
+		sessDone <- AgentSession(sessCtx, SessionOptions{
+			ControllerAddr:    sessAddr2,
+			DataDir:           agentDir,
+			Mode:              ModeFull,
+			HeartbeatInterval: time.Second,
+			OnWelcome: func(*nodev1.Welcome) {
+				select {
+				case welcomed <- struct{}{}:
+				default:
+				}
+			},
+		})
+	}()
+
+	select {
+	case <-welcomed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent failed to complete handshake with rotated cert after controller restart")
+	}
+
+	// Verify cert_serial promoted and pending_cert_serial cleared in SQLite.
+	rec, err := srv2.GetNode(ctx, enrollRes.NodeID)
+	if err != nil || !strings.EqualFold(rec.CertSerial, newSerial) {
+		t.Fatalf("promoted cert_serial = %q, want %q (err=%v)", rec.CertSerial, newSerial, err)
+	}
+	if err := db.Reader().QueryRowContext(ctx, `SELECT pending_cert_serial FROM nodes WHERE id = ?`, enrollRes.NodeID).Scan(&pendingSerial); err != nil {
+		t.Fatalf("query pending_cert_serial after promotion: %v", err)
+	}
+	if pendingSerial != "" {
+		t.Fatalf("pending_cert_serial was not cleared after promotion: %q", pendingSerial)
+	}
+
+	// Old cert must now be rejected by controller #2.
+	oldCtx, oldCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer oldCancel()
+	if err := AgentSession(oldCtx, SessionOptions{
+		ControllerAddr: sessAddr2,
+		DataDir:        oldDir,
+		Mode:           ModeFull,
+	}); err == nil {
+		t.Fatal("superseded cert unexpectedly accepted after promotion on restarted controller")
+	}
+
+	sessCancel()
+	<-sessDone
 }
 
 // ======================== probe_512m 档位资源硬闸门测试 ========================

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -35,9 +36,27 @@ func (s *RenewalService) Tick(ctx context.Context) error {
 	if err != nil {
 		return backendFailure(err, "RENEWAL_FAILED")
 	}
+	// 按 NextAt 升序排程（最早到期优先），防止排在前面的失败策略造成队头饥饿。
+	ordered := slices.Clone(ledger.Policies)
+	slices.SortStableFunc(ordered, func(a, b renewalPolicy) int {
+		switch {
+		case a.NextAt.IsZero() && b.NextAt.IsZero():
+			return 0
+		case a.NextAt.IsZero():
+			return 1
+		case b.NextAt.IsZero():
+			return -1
+		case a.NextAt.Before(b.NextAt):
+			return -1
+		case a.NextAt.After(b.NextAt):
+			return 1
+		default:
+			return 0
+		}
+	})
 	jobs := 0
 	var failures []error
-	for _, policy := range ledger.Policies {
+	for _, policy := range ordered {
 		if err := ctx.Err(); err != nil {
 			return errors.Join(append(failures, err)...)
 		}

@@ -20,3 +20,12 @@ func Detached(ctx context.Context, timeout time.Duration) (context.Context, cont
 	}
 	return context.WithDeadline(context.WithoutCancel(ctx), deadline)
 }
+
+// DetachedFresh 剥离父 context 的取消信号与已到期的业务 deadline，用于显式需要独立有界
+// 善后窗口的补偿任务（非正预算或 nil 父 context 立即到期）。
+func DetachedFresh(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil || timeout <= 0 {
+		return context.WithDeadline(context.Background(), time.Now())
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
+}

@@ -256,7 +256,14 @@ func (i *instance) configSnapshot() proxyConfig {
 	return i.cfg
 }
 
-func (i *instance) Activate(context.Context) error { return i.Go(i.syncLoop) }
+func (i *instance) Activate(ctx context.Context) error {
+	if i.brutalMgr != nil {
+		if bindings, err := i.store.ListBrutalBindings(ctx); err == nil && len(bindings) > 0 {
+			_, _ = i.brutalMgr.Reconcile(bindings)
+		}
+	}
+	return i.Go(i.syncLoop)
+}
 func (i *instance) Deactivate(context.Context) error {
 	if i.brutalMgr != nil {
 		i.brutalMgr.CloseAll()

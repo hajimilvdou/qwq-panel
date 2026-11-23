@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
@@ -60,10 +61,9 @@ func (m *Manager) setupACME(t config.TLS) error {
 			return nil
 		},
 	}
-	if t.DirectoryURL != "" {
-		// Empty means the Let's Encrypt production directory; a staging URL is
-		// what tests and pre-production hosts point at.
-		manager.Client = &acme.Client{DirectoryURL: t.DirectoryURL}
+	manager.Client = &acme.Client{
+		HTTPClient:   &http.Client{Timeout: 30 * time.Second},
+		DirectoryURL: t.DirectoryURL,
 	}
 	m.dir = dir
 	m.acme = manager

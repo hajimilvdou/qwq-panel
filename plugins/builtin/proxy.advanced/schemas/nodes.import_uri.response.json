@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "批量导入外部代理节点 URI 响应",
+  "type": "object",
+  "properties": {
+    "imported": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "imported_count": {
+      "type": "integer"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["imported", "imported_count", "errors"]
+}

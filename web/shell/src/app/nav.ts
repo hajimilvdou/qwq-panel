@@ -78,7 +78,19 @@ export function pluginNav(list: readonly Plugin[]): NavItem[] {
   return out;
 }
 
-/** 当前路径是否属于该导航项（主页只精确匹配） */
-export function isActive(href: string, path: string): boolean {
+/** 计算当前路径在给定导航集合中的唯一最长前缀匹配项 */
+export function activeHref(items: readonly { href: string }[], path: string): string | null {
+  let best: string | null = null;
+  for (const it of items) {
+    const href = it.href;
+    const hit = href === '/' ? path === '/' : path === href || path.startsWith(href + '/');
+    if (hit && (!best || href.length > best.length)) best = href;
+  }
+  return best;
+}
+
+/** 当前路径是否属于该导航项（传入 items 时启用最长路径唯一激活匹配） */
+export function isActive(href: string, path: string, items?: readonly { href: string }[]): boolean {
+  if (items) return activeHref(items, path) === href;
   return href === '/' ? path === '/' : path === href || path.startsWith(href + '/');
 }

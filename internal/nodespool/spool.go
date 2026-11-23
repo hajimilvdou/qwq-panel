@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -56,8 +57,9 @@ type Stats struct {
 
 // Spool 持有单写连接 SQLite WAL 队列，保证并发写入安全与崩溃不丢回执。
 type Spool struct {
-	db       *sql.DB
-	maxBytes int64
+	db        *sql.DB
+	maxBytes  int64
+	usedBytes atomic.Int64
 
 	mu             sync.Mutex
 	droppedMetrics int64
@@ -87,7 +89,7 @@ func Open(ctx context.Context, path string, maxBytes int64) (*Spool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("nodespool: mkdir: %w", err)
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-2048)&_pragma=busy_timeout(5000)&_txlock=immediate", path)
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=journal_size_limit(4194304)&_pragma=auto_vacuum(INCREMENTAL)&_pragma=cache_size(-2048)&_pragma=busy_timeout(5000)&_txlock=immediate", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("nodespool: open sqlite: %w", err)
@@ -99,7 +101,14 @@ func Open(ctx context.Context, path string, maxBytes int64) (*Spool, error) {
 		return nil, fmt.Errorf("nodespool: init schema: %w", err)
 	}
 	_ = os.Chmod(path, 0o600)
-	return &Spool{db: db, maxBytes: maxBytes}, nil
+	sp := &Spool{db: db, maxBytes: maxBytes}
+	var initUsed int64
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes), 0) FROM spool_entries`).Scan(&initUsed); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("nodespool: init used bytes: %w", err)
+	}
+	sp.usedBytes.Store(initUsed)
+	return sp, nil
 }
 
 // Close 关闭底层 SQLite 连接。
@@ -144,29 +153,31 @@ func (s *Spool) Append(ctx context.Context, eventID, topic string, priority int,
 		return 0, qerr
 	}
 
-	var used int64
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes), 0) FROM spool_entries`).Scan(&used); err != nil {
-		return 0, err
-	}
+	used := s.usedBytes.Load()
 
 	// 容量不足时按最旧优先淘汰 PriorityMetrics，死保 PriorityCritical。
+	var evictedRows int64
 	if used+entryBytes > s.maxBytes {
 		needFree := used + entryBytes - s.maxBytes
-		evictedBytes, evictedRows, err := evictMetricsTx(ctx, tx, needFree)
+		evictedBytes, rowsEvicted, err := evictMetricsTx(ctx, tx, needFree)
 		if err != nil {
 			return 0, err
 		}
-		s.droppedMetrics += evictedRows
+		evictedRows = rowsEvicted
 		used -= evictedBytes
+		if used < 0 {
+			used = 0
+		}
 	}
 
 	if used+entryBytes > s.maxBytes {
 		// 若待写入的本身就是低优先级指标，则静默丢弃并计入 droppedMetrics，绝不挤压高优空间。
 		if priority == PriorityMetrics {
-			s.droppedMetrics++
 			if err := tx.Commit(); err != nil {
 				return 0, err
 			}
+			s.droppedMetrics += evictedRows + 1
+			s.usedBytes.Store(used)
 			return 0, nil
 		}
 		return 0, ErrSpoolFull
@@ -186,6 +197,8 @@ func (s *Spool) Append(ctx context.Context, eventID, topic string, priority int,
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("nodespool: commit: %w", err)
 	}
+	s.droppedMetrics += evictedRows
+	s.usedBytes.Store(used + entryBytes)
 	return uint64(seq), nil
 }
 
@@ -254,16 +267,42 @@ func (s *Spool) ReadAfter(ctx context.Context, ackSeq uint64, limit int) ([]Entr
 	return out, rows.Err()
 }
 
-// Ack 在收到 Controller 累计确认后安全清理 seq <= ackSeq 的已送达条目。
+// Ack 在收到 Controller 累计确认后安全清理 seq <= ackSeq 的已送达条目，并增量回收空闲页。
 func (s *Spool) Ack(ctx context.Context, ackSeq uint64) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	res, err := s.db.ExecContext(ctx, `DELETE FROM spool_entries WHERE seq <= ?`, ackSeq)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("nodespool: ack begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	var freedBytes int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes), 0) FROM spool_entries WHERE seq <= ?`, ackSeq).Scan(&freedBytes); err != nil {
+		return 0, fmt.Errorf("nodespool: ack sum: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM spool_entries WHERE seq <= ?`, ackSeq)
 	if err != nil {
 		return 0, fmt.Errorf("nodespool: ack: %w", err)
 	}
-	return res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("nodespool: ack commit: %w", err)
+	}
+	if freedBytes > 0 {
+		next := s.usedBytes.Add(-freedBytes)
+		if next < 0 {
+			s.usedBytes.Store(0)
+		}
+	}
+	if n > 0 {
+		_, _ = s.db.ExecContext(ctx, `PRAGMA incremental_vacuum(64)`)
+	}
+	return n, nil
 }
 
 // Stats 返回当前队列占用与序号边界（供 Agent Hello 握手报告 first_spooled_event_sequence）。

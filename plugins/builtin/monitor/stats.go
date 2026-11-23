@@ -114,6 +114,7 @@ func networkRates(current, previous []*metricsv1.NetIf, names []string, dt float
 		old[iface.Name] = iface
 	}
 	seen := make(map[string]bool)
+	matched := 0
 	var rx, tx float64
 	for _, iface := range current {
 		if iface == nil {
@@ -128,12 +129,16 @@ func networkRates(current, previous []*metricsv1.NetIf, names []string, dt float
 		seen[iface.Name] = true
 		before := old[iface.Name]
 		if before == nil || iface.RxBytes < before.RxBytes || iface.TxBytes < before.TxBytes {
-			return nil, nil
+			if len(names) != 0 {
+				return nil, nil
+			}
+			continue
 		}
+		matched++
 		rx += float64(iface.RxBytes-before.RxBytes) * 8 / dt
 		tx += float64(iface.TxBytes-before.TxBytes) * 8 / dt
 	}
-	if len(seen) == 0 {
+	if matched == 0 {
 		return nil, nil
 	}
 	if len(names) != 0 {
@@ -143,16 +148,17 @@ func networkRates(current, previous []*metricsv1.NetIf, names []string, dt float
 			}
 		}
 	} else {
+		// 默认聚合模式下单个临时/虚拟网卡消失仅跳过，不清空整机有效物理网卡网速。
 		for name := range old {
 			if name != "lo" && !seen[name] {
-				return nil, nil
+				continue
 			}
 		}
 	}
 	return number(rx), number(tx)
 }
 
-// selectedNetwork 显式目标先过滤再校验；默认不重复累计 veth/tun 转发接口。
+// selectedNetwork 显式目标先过滤再校验；默认不重复累计 veth/tun/docker/br-/virbr/wg 等虚拟转发接口。
 func selectedNetwork(name string, names []string) bool {
 	if name == "lo" {
 		return false
@@ -160,7 +166,12 @@ func selectedNetwork(name string, names []string) bool {
 	if len(names) != 0 {
 		return slices.Contains(names, name)
 	}
-	return !strings.HasPrefix(name, "veth") && !strings.HasPrefix(name, "tun")
+	for _, prefix := range []string{"veth", "tun", "docker", "br-", "virbr", "wg"} {
+		if strings.HasPrefix(name, prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 // selectedMetric 只处理已经从环复制出的点，默认保留原完整响应。

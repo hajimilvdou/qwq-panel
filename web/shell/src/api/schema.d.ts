@@ -449,6 +449,50 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/service-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List automation service accounts (without bearer tokens)
+         * @description Returns metadata for automation service accounts; plaintext bearer tokens are never returned.
+         */
+        get: operations["listServiceAccounts"];
+        put?: never;
+        /**
+         * Create an automation service account (returns bearer token once)
+         * @description Creates a scoped automation service account and returns its one-time bearer token in the creation response.
+         */
+        post: operations["createServiceAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/service-accounts/{service_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a service account immediately
+         * @description Revokes the specified service account immediately with optimistic revision concurrency.
+         */
+        delete: operations["deleteServiceAccount"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/service-accounts/renewal-bootstrap": {
         parameters: {
             query?: never;
@@ -553,6 +597,26 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/enrollment-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a one-time short-lived enrollment token for a remote node agent
+         * @description Issues a one-time short-lived enrollment token for pairing a remote node agent via mTLS.
+         */
+        post: operations["createNodeEnrollmentToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}": {
         parameters: {
             query?: never;
@@ -570,6 +634,26 @@ export type paths = {
         get: operations["getNode"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a remote node's mTLS certificate and disconnect its live session
+         * @description Revokes a remote node's mTLS client certificate and disconnects any active agent session immediately.
+         */
+        post: operations["revokeNode"];
         delete?: never;
         options?: never;
         head?: never;
@@ -622,6 +706,86 @@ export type paths = {
          */
         post: operations["uploadPluginPackage"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugin-packages/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch a plugin package from a remote HTTPS URL
+         * @description Downloads a signed `.qwqpkg` package from a public HTTPS URL (such as a GitHub Release
+         *     asset) and stages it in the host's private staging directory through the same path as
+         *     `POST /api/v1/plugin-packages`. The downloader enforces `https://` only, blocks loopback,
+         *     RFC 1918, RFC 4193, link-local, CGNAT, multicast and unspecified IPs on both the initial
+         *     request and every redirect hop, bounds the transfer to 64 MiB and 60 seconds, and verifies
+         *     `expected_sha256` when provided.
+         */
+        post: operations["fetchPluginPackage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugin-trust-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List trusted plugin publisher public keys
+         * @description Returns all currently active Ed25519 publisher public keys trusted by the host, combining
+         *     read-only official system keys (`/etc/qwq/trust`) and administrator-managed custom
+         *     developer keys (`<data_dir>/trust/publishers`).
+         */
+        get: operations["listPluginTrustKeys"];
+        put?: never;
+        /**
+         * Add a custom trusted plugin publisher public key
+         * @description Validates and persists an Ed25519 PKIX public key PEM under the custom trust root so
+         *     third-party plugins signed by that key pass inspection and installation immediately without
+         *     restarting the controller. Human browser session only; requires a fresh second factor or
+         *     `X-QWQ-MFA-Code` when the signed-in administrator has MFA enabled.
+         */
+        post: operations["addPluginTrustKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugin-trust-keys/{key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Trusted publisher Ed25519 key identifier (`ed25519:<64 lower-case hex>`). */
+                key_id: components["parameters"]["PluginTrustKeyIdPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a custom trusted plugin publisher public key
+         * @description Removes an administrator-added custom publisher key from the dynamic trust root and
+         *     invalidates cached package inspections immediately. Official system keys cannot be removed
+         *     (`403 PERMISSION_DENIED`). Human browser session only; requires a fresh second factor or
+         *     `X-QWQ-MFA-Code` when MFA is enabled.
+         */
+        delete: operations["deletePluginTrustKey"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1290,6 +1454,138 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read panel access port, secret entry path, disguise, and reverse-proxy domain settings
+         * @description Returns the live panel listening port, secret entry path, stealth disguise policy, and reverse-proxy domain auto-disable state. Administrators only.
+         */
+        get: operations["getSystemAccess"];
+        /**
+         * Update panel listening port, secret entry path, disguise page, or reverse-proxy domain
+         * @description Updates live panel access settings with optimistic revision checks. Changing the port performs a live hot-rebind; setting a reverse-proxy domain automatically disables the secret entry path and disguise when auto_disable_on_domain is enabled. Administrators only.
+         */
+        put: operations["putSystemAccess"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/facts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read live host IPv4/IPv6 addresses and default route facts
+         * @description Inspects live host IPv4 and IPv6 addresses together with default route facts.
+         */
+        get: operations["getNetworkFacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read node dual-stack inbound/outbound network policy
+         * @description Returns the current dual-stack inbound and outbound network policy for the node.
+         */
+        get: operations["getNetworkPolicy"];
+        /**
+         * Update node dual-stack inbound/outbound network policy
+         * @description Updates the node dual-stack inbound and outbound network policy with optimistic revision concurrency.
+         */
+        put: operations["putNetworkPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/routing/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read China split routing profile and active rule bundle digest
+         * @description Returns the current China split routing profile and active rule bundle metadata.
+         */
+        get: operations["getRoutingProfile"];
+        /**
+         * Update China split routing profile and custom rules
+         * @description Updates the China split routing profile and custom rules with optimistic revision concurrency.
+         */
+        put: operations["putRoutingProfile"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/routing/update-bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify SHA-256 and atomically swap the MIT routing rule bundle
+         * @description Verifies the SHA-256 digest and atomically activates a new MIT routing rule bundle.
+         */
+        post: operations["updateRoutingBundle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/routing/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview client split decision, first-hop endpoints and second-hop outbound policy
+         * @description Evaluates a target hostname or URL against the active routing profile and returns a read-only preview.
+         */
+        post: operations["previewRoutingTwoHop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent-sessions": {
         parameters: {
             query?: never;
@@ -1518,6 +1814,161 @@ export type paths = {
         get: operations["listAgentCores"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-cores/auth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List installation and official login status for external CLI agent cores
+         * @description Returns installation detection, persistent official OAuth/token login state, and (for administrators) active device-code authorization progress for Codex, Claude Code, and OpenCode.
+         */
+        get: operations["listAgentCoreAuth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-cores/{core}/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description External CLI core identifier (codex, claude-code or opencode). */
+                core: "codex" | "claude-code" | "opencode";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start official device-code login or import a setup token for an external CLI agent core
+         * @description Starts an isolated official OAuth/device-code login process or stores an imported OAuth setup token / auth JSON under the core's isolated persistent credential directory. Administrators only.
+         */
+        post: operations["startAgentCoreLogin"];
+        /**
+         * Cancel active login or clear persisted official login credentials for an external CLI core
+         * @description Cancels any in-flight login process and removes persisted official OAuth/token credentials for the specified external CLI core. Administrators only.
+         */
+        delete: operations["logoutAgentCore"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-workspace/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List files in the separated MCP, Skills, or per-core Prompts directory
+         * @description Lists user-managed files inside the strictly separated agent workspace area (mcp, skills, or prompts). Administrators only.
+         */
+        get: operations["listAgentWorkspaceFiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-workspace/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one file from the separated MCP, Skills, or Prompts directory
+         * @description Returns the text content of a workspace file (such as CLAUDE.md, AGENTS.md, SYSTEM.md, SKILL.md, or servers.json). Administrators only.
+         */
+        get: operations["getAgentWorkspaceFile"];
+        /**
+         * Create, update, or upload a file into MCP, Skills, or Prompts
+         * @description Saves edited text or a drag-and-drop uploaded file into the isolated agent workspace directory and mirrors per-core prompt files to their CLI home. Administrators only.
+         */
+        put: operations["putAgentWorkspaceFile"];
+        post?: never;
+        /**
+         * Delete a file or skill directory from MCP, Skills, or Prompts
+         * @description Removes a file or a skill folder inside the isolated agent workspace area. Administrators only.
+         */
+        delete: operations["deleteAgentWorkspaceFile"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search built-in official Skills and MCP repositories
+         * @description Searches the curated and live-cached official repositories (anthropics/skills, openai/skills, modelcontextprotocol/servers) with installation status.
+         */
+        get: operations["searchAgentRegistry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-registry/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Download and install an official Skill or MCP server into the agent workspace
+         * @description Downloads an official Skill SKILL.md from the whitelisted upstream repository or adds an official MCP server entry into mcp/servers.json. Administrators only.
+         */
+        post: operations["installAgentRegistryItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/providers/fetch-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch available model identifiers from an OpenAI or Anthropic compatible endpoint
+         * @description Queries the endpoint's /models list through the host's outbound egress policy, using either an existing provider_id or unsaved base_url + api_key values. Administrators only.
+         */
+        post: operations["fetchAIProviderModels"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2638,13 +3089,15 @@ export type components = {
             config?: Record<string, unknown>;
         };
         /**
-         * @description Members to change; at least one of `title` and `permission_mode` must be present.
+         * @description Members to change; at least one of `title`, `permission_mode`, and `config` must be present.
          *     `expected_revision` is the revision the client last saw.
          */
         AgentSessionUpdateRequest: {
             /** @description New display title. */
             title?: string;
             permission_mode?: components["schemas"]["PermissionMode"];
+            /** @description Partial core configuration patch (provider_id, auth_mode, model, reasoning_effort, max_context_tokens, plan_mode); plaintext secrets are rejected. */
+            config?: Record<string, unknown>;
             expected_revision: components["schemas"]["Revision"];
         };
         /** @description One user message. */
@@ -2741,7 +3194,7 @@ export type components = {
         };
         /**
          * @description A global AI provider (ADR-0017). An administrator sees every member; other principals get
-         *     the reduced projection without `base_url`, `kind`, the timestamps and `revision` (GAPS
+         *     the reduced projection without `base_url`, the timestamps and `revision` (GAPS
          *     缺口 2). The API key is never part of the resource: only `has_api_key` is exposed.
          */
         AiProvider: {
@@ -2749,14 +3202,23 @@ export type components = {
             /** @description Display name; unique among providers. */
             name: string;
             /**
-             * @description The endpoint protocol; only `openai_compatible` exists.
+             * @description Endpoint wire protocol (`openai_compatible` or `anthropic_compatible`).
              * @enum {string}
              */
-            kind?: "openai_compatible";
+            kind?: "openai_compatible" | "anthropic_compatible";
             /** @description Endpoint base URL; administrator projection only. */
             base_url?: string;
-            /** @description Model a session uses unless its config overrides it. */
+            /** @description Default model a session uses unless its config overrides it. */
             model: string;
+            /** @description Cached list of available model identifiers discovered from or configured for this provider. */
+            models?: string[];
+            /** @description Custom reasoning/thinking effort code (e.g. minimal */
+            reasoning_effort?: string;
+            /**
+             * Format: int64
+             * @description Default context window size in tokens (0 uses core default).
+             */
+            max_context_tokens?: number;
             /** @description Whether an API key is stored. The key is write-only and never returned. */
             has_api_key: boolean;
             /** @description Whether sessions without their own endpoint use this provider; at most one provider is the default. */
@@ -2775,31 +3237,331 @@ export type components = {
             /** @description Display name; unique among providers. */
             name: string;
             /**
-             * @description Endpoint protocol; the default and only value is `openai_compatible`.
+             * @description Endpoint wire protocol; defaults to `openai_compatible`.
              * @enum {string}
              */
-            kind?: "openai_compatible";
+            kind?: "openai_compatible" | "anthropic_compatible";
             /** @description Absolute http or https URL without credentials, query or fragment. */
             base_url: string;
-            /** @description Model a session uses unless its config overrides it. */
+            /** @description Default model a session uses unless its config overrides it. */
             model: string;
+            /** @description Optional cached model list available on this provider. */
+            models?: string[];
+            /** @description Custom reasoning/thinking effort code (e.g. minimal */
+            reasoning_effort?: string;
+            /**
+             * Format: int64
+             * @description Default context window size in tokens (0 uses core default).
+             */
+            max_context_tokens?: number;
             /** @description Make this the provider sessions without their own endpoint use; clears the previous default. */
             is_default?: boolean;
         };
-        /**
-         * @description Members to change; at least one of `name`, `base_url`, `model` and `is_default` must be
-         *     present. Changing `base_url` removes the stored API key.
-         */
+        /** @description Members to change; at least one editable field must be present. Changing `base_url` removes the stored API key. */
         AiProviderUpdateRequest: {
             expected_revision: components["schemas"]["Revision"];
             /** @description New display name. */
             name?: string;
+            /**
+             * @description New endpoint wire protocol.
+             * @enum {string}
+             */
+            kind?: "openai_compatible" | "anthropic_compatible";
             /** @description New endpoint base URL; removes the stored API key. */
             base_url?: string;
             /** @description New default model. */
             model?: string;
+            /** @description Updated cached model list available on this provider. */
+            models?: string[];
+            /** @description New custom reasoning/thinking effort code; empty restores auto-matching against the built-in model catalog with fallback to high. */
+            reasoning_effort?: string;
+            /**
+             * Format: int64
+             * @description New default context window size in tokens.
+             */
+            max_context_tokens?: number;
             /** @description Whether this provider is the default; setting it clears the previous default. */
             is_default?: boolean;
+        };
+        /** @description Parameters for discovering available models from a saved provider or an unsaved endpoint. */
+        AiProviderFetchModelsRequest: {
+            provider_id?: components["schemas"]["ResourceId"];
+            /**
+             * @description Endpoint wire protocol.
+             * @enum {string}
+             */
+            kind?: "openai_compatible" | "anthropic_compatible";
+            /** @description Endpoint base URL (required when provider_id is omitted). */
+            base_url?: string;
+            /** @description Optional write-only API key for unsaved endpoints. */
+            api_key?: string;
+        };
+        /** @description Result of model discovery; never returns raw upstream error bodies. */
+        AiProviderFetchModelsResult: {
+            /** @description Whether model discovery succeeded. */
+            ok: boolean;
+            /** @description Sorted deduplicated model identifiers returned by the endpoint. */
+            models: string[];
+            /**
+             * Format: int64
+             * @description Round-trip time in milliseconds.
+             */
+            latency_ms?: number;
+            /**
+             * @description Sanitized failure category when ok is false.
+             * @enum {string}
+             */
+            category?: "auth" | "network" | "denied" | "4xx" | "5xx";
+        };
+        /** @description In-flight or recently completed official CLI login process state. */
+        AgentCoreLoginState: {
+            /**
+             * @description Login lifecycle state.
+             * @enum {string}
+             */
+            state: "pending" | "succeeded" | "failed" | "cancelled" | "expired";
+            /** @description Official OAuth/device verification URL to open in a browser. */
+            verification_url?: string;
+            /** @description One-time device authorization code. */
+            user_code?: string;
+            /** @description Human-readable status guidance. */
+            message?: string;
+            /** @description Recent sanitized CLI login log lines (tokens redacted). */
+            output_tail?: string[];
+            started_at?: components["schemas"]["Timestamp"];
+            updated_at?: components["schemas"]["Timestamp"];
+        };
+        /** @description Installation and official login state of one external CLI agent core. */
+        AgentCoreAuthStatus: {
+            /**
+             * @description External CLI core identifier.
+             * @enum {string}
+             */
+            core: "codex" | "claude-code" | "opencode";
+            /** @description Human-readable core name. */
+            display_name: string;
+            /** @description CLI executable name. */
+            binary: string;
+            /** @description Whether the CLI binary is present in PATH. */
+            installed: boolean;
+            /** @description Recommended official installation command. */
+            install_hint: string;
+            /** @description Whether persistent official login credentials are present in the isolated agent home. */
+            logged_in: boolean;
+            /**
+             * @description Active persistent login credential type.
+             * @enum {string}
+             */
+            auth_method: "oauth" | "token" | "none";
+            updated_at?: components["schemas"]["Timestamp"];
+            active_login?: components["schemas"]["AgentCoreLoginState"];
+        };
+        /** @description Official login status for every supported external CLI agent core. */
+        AgentCoreAuthList: {
+            /** @description External CLI core auth entries. */
+            items: components["schemas"]["AgentCoreAuthStatus"][];
+        };
+        /** @description Request to start official CLI login or import an OAuth setup token. */
+        AgentCoreLoginRequest: {
+            /**
+             * @description Login flow mode (device launches official CLI login; token imports pasted setup token or auth JSON).
+             * @enum {string}
+             */
+            mode?: "device" | "token";
+            /** @description Write-only setup token or credentials JSON when mode is token. */
+            token?: string;
+        };
+        /** @description Canonical custom prompt file for one agent core family. */
+        AgentCorePromptTarget: {
+            core: components["schemas"]["AgentCore"];
+            /** @description Core display name. */
+            display_name: string;
+            /** @description Relative path inside prompts/. */
+            rel_path: string;
+            /** @description Canonical prompt filename (CLAUDE.md */
+            file_name: string;
+            /** @description Explanation of how this prompt file is loaded. */
+            description: string;
+        };
+        /** @description Metadata of one file inside the agent workspace. */
+        AgentWorkspaceFileEntry: {
+            /**
+             * @description Separated workspace area.
+             * @enum {string}
+             */
+            area: "mcp" | "skills" | "prompts";
+            /** @description Relative path within the area. */
+            path: string;
+            /** @description Basename of the file. */
+            name: string;
+            /** @description Skill slug or agent core family folder. */
+            group?: string;
+            /**
+             * Format: int64
+             * @description File size in bytes.
+             */
+            size: number;
+            /** @description Whether the file can be edited inline as UTF-8 text. */
+            is_text: boolean;
+            updated_at: components["schemas"]["Timestamp"];
+        };
+        /** @description Listed files for one separated agent workspace directory. */
+        AgentWorkspaceListResult: {
+            /**
+             * @description Separated workspace area.
+             * @enum {string}
+             */
+            area: "mcp" | "skills" | "prompts";
+            /** @description Isolated host directory path of this area. */
+            directory_hint: string;
+            /** @description Files currently stored in this area. */
+            items: components["schemas"]["AgentWorkspaceFileEntry"][];
+            /** @description Canonical per-core prompt targets when area is prompts. */
+            prompt_targets?: components["schemas"]["AgentCorePromptTarget"][];
+        };
+        /** @description Inline text content of one workspace file. */
+        AgentWorkspaceFileContent: {
+            /**
+             * @description Separated workspace area.
+             * @enum {string}
+             */
+            area: "mcp" | "skills" | "prompts";
+            /** @description Relative path within the area. */
+            path: string;
+            /** @description UTF-8 file text content. */
+            content: string;
+            /**
+             * Format: int64
+             * @description File size in bytes.
+             */
+            size: number;
+            updated_at?: components["schemas"]["Timestamp"];
+        };
+        /** @description Request to write text or upload a file into a workspace area. */
+        AgentWorkspaceWriteRequest: {
+            /**
+             * @description Target workspace area.
+             * @enum {string}
+             */
+            area: "mcp" | "skills" | "prompts";
+            /** @description Relative file path within the area. */
+            path: string;
+            /** @description UTF-8 text content. */
+            content?: string;
+            /** @description Optional base64-encoded file bytes for drag-and-drop uploads. */
+            content_base64?: string;
+        };
+        /** @description Standard MCP server configuration entry stored in mcp/servers.json. */
+        AgentMCPServerEntry: {
+            /** @description Unique MCP server slug. */
+            id: string;
+            /** @description Display name. */
+            name: string;
+            /** @description Server summary. */
+            description?: string;
+            /**
+             * @description Transport protocol.
+             * @enum {string}
+             */
+            transport: "stdio" | "http";
+            /** @description Executable for stdio transport. */
+            command?: string;
+            /** @description Command arguments for stdio transport. */
+            args?: string[];
+            /** @description Endpoint URL for HTTP transport. */
+            url?: string;
+            /** @description Environment variables passed to the MCP server. */
+            env?: {
+                [key: string]: string;
+            };
+            /** @description Whether this MCP server is enabled for agent turns. */
+            enabled: boolean;
+            /** @description Official repository source if installed from the registry. */
+            source?: string;
+        };
+        /** @description Metadata of one built-in official Skills or MCP repository. */
+        AgentRegistrySourceMeta: {
+            /** @description Source identifier. */
+            id: string;
+            /** @description Official repository display name. */
+            name: string;
+            /**
+             * @description Resource category provided by this repository.
+             * @enum {string}
+             */
+            kind: "skill" | "mcp";
+            /** @description GitHub owner/repo slug. */
+            repo: string;
+            /** @description Official repository homepage URL. */
+            url: string;
+            /** @description Short description. */
+            description: string;
+        };
+        /** @description One searchable official Skill or MCP server entry. */
+        AgentRegistryItem: {
+            /** @description Stable registry item identifier. */
+            id: string;
+            /** @description Local folder or MCP id slug. */
+            slug: string;
+            /**
+             * @description Item type.
+             * @enum {string}
+             */
+            kind: "skill" | "mcp";
+            /** @description Official source identifier. */
+            source: string;
+            /** @description Official source display name. */
+            source_name: string;
+            /** @description Display title. */
+            name: string;
+            /** @description Summary of capabilities. */
+            description: string;
+            /** @description Upstream GitHub owner/repo. */
+            repo: string;
+            /** @description Relative path inside upstream repository. */
+            repo_path?: string;
+            /** @description Upstream repository URL. */
+            repo_url: string;
+            /** @description Whitelisted raw SKILL.md URL. */
+            raw_url?: string;
+            /** @description Searchable tags. */
+            tags?: string[];
+            /** @description Whether already installed in the local agent workspace. */
+            installed: boolean;
+            mcp_template?: components["schemas"]["AgentMCPServerEntry"];
+        };
+        /** @description Result of searching built-in official Skills and MCP repositories. */
+        AgentRegistrySearchResult: {
+            /** @description Built-in official repository definitions. */
+            sources: components["schemas"]["AgentRegistrySourceMeta"][];
+            /** @description Matching official Skills and MCP servers. */
+            items: components["schemas"]["AgentRegistryItem"][];
+            /** @description True when live GitHub indexes were refreshed in this call. */
+            live_refreshed: boolean;
+            cached_at?: components["schemas"]["Timestamp"];
+        };
+        /** @description Request to download and install one official Skill or MCP server. */
+        AgentRegistryInstallRequest: {
+            /** @description Official registry item identifier. */
+            id: string;
+        };
+        /** @description Result of installing an official Skill or MCP server. */
+        AgentRegistryInstallResult: {
+            /** @description Installed registry item identifier. */
+            id: string;
+            /**
+             * @description Installed item type.
+             * @enum {string}
+             */
+            kind: "skill" | "mcp";
+            /** @description Always true on success. */
+            installed: boolean;
+            /** @description Written relative path inside the agent workspace. */
+            target: string;
+            /** @description True when downloaded directly from upstream GitHub raw content. */
+            from_live: boolean;
+            /** @description Human-readable confirmation message. */
+            message: string;
         };
         /** @description The provider's API key. Write-only; never returned. */
         AiProviderKeyRequest: {
@@ -2892,6 +3654,47 @@ export type components = {
             data_dir?: string;
             /** @description Whether any plugin has an active version. */
             plugins_enabled: boolean;
+        };
+        /** @description Live panel access port, secret entry path, stealth disguise, and reverse-proxy domain state. */
+        PanelAccessSettings: {
+            /** @description Bound listen IP or host. */
+            listen_host: string;
+            /**
+             * Format: int32
+             * @description Active TCP listening port.
+             */
+            port: number;
+            /** @description Full host:port listen address. */
+            listen: string;
+            /** @description Active TLS mode (self_signed */
+            tls_mode: string;
+            /** @description Configured secret entry path segment without slashes. */
+            entry_path: string;
+            /** @description Currently enforced secret entry path; empty when disabled or bypassed by a reverse-proxy domain. */
+            effective_entry_path: string;
+            /** @description Whether requests without the secret entry path are gated and disguised. */
+            entry_gate_active: boolean;
+            /**
+             * @description Active disguise response mode.
+             * @enum {string}
+             */
+            disguise: "drop" | "nginx_404" | "nginx_403" | "blank_404" | "custom_html";
+            /** @description Custom disguise HTML body. */
+            disguise_html: string;
+            /** @description Configured reverse-proxy domain for direct access. */
+            panel_domain: string;
+            /** @description Automatically disable the secret entry path and disguise when a reverse-proxy domain is configured. */
+            auto_disable_on_domain: boolean;
+            /** @description Reason the entry gate is currently bypassed (tls_proxy */
+            bypass_reason?: string;
+            /** @description True when a PUT request rebound the listener to a new TCP port. */
+            port_changed?: boolean;
+            /**
+             * Format: int64
+             * @description Monotonic revision counter for optimistic concurrency checks.
+             */
+            revision: number;
+            updated_at: components["schemas"]["Timestamp"];
         };
         /** @description A page of nodes. */
         NodeList: components["schemas"]["ListMeta"] & {
@@ -3211,6 +4014,42 @@ export type components = {
             /** @description SHA-256 of the package bytes. */
             sha256: string;
             expires_at: components["schemas"]["Timestamp"];
+        };
+        /** @description Request body to fetch and stage a signed `.qwqpkg` package from a public HTTPS URL. */
+        PluginPackageFetchRequest: {
+            /** @description Public HTTPS URL pointing to a `.qwqpkg` archive. */
+            url: string;
+            /** @description Optional expected SHA-256 checksum of the downloaded `.qwqpkg` file. */
+            expected_sha256?: string;
+        };
+        /** @description Request body to add a custom Ed25519 publisher public key to the dynamic trust store. */
+        PluginTrustKeyCreateRequest: {
+            /** @description Human-readable label identifying the developer or organization. */
+            label: string;
+            /** @description PKIX `PUBLIC KEY` PEM block of an Ed25519 public key. */
+            public_key_pem: string;
+        };
+        /** @description One trusted Ed25519 plugin publisher public key. */
+        PluginTrustKey: {
+            /** @description Canonical Ed25519 key identifier (`ed25519:` + SHA-256 of raw 32-byte public key). */
+            key_id: string;
+            /** @description Display label of the publisher key. */
+            label: string;
+            /**
+             * @description Whether the key comes from the read-only system trust root (`official`) or administrator-managed custom keys (`custom`).
+             * @enum {string}
+             */
+            source: "official" | "custom";
+            /** @description Canonical PKIX `PUBLIC KEY` PEM encoding. */
+            public_key_pem: string;
+            /** @description Principal ID of the administrator who added a custom key. */
+            added_by?: string;
+            added_at?: components["schemas"]["Timestamp"];
+        };
+        /** @description List of all active official and custom trusted publisher public keys. */
+        PluginTrustKeyList: {
+            /** @description Active trusted publisher keys, official keys first. */
+            items: components["schemas"]["PluginTrustKey"][];
         };
         /**
          * @description The pre-install view of a staged package (GAPS gap 4), produced by verification and parsing
@@ -4220,6 +5059,10 @@ export type components = {
         PluginIdPath: components["schemas"]["PluginId"];
         /** @description Opaque upload handle returned by `POST /api/v1/plugin-packages`. */
         PluginUploadIdPath: string;
+        /** @description Trusted publisher Ed25519 key identifier (`ed25519:<64 lower-case hex>`). */
+        PluginTrustKeyIdPath: string;
+        /** @description Optional TOTP or recovery code satisfying second-factor checks for sensitive host mutations when the current session is not freshly MFA-verified. */
+        MfaCodeHeader: string;
         /** @description Plugin instance identifier. */
         InstanceIdPath: components["schemas"]["InstanceId"];
         /** @description Operation name from the plugin manifest. */
@@ -5023,6 +5866,130 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    listServiceAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Service account list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, unknown>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    createServiceAccount: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description Client-generated unique key (a UUID or ULID is fine), sent as a bare token without quotes.
+                 *     Scope: authenticated principal (user, delegation or service account) + HTTP method + concrete
+                 *     path. TTL 24 h from first use; at most `idempotency_keys_per_principal` live keys, beyond which
+                 *     new keys get `429 RATE_LIMITED` (old keys are never evicted early).
+                 *     - Same key, same request fingerprint (SHA-256 of the RFC 8785 canonical JSON body and the
+                 *       sorted query string): the stored response is returned with `Idempotency-Replayed: true`.
+                 *     - Same key, different fingerprint: `422 IDEMPOTENCY_KEY_REUSED`.
+                 *     - Same key while the first request is still being processed: `409 IDEMPOTENCY_IN_PROGRESS`
+                 *       (retryable, with `retry_after`).
+                 *     Only responses produced after the key was bound are stored (2xx and 4xx from the handler).
+                 *     Authentication failures, `429` and `5xx` release the key so the retry is processed afresh.
+                 *     A missing key returns `400 VALIDATION_FAILED` with a violation at `/Idempotency-Key`.
+                 */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Service account creation payload. */
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    /** @enum {string} */
+                    role: "admin" | "operator" | "viewer";
+                    scope?: Record<string, unknown>;
+                };
+            };
+        };
+        responses: {
+            /** @description Created service account with one-time bearer token */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, unknown>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteServiceAccount: {
+        parameters: {
+            query: {
+                /** @description The revision the caller last read; a mismatch returns `409 REVISION_CONFLICT`. */
+                expected_revision: components["parameters"]["ExpectedRevisionQuery"];
+            };
+            header: {
+                /**
+                 * @description Client-generated unique key (a UUID or ULID is fine), sent as a bare token without quotes.
+                 *     Scope: authenticated principal (user, delegation or service account) + HTTP method + concrete
+                 *     path. TTL 24 h from first use; at most `idempotency_keys_per_principal` live keys, beyond which
+                 *     new keys get `429 RATE_LIMITED` (old keys are never evicted early).
+                 *     - Same key, same request fingerprint (SHA-256 of the RFC 8785 canonical JSON body and the
+                 *       sorted query string): the stored response is returned with `Idempotency-Replayed: true`.
+                 *     - Same key, different fingerprint: `422 IDEMPOTENCY_KEY_REUSED`.
+                 *     - Same key while the first request is still being processed: `409 IDEMPOTENCY_IN_PROGRESS`
+                 *       (retryable, with `retry_after`).
+                 *     Only responses produced after the key was bound are stored (2xx and 4xx from the handler).
+                 *     Authentication failures, `429` and `5xx` release the key so the retry is processed afresh.
+                 *     A missing key returns `400 VALIDATION_FAILED` with a violation at `/Idempotency-Key`.
+                 */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description Identifier of the service account to revoke. */
+                service_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Service account revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
     bootstrapRenewalServiceAccount: {
         parameters: {
             query?: never;
@@ -5349,6 +6316,59 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    createNodeEnrollmentToken: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description Client-generated unique key (a UUID or ULID is fine), sent as a bare token without quotes.
+                 *     Scope: authenticated principal (user, delegation or service account) + HTTP method + concrete
+                 *     path. TTL 24 h from first use; at most `idempotency_keys_per_principal` live keys, beyond which
+                 *     new keys get `429 RATE_LIMITED` (old keys are never evicted early).
+                 *     - Same key, same request fingerprint (SHA-256 of the RFC 8785 canonical JSON body and the
+                 *       sorted query string): the stored response is returned with `Idempotency-Replayed: true`.
+                 *     - Same key, different fingerprint: `422 IDEMPOTENCY_KEY_REUSED`.
+                 *     - Same key while the first request is still being processed: `409 IDEMPOTENCY_IN_PROGRESS`
+                 *       (retryable, with `retry_after`).
+                 *     Only responses produced after the key was bound are stored (2xx and 4xx from the handler).
+                 *     Authentication failures, `429` and `5xx` release the key so the retry is processed afresh.
+                 *     A missing key returns `400 VALIDATION_FAILED` with a violation at `/Idempotency-Key`.
+                 */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Node enrollment token parameters. */
+        requestBody: {
+            content: {
+                "application/json": {
+                    preset_name: string;
+                    /** @enum {string} */
+                    mode?: "full" | "probe_512m";
+                    /** Format: int32 */
+                    ttl_seconds?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description One-time enrollment token */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, unknown>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
     getNode: {
         parameters: {
             query?: {
@@ -5384,6 +6404,52 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    revokeNode: {
+        parameters: {
+            query?: never;
+            header: {
+                /**
+                 * @description Client-generated unique key (a UUID or ULID is fine), sent as a bare token without quotes.
+                 *     Scope: authenticated principal (user, delegation or service account) + HTTP method + concrete
+                 *     path. TTL 24 h from first use; at most `idempotency_keys_per_principal` live keys, beyond which
+                 *     new keys get `429 RATE_LIMITED` (old keys are never evicted early).
+                 *     - Same key, same request fingerprint (SHA-256 of the RFC 8785 canonical JSON body and the
+                 *       sorted query string): the stored response is returned with `Idempotency-Replayed: true`.
+                 *     - Same key, different fingerprint: `422 IDEMPOTENCY_KEY_REUSED`.
+                 *     - Same key while the first request is still being processed: `409 IDEMPOTENCY_IN_PROGRESS`
+                 *       (retryable, with `retry_after`).
+                 *     Only responses produced after the key was bound are stored (2xx and 4xx from the handler).
+                 *     Authentication failures, `429` and `5xx` release the key so the retry is processed afresh.
+                 *     A missing key returns `400 VALIDATION_FAILED` with a violation at `/Idempotency-Key`.
+                 */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description Node identifier; `local` in a standalone installation. */
+                node_id: components["parameters"]["NodeIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Node revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, unknown>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["RateLimited"];
             default: components["responses"]["Error"];
         };
@@ -5516,6 +6582,132 @@ export interface operations {
             429: components["responses"]["RateLimited"];
             503: components["responses"]["Unavailable"];
             507: components["responses"]["InsufficientStorage"];
+            default: components["responses"]["Error"];
+        };
+    };
+    fetchPluginPackage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Remote HTTPS package URL and optional SHA-256 digest guard. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PluginPackageFetchRequest"];
+            };
+        };
+        responses: {
+            /** @description The staged package downloaded from the remote HTTPS URL. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginPackageUpload"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["Unavailable"];
+            504: components["responses"]["Timeout"];
+            507: components["responses"]["InsufficientStorage"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listPluginTrustKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The active official and custom trusted publisher keys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginTrustKeyList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    addPluginTrustKey: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional TOTP or recovery code satisfying second-factor checks for sensitive host mutations when the current session is not freshly MFA-verified. */
+                "X-QWQ-MFA-Code"?: components["parameters"]["MfaCodeHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Human label and Ed25519 PKIX public key PEM to trust. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PluginTrustKeyCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description The newly trusted custom publisher key. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginTrustKey"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["Unavailable"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deletePluginTrustKey: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional TOTP or recovery code satisfying second-factor checks for sensitive host mutations when the current session is not freshly MFA-verified. */
+                "X-QWQ-MFA-Code"?: components["parameters"]["MfaCodeHeader"];
+            };
+            path: {
+                /** @description Trusted publisher Ed25519 key identifier (`ed25519:<64 lower-case hex>`). */
+                key_id: components["parameters"]["PluginTrustKeyIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Custom trusted publisher key removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["Unavailable"];
             default: components["responses"]["Error"];
         };
     };
@@ -6673,6 +7865,321 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getSystemAccess: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Field projection: comma-separated RFC 6901 JSON Pointers relative to the resource (for lists:
+                 *     relative to each item), at most `fields_max`. Example: `fields=/name,/status/state`.
+                 *     The result keeps the original nesting and contains only the selected members plus the
+                 *     identifier and `revision`. Pointers traverse objects only: selecting an array returns it
+                 *     whole, and index segments are rejected. Commas inside keys are not supported here (use the
+                 *     agent `read` tool). An unknown pointer returns `400 VALIDATION_FAILED` at `/fields`.
+                 */
+                fields?: components["parameters"]["Fields"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current panel access and disguise configuration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelAccessSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putSystemAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Desired panel access, secret entry path, disguise, and reverse-proxy domain settings. */
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int32
+                     * @description TCP port the panel listens on.
+                     */
+                    port?: number;
+                    /** @description Secret entry path segment without slashes; empty disables the entry gate. */
+                    entry_path?: string;
+                    /** @description Generate a new cryptographically random secret entry path. */
+                    generate_random_entry_path?: boolean;
+                    /**
+                     * @description Stealth response mode when the entry path is missing or wrong.
+                     * @enum {string}
+                     */
+                    disguise?: "drop" | "nginx_404" | "nginx_403" | "blank_404" | "custom_html";
+                    /** @description Custom disguise HTML used when disguise is custom_html. */
+                    disguise_html?: string;
+                    /** @description Reverse-proxy domain for direct access; automatically disables entry path and disguise when auto_disable_on_domain is true. */
+                    panel_domain?: string;
+                    /** @description Automatically disable the secret entry path and disguise once a reverse-proxy domain is configured. */
+                    auto_disable_on_domain?: boolean;
+                    /**
+                     * Format: int64
+                     * @description Optimistic concurrency revision from the previous GET /api/v1/system/access response.
+                     */
+                    expected_revision?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated panel access and disguise configuration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelAccessSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getNetworkFacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live host network facts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, unknown>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getNetworkPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Node network policy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, unknown>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putNetworkPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Desired dual-stack network policy configuration. */
+        requestBody: {
+            content: {
+                "application/json": {
+                    inbound_family_mode?: string;
+                    inbound_candidates?: Record<string, unknown>[];
+                    outbound_family_mode?: string;
+                    outbound_bind_ipv4?: string;
+                    outbound_bind_ipv6?: string;
+                    outbound_overrides?: Record<string, unknown>[];
+                    expected_revision?: components["schemas"]["Revision"];
+                    skip_facts_guard?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated node network policy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, unknown>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getRoutingProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Routing profile. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, unknown>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putRoutingProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Desired China split routing profile and custom rules. */
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    mode?: string;
+                    block_ads?: boolean;
+                    dns_anti_poison?: boolean;
+                    custom_rules?: Record<string, unknown>[];
+                    expected_revision?: components["schemas"]["Revision"];
+                };
+            };
+        };
+        responses: {
+            /** @description Updated routing profile. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, unknown>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    updateRoutingBundle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Routing rule bundle payload and optional expected SHA-256 digest. */
+        requestBody: {
+            content: {
+                "application/json": {
+                    version: string;
+                    bundle_text: string;
+                    expected_sha256?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Activated bundle digest and rule count. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, unknown>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    previewRoutingTwoHop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Target hostname or URL to evaluate. */
+        requestBody: {
+            content: {
+                "application/json": {
+                    target: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Two-hop routing preview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, unknown>;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
     listAgentSessions: {
         parameters: {
             query?: {
@@ -7138,6 +8645,346 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listAgentCoreAuth: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Field projection: comma-separated RFC 6901 JSON Pointers relative to the resource (for lists:
+                 *     relative to each item), at most `fields_max`. Example: `fields=/name,/status/state`.
+                 *     The result keeps the original nesting and contains only the selected members plus the
+                 *     identifier and `revision`. Pointers traverse objects only: selecting an array returns it
+                 *     whole, and index segments are rejected. Commas inside keys are not supported here (use the
+                 *     agent `read` tool). An unknown pointer returns `400 VALIDATION_FAILED` at `/fields`.
+                 */
+                fields?: components["parameters"]["Fields"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description External CLI core authentication statuses. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentCoreAuthList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    startAgentCoreLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description External CLI core identifier (codex, claude-code or opencode). */
+                core: "codex" | "claude-code" | "opencode";
+            };
+            cookie?: never;
+        };
+        /** @description Login mode (device or token) and optional write-only token payload. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentCoreLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated core authentication and login progress state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentCoreAuthStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    logoutAgentCore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description External CLI core identifier (codex, claude-code or opencode). */
+                core: "codex" | "claude-code" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Updated core authentication state after logout. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentCoreAuthStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listAgentWorkspaceFiles: {
+        parameters: {
+            query: {
+                /** @description Separated workspace area (mcp, skills, or prompts). */
+                area: "mcp" | "skills" | "prompts";
+                /**
+                 * @description Field projection: comma-separated RFC 6901 JSON Pointers relative to the resource (for lists:
+                 *     relative to each item), at most `fields_max`. Example: `fields=/name,/status/state`.
+                 *     The result keeps the original nesting and contains only the selected members plus the
+                 *     identifier and `revision`. Pointers traverse objects only: selecting an array returns it
+                 *     whole, and index segments are rejected. Commas inside keys are not supported here (use the
+                 *     agent `read` tool). An unknown pointer returns `400 VALIDATION_FAILED` at `/fields`.
+                 */
+                fields?: components["parameters"]["Fields"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Listed workspace files and canonical per-core prompt targets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentWorkspaceListResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getAgentWorkspaceFile: {
+        parameters: {
+            query: {
+                /** @description Separated workspace area (mcp, skills, or prompts). */
+                area: "mcp" | "skills" | "prompts";
+                /** @description Relative file path within the workspace area. */
+                path: string;
+                /**
+                 * @description Field projection: comma-separated RFC 6901 JSON Pointers relative to the resource (for lists:
+                 *     relative to each item), at most `fields_max`. Example: `fields=/name,/status/state`.
+                 *     The result keeps the original nesting and contains only the selected members plus the
+                 *     identifier and `revision`. Pointers traverse objects only: selecting an array returns it
+                 *     whole, and index segments are rejected. Commas inside keys are not supported here (use the
+                 *     agent `read` tool). An unknown pointer returns `400 VALIDATION_FAILED` at `/fields`.
+                 */
+                fields?: components["parameters"]["Fields"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description File content and metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentWorkspaceFileContent"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putAgentWorkspaceFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Target area, relative path, and UTF-8 or base64 content. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentWorkspaceWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved workspace file metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentWorkspaceFileEntry"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteAgentWorkspaceFile: {
+        parameters: {
+            query: {
+                /** @description Separated workspace area (mcp, skills, or prompts). */
+                area: "mcp" | "skills" | "prompts";
+                /** @description Relative file path (or skill slug directory) within the area. */
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted successfully. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    searchAgentRegistry: {
+        parameters: {
+            query?: {
+                /** @description Filter by item type (all, skill, or mcp). */
+                kind?: "all" | "skill" | "mcp";
+                /** @description Filter by official repository source identifier. */
+                source?: string;
+                /** @description Case-insensitive search query. */
+                q?: string;
+                /** @description Set to 1 to refresh live GitHub repository indexes (cached 10 minutes). */
+                refresh?: "0" | "1" | "false" | "true";
+                /**
+                 * @description Field projection: comma-separated RFC 6901 JSON Pointers relative to the resource (for lists:
+                 *     relative to each item), at most `fields_max`. Example: `fields=/name,/status/state`.
+                 *     The result keeps the original nesting and contains only the selected members plus the
+                 *     identifier and `revision`. Pointers traverse objects only: selecting an array returns it
+                 *     whole, and index segments are rejected. Commas inside keys are not supported here (use the
+                 *     agent `read` tool). An unknown pointer returns `400 VALIDATION_FAILED` at `/fields`.
+                 */
+                fields?: components["parameters"]["Fields"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Official repository metadata and matching installable items. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRegistrySearchResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    installAgentRegistryItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Official registry item identifier to install. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentRegistryInstallRequest"];
+            };
+        };
+        responses: {
+            /** @description Installation result and target workspace path. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRegistryInstallResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    fetchAIProviderModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Existing provider_id or unsaved base_url/kind/api_key parameters. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiProviderFetchModelsRequest"];
+            };
+        };
+        responses: {
+            /** @description Discovered model list or sanitized failure category. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiProviderFetchModelsResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             default: components["responses"]["Error"];
         };
