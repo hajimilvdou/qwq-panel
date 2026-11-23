@@ -42,25 +42,27 @@ var (
 
 // SiteRecord 表示一个反向代理虚拟主机配置（BasicAuthHash 仅用于内部与快照，不对外暴露明文口令）。
 type SiteRecord struct {
-	ID             string            `json:"id"`
-	Domain         string            `json:"domain"`
-	Enabled        bool              `json:"enabled"`
-	UpstreamURL    string            `json:"upstream_url"`
-	PathPrefix     string            `json:"path_prefix"`
-	WebSocket      bool              `json:"websocket"`
-	TLSMode        string            `json:"tls_mode"` // off | managed | custom
-	CertID         string            `json:"cert_id,omitempty"`
-	ForceHTTPS     bool              `json:"force_https"`
-	RateLimitRPS   int               `json:"rate_limit_rps"`
-	RateLimitBurst int               `json:"rate_limit_burst"`
-	BasicAuthUser  string            `json:"basic_auth_user,omitempty"`
-	HasBasicAuth   bool              `json:"has_basic_auth"`
-	BasicAuthHash  string            `json:"-"`
-	ExtraHeaders   map[string]string `json:"extra_headers,omitempty"`
-	Notes          string            `json:"notes,omitempty"`
-	Revision       int               `json:"revision"`
-	CreatedAt      int64             `json:"created_at"`
-	UpdatedAt      int64             `json:"updated_at"`
+	ID                  string            `json:"id"`
+	Domain              string            `json:"domain"`
+	Enabled             bool              `json:"enabled"`
+	UpstreamURL         string            `json:"upstream_url"`
+	PathPrefix          string            `json:"path_prefix"`
+	WebSocket           bool              `json:"websocket"`
+	TLSMode             string            `json:"tls_mode"` // off | managed | custom
+	CertID              string            `json:"cert_id,omitempty"`
+	ForceHTTPS          bool              `json:"force_https"`
+	RateLimitRPS        int               `json:"rate_limit_rps"`
+	RateLimitBurst      int               `json:"rate_limit_burst"`
+	BasicAuthUser       string            `json:"basic_auth_user,omitempty"`
+	HasBasicAuth        bool              `json:"has_basic_auth"`
+	BasicAuthHash       string            `json:"-"`
+	ExtraHeaders        map[string]string `json:"extra_headers,omitempty"`
+	UpstreamTLSInsecure bool              `json:"upstream_tls_insecure"`
+	MaxBodyMB           int               `json:"max_body_mb"`
+	Notes               string            `json:"notes,omitempty"`
+	Revision            int               `json:"revision"`
+	CreatedAt           int64             `json:"created_at"`
+	UpdatedAt           int64             `json:"updated_at"`
 }
 
 // snapshotSite 保存含密码哈希的完整内部快照，确保回滚不会丢失 BasicAuth 凭据。
@@ -104,10 +106,48 @@ func openIngressStore(dataDir, schemaSQL string, nowFn func() time.Time) (*ingre
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
+	if err := migrateIngressSitesColumns(context.Background(), db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate columns: %w", err)
+	}
 	if nowFn == nil {
 		nowFn = time.Now
 	}
 	return &ingressStore{db: db, now: nowFn}, nil
+}
+
+// migrateIngressSitesColumns 幂等补齐旧库缺少的容器反代兼容列（upstream_tls_insecure / max_body_mb）。
+func migrateIngressSitesColumns(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(ingress_sites)`)
+	if err != nil {
+		return err
+	}
+	cols := make(map[string]bool)
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		cols[strings.ToLower(name)] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !cols["upstream_tls_insecure"] {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE ingress_sites ADD COLUMN upstream_tls_insecure INTEGER NOT NULL DEFAULT 0 CHECK (upstream_tls_insecure IN (0, 1))`); err != nil {
+			return err
+		}
+	}
+	if !cols["max_body_mb"] {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE ingress_sites ADD COLUMN max_body_mb INTEGER NOT NULL DEFAULT 0 CHECK (max_body_mb >= 0 AND max_body_mb <= 102400)`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *ingressStore) Close() error {
@@ -200,22 +240,24 @@ func validateHeaders(hdrs map[string]string) (map[string]string, error) {
 }
 
 type siteUpsertParams struct {
-	ID             string
-	Domain         string
-	Enabled        bool
-	UpstreamURL    string
-	PathPrefix     string
-	WebSocket      bool
-	TLSMode        string
-	CertID         string
-	ForceHTTPS     bool
-	RateLimitRPS   int
-	RateLimitBurst int
-	BasicAuthUser  string
-	BasicAuthPass  string
-	ClearBasicAuth bool
-	ExtraHeaders   map[string]string
-	Notes          string
+	ID                  string
+	Domain              string
+	Enabled             bool
+	UpstreamURL         string
+	PathPrefix          string
+	WebSocket           bool
+	TLSMode             string
+	CertID              string
+	ForceHTTPS          bool
+	RateLimitRPS        int
+	RateLimitBurst      int
+	BasicAuthUser       string
+	BasicAuthPass       string
+	ClearBasicAuth      bool
+	ExtraHeaders        map[string]string
+	UpstreamTLSInsecure bool
+	MaxBodyMB           int
+	Notes               string
 }
 
 func (s *ingressStore) upsertSite(ctx context.Context, p siteUpsertParams) (SiteRecord, error) {
@@ -253,6 +295,9 @@ func (s *ingressStore) upsertSite(ctx context.Context, p siteUpsertParams) (Site
 	p.BasicAuthUser = authUserTrim
 	if p.RateLimitRPS < 0 || p.RateLimitRPS > 10000 || p.RateLimitBurst < 0 || p.RateLimitBurst > 20000 {
 		return SiteRecord{}, errors.New("限流参数超出允许范围")
+	}
+	if p.MaxBodyMB < 0 || p.MaxBodyMB > 102400 {
+		return SiteRecord{}, errors.New("max_body_mb 超出允许范围 (0..102400)")
 	}
 	if p.RateLimitRPS > 0 && p.RateLimitBurst == 0 {
 		p.RateLimitBurst = p.RateLimitRPS * 2
@@ -306,20 +351,24 @@ func (s *ingressStore) upsertSite(ctx context.Context, p siteUpsertParams) (Site
 		_, err = s.db.ExecContext(ctx,
 			`INSERT INTO ingress_sites
 			 (id, domain, enabled, upstream_url, path_prefix, websocket, tls_mode, cert_id, force_https,
-			  rate_limit_rps, rate_limit_burst, basic_auth_user, basic_auth_hash, extra_headers_json, notes, revision, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+			  rate_limit_rps, rate_limit_burst, basic_auth_user, basic_auth_hash, extra_headers_json,
+			  upstream_tls_insecure, max_body_mb, notes, revision, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
 			existingID, domain, boolInt(p.Enabled), upstream, prefix, boolInt(p.WebSocket), p.TLSMode,
 			strings.TrimSpace(p.CertID), boolInt(p.ForceHTTPS), p.RateLimitRPS, p.RateLimitBurst,
-			authUser, authHash, string(hdrJSON), strings.TrimSpace(p.Notes), now, now)
+			authUser, authHash, string(hdrJSON), boolInt(p.UpstreamTLSInsecure), p.MaxBodyMB,
+			strings.TrimSpace(p.Notes), now, now)
 	} else {
 		_, err = s.db.ExecContext(ctx,
 			`UPDATE ingress_sites SET domain = ?, enabled = ?, upstream_url = ?, path_prefix = ?, websocket = ?,
 			 tls_mode = ?, cert_id = ?, force_https = ?, rate_limit_rps = ?, rate_limit_burst = ?,
-			 basic_auth_user = ?, basic_auth_hash = ?, extra_headers_json = ?, notes = ?, revision = ?, updated_at = ?
+			 basic_auth_user = ?, basic_auth_hash = ?, extra_headers_json = ?, upstream_tls_insecure = ?, max_body_mb = ?,
+			 notes = ?, revision = ?, updated_at = ?
 			 WHERE id = ?`,
 			domain, boolInt(p.Enabled), upstream, prefix, boolInt(p.WebSocket), p.TLSMode,
 			strings.TrimSpace(p.CertID), boolInt(p.ForceHTTPS), p.RateLimitRPS, p.RateLimitBurst,
-			authUser, authHash, string(hdrJSON), strings.TrimSpace(p.Notes), existingRev+1, now, existingID)
+			authUser, authHash, string(hdrJSON), boolInt(p.UpstreamTLSInsecure), p.MaxBodyMB,
+			strings.TrimSpace(p.Notes), existingRev+1, now, existingID)
 	}
 	if err != nil {
 		return SiteRecord{}, err
@@ -344,14 +393,16 @@ func (s *ingressStore) deleteSite(ctx context.Context, id string) (bool, error) 
 
 func (s *ingressStore) getSiteLocked(ctx context.Context, id string) (SiteRecord, error) {
 	var r SiteRecord
-	var enabled, ws, forceHTTPS int
+	var enabled, ws, forceHTTPS, upstreamInsecure int
 	var hdrRaw string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, domain, enabled, upstream_url, path_prefix, websocket, tls_mode, cert_id, force_https,
-		        rate_limit_rps, rate_limit_burst, basic_auth_user, basic_auth_hash, extra_headers_json, notes, revision, created_at, updated_at
+		        rate_limit_rps, rate_limit_burst, basic_auth_user, basic_auth_hash, extra_headers_json,
+		        upstream_tls_insecure, max_body_mb, notes, revision, created_at, updated_at
 		 FROM ingress_sites WHERE id = ?`, id).Scan(
 		&r.ID, &r.Domain, &enabled, &r.UpstreamURL, &r.PathPrefix, &ws, &r.TLSMode, &r.CertID, &forceHTTPS,
-		&r.RateLimitRPS, &r.RateLimitBurst, &r.BasicAuthUser, &r.BasicAuthHash, &hdrRaw, &r.Notes,
+		&r.RateLimitRPS, &r.RateLimitBurst, &r.BasicAuthUser, &r.BasicAuthHash, &hdrRaw,
+		&upstreamInsecure, &r.MaxBodyMB, &r.Notes,
 		&r.Revision, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return r, err
@@ -359,6 +410,7 @@ func (s *ingressStore) getSiteLocked(ctx context.Context, id string) (SiteRecord
 	r.Enabled = enabled == 1
 	r.WebSocket = ws == 1
 	r.ForceHTTPS = forceHTTPS == 1
+	r.UpstreamTLSInsecure = upstreamInsecure == 1
 	r.HasBasicAuth = r.BasicAuthUser != "" && r.BasicAuthHash != ""
 	_ = json.Unmarshal([]byte(hdrRaw), &r.ExtraHeaders)
 	return r, nil
@@ -373,7 +425,8 @@ func (s *ingressStore) listSites(ctx context.Context) ([]SiteRecord, error) {
 func (s *ingressStore) listSitesLocked(ctx context.Context) ([]SiteRecord, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, domain, enabled, upstream_url, path_prefix, websocket, tls_mode, cert_id, force_https,
-		        rate_limit_rps, rate_limit_burst, basic_auth_user, basic_auth_hash, extra_headers_json, notes, revision, created_at, updated_at
+		        rate_limit_rps, rate_limit_burst, basic_auth_user, basic_auth_hash, extra_headers_json,
+		        upstream_tls_insecure, max_body_mb, notes, revision, created_at, updated_at
 		 FROM ingress_sites ORDER BY domain ASC, path_prefix ASC`)
 	if err != nil {
 		return nil, err
@@ -382,17 +435,19 @@ func (s *ingressStore) listSitesLocked(ctx context.Context) ([]SiteRecord, error
 	out := make([]SiteRecord, 0)
 	for rows.Next() {
 		var r SiteRecord
-		var enabled, ws, forceHTTPS int
+		var enabled, ws, forceHTTPS, upstreamInsecure int
 		var hdrRaw string
 		if err := rows.Scan(
 			&r.ID, &r.Domain, &enabled, &r.UpstreamURL, &r.PathPrefix, &ws, &r.TLSMode, &r.CertID, &forceHTTPS,
-			&r.RateLimitRPS, &r.RateLimitBurst, &r.BasicAuthUser, &r.BasicAuthHash, &hdrRaw, &r.Notes,
+			&r.RateLimitRPS, &r.RateLimitBurst, &r.BasicAuthUser, &r.BasicAuthHash, &hdrRaw,
+			&upstreamInsecure, &r.MaxBodyMB, &r.Notes,
 			&r.Revision, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		r.Enabled = enabled == 1
 		r.WebSocket = ws == 1
 		r.ForceHTTPS = forceHTTPS == 1
+		r.UpstreamTLSInsecure = upstreamInsecure == 1
 		r.HasBasicAuth = r.BasicAuthUser != "" && r.BasicAuthHash != ""
 		_ = json.Unmarshal([]byte(hdrRaw), &r.ExtraHeaders)
 		out = append(out, r)
@@ -494,11 +549,13 @@ func (s *ingressStore) rollbackToSnapshot(ctx context.Context, snapshotID string
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO ingress_sites
 			 (id, domain, enabled, upstream_url, path_prefix, websocket, tls_mode, cert_id, force_https,
-			  rate_limit_rps, rate_limit_burst, basic_auth_user, basic_auth_hash, extra_headers_json, notes, revision, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  rate_limit_rps, rate_limit_burst, basic_auth_user, basic_auth_hash, extra_headers_json,
+			  upstream_tls_insecure, max_body_mb, notes, revision, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			it.ID, it.Domain, boolInt(it.Enabled), it.UpstreamURL, it.PathPrefix, boolInt(it.WebSocket),
 			it.TLSMode, it.CertID, boolInt(it.ForceHTTPS), it.RateLimitRPS, it.RateLimitBurst,
-			it.BasicAuthUser, it.BasicAuthHash, string(hdrJSON), it.Notes, it.Revision, it.CreatedAt, it.UpdatedAt); err != nil {
+			it.BasicAuthUser, it.BasicAuthHash, string(hdrJSON), boolInt(it.UpstreamTLSInsecure), it.MaxBodyMB,
+			it.Notes, it.Revision, it.CreatedAt, it.UpdatedAt); err != nil {
 			return rec, nil, err
 		}
 	}

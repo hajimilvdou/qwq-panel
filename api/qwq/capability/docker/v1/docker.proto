@@ -28,6 +28,18 @@ service DockerService {
   // Runs host-verified `docker compose up -d` or `down` outside the plugin cgroup.
   // effect=write, risk=high.
   rpc ComposeAction(ComposeActionRequest) returns (ComposeActionResponse);
+  // Lists host bindable IP addresses (127.0.0.1, ::1, 0.0.0.0, ::, and active NIC IPs).
+  // effect=read, risk=low.
+  rpc ListBindableIPs(ListBindableIPsRequest) returns (ListBindableIPsResponse);
+  // Creates a controlled Docker bridge/overlay network (never host/macvlan/ipvlan).
+  // effect=write, risk=medium.
+  rpc CreateNetwork(CreateNetworkRequest) returns (CreateNetworkResponse);
+  // Connects or disconnects a container to/from a Docker network with optional aliases and static IP.
+  // effect=write, risk=medium.
+  rpc MutateContainerNetwork(MutateContainerNetworkRequest) returns (MutateContainerNetworkResponse);
+  // Atomically recreates a container with new port bindings using a rollback-safe Saga.
+  // effect=write, risk=high.
+  rpc RecreateContainerPorts(RecreateContainerPortsRequest) returns (RecreateContainerPortsResponse);
 }
 
 message ProxyReadRequest {
@@ -75,4 +87,86 @@ message ComposeActionResponse {
   string output = 1;
   repeated string warnings = 2;
   qwq.platform.v1.ErrorDetail error = 3;
+}
+
+message ListBindableIPsRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+}
+
+message BindableIP {
+  string ip = 1;
+  string family = 2;
+  string iface = 3;
+  string scope = 4;
+  bool recommended = 5;
+  string label = 6;
+  bool is_ipv6 = 7;
+}
+
+message ListBindableIPsResponse {
+  repeated BindableIP ips = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+
+message CreateNetworkRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string name = 2;
+  string driver = 3;
+  string subnet = 4;
+  string gateway = 5;
+  bool internal = 6;
+  bool enable_ipv6 = 7;
+  map<string, string> labels = 8;
+}
+
+message CreateNetworkResponse {
+  string network_id = 1;
+  string name = 2;
+  qwq.platform.v1.ErrorDetail error = 3;
+}
+
+message MutateContainerNetworkRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string container_id = 2;
+  string action = 3;
+  string network_id = 4;
+  repeated string aliases = 5;
+  string ipv4_address = 6;
+  bool force = 7;
+  string ipv6_address = 8;
+}
+
+message MutateContainerNetworkResponse {
+  bool ok = 1;
+  qwq.platform.v1.ErrorDetail error = 2;
+}
+
+message PortBindingSpec {
+  int32 container_port = 1;
+  string protocol = 2;
+  string host_ip = 3;
+  int32 host_port = 4;
+  string bind_mode = 5;
+  bool include_ipv6 = 6;
+}
+
+message RecreateContainerPortsRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string container_id = 2;
+  repeated PortBindingSpec bindings = 3;
+  bool commit_writable_layer = 4;
+  bool allow_port_override = 5;
+  bool allow_discard_writable_layer = 6;
+  optional bool start_after_recreate = 7;
+}
+
+message RecreateContainerPortsResponse {
+  string new_container_id = 1;
+  string old_container_id = 2;
+  string committed_image = 3;
+  repeated string warnings = 4;
+  qwq.platform.v1.ErrorDetail error = 5;
+  string container_name = 6;
+  repeated PortBindingSpec applied_bindings = 7;
+  int64 writable_size_bytes = 8;
 }

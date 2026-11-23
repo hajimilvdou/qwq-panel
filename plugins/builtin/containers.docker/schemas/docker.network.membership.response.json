@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "container_id",
+    "network_id",
+    "action"
+  ],
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "container_id": {
+      "type": "string"
+    },
+    "network_id": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    }
+  }
+}

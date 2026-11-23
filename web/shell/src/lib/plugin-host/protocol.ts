@@ -10,9 +10,9 @@
  *   port ─────────── ui.ready ──────▶   去骨架（6 秒未到 → 超时态）
  *   port ◀────────── ui.settings ────   主题 / 动效 / 密度 / token / 可见性 / public_origin
  *   port ◀────────── ui.route ───────   浏览器前进后退
- *   port ─── ui.resize / ui.toast / ui.navigate / ui.confirm / ui.copy
+ *   port ─── ui.resize / ui.toast / ui.navigate / ui.confirm / ui.copy / ui.ensure_plugins
  *            api.invoke / api.subscribe / events.unsubscribe ───▶
- *   port ◀────────── api.result / ui.confirm.result / ui.copy.result / api.event
+ *   port ◀────────── api.result / ui.confirm.result / ui.copy.result / ui.ensure_plugins.result / api.event
  *
  * 未知类型或结构不符的消息丢弃；超过 4 MiB 的 api.invoke/api.call 返回显式 PAYLOAD_TOO_LARGE 错误。
  * ========================================================================== */
@@ -27,6 +27,33 @@ export const INVOKE_CONCURRENCY = 8;
 export const INVOKE_PER_SECOND = 20;
 export const OPERATION_RE = /^[a-z0-9._-]+$/;
 
+/** 零信任官方联动组件白名单：仅允许插件通过 ui.ensure_plugins 引导启用这 3 个官方组件 */
+export const ENSURE_PLUGIN_ALLOWLIST = ['web.ingress', 'tls.certificates', 'domain.dns'] as const;
+const ENSURE_PLUGIN_ALLOWLIST_SET: ReadonlySet<string> = new Set(ENSURE_PLUGIN_ALLOWLIST);
+
+export function isEnsurePluginAllowed(pluginId: string): boolean {
+  return ENSURE_PLUGIN_ALLOWLIST_SET.has(pluginId);
+}
+
+export interface EnsurePluginsParams {
+  plugins: string[];
+  reason?: string;
+}
+
+export interface EnsurePluginsFailure {
+  plugin_id: string;
+  detail: string;
+}
+
+export interface EnsurePluginsResult {
+  ready: boolean;
+  cancelled?: boolean;
+  installed: string[];
+  enabled: string[];
+  already_ready: string[];
+  failed?: EnsurePluginsFailure[];
+}
+
 /* ------------------------------------------------------------------ 消息类型 */
 
 export type RpcId = string | number;
@@ -38,6 +65,7 @@ export type PluginToShell =
   | { t: 'ui.navigate'; path: string }
   | { t: 'ui.confirm'; id: RpcId; title: string; body: string; confirm_label?: string; danger?: boolean }
   | { t: 'ui.copy'; id: RpcId; text: string; label?: string }
+  | { t: 'ui.ensure_plugins'; id: RpcId; plugins: string[]; reason?: string }
   | {
       t: 'api.invoke';
       id: RpcId;
@@ -67,6 +95,8 @@ export type ShellToPlugin =
   | { t: 'ui.confirm.result'; id: RpcId; ok: false; problem: { code: string; detail?: string; status?: number } }
   | { t: 'ui.copy.result'; id: RpcId; ok: true; data?: { copied: boolean } }
   | { t: 'ui.copy.result'; id: RpcId; ok: false; problem: { code: string; detail?: string; status?: number } }
+  | { t: 'ui.ensure_plugins.result'; id: RpcId; ok: true; data: EnsurePluginsResult }
+  | { t: 'ui.ensure_plugins.result'; id: RpcId; ok: false; problem: { code: string; detail?: string; status?: number } }
   | { t: 'api.event'; event: unknown };
 
 /* ------------------------------------------------------------------ 校验 */
@@ -157,6 +187,18 @@ export function parsePluginMessage(data: unknown): PluginToShell | null {
         id: data.id,
         text: data.text,
         label: data.label as string | undefined,
+      };
+    }
+    case 'ui.ensure_plugins': {
+      if (!isRpcId(data.id)) return null;
+      const list = data.plugins;
+      if (!Array.isArray(list) || list.length === 0 || list.length > 16 || !list.every((x) => isStr(x, 128))) return null;
+      if (data.reason !== undefined && (typeof data.reason !== 'string' || data.reason.length > 500)) return null;
+      return {
+        t: 'ui.ensure_plugins',
+        id: data.id,
+        plugins: list as string[],
+        reason: data.reason as string | undefined,
       };
     }
     case 'api.invoke':

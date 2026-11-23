@@ -12,6 +12,8 @@
   const pending = new Map();
   const pendingConfirm = new Map();
   const pendingCopy = new Map();
+  const pendingEnsure = new Map();
+  let drawerOpen = false;
 
   const setStatus = (t) => { statusEl.textContent = t; };
   const send = (msg) => { if (port) port.postMessage(msg); };
@@ -23,13 +25,22 @@
   }
 
   function timeoutForOperation(operation) {
-    if (operation === 'docker.compose.deploy') return 95000;
+    if (
+      operation === 'docker.compose.deploy' ||
+      operation === 'docker.container.ports.apply' ||
+      operation === 'docker.container.proxy.upsert'
+    ) {
+      return 95000;
+    }
     if (operation === 'docker.images.prune') return 65000;
     if (
       operation === 'docker.container.action' ||
       operation === 'docker.container.limits' ||
       operation === 'docker.container.remove' ||
-      operation === 'docker.compose.remove'
+      operation === 'docker.compose.remove' ||
+      operation === 'docker.network.create' ||
+      operation === 'docker.network.membership' ||
+      operation === 'docker.container.proxy.delete'
     ) {
       return 35000;
     }
@@ -84,6 +95,67 @@
     if (label) msg.label = label;
     send(msg);
   });
+
+  const ensurePlugins = (plugins, reason) => new Promise((resolve, reject) => {
+    if (!port) return reject(new Error('宿主桥尚未就绪'));
+    const list = Array.isArray(plugins) ? plugins.filter(Boolean) : [];
+    if (list.length === 0) return reject(new Error('未指定需要启用的组件'));
+    const id = `ep_${++seq}`;
+    const timer = setTimeout(() => {
+      pendingEnsure.delete(id);
+      reject(new Error('启用组件响应超时 (125s)'));
+    }, 125000);
+    pendingEnsure.set(id, { resolve, reject, timer });
+    const msg = { t: 'ui.ensure_plugins', id, plugins: list };
+    if (reason) msg.reason = String(reason);
+    send(msg);
+  });
+
+  function reportHostHeight() {
+    const rootEl = document.getElementById('docker-root');
+    const contentH = rootEl ? Math.ceil(rootEl.getBoundingClientRect().height) + 24 : 560;
+    send({ t: 'ui.resize', height: drawerOpen ? Math.max(contentH, 760) : contentH });
+  }
+
+  function normalizeContainerName(name) {
+    return String(name || '').trim().replace(/^\/+/, '');
+  }
+
+  function buildSafeProxyHref(domain, pathPrefix, tlsMode) {
+    const cleanDomain = String(domain || '').trim();
+    if (!cleanDomain || /[\s/\\@<>"'`\u0000-\u001f]/.test(cleanDomain)) return null;
+    const rawPath = String(pathPrefix || '/').trim() || '/';
+    const safePath = rawPath.startsWith('/') ? rawPath : '/' + rawPath;
+    if (/[\s<>"'`\u0000-\u001f]/.test(safePath)) return null;
+    const scheme = tlsMode === 'off' ? 'http' : 'https';
+    return `${scheme}://${cleanDomain}${safePath}`;
+  }
+
+  function indexIngressLinks(data) {
+    const map = new Map();
+    const pushLink = (name, lk) => {
+      const key = normalizeContainerName(name);
+      if (!key || !lk || !lk.domain) return;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(lk);
+    };
+    const rawList = Array.isArray(data?.ingress_links)
+      ? data.ingress_links
+      : Array.isArray(data?.proxy_links)
+        ? data.proxy_links
+        : [];
+    for (const lk of rawList) {
+      pushLink(lk.container_name, lk);
+    }
+    if (data?.proxy_links && !Array.isArray(data.proxy_links) && typeof data.proxy_links === 'object') {
+      for (const [k, list] of Object.entries(data.proxy_links)) {
+        if (Array.isArray(list)) {
+          for (const lk of list) pushLink(k, lk);
+        }
+      }
+    }
+    return map;
+  }
 
   function switchTab(tab) {
     for (const b of document.querySelectorAll('#nav-tabs button')) b.classList.toggle('active', b.dataset.tab === tab);
@@ -141,6 +213,7 @@
       document.getElementById('st-img').textContent = String((data.images || []).length);
       document.getElementById('st-st').textContent = String((data.stacks || []).length);
 
+      const linksByContainer = indexIngressLinks(data);
       const ct = document.getElementById('containers-tbody');
       ct.replaceChildren();
       for (const c of data.containers || []) {
@@ -153,11 +226,47 @@
         const stTd = document.createElement('td');
         stTd.appendChild(badge(c.state));
         tr.appendChild(stTd);
+
+        const cLinks = [
+          ...(linksByContainer.get(normalizeContainerName(c.name)) || []),
+          ...(Array.isArray(c.ingress_links) ? c.ingress_links : []),
+          ...(Array.isArray(c.proxy_links) ? c.proxy_links : []),
+        ];
         const pTd = document.createElement('td');
-        pTd.textContent = (c.ports || []).join(', ') || '-';
+        const pWrap = document.createElement('div');
+        pWrap.className = 'port-cell';
+        const pText = document.createElement('span');
+        pText.textContent = (c.ports || []).join(', ') || '-';
+        pWrap.appendChild(pText);
+        if (cLinks.length > 0) {
+          const pillRow = document.createElement('div');
+          pillRow.className = 'proxy-pills-row';
+          for (const lk of cLinks) {
+            const href = buildSafeProxyHref(lk.domain, lk.path_prefix, lk.tls_mode);
+            const label = `${lk.tls_mode === 'off' ? 'http' : 'https'}://${lk.domain}${lk.path_prefix && lk.path_prefix !== '/' ? lk.path_prefix : ''}`;
+            if (href) {
+              const a = document.createElement('a');
+              a.className = 'proxy-pill';
+              a.href = href;
+              a.target = '_blank';
+              a.rel = 'noopener noreferrer';
+              a.textContent = label;
+              pillRow.appendChild(a);
+            }
+          }
+          if (pillRow.childElementCount > 0) pWrap.appendChild(pillRow);
+        }
+        pTd.appendChild(pWrap);
         tr.appendChild(pTd);
+
         const act = document.createElement('td');
         act.className = 'row-actions';
+
+        const settingsBtn = makeBtn('⚙ 设置', 'btn btn-sm', () => {
+          if (window.QWQContainerDrawer) {
+            void window.QWQContainerDrawer.open(c.id, 'overview');
+          }
+        });
 
         const startBtn = makeBtn('启动', 'btn ghost btn-sm', () => void runAction(async () => {
           await invoke('docker.container.action', { id: c.id, action: 'start' });
@@ -190,14 +299,20 @@
         }, `已加载容器 ${c.name} 最新日志`));
 
         const removeBtn = makeBtn('删除', 'btn danger btn-sm', () => void runAction(async () => {
-          const ok = await hostConfirm('删除容器', `确认强制删除容器「${c.name}」(${c.short_id})？此操作不可逆。`, { danger: true, confirmLabel: '确认删除' });
+          const domains = cLinks.map((lk) => lk.domain).filter(Boolean);
+          const body = domains.length > 0
+            ? `确认强制删除容器「${c.name}」(${c.short_id})？检测到关联了 ${domains.length} 条反代域名（${domains.join('、')}），将同步清理关联反代规则以防 502 死链（如需保留反代请在「⚙ 设置」中取消勾选）。`
+            : `确认强制删除容器「${c.name}」(${c.short_id})？此操作不可逆。`;
+          const ok = await hostConfirm('删除容器', body, { danger: true, confirmLabel: '确认删除' });
           if (!ok) return;
-          await invoke('docker.container.remove', { id: c.id, force: true });
+          const removePayload = { id: c.id, force: true };
+          if (domains.length > 0) removePayload.cleanup_linked_proxies = true;
+          await invoke('docker.container.remove', removePayload);
           await refresh();
           setStatus(`已删除容器 ${c.name}`);
         }));
 
-        act.append(startBtn, stopBtn, restartBtn, inspectBtn, logsBtn, removeBtn);
+        act.append(settingsBtn, startBtn, stopBtn, restartBtn, inspectBtn, logsBtn, removeBtn);
         tr.appendChild(act);
         ct.appendChild(tr);
       }
@@ -357,13 +472,36 @@
       else req.reject(new Error(extractErrorMessage(data.problem || data.error, '复制失败')));
       return;
     }
+    if (data.t === 'ui.ensure_plugins.result' && pendingEnsure.has(data.id)) {
+      const req = pendingEnsure.get(data.id);
+      clearTimeout(req.timer);
+      pendingEnsure.delete(data.id);
+      if (data.ok) req.resolve(data.data || { ready: true, installed: [], enabled: [], already_ready: [] });
+      else req.reject(new Error(extractErrorMessage(data.problem || data.error, '启用组件失败')));
+      return;
+    }
     if (data.t === 'ui.settings' && (data.theme === 'light' || data.theme === 'dark')) {
       root.dataset.theme = data.theme;
     }
   }
 
+  if (window.QWQContainerDrawer) {
+    window.QWQContainerDrawer.init({
+      invoke,
+      hostConfirm,
+      hostCopy,
+      ensurePlugins,
+      onListChanged: refresh,
+      setGlobalStatus: setStatus,
+      onDrawerToggle: (isOpen) => {
+        drawerOpen = Boolean(isOpen);
+        reportHostHeight();
+      },
+    });
+  }
+
   const ro = new ResizeObserver(() => {
-    send({ t: 'ui.resize', height: Math.ceil(document.getElementById('docker-root').getBoundingClientRect().height) + 24 });
+    reportHostHeight();
   });
   ro.observe(document.getElementById('docker-root'));
 
@@ -389,6 +527,11 @@
       req.reject(new Error('页面已关闭'));
     }
     pendingCopy.clear();
+    for (const req of pendingEnsure.values()) {
+      clearTimeout(req.timer);
+      req.reject(new Error('页面已关闭'));
+    }
+    pendingEnsure.clear();
     if (port) {
       port.onmessage = null;
       if (typeof port.close === 'function') port.close();

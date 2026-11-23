@@ -6,6 +6,8 @@ package pluginsdk
 
 import "net"
 
+const requirePublicStreamPeerVerification = false
+
 func defaultPublicStreamPeerVerifier(string) func(net.Conn) error {
 	return nil
 }

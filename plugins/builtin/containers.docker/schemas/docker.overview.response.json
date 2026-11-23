@@ -33,6 +33,12 @@
       "items": {
         "type": "object"
       }
+    },
+    "ingress_links": {
+      "type": "object"
+    },
+    "proxy_links": {
+      "type": "object"
     }
   }
 }

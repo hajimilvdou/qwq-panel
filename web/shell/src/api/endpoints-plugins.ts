@@ -24,6 +24,15 @@ import type {
 const enc = encodeURIComponent;
 type Mutating = Operation | OperationOutcome;
 
+/** 判断插件是否已处于可用运行态（running 或无 runtime 报告时的 ACTIVE） */
+export function isPluginActiveReady(plugin: Plugin | undefined): boolean {
+  if (!plugin) return false;
+  const runtimeState = plugin.runtime?.state;
+  if (runtimeState === 'running') return true;
+  if (runtimeState && runtimeState !== 'unknown') return false;
+  return plugin.active_status === 'ACTIVE';
+}
+
 export const plugins = {
   list: listPlugins,
   get: (id: string) => http.get<Plugin>(`/api/v1/plugins/${enc(id)}`).then((r) => r.data),
@@ -54,6 +63,11 @@ export const plugins = {
       .then(() => undefined),
   install: (body: { upload_id: string; accepted_capabilities: { name: string; scope: string }[] }, key: string) =>
     http.post<PluginVersion>('/api/v1/plugins', body, { idempotency: key }).then((r) => r.data),
+  /** 尝试通过宿主官方内置目录接口安装并启用指定内置插件（需宿主支持该端点） */
+  installBuiltin: (id: string, key: string, autoEnable = true): Promise<OpResult> =>
+    http
+      .post<Mutating>(`/api/v1/plugins/${enc(id)}/install-builtin`, { auto_enable: autoEnable }, { idempotency: key })
+      .then(toOpResult),
   update: (
     id: string,
     body: { upload_id: string; accepted_capabilities: { name: string; scope: string }[]; expected_revision?: string },

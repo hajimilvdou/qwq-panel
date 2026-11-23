@@ -51,6 +51,9 @@ const (
 // ErrUserDisabled 表示分发用户已被管理员停用，禁止登录、签到、核销兑换码或调用 API。
 var ErrUserDisabled = errors.New("USER_DISABLED: 该分发账号已被停用")
 
+// ErrQuotaExhausted 表示用户或子令牌的可用虚拟统计额度不足以覆盖本次请求的最小预冻结额。
+var ErrQuotaExhausted = errors.New("QUOTA_EXHAUSTED: insufficient account statistical quota")
+
 // OpenDB 打开并初始化 WAL 模式 SQLite 数据库，同时加载或生成 32 字节本地 AES-256-GCM 主密钥。
 func OpenDB(dataDir, schemaSQL string) (*sql.DB, []byte, error) {
 	dsn := ":memory:"
@@ -331,10 +334,30 @@ type OverviewStats struct {
 
 type LiveUserQuota struct {
 	UserID        string
-	GroupName     string
+	groupName     atomic.Pointer[string]
 	StatusActive  atomic.Bool
 	BalanceMicros atomic.Int64
 	UsedMicros    atomic.Int64
+}
+
+// GetGroupName 原子读取分发用户当前所属分组名，供热路径并发安全访问。
+func (u *LiveUserQuota) GetGroupName() string {
+	if u == nil {
+		return ""
+	}
+	if p := u.groupName.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
+// SetGroupName 原子更新分发用户所属分组名。
+func (u *LiveUserQuota) SetGroupName(name string) {
+	if u == nil {
+		return
+	}
+	cp := name
+	u.groupName.Store(&cp)
 }
 
 type LiveAPIToken struct {
@@ -359,7 +382,7 @@ func (t *LiveAPIToken) EffectiveGroup() string {
 	if t.GroupOverride != "" {
 		return t.GroupOverride
 	}
-	return t.User.GroupName
+	return t.User.GetGroupName()
 }
 
 func (t *LiveAPIToken) AllowRequest(model, clientIP string, now time.Time) error {
@@ -487,7 +510,7 @@ type oauthPKCEState struct {
 type LedgerEngine struct {
 	db             *sql.DB
 	masterKey      []byte
-	httpClient     *http.Client
+	httpClient     atomic.Pointer[http.Client]
 	now            func() time.Time
 	linuxDoBaseURL string
 
@@ -513,10 +536,9 @@ func NewLedgerEngine(db *sql.DB, masterKey []byte, httpClient *http.Client, now 
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 12 * time.Second}
 	}
-	return &LedgerEngine{
+	eng := &LedgerEngine{
 		db:               db,
 		masterKey:        append([]byte(nil), masterKey...),
-		httpClient:       httpClient,
 		now:              now,
 		linuxDoBaseURL:   defaultLinuxDoBase,
 		users:            make(map[string]*LiveUserQuota),
@@ -527,6 +549,23 @@ func NewLedgerEngine(db *sql.DB, masterKey []byte, httpClient *http.Client, now 
 		otpIPCooldown:    make(map[string]time.Time),
 		batchCh:          make(chan UsageLogRecord, 4096),
 	}
+	eng.httpClient.Store(httpClient)
+	return eng
+}
+
+// SetHTTPClient 原子替换账本内部用于 LinuxDo OAuth 回调的 HTTP 客户端，供热更新配置时同步生效。
+func (e *LedgerEngine) SetHTTPClient(client *http.Client) {
+	if e == nil || client == nil {
+		return
+	}
+	e.httpClient.Store(client)
+}
+
+func (e *LedgerEngine) getHTTPClient() *http.Client {
+	if c := e.httpClient.Load(); c != nil {
+		return c
+	}
+	return &http.Client{Timeout: 12 * time.Second}
 }
 
 // SetLinuxDoBaseURL 允许测试替换 LinuxDo OAuth2 端点为本地 httptest 服务。
@@ -560,7 +599,8 @@ func (e *LedgerEngine) LoadFromDB(ctx context.Context) error {
 			_ = uRows.Close()
 			return err
 		}
-		lu := &LiveUserQuota{UserID: id, GroupName: grp}
+		lu := &LiveUserQuota{UserID: id}
+		lu.SetGroupName(grp)
 		lu.StatusActive.Store(st == "active")
 		lu.BalanceMicros.Store(bal)
 		lu.UsedMicros.Store(used)
@@ -825,13 +865,11 @@ func (e *LedgerEngine) AuthorizeAndReserve(rawBearerKey, model, clientIP string,
 			used := tok.UsedMicros.Load()
 			res := tok.ReservedMicros.Load()
 			rem := tok.QuotaLimitMicros - used - res
-			if rem <= 0 {
-				return nil, nil, errors.New("QUOTA_EXHAUSTED: sub-key quota limit reached")
+			if rem < reserveMicros {
+				return nil, nil, fmt.Errorf("%w: sub-key quota limit reached", ErrQuotaExhausted)
 			}
-			want := min(rem, reserveMicros)
-			if tok.ReservedMicros.CompareAndSwap(res, res+want) {
-				subLock = want
-				reserveMicros = want
+			if tok.ReservedMicros.CompareAndSwap(res, res+reserveMicros) {
+				subLock = reserveMicros
 				break
 			}
 		}
@@ -839,22 +877,17 @@ func (e *LedgerEngine) AuthorizeAndReserve(rawBearerKey, model, clientIP string,
 
 	for {
 		cur := tok.User.BalanceMicros.Load()
-		if cur <= 0 {
+		if cur < reserveMicros {
 			if subLock > 0 {
 				tok.ReservedMicros.Add(-subLock)
 			}
-			return nil, nil, errors.New("QUOTA_EXHAUSTED: insufficient account statistical quota")
+			return nil, nil, ErrQuotaExhausted
 		}
-		lockAmt := min(cur, reserveMicros)
-		if tok.User.BalanceMicros.CompareAndSwap(cur, cur-lockAmt) {
-			if subLock > lockAmt {
-				tok.ReservedMicros.Add(-(subLock - lockAmt))
-				subLock = lockAmt
-			}
+		if tok.User.BalanceMicros.CompareAndSwap(cur, cur-reserveMicros) {
 			return tok, &QuotaReservation{
 				ledger:      e,
 				token:       tok,
-				reserved:    lockAmt,
+				reserved:    reserveMicros,
 				subReserved: subLock,
 			}, nil
 		}
@@ -1320,7 +1353,7 @@ func (e *LedgerEngine) LoginOrSignupWithLinuxDo(
 	tokReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	tokReq.Header.Set("Accept", "application/json")
 
-	tokResp, err := e.httpClient.Do(tokReq)
+	tokResp, err := e.getHTTPClient().Do(tokReq)
 	if err != nil {
 		return "", "", false, fmt.Errorf("LINUXDO_UNAVAILABLE: token exchange failed: %w", err)
 	}
@@ -1341,7 +1374,7 @@ func (e *LedgerEngine) LoginOrSignupWithLinuxDo(
 		return "", "", false, err
 	}
 	uReq.Header.Set("Authorization", "Bearer "+tokData.AccessToken)
-	uResp, err := e.httpClient.Do(uReq)
+	uResp, err := e.getHTTPClient().Do(uReq)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -1519,11 +1552,17 @@ func (e *LedgerEngine) ValidateSession(token string) (string, bool) {
 	now := e.now()
 	e.mu.RLock()
 	sess, ok := e.sessions[token]
+	var active bool
+	if ok {
+		if u, uok := e.users[sess.userID]; uok {
+			active = u.StatusActive.Load()
+		}
+	}
 	e.mu.RUnlock()
 	if !ok {
 		return "", false
 	}
-	if now.After(sess.expiresAt) {
+	if now.After(sess.expiresAt) || !active {
 		e.mu.Lock()
 		delete(e.sessions, token)
 		e.mu.Unlock()
@@ -1997,10 +2036,17 @@ func (e *LedgerEngine) AdjustUserQuota(ctx context.Context, userID string, delta
 
 	e.mu.Lock()
 	if lu, ok := e.users[userID]; ok {
-		lu.GroupName = cur.GroupName
+		lu.SetGroupName(cur.GroupName)
 		lu.StatusActive.Store(cur.Status == "active")
 		if deltaMicros != 0 {
 			ApplyAtomicBalanceDelta(&lu.BalanceMicros, deltaMicros)
+		}
+	}
+	if cur.Status != "active" {
+		for tok, sess := range e.sessions {
+			if sess.userID == userID {
+				delete(e.sessions, tok)
+			}
 		}
 	}
 	e.mu.Unlock()
@@ -2574,7 +2620,8 @@ func (e *LedgerEngine) creditUserTx(ctx context.Context, tx *sql.Tx, userID, sou
 }
 
 func (e *LedgerEngine) registerMemoryUser(userID, group string, initBalance int64) {
-	u := &LiveUserQuota{UserID: userID, GroupName: group}
+	u := &LiveUserQuota{UserID: userID}
+	u.SetGroupName(group)
 	u.StatusActive.Store(true)
 	u.BalanceMicros.Store(initBalance)
 	e.mu.Lock()

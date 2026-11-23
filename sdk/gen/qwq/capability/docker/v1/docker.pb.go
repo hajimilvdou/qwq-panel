@@ -416,6 +416,782 @@ func (x *ComposeActionResponse) GetError() *v1.ErrorDetail {
 	return nil
 }
 
+type ListBindableIPsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Context       *v1.HostCallContext    `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBindableIPsRequest) Reset() {
+	*x = ListBindableIPsRequest{}
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBindableIPsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBindableIPsRequest) ProtoMessage() {}
+
+func (x *ListBindableIPsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBindableIPsRequest.ProtoReflect.Descriptor instead.
+func (*ListBindableIPsRequest) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_docker_v1_docker_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ListBindableIPsRequest) GetContext() *v1.HostCallContext {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+type BindableIP struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ip            string                 `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
+	Family        string                 `protobuf:"bytes,2,opt,name=family,proto3" json:"family,omitempty"`
+	Iface         string                 `protobuf:"bytes,3,opt,name=iface,proto3" json:"iface,omitempty"`
+	Scope         string                 `protobuf:"bytes,4,opt,name=scope,proto3" json:"scope,omitempty"`
+	Recommended   bool                   `protobuf:"varint,5,opt,name=recommended,proto3" json:"recommended,omitempty"`
+	Label         string                 `protobuf:"bytes,6,opt,name=label,proto3" json:"label,omitempty"`
+	IsIpv6        bool                   `protobuf:"varint,7,opt,name=is_ipv6,json=isIpv6,proto3" json:"is_ipv6,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BindableIP) Reset() {
+	*x = BindableIP{}
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BindableIP) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BindableIP) ProtoMessage() {}
+
+func (x *BindableIP) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BindableIP.ProtoReflect.Descriptor instead.
+func (*BindableIP) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_docker_v1_docker_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *BindableIP) GetIp() string {
+	if x != nil {
+		return x.Ip
+	}
+	return ""
+}
+
+func (x *BindableIP) GetFamily() string {
+	if x != nil {
+		return x.Family
+	}
+	return ""
+}
+
+func (x *BindableIP) GetIface() string {
+	if x != nil {
+		return x.Iface
+	}
+	return ""
+}
+
+func (x *BindableIP) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+func (x *BindableIP) GetRecommended() bool {
+	if x != nil {
+		return x.Recommended
+	}
+	return false
+}
+
+func (x *BindableIP) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *BindableIP) GetIsIpv6() bool {
+	if x != nil {
+		return x.IsIpv6
+	}
+	return false
+}
+
+type ListBindableIPsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ips           []*BindableIP          `protobuf:"bytes,1,rep,name=ips,proto3" json:"ips,omitempty"`
+	Error         *v1.ErrorDetail        `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListBindableIPsResponse) Reset() {
+	*x = ListBindableIPsResponse{}
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListBindableIPsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListBindableIPsResponse) ProtoMessage() {}
+
+func (x *ListBindableIPsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListBindableIPsResponse.ProtoReflect.Descriptor instead.
+func (*ListBindableIPsResponse) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_docker_v1_docker_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ListBindableIPsResponse) GetIps() []*BindableIP {
+	if x != nil {
+		return x.Ips
+	}
+	return nil
+}
+
+func (x *ListBindableIPsResponse) GetError() *v1.ErrorDetail {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+type CreateNetworkRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Context       *v1.HostCallContext    `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Driver        string                 `protobuf:"bytes,3,opt,name=driver,proto3" json:"driver,omitempty"`
+	Subnet        string                 `protobuf:"bytes,4,opt,name=subnet,proto3" json:"subnet,omitempty"`
+	Gateway       string                 `protobuf:"bytes,5,opt,name=gateway,proto3" json:"gateway,omitempty"`
+	Internal      bool                   `protobuf:"varint,6,opt,name=internal,proto3" json:"internal,omitempty"`
+	EnableIpv6    bool                   `protobuf:"varint,7,opt,name=enable_ipv6,json=enableIpv6,proto3" json:"enable_ipv6,omitempty"`
+	Labels        map[string]string      `protobuf:"bytes,8,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateNetworkRequest) Reset() {
+	*x = CreateNetworkRequest{}
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateNetworkRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateNetworkRequest) ProtoMessage() {}
+
+func (x *CreateNetworkRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateNetworkRequest.ProtoReflect.Descriptor instead.
+func (*CreateNetworkRequest) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_docker_v1_docker_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *CreateNetworkRequest) GetContext() *v1.HostCallContext {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *CreateNetworkRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CreateNetworkRequest) GetDriver() string {
+	if x != nil {
+		return x.Driver
+	}
+	return ""
+}
+
+func (x *CreateNetworkRequest) GetSubnet() string {
+	if x != nil {
+		return x.Subnet
+	}
+	return ""
+}
+
+func (x *CreateNetworkRequest) GetGateway() string {
+	if x != nil {
+		return x.Gateway
+	}
+	return ""
+}
+
+func (x *CreateNetworkRequest) GetInternal() bool {
+	if x != nil {
+		return x.Internal
+	}
+	return false
+}
+
+func (x *CreateNetworkRequest) GetEnableIpv6() bool {
+	if x != nil {
+		return x.EnableIpv6
+	}
+	return false
+}
+
+func (x *CreateNetworkRequest) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+type CreateNetworkResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NetworkId     string                 `protobuf:"bytes,1,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Error         *v1.ErrorDetail        `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateNetworkResponse) Reset() {
+	*x = CreateNetworkResponse{}
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateNetworkResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateNetworkResponse) ProtoMessage() {}
+
+func (x *CreateNetworkResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateNetworkResponse.ProtoReflect.Descriptor instead.
+func (*CreateNetworkResponse) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_docker_v1_docker_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *CreateNetworkResponse) GetNetworkId() string {
+	if x != nil {
+		return x.NetworkId
+	}
+	return ""
+}
+
+func (x *CreateNetworkResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CreateNetworkResponse) GetError() *v1.ErrorDetail {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+type MutateContainerNetworkRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Context       *v1.HostCallContext    `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	ContainerId   string                 `protobuf:"bytes,2,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	Action        string                 `protobuf:"bytes,3,opt,name=action,proto3" json:"action,omitempty"`
+	NetworkId     string                 `protobuf:"bytes,4,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
+	Aliases       []string               `protobuf:"bytes,5,rep,name=aliases,proto3" json:"aliases,omitempty"`
+	Ipv4Address   string                 `protobuf:"bytes,6,opt,name=ipv4_address,json=ipv4Address,proto3" json:"ipv4_address,omitempty"`
+	Force         bool                   `protobuf:"varint,7,opt,name=force,proto3" json:"force,omitempty"`
+	Ipv6Address   string                 `protobuf:"bytes,8,opt,name=ipv6_address,json=ipv6Address,proto3" json:"ipv6_address,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MutateContainerNetworkRequest) Reset() {
+	*x = MutateContainerNetworkRequest{}
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MutateContainerNetworkRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MutateContainerNetworkRequest) ProtoMessage() {}
+
+func (x *MutateContainerNetworkRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MutateContainerNetworkRequest.ProtoReflect.Descriptor instead.
+func (*MutateContainerNetworkRequest) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_docker_v1_docker_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *MutateContainerNetworkRequest) GetContext() *v1.HostCallContext {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *MutateContainerNetworkRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *MutateContainerNetworkRequest) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *MutateContainerNetworkRequest) GetNetworkId() string {
+	if x != nil {
+		return x.NetworkId
+	}
+	return ""
+}
+
+func (x *MutateContainerNetworkRequest) GetAliases() []string {
+	if x != nil {
+		return x.Aliases
+	}
+	return nil
+}
+
+func (x *MutateContainerNetworkRequest) GetIpv4Address() string {
+	if x != nil {
+		return x.Ipv4Address
+	}
+	return ""
+}
+
+func (x *MutateContainerNetworkRequest) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
+func (x *MutateContainerNetworkRequest) GetIpv6Address() string {
+	if x != nil {
+		return x.Ipv6Address
+	}
+	return ""
+}
+
+type MutateContainerNetworkResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Error         *v1.ErrorDetail        `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MutateContainerNetworkResponse) Reset() {
+	*x = MutateContainerNetworkResponse{}
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MutateContainerNetworkResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MutateContainerNetworkResponse) ProtoMessage() {}
+
+func (x *MutateContainerNetworkResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MutateContainerNetworkResponse.ProtoReflect.Descriptor instead.
+func (*MutateContainerNetworkResponse) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_docker_v1_docker_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *MutateContainerNetworkResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *MutateContainerNetworkResponse) GetError() *v1.ErrorDetail {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+type PortBindingSpec struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ContainerPort int32                  `protobuf:"varint,1,opt,name=container_port,json=containerPort,proto3" json:"container_port,omitempty"`
+	Protocol      string                 `protobuf:"bytes,2,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	HostIp        string                 `protobuf:"bytes,3,opt,name=host_ip,json=hostIp,proto3" json:"host_ip,omitempty"`
+	HostPort      int32                  `protobuf:"varint,4,opt,name=host_port,json=hostPort,proto3" json:"host_port,omitempty"`
+	BindMode      string                 `protobuf:"bytes,5,opt,name=bind_mode,json=bindMode,proto3" json:"bind_mode,omitempty"`
+	IncludeIpv6   bool                   `protobuf:"varint,6,opt,name=include_ipv6,json=includeIpv6,proto3" json:"include_ipv6,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PortBindingSpec) Reset() {
+	*x = PortBindingSpec{}
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PortBindingSpec) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PortBindingSpec) ProtoMessage() {}
+
+func (x *PortBindingSpec) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PortBindingSpec.ProtoReflect.Descriptor instead.
+func (*PortBindingSpec) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_docker_v1_docker_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *PortBindingSpec) GetContainerPort() int32 {
+	if x != nil {
+		return x.ContainerPort
+	}
+	return 0
+}
+
+func (x *PortBindingSpec) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
+func (x *PortBindingSpec) GetHostIp() string {
+	if x != nil {
+		return x.HostIp
+	}
+	return ""
+}
+
+func (x *PortBindingSpec) GetHostPort() int32 {
+	if x != nil {
+		return x.HostPort
+	}
+	return 0
+}
+
+func (x *PortBindingSpec) GetBindMode() string {
+	if x != nil {
+		return x.BindMode
+	}
+	return ""
+}
+
+func (x *PortBindingSpec) GetIncludeIpv6() bool {
+	if x != nil {
+		return x.IncludeIpv6
+	}
+	return false
+}
+
+type RecreateContainerPortsRequest struct {
+	state                     protoimpl.MessageState `protogen:"open.v1"`
+	Context                   *v1.HostCallContext    `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	ContainerId               string                 `protobuf:"bytes,2,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	Bindings                  []*PortBindingSpec     `protobuf:"bytes,3,rep,name=bindings,proto3" json:"bindings,omitempty"`
+	CommitWritableLayer       bool                   `protobuf:"varint,4,opt,name=commit_writable_layer,json=commitWritableLayer,proto3" json:"commit_writable_layer,omitempty"`
+	AllowPortOverride         bool                   `protobuf:"varint,5,opt,name=allow_port_override,json=allowPortOverride,proto3" json:"allow_port_override,omitempty"`
+	AllowDiscardWritableLayer bool                   `protobuf:"varint,6,opt,name=allow_discard_writable_layer,json=allowDiscardWritableLayer,proto3" json:"allow_discard_writable_layer,omitempty"`
+	StartAfterRecreate        *bool                  `protobuf:"varint,7,opt,name=start_after_recreate,json=startAfterRecreate,proto3,oneof" json:"start_after_recreate,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
+}
+
+func (x *RecreateContainerPortsRequest) Reset() {
+	*x = RecreateContainerPortsRequest{}
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecreateContainerPortsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecreateContainerPortsRequest) ProtoMessage() {}
+
+func (x *RecreateContainerPortsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecreateContainerPortsRequest.ProtoReflect.Descriptor instead.
+func (*RecreateContainerPortsRequest) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_docker_v1_docker_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *RecreateContainerPortsRequest) GetContext() *v1.HostCallContext {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *RecreateContainerPortsRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *RecreateContainerPortsRequest) GetBindings() []*PortBindingSpec {
+	if x != nil {
+		return x.Bindings
+	}
+	return nil
+}
+
+func (x *RecreateContainerPortsRequest) GetCommitWritableLayer() bool {
+	if x != nil {
+		return x.CommitWritableLayer
+	}
+	return false
+}
+
+func (x *RecreateContainerPortsRequest) GetAllowPortOverride() bool {
+	if x != nil {
+		return x.AllowPortOverride
+	}
+	return false
+}
+
+func (x *RecreateContainerPortsRequest) GetAllowDiscardWritableLayer() bool {
+	if x != nil {
+		return x.AllowDiscardWritableLayer
+	}
+	return false
+}
+
+func (x *RecreateContainerPortsRequest) GetStartAfterRecreate() bool {
+	if x != nil && x.StartAfterRecreate != nil {
+		return *x.StartAfterRecreate
+	}
+	return false
+}
+
+type RecreateContainerPortsResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	NewContainerId    string                 `protobuf:"bytes,1,opt,name=new_container_id,json=newContainerId,proto3" json:"new_container_id,omitempty"`
+	OldContainerId    string                 `protobuf:"bytes,2,opt,name=old_container_id,json=oldContainerId,proto3" json:"old_container_id,omitempty"`
+	CommittedImage    string                 `protobuf:"bytes,3,opt,name=committed_image,json=committedImage,proto3" json:"committed_image,omitempty"`
+	Warnings          []string               `protobuf:"bytes,4,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	Error             *v1.ErrorDetail        `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	ContainerName     string                 `protobuf:"bytes,6,opt,name=container_name,json=containerName,proto3" json:"container_name,omitempty"`
+	AppliedBindings   []*PortBindingSpec     `protobuf:"bytes,7,rep,name=applied_bindings,json=appliedBindings,proto3" json:"applied_bindings,omitempty"`
+	WritableSizeBytes int64                  `protobuf:"varint,8,opt,name=writable_size_bytes,json=writableSizeBytes,proto3" json:"writable_size_bytes,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *RecreateContainerPortsResponse) Reset() {
+	*x = RecreateContainerPortsResponse{}
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecreateContainerPortsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecreateContainerPortsResponse) ProtoMessage() {}
+
+func (x *RecreateContainerPortsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_docker_v1_docker_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecreateContainerPortsResponse.ProtoReflect.Descriptor instead.
+func (*RecreateContainerPortsResponse) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_docker_v1_docker_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *RecreateContainerPortsResponse) GetNewContainerId() string {
+	if x != nil {
+		return x.NewContainerId
+	}
+	return ""
+}
+
+func (x *RecreateContainerPortsResponse) GetOldContainerId() string {
+	if x != nil {
+		return x.OldContainerId
+	}
+	return ""
+}
+
+func (x *RecreateContainerPortsResponse) GetCommittedImage() string {
+	if x != nil {
+		return x.CommittedImage
+	}
+	return ""
+}
+
+func (x *RecreateContainerPortsResponse) GetWarnings() []string {
+	if x != nil {
+		return x.Warnings
+	}
+	return nil
+}
+
+func (x *RecreateContainerPortsResponse) GetError() *v1.ErrorDetail {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
+func (x *RecreateContainerPortsResponse) GetContainerName() string {
+	if x != nil {
+		return x.ContainerName
+	}
+	return ""
+}
+
+func (x *RecreateContainerPortsResponse) GetAppliedBindings() []*PortBindingSpec {
+	if x != nil {
+		return x.AppliedBindings
+	}
+	return nil
+}
+
+func (x *RecreateContainerPortsResponse) GetWritableSizeBytes() int64 {
+	if x != nil {
+		return x.WritableSizeBytes
+	}
+	return 0
+}
+
 var File_qwq_capability_docker_v1_docker_proto protoreflect.FileDescriptor
 
 const file_qwq_capability_docker_v1_docker_proto_rawDesc = "" +
@@ -450,12 +1226,86 @@ const file_qwq_capability_docker_v1_docker_proto_rawDesc = "" +
 	"\x15ComposeActionResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x1a\n" +
 	"\bwarnings\x18\x02 \x03(\tR\bwarnings\x122\n" +
-	"\x05error\x18\x03 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error2\xd0\x02\n" +
+	"\x05error\x18\x03 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error\"T\n" +
+	"\x16ListBindableIPsRequest\x12:\n" +
+	"\acontext\x18\x01 \x01(\v2 .qwq.platform.v1.HostCallContextR\acontext\"\xb1\x01\n" +
+	"\n" +
+	"BindableIP\x12\x0e\n" +
+	"\x02ip\x18\x01 \x01(\tR\x02ip\x12\x16\n" +
+	"\x06family\x18\x02 \x01(\tR\x06family\x12\x14\n" +
+	"\x05iface\x18\x03 \x01(\tR\x05iface\x12\x14\n" +
+	"\x05scope\x18\x04 \x01(\tR\x05scope\x12 \n" +
+	"\vrecommended\x18\x05 \x01(\bR\vrecommended\x12\x14\n" +
+	"\x05label\x18\x06 \x01(\tR\x05label\x12\x17\n" +
+	"\ais_ipv6\x18\a \x01(\bR\x06isIpv6\"\x85\x01\n" +
+	"\x17ListBindableIPsResponse\x126\n" +
+	"\x03ips\x18\x01 \x03(\v2$.qwq.capability.docker.v1.BindableIPR\x03ips\x122\n" +
+	"\x05error\x18\x02 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error\"\xfc\x02\n" +
+	"\x14CreateNetworkRequest\x12:\n" +
+	"\acontext\x18\x01 \x01(\v2 .qwq.platform.v1.HostCallContextR\acontext\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
+	"\x06driver\x18\x03 \x01(\tR\x06driver\x12\x16\n" +
+	"\x06subnet\x18\x04 \x01(\tR\x06subnet\x12\x18\n" +
+	"\agateway\x18\x05 \x01(\tR\agateway\x12\x1a\n" +
+	"\binternal\x18\x06 \x01(\bR\binternal\x12\x1f\n" +
+	"\venable_ipv6\x18\a \x01(\bR\n" +
+	"enableIpv6\x12R\n" +
+	"\x06labels\x18\b \x03(\v2:.qwq.capability.docker.v1.CreateNetworkRequest.LabelsEntryR\x06labels\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"~\n" +
+	"\x15CreateNetworkResponse\x12\x1d\n" +
+	"\n" +
+	"network_id\x18\x01 \x01(\tR\tnetworkId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x122\n" +
+	"\x05error\x18\x03 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error\"\xab\x02\n" +
+	"\x1dMutateContainerNetworkRequest\x12:\n" +
+	"\acontext\x18\x01 \x01(\v2 .qwq.platform.v1.HostCallContextR\acontext\x12!\n" +
+	"\fcontainer_id\x18\x02 \x01(\tR\vcontainerId\x12\x16\n" +
+	"\x06action\x18\x03 \x01(\tR\x06action\x12\x1d\n" +
+	"\n" +
+	"network_id\x18\x04 \x01(\tR\tnetworkId\x12\x18\n" +
+	"\aaliases\x18\x05 \x03(\tR\aaliases\x12!\n" +
+	"\fipv4_address\x18\x06 \x01(\tR\vipv4Address\x12\x14\n" +
+	"\x05force\x18\a \x01(\bR\x05force\x12!\n" +
+	"\fipv6_address\x18\b \x01(\tR\vipv6Address\"d\n" +
+	"\x1eMutateContainerNetworkResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x122\n" +
+	"\x05error\x18\x02 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error\"\xca\x01\n" +
+	"\x0fPortBindingSpec\x12%\n" +
+	"\x0econtainer_port\x18\x01 \x01(\x05R\rcontainerPort\x12\x1a\n" +
+	"\bprotocol\x18\x02 \x01(\tR\bprotocol\x12\x17\n" +
+	"\ahost_ip\x18\x03 \x01(\tR\x06hostIp\x12\x1b\n" +
+	"\thost_port\x18\x04 \x01(\x05R\bhostPort\x12\x1b\n" +
+	"\tbind_mode\x18\x05 \x01(\tR\bbindMode\x12!\n" +
+	"\finclude_ipv6\x18\x06 \x01(\bR\vincludeIpv6\"\xba\x03\n" +
+	"\x1dRecreateContainerPortsRequest\x12:\n" +
+	"\acontext\x18\x01 \x01(\v2 .qwq.platform.v1.HostCallContextR\acontext\x12!\n" +
+	"\fcontainer_id\x18\x02 \x01(\tR\vcontainerId\x12E\n" +
+	"\bbindings\x18\x03 \x03(\v2).qwq.capability.docker.v1.PortBindingSpecR\bbindings\x122\n" +
+	"\x15commit_writable_layer\x18\x04 \x01(\bR\x13commitWritableLayer\x12.\n" +
+	"\x13allow_port_override\x18\x05 \x01(\bR\x11allowPortOverride\x12?\n" +
+	"\x1callow_discard_writable_layer\x18\x06 \x01(\bR\x19allowDiscardWritableLayer\x125\n" +
+	"\x14start_after_recreate\x18\a \x01(\bH\x00R\x12startAfterRecreate\x88\x01\x01B\x17\n" +
+	"\x15_start_after_recreate\"\x9a\x03\n" +
+	"\x1eRecreateContainerPortsResponse\x12(\n" +
+	"\x10new_container_id\x18\x01 \x01(\tR\x0enewContainerId\x12(\n" +
+	"\x10old_container_id\x18\x02 \x01(\tR\x0eoldContainerId\x12'\n" +
+	"\x0fcommitted_image\x18\x03 \x01(\tR\x0ecommittedImage\x12\x1a\n" +
+	"\bwarnings\x18\x04 \x03(\tR\bwarnings\x122\n" +
+	"\x05error\x18\x05 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error\x12%\n" +
+	"\x0econtainer_name\x18\x06 \x01(\tR\rcontainerName\x12T\n" +
+	"\x10applied_bindings\x18\a \x03(\v2).qwq.capability.docker.v1.PortBindingSpecR\x0fappliedBindings\x12.\n" +
+	"\x13writable_size_bytes\x18\b \x01(\x03R\x11writableSizeBytes2\xd6\x06\n" +
 	"\rDockerService\x12d\n" +
 	"\tProxyRead\x12*.qwq.capability.docker.v1.ProxyReadRequest\x1a+.qwq.capability.docker.v1.ProxyReadResponse\x12g\n" +
 	"\n" +
 	"ProxyWrite\x12+.qwq.capability.docker.v1.ProxyWriteRequest\x1a,.qwq.capability.docker.v1.ProxyWriteResponse\x12p\n" +
-	"\rComposeAction\x12..qwq.capability.docker.v1.ComposeActionRequest\x1a/.qwq.capability.docker.v1.ComposeActionResponseB\xf2\x01\n" +
+	"\rComposeAction\x12..qwq.capability.docker.v1.ComposeActionRequest\x1a/.qwq.capability.docker.v1.ComposeActionResponse\x12v\n" +
+	"\x0fListBindableIPs\x120.qwq.capability.docker.v1.ListBindableIPsRequest\x1a1.qwq.capability.docker.v1.ListBindableIPsResponse\x12p\n" +
+	"\rCreateNetwork\x12..qwq.capability.docker.v1.CreateNetworkRequest\x1a/.qwq.capability.docker.v1.CreateNetworkResponse\x12\x8b\x01\n" +
+	"\x16MutateContainerNetwork\x127.qwq.capability.docker.v1.MutateContainerNetworkRequest\x1a8.qwq.capability.docker.v1.MutateContainerNetworkResponse\x12\x8b\x01\n" +
+	"\x16RecreateContainerPorts\x127.qwq.capability.docker.v1.RecreateContainerPortsRequest\x1a8.qwq.capability.docker.v1.RecreateContainerPortsResponseB\xf2\x01\n" +
 	"\x1ccom.qwq.capability.docker.v1B\vDockerProtoP\x01ZBgithub.com/qwq-panel/qwq/sdk/gen/qwq/capability/docker/v1;dockerv1\xa2\x02\x03QCD\xaa\x02\x18Qwq.Capability.Docker.V1\xca\x02\x18Qwq\\Capability\\Docker\\V1\xe2\x02$Qwq\\Capability\\Docker\\V1\\GPBMetadata\xea\x02\x1bQwq::Capability::Docker::V1b\x06proto3"
 
 var (
@@ -470,35 +1320,66 @@ func file_qwq_capability_docker_v1_docker_proto_rawDescGZIP() []byte {
 	return file_qwq_capability_docker_v1_docker_proto_rawDescData
 }
 
-var file_qwq_capability_docker_v1_docker_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_qwq_capability_docker_v1_docker_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_qwq_capability_docker_v1_docker_proto_goTypes = []any{
-	(*ProxyReadRequest)(nil),      // 0: qwq.capability.docker.v1.ProxyReadRequest
-	(*ProxyReadResponse)(nil),     // 1: qwq.capability.docker.v1.ProxyReadResponse
-	(*ProxyWriteRequest)(nil),     // 2: qwq.capability.docker.v1.ProxyWriteRequest
-	(*ProxyWriteResponse)(nil),    // 3: qwq.capability.docker.v1.ProxyWriteResponse
-	(*ComposeActionRequest)(nil),  // 4: qwq.capability.docker.v1.ComposeActionRequest
-	(*ComposeActionResponse)(nil), // 5: qwq.capability.docker.v1.ComposeActionResponse
-	(*v1.HostCallContext)(nil),    // 6: qwq.platform.v1.HostCallContext
-	(*v1.ErrorDetail)(nil),        // 7: qwq.platform.v1.ErrorDetail
+	(*ProxyReadRequest)(nil),               // 0: qwq.capability.docker.v1.ProxyReadRequest
+	(*ProxyReadResponse)(nil),              // 1: qwq.capability.docker.v1.ProxyReadResponse
+	(*ProxyWriteRequest)(nil),              // 2: qwq.capability.docker.v1.ProxyWriteRequest
+	(*ProxyWriteResponse)(nil),             // 3: qwq.capability.docker.v1.ProxyWriteResponse
+	(*ComposeActionRequest)(nil),           // 4: qwq.capability.docker.v1.ComposeActionRequest
+	(*ComposeActionResponse)(nil),          // 5: qwq.capability.docker.v1.ComposeActionResponse
+	(*ListBindableIPsRequest)(nil),         // 6: qwq.capability.docker.v1.ListBindableIPsRequest
+	(*BindableIP)(nil),                     // 7: qwq.capability.docker.v1.BindableIP
+	(*ListBindableIPsResponse)(nil),        // 8: qwq.capability.docker.v1.ListBindableIPsResponse
+	(*CreateNetworkRequest)(nil),           // 9: qwq.capability.docker.v1.CreateNetworkRequest
+	(*CreateNetworkResponse)(nil),          // 10: qwq.capability.docker.v1.CreateNetworkResponse
+	(*MutateContainerNetworkRequest)(nil),  // 11: qwq.capability.docker.v1.MutateContainerNetworkRequest
+	(*MutateContainerNetworkResponse)(nil), // 12: qwq.capability.docker.v1.MutateContainerNetworkResponse
+	(*PortBindingSpec)(nil),                // 13: qwq.capability.docker.v1.PortBindingSpec
+	(*RecreateContainerPortsRequest)(nil),  // 14: qwq.capability.docker.v1.RecreateContainerPortsRequest
+	(*RecreateContainerPortsResponse)(nil), // 15: qwq.capability.docker.v1.RecreateContainerPortsResponse
+	nil,                                    // 16: qwq.capability.docker.v1.CreateNetworkRequest.LabelsEntry
+	(*v1.HostCallContext)(nil),             // 17: qwq.platform.v1.HostCallContext
+	(*v1.ErrorDetail)(nil),                 // 18: qwq.platform.v1.ErrorDetail
 }
 var file_qwq_capability_docker_v1_docker_proto_depIdxs = []int32{
-	6, // 0: qwq.capability.docker.v1.ProxyReadRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	7, // 1: qwq.capability.docker.v1.ProxyReadResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	6, // 2: qwq.capability.docker.v1.ProxyWriteRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	7, // 3: qwq.capability.docker.v1.ProxyWriteResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	6, // 4: qwq.capability.docker.v1.ComposeActionRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	7, // 5: qwq.capability.docker.v1.ComposeActionResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	0, // 6: qwq.capability.docker.v1.DockerService.ProxyRead:input_type -> qwq.capability.docker.v1.ProxyReadRequest
-	2, // 7: qwq.capability.docker.v1.DockerService.ProxyWrite:input_type -> qwq.capability.docker.v1.ProxyWriteRequest
-	4, // 8: qwq.capability.docker.v1.DockerService.ComposeAction:input_type -> qwq.capability.docker.v1.ComposeActionRequest
-	1, // 9: qwq.capability.docker.v1.DockerService.ProxyRead:output_type -> qwq.capability.docker.v1.ProxyReadResponse
-	3, // 10: qwq.capability.docker.v1.DockerService.ProxyWrite:output_type -> qwq.capability.docker.v1.ProxyWriteResponse
-	5, // 11: qwq.capability.docker.v1.DockerService.ComposeAction:output_type -> qwq.capability.docker.v1.ComposeActionResponse
-	9, // [9:12] is the sub-list for method output_type
-	6, // [6:9] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	17, // 0: qwq.capability.docker.v1.ProxyReadRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	18, // 1: qwq.capability.docker.v1.ProxyReadResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	17, // 2: qwq.capability.docker.v1.ProxyWriteRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	18, // 3: qwq.capability.docker.v1.ProxyWriteResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	17, // 4: qwq.capability.docker.v1.ComposeActionRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	18, // 5: qwq.capability.docker.v1.ComposeActionResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	17, // 6: qwq.capability.docker.v1.ListBindableIPsRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	7,  // 7: qwq.capability.docker.v1.ListBindableIPsResponse.ips:type_name -> qwq.capability.docker.v1.BindableIP
+	18, // 8: qwq.capability.docker.v1.ListBindableIPsResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	17, // 9: qwq.capability.docker.v1.CreateNetworkRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	16, // 10: qwq.capability.docker.v1.CreateNetworkRequest.labels:type_name -> qwq.capability.docker.v1.CreateNetworkRequest.LabelsEntry
+	18, // 11: qwq.capability.docker.v1.CreateNetworkResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	17, // 12: qwq.capability.docker.v1.MutateContainerNetworkRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	18, // 13: qwq.capability.docker.v1.MutateContainerNetworkResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	17, // 14: qwq.capability.docker.v1.RecreateContainerPortsRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	13, // 15: qwq.capability.docker.v1.RecreateContainerPortsRequest.bindings:type_name -> qwq.capability.docker.v1.PortBindingSpec
+	18, // 16: qwq.capability.docker.v1.RecreateContainerPortsResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	13, // 17: qwq.capability.docker.v1.RecreateContainerPortsResponse.applied_bindings:type_name -> qwq.capability.docker.v1.PortBindingSpec
+	0,  // 18: qwq.capability.docker.v1.DockerService.ProxyRead:input_type -> qwq.capability.docker.v1.ProxyReadRequest
+	2,  // 19: qwq.capability.docker.v1.DockerService.ProxyWrite:input_type -> qwq.capability.docker.v1.ProxyWriteRequest
+	4,  // 20: qwq.capability.docker.v1.DockerService.ComposeAction:input_type -> qwq.capability.docker.v1.ComposeActionRequest
+	6,  // 21: qwq.capability.docker.v1.DockerService.ListBindableIPs:input_type -> qwq.capability.docker.v1.ListBindableIPsRequest
+	9,  // 22: qwq.capability.docker.v1.DockerService.CreateNetwork:input_type -> qwq.capability.docker.v1.CreateNetworkRequest
+	11, // 23: qwq.capability.docker.v1.DockerService.MutateContainerNetwork:input_type -> qwq.capability.docker.v1.MutateContainerNetworkRequest
+	14, // 24: qwq.capability.docker.v1.DockerService.RecreateContainerPorts:input_type -> qwq.capability.docker.v1.RecreateContainerPortsRequest
+	1,  // 25: qwq.capability.docker.v1.DockerService.ProxyRead:output_type -> qwq.capability.docker.v1.ProxyReadResponse
+	3,  // 26: qwq.capability.docker.v1.DockerService.ProxyWrite:output_type -> qwq.capability.docker.v1.ProxyWriteResponse
+	5,  // 27: qwq.capability.docker.v1.DockerService.ComposeAction:output_type -> qwq.capability.docker.v1.ComposeActionResponse
+	8,  // 28: qwq.capability.docker.v1.DockerService.ListBindableIPs:output_type -> qwq.capability.docker.v1.ListBindableIPsResponse
+	10, // 29: qwq.capability.docker.v1.DockerService.CreateNetwork:output_type -> qwq.capability.docker.v1.CreateNetworkResponse
+	12, // 30: qwq.capability.docker.v1.DockerService.MutateContainerNetwork:output_type -> qwq.capability.docker.v1.MutateContainerNetworkResponse
+	15, // 31: qwq.capability.docker.v1.DockerService.RecreateContainerPorts:output_type -> qwq.capability.docker.v1.RecreateContainerPortsResponse
+	25, // [25:32] is the sub-list for method output_type
+	18, // [18:25] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_qwq_capability_docker_v1_docker_proto_init() }
@@ -506,13 +1387,14 @@ func file_qwq_capability_docker_v1_docker_proto_init() {
 	if File_qwq_capability_docker_v1_docker_proto != nil {
 		return
 	}
+	file_qwq_capability_docker_v1_docker_proto_msgTypes[14].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_qwq_capability_docker_v1_docker_proto_rawDesc), len(file_qwq_capability_docker_v1_docker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

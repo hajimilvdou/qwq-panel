@@ -36,18 +36,36 @@ type AlertEventPayload struct {
 	Timestamp time.Time         `json:"timestamp,omitempty"`
 }
 
+// notifyDispatchArgs matches plugins/builtin/notify.hub/schemas/notify.dispatch.request.json
+// which enforces "additionalProperties": false and permits only these 6 fields.
+type notifyDispatchArgs struct {
+	Source   string            `json:"source"`
+	Severity string            `json:"severity,omitempty"`
+	Title    string            `json:"title"`
+	Message  string            `json:"message,omitempty"`
+	DedupKey string            `json:"dedup_key,omitempty"`
+	Tags     map[string]string `json:"tags,omitempty"`
+}
+
+const (
+	alertRateLimitPerPlugin = 10
+	alertRateLimitWindow    = time.Minute
+)
+
 // AlertEventRelay forwards "*.alert" plugin events to notify.hub through a
 // bounded 64-item queue so hot paths never block and 1C1G memory stays bounded.
 type AlertEventRelay struct {
 	invoker AlertDispatchInvoker
 	logger  *slog.Logger
 	queue   chan AlertEventPayload
+	now     func() time.Time
 
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	started bool
-	stopped bool
-	wg      sync.WaitGroup
+	mu            sync.Mutex
+	pluginWindows map[string][]time.Time
+	cancel        context.CancelFunc
+	started       bool
+	stopped       bool
+	wg            sync.WaitGroup
 }
 
 // NewAlertEventRelay constructs a bounded alert relay (queue capacity 64).
@@ -56,9 +74,11 @@ func NewAlertEventRelay(invoker AlertDispatchInvoker, logger *slog.Logger) *Aler
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &AlertEventRelay{
-		invoker: invoker,
-		logger:  logger,
-		queue:   make(chan AlertEventPayload, 64),
+		invoker:       invoker,
+		logger:        logger,
+		queue:         make(chan AlertEventPayload, 64),
+		now:           time.Now,
+		pluginWindows: make(map[string][]time.Time),
 	}
 }
 
@@ -134,8 +154,13 @@ func (r *AlertEventRelay) OnPluginEvent(publisherPluginID string, draft *platfor
 	if payload.Severity != "info" && payload.Severity != "warn" && payload.Severity != "critical" {
 		payload.Severity = "warn"
 	}
+	nowFn := r.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	now := nowFn().UTC()
 	if payload.Timestamp.IsZero() {
-		payload.Timestamp = time.Now().UTC()
+		payload.Timestamp = now
 	}
 
 	r.mu.Lock()
@@ -143,19 +168,52 @@ func (r *AlertEventRelay) OnPluginEvent(publisherPluginID string, draft *platfor
 	if r.stopped {
 		return
 	}
+	if !r.allowPluginAlertLocked(publisherPluginID, now) {
+		r.logger.Warn("alert relay per-plugin rate limit exceeded, dropping alert",
+			"source", publisherPluginID, "event_id", payload.EventID, "title", payload.Title)
+		return
+	}
 	select {
 	case r.queue <- payload:
 	default:
 		r.logger.Warn("alert relay queue full, dropping alert to protect memory budget",
-			"source", publisherPluginID, "title", payload.Title)
+			"source", publisherPluginID, "event_id", payload.EventID, "title", payload.Title)
 	}
+}
+
+func (r *AlertEventRelay) allowPluginAlertLocked(pluginID string, now time.Time) bool {
+	if r.pluginWindows == nil {
+		r.pluginWindows = make(map[string][]time.Time)
+	}
+	cutoff := now.Add(-alertRateLimitWindow)
+	ts := r.pluginWindows[pluginID]
+	keep := ts[:0]
+	for _, t := range ts {
+		if t.After(cutoff) {
+			keep = append(keep, t)
+		}
+	}
+	if len(keep) >= alertRateLimitPerPlugin {
+		r.pluginWindows[pluginID] = keep
+		return false
+	}
+	r.pluginWindows[pluginID] = append(keep, now)
+	return true
 }
 
 func (r *AlertEventRelay) deliverOne(parent context.Context, ev AlertEventPayload) {
 	if r.invoker == nil {
 		return
 	}
-	raw, err := json.Marshal(ev)
+	args := notifyDispatchArgs{
+		Source:   ev.Source,
+		Severity: ev.Severity,
+		Title:    ev.Title,
+		Message:  ev.Message,
+		DedupKey: ev.DedupKey,
+		Tags:     ev.Tags,
+	}
+	raw, err := json.Marshal(args)
 	if err != nil {
 		return
 	}
@@ -163,7 +221,7 @@ func (r *AlertEventRelay) deliverOne(parent context.Context, ev AlertEventPayloa
 	defer cancel()
 	if err := r.invoker.DispatchInternalAlert(ctx, raw); err != nil {
 		if !strings.Contains(err.Error(), "not installed") && !strings.Contains(err.Error(), "not found") {
-			r.logger.Warn("notify.hub internal alert delivery failed", "source", ev.Source, "err", err)
+			r.logger.Warn("notify.hub internal alert delivery failed", "source", ev.Source, "event_id", ev.EventID, "err", err)
 		}
 	}
 }

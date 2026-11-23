@@ -27,21 +27,30 @@ type RelaySMTPConfig struct {
 }
 
 var (
-	smtpLinkLocalV4 = netip.MustParsePrefix("169.254.0.0/16")
-	smtpLinkLocalV6 = netip.MustParsePrefix("fe80::/10")
-	smtpAliyunIMDS  = netip.MustParseAddr("100.100.100.200")
-	smtpAWSIMDSV6   = netip.MustParseAddr("fd00:ec2::254")
+	smtpBlockedPrefixes = []netip.Prefix{
+		netip.MustParsePrefix("169.254.0.0/16"),    // AWS/GCP/Azure/OpenStack IMDS & Link-Local
+		netip.MustParsePrefix("100.64.0.0/10"),     // 阿里云 100.100.100.200 元数据 & CGNAT
+		netip.MustParsePrefix("0.0.0.0/8"),         // 本网络保留段
+		netip.MustParsePrefix("fe80::/10"),         // IPv6 Link-Local
+		netip.MustParsePrefix("fd00:ec2::254/128"), // AWS IPv6 IMDS
+		netip.MustParsePrefix("64:ff9b::/96"),      // NAT64 well-known
+		netip.MustParsePrefix("64:ff9b:1::/48"),    // NAT64 local
+		netip.MustParsePrefix("2002::/16"),         // 6to4
+		netip.MustParsePrefix("2001::/32"),         // Teredo
+	}
 )
 
 func isMetadataIP(addr netip.Addr) bool {
 	a := addr.Unmap()
-	if !a.IsValid() {
+	if !a.IsValid() || a.IsUnspecified() || a.IsMulticast() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() {
 		return true
 	}
-	if a.Is4() {
-		return smtpLinkLocalV4.Contains(a) || a == smtpAliyunIMDS
+	for _, p := range smtpBlockedPrefixes {
+		if p.Contains(a) {
+			return true
+		}
 	}
-	return smtpLinkLocalV6.Contains(a) || a == smtpAWSIMDSV6
+	return false
 }
 
 func validateSMTPHostNotMetadata(ctx context.Context, host string) (string, error) {

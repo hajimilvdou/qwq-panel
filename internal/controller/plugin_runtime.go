@@ -512,7 +512,11 @@ func NewPluginRuntime(opts PluginRuntimeOptions) (*PluginRuntime, error) {
 		router.Services["account"] = account.Forwarder{Helper: capClient, RevealSecret: rt.capabilityRevealOperationSecret}
 		router.Services["ban"] = ban.Forwarder{Helper: capClient, Protected: rt.capabilityBanProtectedAddresses}
 		router.Services["traffic"] = traffic.Forwarder{Helper: capClient}
-		router.Services["docker"] = docker.Forwarder{Helper: capClient}
+		router.Services["docker"] = docker.Forwarder{
+			Helper:        capClient,
+			HostPorts:     append([]uint32(nil), opts.ManagementPorts...),
+			HostPortsFunc: rt.liveManagementPorts,
+		}
 		router.Services["pluginconfig"] = pluginconfig.Forwarder{Backend: &runtimePluginConfigBackend{rt: rt}}
 	}
 	rt.hostFactory = opts.Host

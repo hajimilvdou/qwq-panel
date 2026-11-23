@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "container",
+    "port_rules",
+    "image_exposed_ports",
+    "host_bindable_ips",
+    "networks_connected",
+    "networks_all",
+    "mounts",
+    "env",
+    "proxy_readiness",
+    "proxy_links"
+  ],
+  "properties": {
+    "container": {
+      "type": "object"
+    },
+    "port_rules": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "image_exposed_ports": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "host_bindable_ips": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "networks_connected": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "networks_all": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "mounts": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "env": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "proxy_readiness": {
+      "type": "object"
+    },
+    "proxy_links": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

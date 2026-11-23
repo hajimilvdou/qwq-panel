@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "driver": {
+      "type": "string",
+      "enum": [
+        "bridge"
+      ]
+    },
+    "subnet": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "subnet_cidr": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "gateway": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "gateway_ip": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "internal": {
+      "type": "boolean"
+    },
+    "enable_ipv6": {
+      "type": "boolean"
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 256
+      }
+    },
+    "attach_container_id": {
+      "type": "string",
+      "maxLength": 128
+    }
+  }
+}

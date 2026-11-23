@@ -83,6 +83,20 @@
       <pre id="logs-pre">在容器列表点击“日志”后在此显示最新 100 行日志。</pre>
     </section>
   </main>
+  <div id="ct-drawer-backdrop" class="drawer-backdrop" hidden></div>
+  <aside id="ct-drawer" class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="ct-drawer-title" hidden>
+    <header class="drawer-header">
+      <div class="drawer-header-meta">
+        <h3 id="ct-drawer-title" class="drawer-title">容器设置</h3>
+        <div id="ct-drawer-sub" class="drawer-sub"></div>
+      </div>
+      <button id="ct-drawer-close" class="btn ghost btn-sm" type="button">关闭 ✕</button>
+    </header>
+    <nav id="ct-drawer-tabs" class="drawer-tabs" role="tablist" aria-label="容器设置分页"></nav>
+    <div id="ct-drawer-feedback" class="drawer-feedback" role="status" aria-live="polite" hidden></div>
+    <div id="ct-drawer-body" class="drawer-body"></div>
+  </aside>
+  <script src="./container-drawer.js"></script>
   <script src="./plugin.js"></script>
 </body>
 </html>

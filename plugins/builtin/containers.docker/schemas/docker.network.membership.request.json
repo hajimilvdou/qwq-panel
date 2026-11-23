@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "container_id",
+    "network_id",
+    "action"
+  ],
+  "properties": {
+    "container_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "network_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "connect",
+        "disconnect"
+      ]
+    },
+    "aliases": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      }
+    },
+    "ipv4_address": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "ipv6_address": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "force": {
+      "type": "boolean"
+    }
+  }
+}

@@ -12,6 +12,9 @@
     },
     "name": {
       "type": "string"
+    },
+    "cleaned_proxies": {
+      "type": "integer"
     }
   }
 }

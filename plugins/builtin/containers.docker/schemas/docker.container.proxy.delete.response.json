@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "deleted",
+    "link_id"
+  ],
+  "properties": {
+    "deleted": {
+      "type": "boolean"
+    },
+    "link_id": {
+      "type": "string"
+    }
+  }
+}

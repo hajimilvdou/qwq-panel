@@ -21,10 +21,11 @@ import (
 // ======================== 7 步双端口零断连 SSH 改端口 Saga ========================
 
 const (
-	minUserSSHPort         = 1024
-	maxUserSSHPort         = 65535
-	sagaStagePrepared      = "PREPARED"
-	sagaStageSSHDCommitted = "SSHD_COMMITTED"
+	minUserSSHPort          = 1024
+	maxUserSSHPort          = 65535
+	sagaStagePrepared       = "PREPARED"
+	sagaStageSSHDCommitted  = "SSHD_COMMITTED"
+	sagaStageSSHDRolledBack = "SSHD_ROLLED_BACK"
 )
 
 type portSagaState struct {
@@ -302,6 +303,9 @@ func (i *instance) handleSSHDChangePortCommit(ctx context.Context, req pluginsdk
 	if saga.TransactionRef != txRef {
 		return pluginsdk.Result{}, pluginsdk.Errorf("PRECONDITION_FAILED", "transaction_ref 与当前挂起事务不匹配")
 	}
+	if saga.Stage == sagaStageSSHDRolledBack {
+		return pluginsdk.Result{}, pluginsdk.Errorf("PRECONDITION_FAILED", "SSH 改端口事务已完成 sshd 回滚，请完成回滚收尾后重新发起")
+	}
 
 	var (
 		banner    string
@@ -417,6 +421,16 @@ func (i *instance) handleSSHDChangePortRollback(ctx context.Context, req plugins
 			return pluginsdk.Result{}, pluginsdk.Errorf("NOT_FOUND", "当前不存在可回滚的 SSH 改端口事务")
 		}
 		saga = portSagaState{TransactionRef: reqTxRef}
+		if sshdRead, sshdReadMeta, rerr := sshdClientReadOnly(ctx, host); rerr == nil {
+			if dropResp, derr := sshdRead.GetDropIn(ctx, &sshdv1.GetDropInRequest{Context: sshdReadMeta}); derr == nil && protoError(dropResp.GetError()) == nil {
+				if tp := dropResp.GetTransactionPort(); tp > 0 {
+					saga.NewPort = tp
+				}
+				if rev := strings.TrimSpace(dropResp.GetRevision()); rev != "" {
+					saga.SSHDRevision = rev
+				}
+			}
+		}
 	} else if reqTxRef != "" && saga.TransactionRef != reqTxRef {
 		return pluginsdk.Result{}, pluginsdk.Errorf("PRECONDITION_FAILED", "transaction_ref 与当前挂起事务不匹配")
 	}
@@ -430,36 +444,53 @@ func (i *instance) handleSSHDChangePortRollback(ctx context.Context, req plugins
 }
 
 func (i *instance) executePortRollbackLocked(ctx context.Context, host *pluginsdk.Host, saga portSagaState, explicitRev, autonReason string) (sshdPortSagaResponse, error) {
-	expectedRev := explicitRev
-	if expectedRev == "" {
-		expectedRev = saga.SSHDRevision
-	}
 	var (
-		sshdWrite     sshdv1.SshdServiceClient
-		sshdWriteMeta *platformv1.HostCallContext
-		err           error
+		listening []uint32
+		finalRev  = saga.SSHDRevision
 	)
-	if autonReason != "" {
-		sshdWrite, sshdWriteMeta, err = sshdClientWriteAutonomous(ctx, host, autonReason)
+	if saga.Stage != sagaStageSSHDRolledBack {
+		expectedRev := explicitRev
+		if expectedRev == "" {
+			expectedRev = saga.SSHDRevision
+		}
+		var (
+			sshdWrite     sshdv1.SshdServiceClient
+			sshdWriteMeta *platformv1.HostCallContext
+			err           error
+		)
+		if autonReason != "" {
+			sshdWrite, sshdWriteMeta, err = sshdClientWriteAutonomous(ctx, host, autonReason)
+		} else {
+			sshdWrite, sshdWriteMeta, err = sshdClientWrite(ctx, host)
+		}
+		if err != nil {
+			return sshdPortSagaResponse{}, err
+		}
+		rbResp, err := sshdWrite.SetPort(ctx, &sshdv1.SetPortRequest{
+			Context:          sshdWriteMeta,
+			NewPort:          saga.NewPort,
+			ExpectedRevision: expectedRev,
+			Stage:            sshdv1.PortChangeStage_PORT_CHANGE_STAGE_ROLLBACK,
+			TransactionRef:   saga.TransactionRef,
+		})
+		if err != nil {
+			return sshdPortSagaResponse{}, err
+		}
+		if err := protoError(rbResp.GetError()); err != nil {
+			return sshdPortSagaResponse{}, err
+		}
+		finalRev = rbResp.GetRevision()
+		listening = append(listening, rbResp.GetListeningPorts()...)
+
+		// 立即持久化中间态 SSHD_ROLLED_BACK：若后续防火墙恢复或删除 KV 短暂失败，
+		// 下一次重试直接跳过 SetPort(ROLLBACK) 从防火墙恢复与 KV 清理继续收敛。
+		saga.Stage = sagaStageSSHDRolledBack
+		saga.SSHDRevision = finalRev
+		_ = i.savePortSaga(ctx, host, saga)
 	} else {
-		sshdWrite, sshdWriteMeta, err = sshdClientWrite(ctx, host)
+		listening = append(listening, saga.allOldPorts()...)
 	}
-	if err != nil {
-		return sshdPortSagaResponse{}, err
-	}
-	rbResp, err := sshdWrite.SetPort(ctx, &sshdv1.SetPortRequest{
-		Context:          sshdWriteMeta,
-		NewPort:          saga.NewPort,
-		ExpectedRevision: expectedRev,
-		Stage:            sshdv1.PortChangeStage_PORT_CHANGE_STAGE_ROLLBACK,
-		TransactionRef:   saga.TransactionRef,
-	})
-	if err != nil {
-		return sshdPortSagaResponse{}, err
-	}
-	if err := protoError(rbResp.GetError()); err != nil {
-		return sshdPortSagaResponse{}, err
-	}
+
 	if saga.FirewallManaged {
 		if err := i.restoreFirewallPorts(ctx, host, saga.allOldPorts(), saga.NewPort, autonReason); err != nil {
 			return sshdPortSagaResponse{}, err
@@ -470,15 +501,13 @@ func (i *instance) executePortRollbackLocked(ctx context.Context, host *pluginsd
 	}
 	i.setOverviewSagaPending(ctx, host, false)
 
-	listening := make([]uint32, 0, len(rbResp.GetListeningPorts()))
-	listening = append(listening, rbResp.GetListeningPorts()...)
 	return sshdPortSagaResponse{
 		Stage:           "rolled_back",
 		TransactionRef:  saga.TransactionRef,
 		OldPort:         saga.OldPort,
 		NewPort:         saga.NewPort,
 		ListeningPorts:  listening,
-		Revision:        rbResp.GetRevision(),
+		Revision:        finalRev,
 		FirewallManaged: saga.FirewallManaged,
 	}, nil
 }
@@ -511,7 +540,7 @@ func (i *instance) checkExpiredPortSaga(ctx context.Context) {
 	if err != nil || !found {
 		return
 	}
-	if saga.Stage != sagaStageSSHDCommitted && i.nowTime().Unix() < saga.DeadlineUnix {
+	if saga.Stage != sagaStageSSHDCommitted && saga.Stage != sagaStageSSHDRolledBack && i.nowTime().Unix() < saga.DeadlineUnix {
 		return
 	}
 	i.sagaMu.Lock()
@@ -536,7 +565,22 @@ func (i *instance) checkExpiredPortSaga(ctx context.Context) {
 		i.setOverviewSagaPending(ctx, host, false)
 		return
 	}
-	if saga.Stage != sagaStageSSHDCommitted && i.nowTime().Unix() < saga.DeadlineUnix {
+	if saga.Stage == sagaStageSSHDRolledBack {
+		// sshd 已完成 ROLLBACK，仅重试防火墙恢复与清理 KV，不再重复发 SetPort(ROLLBACK)。
+		if saga.FirewallManaged {
+			if err := i.restoreFirewallPorts(ctx, host, saga.allOldPorts(), saga.NewPort, "sshd_saga_rollback"); err != nil {
+				i.Logger().Warn("SSH 改端口已回滚，重试防火墙恢复失败", "transaction_ref", saga.TransactionRef, "error", err.Error())
+				return
+			}
+		}
+		if err := host.DeleteState(ctx, kvKeyPortSaga, ""); err != nil {
+			i.Logger().Warn("SSH 改端口已回滚，清理 KV 失败", "transaction_ref", saga.TransactionRef, "error", err.Error())
+			return
+		}
+		i.setOverviewSagaPending(ctx, host, false)
+		return
+	}
+	if i.nowTime().Unix() < saga.DeadlineUnix {
 		return
 	}
 	if _, err := i.executePortRollbackLocked(ctx, host, saga, "", "sshd_saga_rollback"); err != nil {

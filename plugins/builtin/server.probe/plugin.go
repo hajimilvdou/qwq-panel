@@ -76,7 +76,7 @@ type instance struct {
 	publishAlert func(context.Context, pluginsdk.EventDraft) error
 }
 
-func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (pluginsdk.Instance, error) {
+func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pluginsdk.Instance, error) {
 	cfg := probeConfig{
 		CollectLocalHost:    true,
 		LocalNodeName:       "本机主控节点",
@@ -136,12 +136,9 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 	store.mu.RUnlock()
 	_ = domains.ReloadSealedBundle(time.Now(), loadedSettings)
 
-	initialAdminPwd := ""
-	if cfg.StandaloneAdminPassword.Plain != "" || cfg.StandaloneAdminPassword.SecretRef != "" {
-		if resolved, rerr := resolveProbeSecretOrPlain(ctx, base.Host(), cfg.StandaloneAdminPassword, "standalone_admin_password"); rerr == nil {
-			initialAdminPwd = resolved
-		}
-	}
+	// NewInstance 阶段不存在已派发的 operation_id，不能调用 host.RevealSecret；
+	// 仅接收明文配置值，宿主封存的 {"$secret":...} 引用静默跳过并保留 DB 中既有 verifier（由 probe.settings.update 解封更新）。
+	initialAdminPwd := cfg.StandaloneAdminPassword.Plain
 
 	aiCtrl := NewAINativeController(store, domains)
 	portal := NewPortalGateway(store, domains, aiCtrl, initialAdminPwd, time.Now)
@@ -212,23 +209,19 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 		i.cfgMu.Lock()
 		i.cfg = next
 		i.cfgMu.Unlock()
-		if next.StandaloneAdminPassword.Plain != "" || next.StandaloneAdminPassword.SecretRef != "" {
-			pwd, err := resolveProbeSecretOrPlain(ctx, i.Host(), next.StandaloneAdminPassword, "standalone_admin_password")
+		// ApplyConfig 阶段不存在已派发的 operation_id，绝不调用 host.RevealSecret；
+		// 仅在直接提供明文时更新 verifier，宿主封存的 {"$secret":...} 引用静默跳过以保留既有 DB verifier。
+		if next.StandaloneAdminPassword.Plain != "" {
+			verifier, err := EncodeAdminVerifier(next.StandaloneAdminPassword.Plain)
 			if err != nil {
-				return pluginsdk.Errorf("SECRET_REVEAL_FAILED", "读取独立管理口令失败: %v", err)
+				return pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
 			}
-			if pwd != "" {
-				verifier, err := EncodeAdminVerifier(pwd)
-				if err != nil {
-					return pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
-				}
-				i.store.mu.Lock()
-				i.store.settings.StandaloneAdminVerifier = verifier
-				saved := i.store.settings
-				i.store.mu.Unlock()
-				i.portal.SetAdminVerifier(verifier)
-				_ = i.store.PersistSettings(ctx, saved)
-			}
+			i.store.mu.Lock()
+			i.store.settings.StandaloneAdminVerifier = verifier
+			saved := i.store.settings
+			i.store.mu.Unlock()
+			i.portal.SetAdminVerifier(verifier)
+			_ = i.store.PersistSettings(ctx, saved)
 		}
 	}
 	return nil
@@ -826,7 +819,7 @@ func (i *instance) registerOperations() {
 		}
 		var newAdminVerifier string
 		if patch.StandaloneAdminPassword.Plain != "" || patch.StandaloneAdminPassword.SecretRef != "" {
-			pwd, err := resolveProbeSecretOrPlain(ctx, i.Host(), patch.StandaloneAdminPassword, "standalone_admin_password")
+			pwd, err := resolveProbeSecretOrPlain(ctx, req.Host(), patch.StandaloneAdminPassword, "standalone_admin_password")
 			if err != nil {
 				return pluginsdk.Result{}, pluginsdk.Errorf("SECRET_REVEAL_FAILED", "读取独立管理口令失败: %v", err)
 			}
@@ -895,7 +888,7 @@ func (i *instance) registerOperations() {
 		if err := json.Unmarshal(req.Payload, &in); err != nil {
 			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "域名绑定参数 JSON 无效")
 		}
-		resolvedKey, err := resolveProbeSecretOrPlain(ctx, i.Host(), in.KeyPEM, "domain_tls_key_pem")
+		resolvedKey, err := resolveProbeSecretOrPlain(ctx, req.Host(), in.KeyPEM, "domain_tls_key_pem")
 		if err != nil {
 			return pluginsdk.Result{}, pluginsdk.Errorf("SECRET_REVEAL_FAILED", "读取证书私钥失败: %v", err)
 		}

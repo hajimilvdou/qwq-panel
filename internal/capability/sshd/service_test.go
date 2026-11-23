@@ -194,6 +194,43 @@ func TestPortStagesAndBinding(t *testing.T) {
 	if !slices.Equal(runtime.ports, []uint32{2222}) {
 		t.Fatal("autonomous rollback did not restore original listener")
 	}
+
+	// 验证手动无 KV 场景下仅凭 transaction_ref 且 NewPort == 0 也可正常 ROLLBACK，而 ADD_NEW/COMMIT_NEW 仍拒绝 NewPort == 0。
+	added3 := portResponse(t, portCall(t, s, r, "ADD_NEW", "", "op_00000000000000000000000005"))
+	callWithPort := func(stage string, port uint32, ref, op string) sandbox.CapabilityResponse {
+		current, err := r.Read(context.Background(), Match{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(PortMutation{
+			Kind:             "port",
+			NewPort:          port,
+			Stage:            stage,
+			TransactionRef:   ref,
+			ExpectedRevision: current.Revision,
+			OperationID:      op,
+			InstanceID:       "default",
+			HostPorts:        []uint32{8443},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := s.Run(context.Background(), sandbox.CapabilityRequest{Op: "sshd.write-dropin", ID: "security.basic", ParamsJSON: raw})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	if res := callWithPort("ADD_NEW", 0, "", "op_00000000000000000000000006"); res.Code != "VALIDATION_FAILED" {
+		t.Fatalf("ADD_NEW with NewPort=0 = %s, want VALIDATION_FAILED", res.Code)
+	}
+	if res := callWithPort("COMMIT_NEW", 0, added3.TransactionRef, "op_00000000000000000000000006"); res.Code != "VALIDATION_FAILED" {
+		t.Fatalf("COMMIT_NEW with NewPort=0 = %s, want VALIDATION_FAILED", res.Code)
+	}
+	portResponse(t, callWithPort("ROLLBACK", 0, added3.TransactionRef, "op_00000000000000000000000006"))
+	if !slices.Equal(runtime.ports, []uint32{2222}) {
+		t.Fatalf("zero-port rollback did not restore original listener: %v", runtime.ports)
+	}
 }
 
 func TestVerifyPortExternalConnectionAndProcNetParser(t *testing.T) {

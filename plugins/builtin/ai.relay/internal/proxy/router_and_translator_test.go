@@ -452,3 +452,63 @@ func TestAnthropicSSEStateMachineToolsAnd5xxCooldown(t *testing.T) {
 		}
 	}
 }
+
+func TestSafeHTTPClientBlocksRedirectsAndMetadataEvenWhenAllowPrivate(t *testing.T) {
+	privClient := NewSafeHTTPClient(true, 2*time.Second)
+	tr, ok := privClient.Transport.(*http.Transport)
+	if !ok || tr.Proxy != nil {
+		t.Fatal("NewSafeHTTPClient must disable env proxy (Proxy == nil)")
+	}
+
+	// 1. 307 跨源重定向必须被 ErrUseLastResponse 拦截，禁止跟随泄漏 x-api-key
+	var targetCalled bool
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	redirSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetSrv.URL+"/steal", http.StatusTemporaryRedirect)
+	}))
+	defer redirSrv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, redirSrv.URL+"/v1/messages", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("x-api-key", "sk-secret-do-not-leak")
+	resp, err := privClient.Do(req)
+	if err != nil {
+		t.Fatalf("expected 307 response without following redirect, got err: %v", err)
+	}
+	_ = resp.Body.Close()
+	targetSrv.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("expected HTTP 307, got %d", resp.StatusCode)
+	}
+	if targetCalled {
+		t.Fatal("redirect target must NOT be called (API key leak prevention)")
+	}
+
+	// 2. 即使 allowPrivate=true，也必须无条件阻断云元数据、0.0.0.0/8、NAT64、6to4 与 Teredo
+	for _, blockedURL := range []string{
+		"http://169.254.169.254/latest/meta-data/",
+		"http://100.100.100.200/latest/meta-data/",
+		"http://0.0.0.0:8080/",
+		"http://[fd00:ec2::254]/latest/meta-data/",
+		"http://[64:ff9b::169.254.169.254]/",
+		"http://[2002:a9fe:a9fe::1]/",
+		"http://[2001:0:4136:e378::1]/",
+		"http://metadata.google.internal/",
+	} {
+		r, gerr := privClient.Get(blockedURL)
+		if gerr == nil {
+			_ = r.Body.Close()
+			t.Fatalf("expected SSRF_BLOCKED for %s even with allowPrivate=true", blockedURL)
+		}
+		if !strings.Contains(gerr.Error(), "SSRF_BLOCKED") {
+			t.Fatalf("expected SSRF_BLOCKED for %s, got: %v", blockedURL, gerr)
+		}
+	}
+}

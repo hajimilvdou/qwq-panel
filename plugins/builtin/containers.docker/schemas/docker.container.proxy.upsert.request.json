@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "container_id",
+    "container_port",
+    "domain"
+  ],
+  "properties": {
+    "container_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "container_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "upstream_port_strategy": {
+      "type": "string",
+      "enum": [
+        "use_existing",
+        "converge_loopback",
+        "auto_map_loopback"
+      ]
+    },
+    "existing_host_port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "auto_close_public_port": {
+      "type": "boolean"
+    },
+    "commit_writable_layer": {
+      "type": "boolean"
+    },
+    "allow_discard_writable_layer": {
+      "type": "boolean"
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 253
+    },
+    "path_prefix": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "upstream_scheme": {
+      "type": "string",
+      "enum": [
+        "http",
+        "https"
+      ]
+    },
+    "upstream_insecure": {
+      "type": "boolean"
+    },
+    "websocket": {
+      "type": "boolean"
+    },
+    "max_body_mb": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 102400
+    },
+    "rate_limit_rps": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "basic_auth_user": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "basic_auth_pass": {
+      "type": "string",
+      "maxLength": 128,
+      "x-secret": true,
+      "writeOnly": true
+    },
+    "clear_basic_auth": {
+      "type": "boolean"
+    },
+    "cert_strategy": {
+      "type": "string",
+      "enum": [
+        "auto_acme",
+        "existing_cert",
+        "http_only"
+      ]
+    },
+    "existing_cert_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "dns_provider_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "dns_zone_id": {
+      "type": "string",
+      "maxLength": 128
+    }
+  }
+}

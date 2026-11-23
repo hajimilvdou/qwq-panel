@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -24,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
 
 	pb "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
@@ -500,5 +502,409 @@ func TestShouldRedirectHTTPSAvoidsLoopWithoutActiveListener(t *testing.T) {
 	req.RemoteAddr = "203.0.113.99:12345"
 	if got := RealClientIP(req, trusted); got != "203.0.113.99" {
 		t.Fatalf("expected untrusted peer IP 203.0.113.99, got %q", got)
+	}
+}
+
+func TestWebIngressUpstreamTLSInsecureAndMaxBodyMB(t *testing.T) {
+	// 自签 HTTPS 上游（模拟 Portainer 9443 等容器）
+	tlsUpstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("self-signed-ok:" + r.Method + ":" + string(body[:min(len(body), 16)])))
+	}))
+	defer tlsUpstream.Close()
+
+	srv := startIngressTestServer(t, New(), []byte(`{"preferred_engine":"builtin-go","listen_addr":"127.0.0.1:0"}`))
+
+	// 1. max_body_mb 超界拒绝
+	for _, badMB := range []int{-1, 102401} {
+		resp := invokeIngressRaw(t, srv, "ingress.site.upsert", map[string]any{
+			"domain":       "badmb.example.com",
+			"upstream_url": tlsUpstream.URL,
+			"max_body_mb":  badMB,
+		})
+		if resp.GetError() == nil {
+			t.Fatalf("expected max_body_mb=%d to be rejected", badMB)
+		}
+	}
+
+	// 2. 先配置 upstream_tls_insecure=false，验证对自签 HTTPS 上游返回 502（严格校验证书）
+	strictSite := invokeIngress(t, srv, "ingress.site.upsert", map[string]any{
+		"domain":                "strict-tls.example.com",
+		"upstream_url":          tlsUpstream.URL,
+		"tls_mode":              "off",
+		"upstream_tls_insecure": false,
+		"max_body_mb":           0,
+	})
+	strictSiteID := strictSite["site"].(map[string]any)["id"].(string)
+
+	// 3. 再配置 upstream_tls_insecure=true + max_body_mb=1，验证可正常反代自签 HTTPS 并拦截超限请求体
+	insecSite := invokeIngress(t, srv, "ingress.site.upsert", map[string]any{
+		"domain":                "portainer.example.com",
+		"upstream_url":          tlsUpstream.URL,
+		"tls_mode":              "off",
+		"upstream_tls_insecure": true,
+		"max_body_mb":           1,
+	})
+	insecSiteID := insecSite["site"].(map[string]any)["id"].(string)
+	if insecSite["site"].(map[string]any)["upstream_tls_insecure"] != true ||
+		int(insecSite["site"].(map[string]any)["max_body_mb"].(float64)) != 1 {
+		t.Fatalf("unexpected site record fields: %+v", insecSite["site"])
+	}
+
+	ov := invokeIngress(t, srv, "ingress.overview", map[string]any{})
+	boundAddr := ov["bound_addr"].(string)
+
+	// 严格站点访问自签 HTTPS 上游必须 502
+	reqStrict, _ := http.NewRequest(http.MethodGet, "http://"+boundAddr+"/", nil)
+	reqStrict.Host = "strict-tls.example.com"
+	respStrict, err := http.DefaultClient.Do(reqStrict)
+	if err != nil {
+		t.Fatalf("strict request transport error: %v", err)
+	}
+	_ = respStrict.Body.Close()
+	if respStrict.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502 for strict TLS against self-signed upstream, got %d", respStrict.StatusCode)
+	}
+
+	// 开启 upstream_tls_insecure 的站点小请求体应 200
+	reqOK, _ := http.NewRequest(http.MethodPost, "http://"+boundAddr+"/upload", strings.NewReader("hello-small"))
+	reqOK.Host = "portainer.example.com"
+	respOK, err := http.DefaultClient.Do(reqOK)
+	if err != nil {
+		t.Fatalf("insecure request failed: %v", err)
+	}
+	bodyOK, _ := io.ReadAll(respOK.Body)
+	_ = respOK.Body.Close()
+	if respOK.StatusCode != http.StatusOK || !strings.Contains(string(bodyOK), "self-signed-ok:POST:hello-small") {
+		t.Fatalf("expected 200 from self-signed upstream, got %d body=%q", respOK.StatusCode, string(bodyOK))
+	}
+
+	// 超过 1 MiB 请求体应被 413 拒绝
+	oversize := strings.Repeat("A", (1<<20)+1024)
+	reqBig, _ := http.NewRequest(http.MethodPost, "http://"+boundAddr+"/upload", strings.NewReader(oversize))
+	reqBig.Host = "portainer.example.com"
+	respBig, err := http.DefaultClient.Do(reqBig)
+	if err != nil {
+		t.Fatalf("oversize request failed: %v", err)
+	}
+	_ = respBig.Body.Close()
+	if respBig.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for >1MiB body, got %d", respBig.StatusCode)
+	}
+
+	// 验证上游探测对自签 HTTPS 同样遵循站点开关
+	strictProbe := invokeIngress(t, srv, "ingress.upstream.probe", map[string]any{"id": strictSiteID})
+	if strictProbe["reachable"] != false {
+		t.Fatalf("expected strict self-signed upstream probe to fail, got %+v", strictProbe)
+	}
+	insecProbe := invokeIngress(t, srv, "ingress.upstream.probe", map[string]any{"id": insecSiteID})
+	if insecProbe["reachable"] != true {
+		t.Fatalf("expected insecure self-signed upstream probe to succeed, got %+v", insecProbe)
+	}
+
+	// 4. 验证 Caddyfile 与 Nginx 渲染输出
+	preview := invokeIngress(t, srv, "ingress.config.preview", map[string]any{})
+	caddy := preview["caddyfile"].(string)
+	nginx := preview["nginx"].(string)
+	if !strings.Contains(caddy, "tls_insecure_skip_verify") || !strings.Contains(caddy, "max_size 1MB") {
+		t.Fatalf("caddyfile missing insecure transport or request_body limit:\n%s", caddy)
+	}
+	if !strings.Contains(nginx, "proxy_ssl_verify off;") ||
+		!strings.Contains(nginx, "client_max_body_size 1m;") ||
+		!strings.Contains(nginx, "client_max_body_size 0;") {
+		t.Fatalf("nginx config missing proxy_ssl_verify or client_max_body_size:\n%s", nginx)
+	}
+}
+
+func TestWebIngressLegacyColumnMigrationIdempotent(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "ingress.db")
+	legacyDB, err := sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath))
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+	// 已带复合唯一键但缺少 upstream_tls_insecure 和 max_body_mb 的旧库
+	if _, err := legacyDB.Exec(`CREATE TABLE ingress_sites (
+		id                 TEXT PRIMARY KEY,
+		domain             TEXT NOT NULL,
+		enabled            INTEGER NOT NULL DEFAULT 1,
+		upstream_url       TEXT NOT NULL,
+		path_prefix        TEXT NOT NULL DEFAULT '/',
+		websocket          INTEGER NOT NULL DEFAULT 1,
+		tls_mode           TEXT NOT NULL DEFAULT 'managed',
+		cert_id            TEXT NOT NULL DEFAULT '',
+		force_https        INTEGER NOT NULL DEFAULT 1,
+		rate_limit_rps     INTEGER NOT NULL DEFAULT 0,
+		rate_limit_burst   INTEGER NOT NULL DEFAULT 0,
+		basic_auth_user    TEXT NOT NULL DEFAULT '',
+		basic_auth_hash    TEXT NOT NULL DEFAULT '',
+		extra_headers_json TEXT NOT NULL DEFAULT '{}',
+		notes              TEXT NOT NULL DEFAULT '',
+		revision           INTEGER NOT NULL DEFAULT 1,
+		created_at         INTEGER NOT NULL,
+		updated_at         INTEGER NOT NULL,
+		UNIQUE (domain, path_prefix)
+	) STRICT;`); err != nil {
+		t.Fatalf("create old v2 table: %v", err)
+	}
+	if _, err := legacyDB.Exec(`INSERT INTO ingress_sites (id, domain, upstream_url, created_at, updated_at) VALUES ('ing_old', 'old.example.com', 'http://127.0.0.1:8080', 1700000000, 1700000000)`); err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+	_ = legacyDB.Close()
+
+	// 首次打开：应自动补齐两列且老数据保留默认值
+	st1, err := openIngressStore(dataDir, embeddedSchemaSQL, time.Now)
+	if err != nil {
+		t.Fatalf("first openIngressStore: %v", err)
+	}
+	sites, err := st1.listSites(t.Context())
+	if err != nil || len(sites) != 1 || sites[0].UpstreamTLSInsecure || sites[0].MaxBodyMB != 0 {
+		t.Fatalf("unexpected migrated sites: %+v err=%v", sites, err)
+	}
+	_ = st1.Close()
+
+	// 二次打开：幂等无报错
+	st2, err := openIngressStore(dataDir, embeddedSchemaSQL, time.Now)
+	if err != nil {
+		t.Fatalf("second openIngressStore (idempotency): %v", err)
+	}
+	_ = st2.Close()
+}
+
+func TestWebIngressPathPrefixSegmentBoundary(t *testing.T) {
+	apiBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("api:" + r.URL.Path))
+	}))
+	defer apiBackend.Close()
+	rootBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("root:" + r.URL.Path))
+	}))
+	defer rootBackend.Close()
+
+	p := newBuiltinProxy(time.Now, nil)
+	defer p.Close()
+	p.Reload([]SiteRecord{
+		{ID: "s-root", Domain: "boundary.example.com", Enabled: true, UpstreamURL: rootBackend.URL, PathPrefix: "/", TLSMode: "off"},
+		{ID: "s-api", Domain: "boundary.example.com", Enabled: true, UpstreamURL: apiBackend.URL, PathPrefix: "/api", TLSMode: "off"},
+	})
+
+	cases := []struct {
+		path string
+		want string
+	}{
+		{"/api", "api:/api"},
+		{"/api/", "api:/api/"},
+		{"/api/v1/items", "api:/api/v1/items"},
+		{"/api-admin", "root:/api-admin"},
+		{"/apiv2", "root:/apiv2"},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "http://boundary.example.com"+tc.path, nil)
+		req.Host = "boundary.example.com"
+		p.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || rec.Body.String() != tc.want {
+			t.Fatalf("path %q: got status=%d body=%q, want %q", tc.path, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
+}
+
+func TestSNICertStorePartialFailureAndEviction(t *testing.T) {
+	dataDir := t.TempDir()
+	sni := NewSNICertStore(dataDir)
+
+	writeBinding := func(ref, domain string) {
+		certPEM, keyPEM := generateSelfSignedCertPEM(t, domain)
+		fullPath, keyPath := MaterializedCertPaths(dataDir, ref)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", ref, err)
+		}
+		if err := os.WriteFile(fullPath, certPEM, 0o600); err != nil {
+			t.Fatalf("write cert %s: %v", ref, err)
+		}
+		if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+			t.Fatalf("write key %s: %v", ref, err)
+		}
+	}
+	writeBinding("certbind_good", "good.example.com")
+	writeBinding("certbind_old", "old.example.com")
+
+	// 初始加载 good + old + 缺失证书的 missing：缺失项不得阻断有效项加载
+	loaded, err := sni.ReloadFromBindings(map[string]string{
+		"good.example.com":    "certbind_good",
+		"old.example.com":     "certbind_old",
+		"missing.example.com": "certbind_nonexistent",
+	})
+	if err == nil {
+		t.Fatal("expected partial error when one binding is missing")
+	}
+	if loaded != 2 {
+		t.Fatalf("expected 2 valid certs loaded despite 1 missing, got %d", loaded)
+	}
+	if !sni.HasCertForDomain("good.example.com") || !sni.HasCertForDomain("old.example.com") {
+		t.Fatal("expected good.example.com and old.example.com to be loaded")
+	}
+
+	// 移除 old.example.com 后重载：旧域名必须被立即驱逐
+	loaded, err = sni.ReloadFromBindings(map[string]string{
+		"good.example.com": "certbind_good",
+	})
+	if err != nil || loaded != 1 {
+		t.Fatalf("reload after removal: loaded=%d err=%v", loaded, err)
+	}
+	if !sni.HasCertForDomain("good.example.com") || sni.HasCertForDomain("old.example.com") {
+		t.Fatal("expected old.example.com to be evicted and good.example.com retained")
+	}
+
+	// 清空全部 TLS 站点后通过 syncSiteBindingsToSNI 同步：最后一个域名也必须被清空
+	syncSiteBindingsToSNI(sni, nil)
+	if sni.HasCertForDomain("good.example.com") {
+		t.Fatal("expected last TLS domain to be evicted when active bindings become empty")
+	}
+}
+
+func TestBasicAuthUserChangeInvalidatesCache(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer backend.Close()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte("SecretPass#1"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt: %v", err)
+	}
+	fixedNow := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	p := newBuiltinProxy(func() time.Time { return fixedNow }, nil)
+	defer p.Close()
+
+	site := SiteRecord{
+		ID:            "site-auth",
+		Domain:        "auth.example.com",
+		Enabled:       true,
+		UpstreamURL:   backend.URL,
+		PathPrefix:    "/",
+		TLSMode:       "off",
+		HasBasicAuth:  true,
+		BasicAuthUser: "alice",
+		BasicAuthHash: string(hash),
+	}
+	p.Reload([]SiteRecord{site})
+
+	// alice 认证通过并写入 basicAuthCache
+	req1 := httptest.NewRequest(http.MethodGet, "http://auth.example.com/", nil)
+	req1.Host = "auth.example.com"
+	req1.SetBasicAuth("alice", "SecretPass#1")
+	rec1 := httptest.NewRecorder()
+	p.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected 200 for alice, got %d", rec1.Code)
+	}
+
+	// 仅修改 BasicAuthUser 为 bob（保持同一 BasicAuthHash 与同一时钟），旧的 alice 凭证必须立即 401
+	site.BasicAuthUser = "bob"
+	p.Reload([]SiteRecord{site})
+
+	req2 := httptest.NewRequest(http.MethodGet, "http://auth.example.com/", nil)
+	req2.Host = "auth.example.com"
+	req2.SetBasicAuth("alice", "SecretPass#1")
+	rec2 := httptest.NewRecorder()
+	p.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 after BasicAuthUser changed to bob, got %d", rec2.Code)
+	}
+
+	// bob 使用同一密码应立即 200
+	req3 := httptest.NewRequest(http.MethodGet, "http://auth.example.com/", nil)
+	req3.Host = "auth.example.com"
+	req3.SetBasicAuth("bob", "SecretPass#1")
+	rec3 := httptest.NewRecorder()
+	p.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("expected 200 for bob, got %d", rec3.Code)
+	}
+}
+
+func TestDialSafeUpstreamProbeGuardsEmptyDNSAndRebinding(t *testing.T) {
+	// 1. LookupNetIP 返回空切片且 err == nil 时，必须返回非 nil error，不能返回 (nil, nil)
+	conn, err := dialSafeUpstreamProbeWithResolver(t.Context(), "tcp", "empty.example.com:80", func(context.Context, string, string) ([]netip.Addr, error) {
+		return nil, nil
+	})
+	if err == nil || conn != nil {
+		t.Fatalf("expected non-nil error for empty DNS result, got conn=%v err=%v", conn, err)
+	}
+
+	// 2. 域名解析到 loopback / private IP 必须被拦截（防 DNS Rebinding）
+	for _, targetIP := range []string{"127.0.0.1", "10.0.0.5", "192.168.1.10", "::1"} {
+		conn, err := dialSafeUpstreamProbeWithResolver(t.Context(), "tcp", "rebind.example.com:80", func(context.Context, string, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr(targetIP)}, nil
+		})
+		if err == nil || conn != nil || !strings.Contains(err.Error(), "SSRF_DNS_REBIND_BLOCKED") {
+			t.Fatalf("expected DNS rebinding block for %s, got conn=%v err=%v", targetIP, conn, err)
+		}
+	}
+
+	// 3. 字面量 127.0.0.1 本地容器上游仍允许探测
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		if c, aerr := ln.Accept(); aerr == nil {
+			_ = c.Close()
+		}
+	}()
+	conn, err = dialSafeUpstreamProbeWithResolver(t.Context(), "tcp", ln.Addr().String(), nil)
+	if err != nil || conn == nil {
+		t.Fatalf("expected literal loopback probe to succeed, got conn=%v err=%v", conn, err)
+	}
+	_ = conn.Close()
+}
+
+func TestWebIngressApplyConfigFailurePreservesOldListener(t *testing.T) {
+	srv := startIngressTestServer(t, New(), []byte(`{"preferred_engine":"builtin-go","listen_addr":"127.0.0.1:0"}`))
+	ovBefore := invokeIngress(t, srv, "ingress.overview", map[string]any{})
+	oldBound := ovBefore["bound_addr"].(string)
+	if oldBound == "" {
+		t.Fatal("expected initial bound_addr")
+	}
+
+	// 占用一个端口使 HTTPS 绑定失败，同时尝试变更 HTTP listen_addr（置空关闭 HTTP 或切换端口）
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen busy: %v", err)
+	}
+	defer busy.Close()
+
+	for _, nextHTTP := range []string{"", "localhost:0"} {
+		cfgRaw, _ := json.Marshal(map[string]any{
+			"preferred_engine":  "builtin-go",
+			"listen_addr":       nextHTTP,
+			"https_listen_addr": busy.Addr().String(),
+		})
+		resp, err := srv.ApplyConfig(t.Context(), &pb.ApplyConfigRequest{
+			Context:          &pb.RequestContext{InstanceId: "default", NodeId: "local", Locale: "zh-CN"},
+			ConfigJson:       cfgRaw,
+			ProposedRevision: "2",
+		})
+		if err == nil && resp.GetError() == nil {
+			t.Fatalf("expected ApplyConfig(listen_addr=%q) to fail when https_listen_addr is already in use", nextHTTP)
+		}
+
+		ovAfter := invokeIngress(t, srv, "ingress.overview", map[string]any{})
+		if ovAfter["bound_addr"].(string) != oldBound {
+			t.Fatalf("bound_addr corrupted after failed ApplyConfig(listen_addr=%q): before=%q after=%q", nextHTTP, oldBound, ovAfter["bound_addr"])
+		}
+		// 确认旧 HTTP 监听仍在正常服务
+		r, gerr := http.Get("http://" + oldBound + "/")
+		if gerr != nil {
+			t.Fatalf("old HTTP listener stopped accepting after failed ApplyConfig: %v", gerr)
+		}
+		_ = r.Body.Close()
 	}
 }

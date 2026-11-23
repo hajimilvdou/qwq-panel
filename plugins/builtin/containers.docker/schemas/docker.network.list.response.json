@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "networks",
+    "bindable_ips"
+  ],
+  "properties": {
+    "networks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "bindable_ips": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

@@ -225,3 +225,19 @@ func (x *dockerCapabilityService) ProxyWrite(ctx context.Context, req *dockerv1.
 func (x *dockerCapabilityService) ComposeAction(ctx context.Context, req *dockerv1.ComposeActionRequest) (*dockerv1.ComposeActionResponse, error) {
 	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "docker", method: "ComposeAction", verb: "docker.compose", name: "system.docker.manage", write: true}, new(dockerv1.ComposeActionResponse))
 }
+
+func (x *dockerCapabilityService) ListBindableIPs(ctx context.Context, req *dockerv1.ListBindableIPsRequest) (*dockerv1.ListBindableIPsResponse, error) {
+	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "docker", method: "ListBindableIPs", verb: "docker.bindable_ips", name: "system.docker.read"}, new(dockerv1.ListBindableIPsResponse))
+}
+
+func (x *dockerCapabilityService) CreateNetwork(ctx context.Context, req *dockerv1.CreateNetworkRequest) (*dockerv1.CreateNetworkResponse, error) {
+	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "docker", method: "CreateNetwork", verb: "docker.network.create", name: "system.docker.manage", write: true}, new(dockerv1.CreateNetworkResponse))
+}
+
+func (x *dockerCapabilityService) MutateContainerNetwork(ctx context.Context, req *dockerv1.MutateContainerNetworkRequest) (*dockerv1.MutateContainerNetworkResponse, error) {
+	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "docker", method: "MutateContainerNetwork", verb: "docker.network.membership", name: "system.docker.manage", write: true}, new(dockerv1.MutateContainerNetworkResponse))
+}
+
+func (x *dockerCapabilityService) RecreateContainerPorts(ctx context.Context, req *dockerv1.RecreateContainerPortsRequest) (*dockerv1.RecreateContainerPortsResponse, error) {
+	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "docker", method: "RecreateContainerPorts", verb: "docker.recreate_ports", name: "system.docker.manage", write: true}, new(dockerv1.RecreateContainerPortsResponse))
+}

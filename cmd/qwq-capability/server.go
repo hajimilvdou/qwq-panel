@@ -34,7 +34,8 @@ func newDockerDispatchRunner(base sandbox.CapabilityRunner, svc *docker.Service)
 
 func (r dockerDispatchRunner) Run(ctx context.Context, request sandbox.CapabilityRequest) (sandbox.CapabilityResponse, error) {
 	switch request.Op {
-	case "docker.api.read", "docker.api.write", "docker.compose":
+	case "docker.api.read", "docker.api.write", "docker.compose",
+		"docker.bindable_ips", "docker.network.create", "docker.network.membership", "docker.recreate_ports":
 		if r.docker != nil {
 			return r.docker.Run(ctx, request)
 		}
@@ -123,7 +124,7 @@ func (s *capabilityServer) serveConn(ctx context.Context, connection net.Conn) {
 		_ = sandbox.WriteHelperJSON(connection, sandbox.CapabilityResponse{Code: "VALIDATION_FAILED", Error: "能力请求格式无效"})
 		return
 	}
-	if request.Op == "docker.compose" {
+	if request.Op == "docker.compose" || request.Op == "docker.recreate_ports" {
 		cancel()
 		requestCtx, cancel = context.WithTimeout(ctx, composeRequestTimeout)
 		defer cancel()

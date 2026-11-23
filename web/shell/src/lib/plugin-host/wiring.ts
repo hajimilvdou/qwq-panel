@@ -8,12 +8,23 @@
  * ========================================================================== */
 import { ApiError, newIdempotencyKey, NetworkError, TERMINAL, type OpResult } from '$api/client';
 import { operations as opsApi, plugins as pluginsApi } from '$api/endpoints';
+import { isPluginActiveReady } from '$api/endpoints-plugins';
 import type { Plugin } from '$api/types';
 import { dock } from '../ai/dock.svelte';
 import { events } from '../events.svelte';
 import { prefs } from '../prefs.svelte';
+import { resources } from '../resource.svelte';
 import { toasts } from '../toast.svelte';
-import type { BridgeDeps, BridgeProblem, HostSettings } from './index';
+import {
+  isEnsurePluginAllowed,
+  type BridgeConfirmRequest,
+  type BridgeDeps,
+  type BridgeProblem,
+  type EnsurePluginsFailure,
+  type EnsurePluginsParams,
+  type EnsurePluginsResult,
+  type HostSettings,
+} from './index';
 
 /** 下发给插件的设计 token（只读值，不含任何会话信息） */
 export const TOKEN_WHITELIST = [
@@ -82,7 +93,25 @@ const SAFE_DETAIL_CODES = new Set([
   'NOT_FOUND',
 ]);
 
+export class EnsurePluginsError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status: number,
+    readonly detail?: string,
+  ) {
+    super(detail || code);
+    this.name = 'EnsurePluginsError';
+  }
+}
+
 export function toProblem(err: unknown): BridgeProblem {
+  if (err instanceof EnsurePluginsError) {
+    return {
+      code: err.code,
+      status: err.status,
+      detail: err.detail,
+    };
+  }
   if (err instanceof ApiError) {
     return {
       code: err.code,
@@ -156,9 +185,220 @@ async function waitForOperation(initial: OpResult, budgetMs: number, signal?: Ab
   return cur;
 }
 
-type Hooks = Pick<BridgeDeps, 'onReady' | 'onResize' | 'onToast' | 'onNavigate' | 'onTimeout' | 'onConfirm' | 'onCopy'>;
+const ENSURE_PLUGIN_LABELS: Record<string, string> = {
+  'web.ingress': '反向代理网关 (web.ingress)',
+  'tls.certificates': '自动 HTTPS 证书管理 (tls.certificates)',
+  'domain.dns': 'DNS 托管与自动验证 (domain.dns)',
+};
+
+export interface EnsurePluginsHandlerDeps {
+  listPlugins: () => Promise<{ items: Plugin[] }>;
+  installPlugin?: (pluginId: string, key: string, autoEnable?: boolean) => Promise<OpResult>;
+  enablePlugin: (pluginId: string, key: string) => Promise<OpResult>;
+  waitForOp: (initial: OpResult, budgetMs: number, signal?: AbortSignal) => Promise<OpResult>;
+  newKey: () => string;
+  confirmAction?: (req: BridgeConfirmRequest) => Promise<boolean>;
+  onAwaitingApproval?: (approvalId?: string) => void;
+  onChanged?: () => void;
+}
+
+function opFailureDetail(op: OpResult, fallback: string): string | null {
+  if (op.status === 'AWAITING_APPROVAL') return '等待审批确认';
+  if (op.error) {
+    return SAFE_DETAIL_CODES.has(op.error.code) ? op.error.detail || op.error.code : op.error.code;
+  }
+  if (op.status === 'FAILED' || op.status === 'REJECTED' || op.status === 'CANCELED' || op.status === 'EXPIRED') {
+    return `${fallback} (${op.status})`;
+  }
+  return null;
+}
+
+/**
+ * 零信任官方联动组件一键安装/启用处理器：
+ *   1. 严格校验白名单（仅允许 web.ingress / tls.certificates / domain.dns，其余直接 PERMISSION_DENIED）；
+ *   2. 对缺装或停用组件强制弹出宿主标准确认框；
+ *   3. 依次安装缺失组件并启用停用组件，等待 Operation 终态并返回结构化结果。
+ */
+export function createEnsurePluginsHandler(
+  deps: EnsurePluginsHandlerDeps,
+): (req: EnsurePluginsParams) => Promise<EnsurePluginsResult> {
+  return async (req: EnsurePluginsParams): Promise<EnsurePluginsResult> => {
+    const requested = Array.from(new Set((req.plugins ?? []).map((s) => s.trim()).filter(Boolean)));
+    if (requested.length === 0) {
+      throw new EnsurePluginsError('INVALID_ARGUMENT', 400, '请求的组件列表不能为空');
+    }
+    const disallowed = requested.filter((id) => !isEnsurePluginAllowed(id));
+    if (disallowed.length > 0) {
+      throw new EnsurePluginsError(
+        'PERMISSION_DENIED',
+        403,
+        `不允许请求非白名单组件：${disallowed.join(', ')}`,
+      );
+    }
+
+    const page = await deps.listPlugins();
+    const byId = new Map<string, Plugin>();
+    for (const item of page.items ?? []) {
+      byId.set(item.plugin_id, item);
+    }
+
+    const already_ready: string[] = [];
+    const missing: string[] = [];
+    const disabled: string[] = [];
+    for (const id of requested) {
+      const existing = byId.get(id);
+      if (!existing) {
+        missing.push(id);
+      } else if (isPluginActiveReady(existing)) {
+        already_ready.push(id);
+      } else {
+        disabled.push(id);
+      }
+    }
+
+    if (missing.length === 0 && disabled.length === 0) {
+      return {
+        ready: true,
+        installed: [],
+        enabled: [],
+        already_ready,
+      };
+    }
+
+    const lines: string[] = [];
+    if (req.reason) lines.push(req.reason);
+    if (missing.length > 0) {
+      lines.push(`将安装并启用：${missing.map((id) => ENSURE_PLUGIN_LABELS[id] ?? id).join('、')}`);
+    }
+    if (disabled.length > 0) {
+      lines.push(`将启动并启用：${disabled.map((id) => ENSURE_PLUGIN_LABELS[id] ?? id).join('、')}`);
+    }
+    lines.push('是否立即继续？');
+
+    const confirmed = deps.confirmAction
+      ? await deps.confirmAction({
+          title: '启用官方联动组件',
+          body: lines.join('\n'),
+          confirmLabel: '立即启用',
+          danger: false,
+        })
+      : false;
+
+    if (!confirmed) {
+      return {
+        ready: false,
+        cancelled: true,
+        installed: [],
+        enabled: [],
+        already_ready,
+      };
+    }
+
+    const installed: string[] = [];
+    const enabled: string[] = [];
+    const failed: EnsurePluginsFailure[] = [];
+
+    for (const id of missing) {
+      if (!deps.installPlugin) {
+        failed.push({ plugin_id: id, detail: `组件 ${id} 尚未安装，请前往应用中心上传安装官方组件包` });
+        continue;
+      }
+      try {
+        let op = await deps.installPlugin(id, deps.newKey(), true);
+        if (op.status === 'AWAITING_APPROVAL') {
+          deps.onAwaitingApproval?.(op.approvalId);
+          failed.push({ plugin_id: id, detail: '等待审批确认' });
+          continue;
+        }
+        if (op.operationId && !TERMINAL.has(op.status)) {
+          op = await deps.waitForOp(op, 60_000);
+        }
+        if (op.status === 'AWAITING_APPROVAL') {
+          deps.onAwaitingApproval?.(op.approvalId);
+          failed.push({ plugin_id: id, detail: '等待审批确认' });
+          continue;
+        }
+        const failDetail = opFailureDetail(op, '安装未完成');
+        if (failDetail) {
+          failed.push({ plugin_id: id, detail: failDetail });
+          continue;
+        }
+        installed.push(id);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          failed.push({
+            plugin_id: id,
+            detail: `当前节点未预置 ${id} 内置安装包，请前往「应用中心 → 上传安装」安装该官方组件`,
+          });
+        } else {
+          const prob = toProblem(err);
+          failed.push({ plugin_id: id, detail: prob.detail || prob.code });
+        }
+      }
+    }
+
+    for (const id of disabled) {
+      try {
+        let op = await deps.enablePlugin(id, deps.newKey());
+        if (op.status === 'AWAITING_APPROVAL') {
+          deps.onAwaitingApproval?.(op.approvalId);
+          failed.push({ plugin_id: id, detail: '等待审批确认' });
+          continue;
+        }
+        if (op.operationId && !TERMINAL.has(op.status)) {
+          op = await deps.waitForOp(op, 60_000);
+        }
+        if (op.status === 'AWAITING_APPROVAL') {
+          deps.onAwaitingApproval?.(op.approvalId);
+          failed.push({ plugin_id: id, detail: '等待审批确认' });
+          continue;
+        }
+        const failDetail = opFailureDetail(op, '启用未完成');
+        if (failDetail) {
+          failed.push({ plugin_id: id, detail: failDetail });
+          continue;
+        }
+        enabled.push(id);
+      } catch (err) {
+        const prob = toProblem(err);
+        failed.push({ plugin_id: id, detail: prob.detail || prob.code });
+      }
+    }
+
+    if (installed.length > 0 || enabled.length > 0) {
+      deps.onChanged?.();
+    }
+
+    return {
+      ready: failed.length === 0,
+      installed,
+      enabled,
+      already_ready,
+      ...(failed.length > 0 ? { failed } : {}),
+    };
+  };
+}
+
+type Hooks = Pick<
+  BridgeDeps,
+  'onReady' | 'onResize' | 'onToast' | 'onNavigate' | 'onTimeout' | 'onConfirm' | 'onCopy' | 'onEnsurePlugins'
+>;
 
 export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
+  const defaultEnsurePlugins = createEnsurePluginsHandler({
+    listPlugins: pluginsApi.list,
+    installPlugin: pluginsApi.installBuiltin,
+    enablePlugin: pluginsApi.enable,
+    waitForOp: waitForOperation,
+    newKey: newIdempotencyKey,
+    confirmAction: hooks.onConfirm,
+    onAwaitingApproval: (approvalId) => dock.open({ approvalId }),
+    onChanged: () => {
+      resources.invalidate('plugins');
+      toasts.success('官方联动组件已就绪');
+    },
+  });
+
   return {
     pluginId: plugin.plugin_id,
     operations: (plugin.operations ?? []).map((o) => ({ id: o.id, effect: o.effect, mode: o.mode, summary: o.summary })),
@@ -175,7 +415,7 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
         dock.open({ approvalId: r.approvalId });
       } else if (r.operationId && !TERMINAL.has(r.status)) {
         /* mode="job" 返回 HTTP 202 PENDING/RUNNING 时透明等待终态，直接返回真实业务 result */
-        r = await waitForOperation(r, 45_000, meta?.signal);
+        r = await waitForOperation(r, 90_000, meta?.signal);
         if (r.status === 'AWAITING_APPROVAL') dock.open({ approvalId: r.approvalId });
       }
       const errDetail = r.error
@@ -197,6 +437,7 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
       await navigator.clipboard.writeText(text);
       toasts.success(label || '已复制到剪贴板');
     },
+    onEnsurePlugins: defaultEnsurePlugins,
     ...hooks,
   };
 }

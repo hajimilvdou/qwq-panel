@@ -32,7 +32,7 @@
     "schemas/ingress.probe.response.json": "sha256:bc95a60b106021a3c6b2fc147a5673e4fadeeb7d6d09260a7ad5064b16428d61",
     "schemas/ingress.rollback.request.json": "sha256:80dcf9217bac3de74eab49ca5123de9a6e4d61c27f4a0534db72db9df651e751",
     "schemas/ingress.rollback.response.json": "sha256:d9900ac8896c77504a37d9415da78438a09b53438a1102cf33c7718270862966",
-    "schemas/ingress.site.upsert.request.json": "sha256:2e4e22af300e8a5724899959c5f81562614e0dc859cd26c35af246be2a05a177",
+    "schemas/ingress.site.upsert.request.json": "sha256:fe11b0c6f3c4728f93435d920659217eac76c664d648026a62d84c23dfdd207a",
     "schemas/ingress.site.upsert.response.json": "sha256:f2c9aa101c91475109f593a3ca606c531c63d5d6c7a304ae45a602c41faa6738",
     "schemas/ingress.tls.inspect.request.json": "sha256:7c2c7187cf096c3a1f016dc854d110ccabec39c9d254a3d9e2756c2c412a5a7b",
     "schemas/ingress.tls.inspect.response.json": "sha256:eceedced80fbbcb25df8fa534bc2f7117a0eeeea8ef2a8e1ba9600bd44c09171",

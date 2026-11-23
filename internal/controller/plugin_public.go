@@ -134,6 +134,80 @@ func (p *bytesSlicePool) Put(b []byte) {
 	}
 }
 
+var allowedPublicStreamResponseHeaders = map[string]struct{}{
+	http.CanonicalHeaderKey("Content-Type"):            {},
+	http.CanonicalHeaderKey("Content-Length"):          {},
+	http.CanonicalHeaderKey("Content-Encoding"):        {},
+	http.CanonicalHeaderKey("Cache-Control"):           {},
+	http.CanonicalHeaderKey("ETag"):                    {},
+	http.CanonicalHeaderKey("Last-Modified"):           {},
+	http.CanonicalHeaderKey("Vary"):                    {},
+	http.CanonicalHeaderKey("Content-Disposition"):     {},
+	http.CanonicalHeaderKey("Location"):                {},
+	http.CanonicalHeaderKey("Subscription-Userinfo"):   {},
+	http.CanonicalHeaderKey("Profile-Update-Interval"): {},
+	http.CanonicalHeaderKey("X-Request-Id"):            {},
+	http.CanonicalHeaderKey("X-Relay-Request-Id"):      {},
+	http.CanonicalHeaderKey("Anthropic-Version"):       {},
+	http.CanonicalHeaderKey("Retry-After"):             {},
+	http.CanonicalHeaderKey("X-Accel-Buffering"):       {},
+}
+
+func isAllowedPublicStreamResponseHeader(name string) bool {
+	canon := http.CanonicalHeaderKey(strings.TrimSpace(name))
+	if canon == "" {
+		return false
+	}
+	if _, ok := allowedPublicStreamResponseHeaders[canon]; ok {
+		return true
+	}
+	return strings.HasPrefix(canon, "X-Ratelimit-")
+}
+
+func sanitizePublicStreamResponseHeaders(h http.Header) {
+	for k := range h {
+		if !isAllowedPublicStreamResponseHeader(k) {
+			h.Del(k)
+		}
+	}
+}
+
+func ensurePublicStreamSecurityHeaders(h http.Header) {
+	if h.Get("X-Content-Type-Options") == "" {
+		h.Set("X-Content-Type-Options", "nosniff")
+	}
+	if h.Get("X-Frame-Options") == "" {
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+	}
+	if h.Get("Referrer-Policy") == "" {
+		h.Set("Referrer-Policy", "no-referrer")
+	}
+}
+
+// resolvePublicStreamSocketPath checks the dedicated plugin-writable stream
+// runtime directory (e.g. /run/qwq-plugin-stream-<id>/public-stream.sock)
+// before falling back to HostDir/public-stream.sock.
+func resolvePublicStreamSocketPath(runDir, pluginID string) string {
+	hostSock := supervisor.HostSocketPath(runDir, pluginID)
+	cleanRunDir := filepath.Clean(runDir)
+	candidates := make([]string, 0, 3)
+	if cleanRunDir != "" && cleanRunDir != "." {
+		// Standard layout: runDir=/run/qwq -> runtimeBase=/run -> /run/qwq-plugin-stream-<id>/public-stream.sock
+		candidates = append(candidates,
+			filepath.Join(filepath.Dir(cleanRunDir), "qwq-plugin-stream-"+pluginID, pluginsdk.PublicStreamSocketName),
+			filepath.Join(cleanRunDir, "qwq-plugin-stream-"+pluginID, pluginsdk.PublicStreamSocketName),
+		)
+	}
+	candidates = append(candidates, filepath.Join(filepath.Dir(hostSock), pluginsdk.PublicStreamSocketName))
+
+	for _, cand := range candidates {
+		if st, err := os.Stat(cand); err == nil && (st.Mode()&os.ModeSocket) != 0 {
+			return cand
+		}
+	}
+	return ""
+}
+
 // ServePublicStream implements pluginpublic.StreamDispatcher for zero-buffer
 // HTTP/SSE public routes over the plugin's private public-stream.sock UDS.
 // When a plugin has not exposed public-stream.sock yet, it falls back cleanly
@@ -151,10 +225,8 @@ func (rt *PluginRuntime) ServePublicStream(
 	if _, err := rt.live(pluginID); err != nil {
 		return err
 	}
-	hostSock := supervisor.HostSocketPath(rt.opts.RunDir, pluginID)
-	streamSock := filepath.Join(filepath.Dir(hostSock), pluginsdk.PublicStreamSocketName)
-
-	if st, statErr := os.Stat(streamSock); statErr != nil || (st.Mode()&os.ModeSocket) == 0 {
+	streamSock := resolvePublicStreamSocketPath(rt.opts.RunDir, pluginID)
+	if streamSock == "" {
 		return rt.fallbackBufferedPublicStream(ctx, pluginID, req, body, w)
 	}
 
@@ -190,6 +262,7 @@ func (rt *PluginRuntime) ServePublicStream(
 	defer transport.CloseIdleConnections()
 
 	var proxyErr error
+	ensurePublicStreamSecurityHeaders(w.Header())
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL = u
@@ -200,7 +273,8 @@ func (rt *PluginRuntime) ServePublicStream(
 		FlushInterval: -1,
 		BufferPool:    streamBufferPool,
 		ModifyResponse: func(resp *http.Response) error {
-			resp.Header.Del("Set-Cookie")
+			sanitizePublicStreamResponseHeaders(resp.Header)
+			sanitizePublicStreamResponseHeaders(resp.Trailer)
 			return nil
 		},
 		ErrorHandler: func(_ http.ResponseWriter, _ *http.Request, e error) {
@@ -259,8 +333,9 @@ func (rt *PluginRuntime) fallbackBufferedPublicStream(
 	if err != nil {
 		return err
 	}
+	ensurePublicStreamSecurityHeaders(w.Header())
 	for k, v := range resp.Headers {
-		if !strings.EqualFold(k, "Set-Cookie") {
+		if isAllowedPublicStreamResponseHeader(k) {
 			w.Header().Set(k, v)
 		}
 	}

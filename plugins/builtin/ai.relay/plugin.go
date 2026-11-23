@@ -241,12 +241,21 @@ func (i *instance) ApplyConfig(_ context.Context, cfg pluginsdk.Config) error {
 	if err != nil {
 		return err
 	}
+	var oldClient, newClient *http.Client
 	i.mu.Lock()
 	i.cfg = next
 	if !i.customHTTPClient {
-		i.httpClient = proxy.NewSafeHTTPClient(next.AllowPrivateUpstream, time.Duration(next.UpstreamTimeoutSeconds)*time.Second)
+		oldClient = i.httpClient
+		newClient = proxy.NewSafeHTTPClient(next.AllowPrivateUpstream, time.Duration(next.UpstreamTimeoutSeconds)*time.Second)
+		i.httpClient = newClient
 	}
 	i.mu.Unlock()
+	if newClient != nil && i.ledger != nil {
+		i.ledger.SetHTTPClient(newClient)
+	}
+	if oldClient != nil {
+		oldClient.CloseIdleConnections()
+	}
 	return nil
 }
 
@@ -1207,11 +1216,25 @@ func (i *instance) publishAllChannelsTrippedAlert(ctx context.Context, group, mo
 	if host == nil || host.Conn() == nil {
 		return
 	}
+	nowUTC := i.nowTime().UTC()
+	nowMs := nowUTC.UnixMilli()
 	payload, err := json.Marshal(map[string]any{
-		"group":   group,
-		"model":   model,
-		"reason":  reason,
-		"time_ms": i.nowTime().UTC().UnixMilli(),
+		"source":    "ai.relay",
+		"severity":  "critical",
+		"title":     fmt.Sprintf("AI 中转模型 %s 全部上游渠道熔断", model),
+		"message":   fmt.Sprintf("分组 %s 下模型 %s 已无可用健康上游渠道：%s", group, model, reason),
+		"dedup_key": fmt.Sprintf("ai.relay:all_tripped:%s:%s", group, model),
+		"tags": map[string]string{
+			"group":   group,
+			"model":   model,
+			"reason":  reason,
+			"time_ms": fmt.Sprintf("%d", nowMs),
+		},
+		"timestamp": nowUTC,
+		"group":     group,
+		"model":     model,
+		"reason":    reason,
+		"time_ms":   nowMs,
 	})
 	if err != nil {
 		return

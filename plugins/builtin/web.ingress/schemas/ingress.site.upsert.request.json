@@ -75,6 +75,14 @@
         "maxLength": 256
       }
     },
+    "upstream_tls_insecure": {
+      "type": "boolean"
+    },
+    "max_body_mb": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 102400
+    },
     "notes": {
       "type": "string",
       "maxLength": 256

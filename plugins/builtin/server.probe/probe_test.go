@@ -20,7 +20,9 @@ import (
 	"testing"
 	"time"
 
+	platformv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
+	"google.golang.org/grpc"
 )
 
 func TestAgentOneWayReportAndAntiReplay(t *testing.T) {
@@ -626,5 +628,83 @@ func TestSealingSecretPersistenceOfflineSLALatencyAndAdminStatus(t *testing.T) {
 	installCmd := BuildAgentInstallCommand("linux", "https://status.example.com/api/probe/v1/report", "hk-edge", "prb_agt_123")
 	if strings.Contains(installCmd, "get.qwq.panel") || !strings.Contains(installCmd, "https://status.example.com/install-probe-agent.sh") {
 		t.Fatalf("expected derived reachable script URL, got %s", installCmd)
+	}
+}
+
+func TestProbeConfigSecretRefSkippedWithoutRevealError(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx := t.Context()
+
+	readStoredVerifier := func() string {
+		st, err := OpenProbeStore(dataDir)
+		if err != nil {
+			t.Fatalf("OpenProbeStore: %v", err)
+		}
+		defer func() { _ = st.Close() }()
+		st.mu.RLock()
+		defer st.mu.RUnlock()
+		return st.settings.StandaloneAdminVerifier
+	}
+
+	rc := &platformv1.RequestContext{InstanceId: "default", NodeId: "local", Locale: "zh-CN"}
+
+	// 1. 先用明文初始化并通过真实 SDK 生命周期落盘 verifier
+	srv1, err := pluginsdk.Serve(ctx, pluginsdk.Options{
+		Plugin:             New(),
+		Manifest:           Manifest(),
+		Registrar:          grpc.NewServer(),
+		DefaultGracePeriod: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Serve(1): %v", err)
+	}
+	if _, err := srv1.Initialize(ctx, &platformv1.InitializeRequest{
+		Context:        rc,
+		InstanceHandle: "probe-handle-1",
+		DataDir:        dataDir,
+		ConfigJson:     []byte(`{"collect_local_host":false,"standalone_admin_password":"InitialStrongPass#1"}`),
+		ConfigRevision: "1",
+	}); err != nil {
+		t.Fatalf("Initialize(plain): %v", err)
+	}
+	origVerifier := readStoredVerifier()
+	if origVerifier == "" {
+		t.Fatal("expected initial admin verifier to be persisted")
+	}
+
+	// 2. ApplyConfig 收到宿主封存的 {"$secret": "..."} 引用时，无 operation_id 绝不报错且保留既有 verifier
+	if _, err := srv1.ApplyConfig(ctx, &platformv1.ApplyConfigRequest{
+		Context:    rc,
+		ConfigJson: []byte(`{"collect_local_host":false,"local_node_name":"香港节点","standalone_admin_password":{"$secret":"sec_probe_123"}}`),
+	}); err != nil {
+		t.Fatalf("ApplyConfig with $secret ref must not fail: %v", err)
+	}
+	if got := readStoredVerifier(); got != origVerifier {
+		t.Fatalf("expected existing verifier to remain intact, got %q want %q", got, origVerifier)
+	}
+	srv1.Close()
+
+	// 3. 重启后 Initialize 收到宿主封存的 {"$secret": "..."} 引用时也能正常启动且保留 DB verifier
+	srv2, err := pluginsdk.Serve(ctx, pluginsdk.Options{
+		Plugin:             New(),
+		Manifest:           Manifest(),
+		Registrar:          grpc.NewServer(),
+		DefaultGracePeriod: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Serve(2): %v", err)
+	}
+	defer srv2.Close()
+	if _, err := srv2.Initialize(ctx, &platformv1.InitializeRequest{
+		Context:        rc,
+		InstanceHandle: "probe-handle-2",
+		DataDir:        dataDir,
+		ConfigJson:     []byte(`{"collect_local_host":false,"standalone_admin_password":{"$secret":"sec_probe_123"}}`),
+		ConfigRevision: "3",
+	}); err != nil {
+		t.Fatalf("Initialize($secret): %v", err)
+	}
+	if got := readStoredVerifier(); got != origVerifier {
+		t.Fatalf("expected DB verifier preserved across restart, got %q want %q", got, origVerifier)
 	}
 }

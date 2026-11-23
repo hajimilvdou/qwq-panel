@@ -18,33 +18,46 @@
   "target": "linux/amd64",
   "entrypoint": "bin/plugin",
   "files": {
-    "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "attestations/sbom.spdx.json": "sha256:96d52cb06056302286a21b3f4b163eb05331a25f9184b2463bd505c91d753f93",
+    "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "schemas/checks.response.json": "sha256:ddafab2ab01b1da2df7e66256923fd59c988ed77c39b619f188131dc05fda94a",
     "schemas/config.schema.json": "sha256:ef61e31cabdd57ce8b76b89d70bfd1e691b081122e9ddeeb33e619b9a8dd0528",
     "schemas/docker.ai.digest.response.json": "sha256:ecce6f7c2dbee53ea71977162ab6e9602acf854af31bdbf30b6fb3a6161ee63e",
     "schemas/docker.compose.deploy.request.json": "sha256:8e115a58115ba4ef1f0d5dff77f51e2b258c9e7716d9cbde94b8ca2f6b86bff6",
     "schemas/docker.compose.deploy.response.json": "sha256:4ebb5dab6b8919e7b9d6c01921dda7857a94f728979b74644c2418d6ae0a96cd",
-    "schemas/docker.compose.remove.request.json": "sha256:d6adcdd22271742d0fbf5abec1c594643a5037ac81b6f459d445792070e01fa8",
-    "schemas/docker.compose.remove.response.json": "sha256:7fa650916dfeccdae16e93967d9dec3f8ccf6979c1b9292f128eca766d0bcfaf",
+    "schemas/docker.compose.remove.request.json": "sha256:e36f971455ba7b629137bc45fbcd8c4f4f5bba06f234dfad07f6684b59bb9be0",
+    "schemas/docker.compose.remove.response.json": "sha256:8f54ac9ed187d0e63fc5fc26f0f54a59f1f24b7791d44cb85328076dbb37cc8e",
     "schemas/docker.container.action.request.json": "sha256:123d5b65b1baab7e4c577086755c421a82088655c93aa47a5f17facc8fb6e4de",
     "schemas/docker.container.action.response.json": "sha256:e895e7f429e282eef875d50dd4641d402f5c624e7f53977683a8c49b19fddcd1",
     "schemas/docker.container.inspect.response.json": "sha256:9eacf927f16bb554effdd0c3039d9dca0552aa39f23071297d7a602595712b64",
-    "schemas/docker.container.limits.request.json": "sha256:cc11765cbe64ff72383f01817a1faf822c314b1b05a91f10e0cea1e92cb13f75",
-    "schemas/docker.container.limits.response.json": "sha256:f96e3a839aeaf2c1062bf10ee2adf14e6453bb2f630560479b4ac6130050fa42",
+    "schemas/docker.container.limits.request.json": "sha256:5c836922a0e90605a2fad864b4992acb51d43cb95f2b84426887f7e4ae64b303",
+    "schemas/docker.container.limits.response.json": "sha256:5faa18ad6c8cd694fb39a57a505425d375a6990c09dbafaa47d7cd664f0fc305",
     "schemas/docker.container.logs.request.json": "sha256:cb7b851e4f4028ffb98ffc53867980f86faea4e54191d0724135bf96b124c863",
     "schemas/docker.container.logs.response.json": "sha256:36406a35a36df719c4a32874b29cd2627e9b2e447149bad9c02ebcb16fcd84d8",
-    "schemas/docker.container.remove.request.json": "sha256:68b02b10be86cff1cd8029e2034fc3d15831508d6f3063c34cae36c8d7bfccfb",
-    "schemas/docker.container.remove.response.json": "sha256:cfdf197544d5d23cf1cf01c925ec49968593c3e684e7da68ec5a31c54a478144",
+    "schemas/docker.container.ports.apply.request.json": "sha256:10fba05b28a9ec5182857b79a5cf92a9c0bd83af3a52c45e825b0981f1c02e1e",
+    "schemas/docker.container.ports.apply.response.json": "sha256:00a3a1ea47a37c09f9aba23053ff35b8e8369ea387a35a7733f79bbace17db1e",
+    "schemas/docker.container.proxy.delete.request.json": "sha256:5e1819dffe410590e8285c00a755716818746cd69708c42ad494dcdbdb5431e3",
+    "schemas/docker.container.proxy.delete.response.json": "sha256:7161779b2765de9175e74125fc46daee018f0eee244c28384bb24fb3b032b345",
+    "schemas/docker.container.proxy.upsert.request.json": "sha256:2101b478962fe40af4578132d2b30e405b5eb8d35f5c6ec76ea3855e54a1f97b",
+    "schemas/docker.container.proxy.upsert.response.json": "sha256:a322c4b975bcbd37907043092404ba6491f4c1e1f6bb0ddfda939a8944ca2f25",
+    "schemas/docker.container.remove.request.json": "sha256:7a57006401560e815748a4ff3010b1f278f710be24d279d990b1cc5ff0866da5",
+    "schemas/docker.container.remove.response.json": "sha256:0b4645a45e34f020d20aca3125b2c5876a831a870e5b5e6fba844c6442aa8570",
+    "schemas/docker.container.settings.get.response.json": "sha256:e08e69146ae84693c145b7fb66908e4398cf37c5bfcc986ea155e6ef0ea83f5b",
     "schemas/docker.id.request.json": "sha256:8c2849bb64263076eb92f54103a62d65ffb04d4557e35274dd73df73cb2a4715",
     "schemas/docker.images.prune.request.json": "sha256:ec4eef70cc273857a90d1b15b9409662b2c3fb3a2c5fed15eea669cb44f41f99",
     "schemas/docker.images.prune.response.json": "sha256:59b082cefbbb2eca92cf0fef9e1896378cbf1bb725ea9c33c41d37858673a7a3",
-    "schemas/docker.overview.response.json": "sha256:923fca39cfe6e5f16f32fbcedaadf785d837ff36ec8e55f14712f221a34f417c",
+    "schemas/docker.network.create.request.json": "sha256:0e20ff3910ff27227dfeb59f9cd5179d20bfd00de8ea75612c26a5f8436945b0",
+    "schemas/docker.network.create.response.json": "sha256:60fbe0446cc8ae7c5569bccaed2ce5702063d21c19d7f460aa6ebe0aa3ee969a",
+    "schemas/docker.network.list.response.json": "sha256:ecb767f133f3cf026622c74ad3d73e8643680077803b0a94c9d1e6a9ff49e7b4",
+    "schemas/docker.network.membership.request.json": "sha256:92b1c73da360a2e322376855216a2002b78f21c4580d435bc66d35438e883f10",
+    "schemas/docker.network.membership.response.json": "sha256:4a9feab3ba6abafdede6779c611ef516e9b781ccc45e384fe9d0eba0a2f96dba",
+    "schemas/docker.overview.response.json": "sha256:5f3bba501e2aca08696e3d33a5623da1716475ae4951d014860ff013cc86a23b",
     "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
-    "ui/index.html": "sha256:da9104839b9f4d9d61c6634bf6de5ef86aace3fb75118452da6dd947e3d62453",
-    "ui/plugin.css": "sha256:5c4f9a5db167ba54825c7edaeb8337b09a71954dc8bec027d8cd79bd7577620f",
-    "ui/plugin.js": "sha256:8869729cae88927d01afd3f190133608720609a024cf19a3b4f30ffe9bb6e0c7"
+    "ui/container-drawer.js": "sha256:dd6286274f9420d5cb9a2ddc527c85fea0d8d232a97f255517254a52d84bb9f6",
+    "ui/index.html": "sha256:139abf88b275b437698fe33a9207329dbfb68416d168c700204dba12aaae25d2",
+    "ui/plugin.css": "sha256:3c5a3d2d967679d13eff83743585f9fda20c0fa10e0700526da75221e84ffbd1",
+    "ui/plugin.js": "sha256:61107a6a532cd1bba308ab85afca7aba001bd295a7f1336b785021c027564ff8"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -239,8 +252,24 @@
       "summary": "删除指定 Docker 容器",
       "capabilities": [
         {
+          "name": "system.docker.read",
+          "scope": "self"
+        },
+        {
           "name": "system.docker.manage",
           "scope": "self"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.site.delete"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.apply"
         }
       ],
       "request_schema": "schemas/docker.container.remove.request.json",
@@ -316,32 +345,303 @@
         {
           "name": "state.kv.write",
           "scope": "self"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.site.delete"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.apply"
         }
       ],
       "request_schema": "schemas/docker.compose.remove.request.json",
       "response_schema": "schemas/docker.compose.remove.response.json"
+    },
+    {
+      "name": "docker.container.settings.get",
+      "api_version": "v1",
+      "permission": "containers.docker:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "summary": "获取容器五分页设置工作台全量聚合视图（端口、网络、存储、环境与反代证书状态）",
+      "capabilities": [
+        {
+          "name": "system.docker.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.overview"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "tls.certificates/certificates.list"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "domain.dns/providers.status"
+        }
+      ],
+      "request_schema": "schemas/docker.id.request.json",
+      "response_schema": "schemas/docker.container.settings.get.response.json"
+    },
+    {
+      "name": "docker.network.list",
+      "api_version": "v1",
+      "permission": "containers.docker:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "列出宿主机 Docker 网络清单与可绑定网卡地址",
+      "capabilities": [
+        {
+          "name": "system.docker.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/docker.network.list.response.json"
+    },
+    {
+      "name": "docker.network.create",
+      "api_version": "v1",
+      "permission": "containers.docker:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": false,
+      "timeout_ms": 15000,
+      "approval": "ai_confirm",
+      "approval_summary": "创建受控 Docker Bridge 隔离网络",
+      "approval_description": "创建一个受控 bridge 驱动 Docker 网络（支持纯内网 internal 与 IPv6），可选创建后立即接入指定容器。",
+      "summary": "新建受控 Docker Bridge 隔离网络",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/docker.network.create.request.json",
+      "response_schema": "schemas/docker.network.create.response.json"
+    },
+    {
+      "name": "docker.network.membership",
+      "api_version": "v1",
+      "permission": "containers.docker:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "approval": "ai_confirm",
+      "approval_summary": "在线接入或断开容器 Docker 网络",
+      "approval_description": "无需重启容器即可将其在线加入或移出指定 Docker 网络，支持配置网络内 DNS 别名与静态内网 IP。",
+      "summary": "在线热插拔容器所属 Docker 网络",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/docker.network.membership.request.json",
+      "response_schema": "schemas/docker.network.membership.response.json"
+    },
+    {
+      "name": "docker.container.ports.apply",
+      "api_version": "v1",
+      "permission": "containers.docker:write",
+      "mode": "job",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": false,
+      "timeout_ms": 90000,
+      "approval": "ai_confirm",
+      "approval_summary": "应用容器端口映射并同步关联反向代理",
+      "approval_description": "独立容器执行无损换名回滚重建，受管 Compose 容器自动改写 compose.yml 并平滑重拉，随后自动同步更新关联 web.ingress 上游端口。",
+      "summary": "无损更新容器宿主机端口映射并联动刷新反代上游",
+      "capabilities": [
+        {
+          "name": "system.docker.read",
+          "scope": "self"
+        },
+        {
+          "name": "system.docker.manage",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.site.upsert"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.apply"
+        }
+      ],
+      "request_schema": "schemas/docker.container.ports.apply.request.json",
+      "response_schema": "schemas/docker.container.ports.apply.response.json"
+    },
+    {
+      "name": "docker.container.proxy.upsert",
+      "api_version": "v1",
+      "permission": "containers.docker:write",
+      "mode": "job",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 90000,
+      "approval": "ai_confirm",
+      "approval_summary": "为容器一键配置域名反向代理与 HTTPS 证书",
+      "approval_description": "按需自动将容器端口收敛/映射至 127.0.0.1 本机安全回环，复用或签发 TLS 证书并写入 web.ingress 热生效。",
+      "summary": "一站式编排容器回环端口、HTTPS 证书与 web.ingress 反代",
+      "capabilities": [
+        {
+          "name": "system.docker.read",
+          "scope": "self"
+        },
+        {
+          "name": "system.docker.manage",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.overview"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.site.upsert"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.apply"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "tls.certificates/certificates.list"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "tls.certificates/certificates.issue"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "domain.dns/providers.status"
+        }
+      ],
+      "request_schema": "schemas/docker.container.proxy.upsert.request.json",
+      "response_schema": "schemas/docker.container.proxy.upsert.response.json"
+    },
+    {
+      "name": "docker.container.proxy.delete",
+      "api_version": "v1",
+      "permission": "containers.docker:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "approval": "ai_confirm",
+      "approval_summary": "解绑并移除容器关联的域名反向代理",
+      "approval_description": "从 web.ingress 移除指定关联反代站点并热重载，容器自身不受影响。",
+      "summary": "解绑并删除容器关联的 web.ingress 反向代理规则",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.site.delete"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.apply"
+        }
+      ],
+      "request_schema": "schemas/docker.container.proxy.delete.request.json",
+      "response_schema": "schemas/docker.container.proxy.delete.response.json"
     }
   ],
   "capabilities": [
     {
       "name": "system.docker.read",
       "scope": "self",
-      "reason": "通过只读 Unix Socket 接口查询容器状态、实时资源占用、OOM 标记与有界日志"
+      "reason": "通过只读 Unix Socket 接口查询容器状态、实时资源占用、OOM 标记、网络、镜像暴露端口与有界日志"
     },
     {
       "name": "system.docker.manage",
       "scope": "self",
-      "reason": "在审批通过后执行容器启停、动态资源限额更新、镜像清理与受管 Compose 编排"
+      "reason": "在审批通过后执行容器启停、动态资源限额与重启策略更新、网络热插拔、无损端口重建、镜像清理与受管 Compose 编排"
     },
     {
       "name": "state.kv.read",
       "scope": "self",
-      "reason": "读取已保存的受管 Compose 编排栈清单与安全告警"
+      "reason": "读取已保存的受管 Compose 编排栈清单、容器反代关联映射与安全告警"
     },
     {
       "name": "state.kv.write",
       "scope": "self",
-      "reason": "持久化受管 Compose 编排栈定义与版本元数据"
+      "reason": "持久化受管 Compose 编排栈定义、容器与 web.ingress 关联映射与版本元数据"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "web.ingress/ingress.overview",
+      "reason": "探测 web.ingress 反向代理组件安装与运行状态"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "web.ingress/ingress.site.upsert",
+      "reason": "为容器创建或自动同步更新反向代理站点规则"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "web.ingress/ingress.site.delete",
+      "reason": "在解绑或删除容器时同步清理关联反向代理规则"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "web.ingress/ingress.apply",
+      "reason": "热重载 web.ingress 反向代理路由表使容器反代变更立即生效"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "tls.certificates/certificates.list",
+      "reason": "读取面板已有托管证书与泛域名证书清单以供容器反代自动复用"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "tls.certificates/certificates.issue",
+      "reason": "为容器绑定的域名通过受控 ACME 流程自动签发 HTTPS 证书"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "domain.dns/providers.status",
+      "reason": "探测 DNS 托管组件就绪状态以辅助容器自动证书配置"
     }
   ],
   "dependencies": [],

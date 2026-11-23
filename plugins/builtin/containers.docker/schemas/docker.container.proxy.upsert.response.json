@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "link",
+    "new_container_id"
+  ],
+  "properties": {
+    "link": {
+      "type": "object"
+    },
+    "new_container_id": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

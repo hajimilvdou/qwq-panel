@@ -68,7 +68,7 @@ func (c *CapabilityClient) Call(ctx context.Context, request CapabilityRequest) 
 		return response, problem.New(problem.Unavailable, "The capability helper is not configured.")
 	}
 	client := c.HelperClient
-	if request.Op == "docker.compose" && client.Timeout == 0 {
+	if (request.Op == "docker.compose" || request.Op == "docker.recreate_ports") && client.Timeout == 0 {
 		copied := *client
 		copied.Timeout = 95 * time.Second
 		client = &copied
@@ -91,7 +91,8 @@ func CapabilityVerbAllowed(op string) bool {
 		"ban.scan", "ban.apply", "ban.remove", "ban.list",
 		"traffic.status", "traffic.apply", "traffic.clear",
 		"sysctl.apply", "sysctl.rollback",
-		"docker.api.read", "docker.api.write", "docker.compose":
+		"docker.api.read", "docker.api.write", "docker.compose",
+		"docker.bindable_ips", "docker.network.create", "docker.network.membership", "docker.recreate_ports":
 		return true
 	default:
 		return false

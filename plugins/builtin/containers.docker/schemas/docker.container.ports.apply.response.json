@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "old_container_id",
+    "new_container_id",
+    "container_name",
+    "applied_rules",
+    "synced_proxies",
+    "writable_size_bytes"
+  ],
+  "properties": {
+    "old_container_id": {
+      "type": "string"
+    },
+    "new_container_id": {
+      "type": "string"
+    },
+    "container_name": {
+      "type": "string"
+    },
+    "applied_rules": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "synced_proxies": {
+      "type": "integer"
+    },
+    "committed_image": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "writable_size_bytes": {
+      "type": "integer"
+    }
+  }
+}

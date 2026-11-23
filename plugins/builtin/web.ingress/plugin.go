@@ -188,14 +188,19 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 
 func (i *instance) planSiteUpsert(_ context.Context, req pluginsdk.Request) (pluginsdk.Plan, error) {
 	var body struct {
-		Domain       string            `json:"domain"`
-		UpstreamURL  string            `json:"upstream_url"`
-		PathPrefix   string            `json:"path_prefix"`
-		TLSMode      string            `json:"tls_mode"`
-		ExtraHeaders map[string]string `json:"extra_headers"`
+		Domain              string            `json:"domain"`
+		UpstreamURL         string            `json:"upstream_url"`
+		PathPrefix          string            `json:"path_prefix"`
+		TLSMode             string            `json:"tls_mode"`
+		ExtraHeaders        map[string]string `json:"extra_headers"`
+		UpstreamTLSInsecure bool              `json:"upstream_tls_insecure"`
+		MaxBodyMB           int               `json:"max_body_mb"`
 	}
 	if err := json.Unmarshal(req.Payload, &body); err != nil {
 		return pluginsdk.Plan{}, pluginsdk.Errorf("INVALID_ARGUMENT", "请求格式错误: %s", err.Error())
+	}
+	if body.MaxBodyMB < 0 || body.MaxBodyMB > 102400 {
+		return pluginsdk.Plan{}, pluginsdk.Errorf("INVALID_ARGUMENT", "max_body_mb 超出允许范围 (0..102400)")
 	}
 	domain, err := validateDomain(body.Domain)
 	if err != nil {
@@ -310,48 +315,47 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 	var oldSrv, oldHTTPSSrv *http.Server
 	var newSrv, newHTTPSSrv *http.Server
 	var ln, httpsLn net.Listener
+	var newBound, newHTTPSBound string
+
+	// 两阶段切换：先完成所有需要变更的监听绑定，任一失败即关闭已打开的新监听且不改动旧字段。
+	if newAddr != oldAddr && newAddr != "" {
+		ln, err = net.Listen("tcp", newAddr)
+		if err != nil {
+			i.cfgMu.Unlock()
+			return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代监听 %s 失败: %s", newAddr, err.Error())
+		}
+		newSrv = &http.Server{
+			Handler:           i.proxy,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		newBound = ln.Addr().String()
+	}
+	if newHTTPSAddr != oldHTTPSAddr && newHTTPSAddr != "" {
+		rawLn, lerr := net.Listen("tcp", newHTTPSAddr)
+		if lerr != nil {
+			if ln != nil {
+				_ = ln.Close()
+			}
+			i.cfgMu.Unlock()
+			return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代 HTTPS 监听 %s 失败: %s", newHTTPSAddr, lerr.Error())
+		}
+		httpsLn = tls.NewListener(rawLn, i.sni.TLSConfig())
+		newHTTPSSrv = &http.Server{
+			Handler:           i.proxy,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		newHTTPSBound = rawLn.Addr().String()
+	}
 
 	if newAddr != oldAddr {
 		oldSrv = i.server
-		newBound := ""
-		if newAddr != "" {
-			ln, err = net.Listen("tcp", newAddr)
-			if err != nil {
-				i.cfgMu.Unlock()
-				return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代监听 %s 失败: %s", newAddr, err.Error())
-			}
-			newSrv = &http.Server{
-				Handler:           i.proxy,
-				ReadHeaderTimeout: 10 * time.Second,
-				IdleTimeout:       60 * time.Second,
-			}
-			newBound = ln.Addr().String()
-		}
 		i.server = newSrv
 		i.boundAddr = newBound
 	}
 	if newHTTPSAddr != oldHTTPSAddr {
 		oldHTTPSSrv = i.httpsServer
-		newHTTPSBound := ""
-		if newHTTPSAddr != "" {
-			rawLn, lerr := net.Listen("tcp", newHTTPSAddr)
-			if lerr != nil {
-				if ln != nil {
-					_ = ln.Close()
-					i.server = oldSrv
-					i.boundAddr = oldAddr
-				}
-				i.cfgMu.Unlock()
-				return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代 HTTPS 监听 %s 失败: %s", newHTTPSAddr, lerr.Error())
-			}
-			httpsLn = tls.NewListener(rawLn, i.sni.TLSConfig())
-			newHTTPSSrv = &http.Server{
-				Handler:           i.proxy,
-				ReadHeaderTimeout: 10 * time.Second,
-				IdleTimeout:       60 * time.Second,
-			}
-			newHTTPSBound = rawLn.Addr().String()
-		}
 		i.httpsServer = newHTTPSSrv
 		i.httpsBoundAddr = newHTTPSBound
 		if i.sni != nil {
@@ -527,22 +531,24 @@ func (i *instance) handleAIDigest(ctx context.Context) (pluginsdk.Response, erro
 
 func (i *instance) handleSiteUpsert(ctx context.Context, payload []byte) (pluginsdk.Response, error) {
 	var req struct {
-		ID             string            `json:"id"`
-		Domain         string            `json:"domain"`
-		Enabled        *bool             `json:"enabled"`
-		UpstreamURL    string            `json:"upstream_url"`
-		PathPrefix     string            `json:"path_prefix"`
-		WebSocket      *bool             `json:"websocket"`
-		TLSMode        string            `json:"tls_mode"`
-		CertID         string            `json:"cert_id"`
-		ForceHTTPS     *bool             `json:"force_https"`
-		RateLimitRPS   int               `json:"rate_limit_rps"`
-		RateLimitBurst int               `json:"rate_limit_burst"`
-		BasicAuthUser  string            `json:"basic_auth_user"`
-		BasicAuthPass  string            `json:"basic_auth_pass"`
-		ClearBasicAuth bool              `json:"clear_basic_auth"`
-		ExtraHeaders   map[string]string `json:"extra_headers"`
-		Notes          string            `json:"notes"`
+		ID                  string            `json:"id"`
+		Domain              string            `json:"domain"`
+		Enabled             *bool             `json:"enabled"`
+		UpstreamURL         string            `json:"upstream_url"`
+		PathPrefix          string            `json:"path_prefix"`
+		WebSocket           *bool             `json:"websocket"`
+		TLSMode             string            `json:"tls_mode"`
+		CertID              string            `json:"cert_id"`
+		ForceHTTPS          *bool             `json:"force_https"`
+		RateLimitRPS        int               `json:"rate_limit_rps"`
+		RateLimitBurst      int               `json:"rate_limit_burst"`
+		BasicAuthUser       string            `json:"basic_auth_user"`
+		BasicAuthPass       string            `json:"basic_auth_pass"`
+		ClearBasicAuth      bool              `json:"clear_basic_auth"`
+		ExtraHeaders        map[string]string `json:"extra_headers"`
+		UpstreamTLSInsecure bool              `json:"upstream_tls_insecure"`
+		MaxBodyMB           int               `json:"max_body_mb"`
+		Notes               string            `json:"notes"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "请求格式错误: %s", err.Error())
@@ -560,22 +566,24 @@ func (i *instance) handleSiteUpsert(ctx context.Context, payload []byte) (plugin
 		forceHTTPS = *req.ForceHTTPS
 	}
 	site, err := i.store.upsertSite(ctx, siteUpsertParams{
-		ID:             strings.TrimSpace(req.ID),
-		Domain:         req.Domain,
-		Enabled:        enabled,
-		UpstreamURL:    req.UpstreamURL,
-		PathPrefix:     req.PathPrefix,
-		WebSocket:      ws,
-		TLSMode:        req.TLSMode,
-		CertID:         req.CertID,
-		ForceHTTPS:     forceHTTPS,
-		RateLimitRPS:   req.RateLimitRPS,
-		RateLimitBurst: req.RateLimitBurst,
-		BasicAuthUser:  req.BasicAuthUser,
-		BasicAuthPass:  req.BasicAuthPass,
-		ClearBasicAuth: req.ClearBasicAuth,
-		ExtraHeaders:   req.ExtraHeaders,
-		Notes:          req.Notes,
+		ID:                  strings.TrimSpace(req.ID),
+		Domain:              req.Domain,
+		Enabled:             enabled,
+		UpstreamURL:         req.UpstreamURL,
+		PathPrefix:          req.PathPrefix,
+		WebSocket:           ws,
+		TLSMode:             req.TLSMode,
+		CertID:              req.CertID,
+		ForceHTTPS:          forceHTTPS,
+		RateLimitRPS:        req.RateLimitRPS,
+		RateLimitBurst:      req.RateLimitBurst,
+		BasicAuthUser:       req.BasicAuthUser,
+		BasicAuthPass:       req.BasicAuthPass,
+		ClearBasicAuth:      req.ClearBasicAuth,
+		ExtraHeaders:        req.ExtraHeaders,
+		UpstreamTLSInsecure: req.UpstreamTLSInsecure,
+		MaxBodyMB:           req.MaxBodyMB,
+		Notes:               req.Notes,
 	})
 	if err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
@@ -627,9 +635,7 @@ func syncSiteBindingsToSNI(sni *SNICertStore, sites []SiteRecord) {
 			bindings[s.Domain] = s.CertID
 		}
 	}
-	if len(bindings) > 0 {
-		_, _ = sni.ReloadFromBindings(bindings)
-	}
+	_, _ = sni.ReloadFromBindings(bindings)
 }
 
 func (i *instance) reloadAndRenderLocked(ctx context.Context) (int, []string, error) {

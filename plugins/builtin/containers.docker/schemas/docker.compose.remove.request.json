@@ -10,6 +10,9 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 48
+    },
+    "cleanup_linked_proxies": {
+      "type": "boolean"
     }
   }
 }

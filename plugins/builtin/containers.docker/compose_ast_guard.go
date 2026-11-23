@@ -66,8 +66,8 @@ var BlockedLinuxCapabilities = []string{
 	"CAP_PERFMON",
 }
 
-// ValidateComposeYAMLStrict 使用基于缩进栈的键值/列表令牌状态机（零外部依赖，且免疫冒号前后空格、多行值、YAML 布尔别名 yes/on/true、路径 // 与 .. 折叠绕过）
-// 替代脆弱的字符串包含检查。
+// ValidateComposeYAMLStrict 使用基于缩进栈的键值/列表令牌状态机（零外部依赖，且免疫冒号前后空格、多行值、YAML 布尔别名 yes/on/true、路径 // 与 .. 折叠、变量插值、转义序列、内联/跨行流式语法及高危指令绕过）
+// 对 Compose YAML 执行结构化安全扫描。
 func ValidateComposeYAMLStrict(raw string) ([]string, error) {
 	if len(raw) == 0 || len(raw) > MaxComposeYAMLBytes {
 		return nil, fmt.Errorf("compose_yaml 长度必须在 1..%d 字节之间", MaxComposeYAMLBytes)
@@ -91,9 +91,25 @@ func ValidateComposeYAMLStrict(raw string) ([]string, error) {
 		if trimmed == "" || trimmed == "---" || trimmed == "..." {
 			continue
 		}
-		// 禁止 YAML 锚点/别名/自定义标签注入（防止 &p true / *p 或 !!bool 绕过静态检查）
-		if strings.Contains(trimmed, "!!") || hasYAMLAnchorOrAlias(trimmed) {
-			return nil, fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止使用 YAML 自定义标签或锚点引用", lineNo+1)
+		// 1. 禁止 Compose 变量插值（防止 ${X:-true} 或 ${V:-/}:/host 绕过静态检查）
+		if strings.Contains(trimmed, "${") {
+			return nil, fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止使用变量插值 (${...})", lineNo+1)
+		}
+		// 2. 禁止键名或引号字符串中的反斜杠转义（防止 "\x70rivileged" / "\u0070id" / "\x2fetc:/host" 绕过）
+		if hasYAMLBackslashEscape(trimmed) {
+			return nil, fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止在键名或引号字符串中使用反斜杠转义", lineNo+1)
+		}
+		// 3. 禁止 YAML 锚点/别名/合并键/自定义标签注入（防止 &p true / *p / <<: / !!bool 绕过）
+		if hasYAMLAnchorOrAlias(trimmed) {
+			return nil, fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止使用 YAML 锚点、别名、合并键或自定义标签", lineNo+1)
+		}
+		// 4. 禁止非空内联流式映射 {...}（仅允许字面空 {}）与跨行/未闭合流式序列 [...] 及未闭合引号
+		if err := validateYAMLFlowSyntax(lineNo+1, trimmed); err != nil {
+			return nil, err
+		}
+		// 禁止 YAML 显式复合键语法（? key / : val）
+		if trimmed == "?" || strings.HasPrefix(trimmed, "? ") || strings.HasPrefix(trimmed, "?\t") || strings.HasPrefix(trimmed, ":") {
+			return nil, fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止使用 YAML 显式复合键语法", lineNo+1)
 		}
 
 		indent := countLeadingIndent(rawLine)
@@ -116,6 +132,7 @@ func ValidateComposeYAMLStrict(raw string) ([]string, error) {
 			if len(pathKeys) > 0 {
 				parentKey = pathKeys[len(pathKeys)-1]
 			}
+			// 禁止在受控指令列表中使用 YAML 流式映射 `{...}` 规避长语法检查
 			if strings.HasPrefix(item, "{") {
 				return nil, fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 列表项禁止使用内联流式映射", lineNo+1)
 			}
@@ -130,12 +147,11 @@ func ValidateComposeYAMLStrict(raw string) ([]string, error) {
 			cleanItem := unquoteYAML(item)
 			switch parentKey {
 			case "volumes":
+				if strings.HasPrefix(strings.TrimSpace(item), "[") {
+					return nil, fmt.Errorf("第 %d 行：出于安全限制，volumes 列表项禁止嵌套流式序列", lineNo+1)
+				}
 				if err := validateVolumeShortSpec(lineNo+1, cleanItem); err != nil {
 					return nil, err
-				}
-			case "env_file":
-				if isUnsafeRelativePath(cleanItem) {
-					return nil, fmt.Errorf("第 %d 行：禁止越界 env_file 路径 %q", lineNo+1, cleanItem)
 				}
 			case "cap_add":
 				if isBlockedCap(cleanItem) {
@@ -168,15 +184,12 @@ func ValidateComposeYAMLStrict(raw string) ([]string, error) {
 		if len(stack) == 0 && key == "services" {
 			hasServices = true
 		}
-		if len(stack) == 0 && key == "include" {
-			return nil, fmt.Errorf("第 %d 行：禁止使用顶层 include 指令引用外部文件", lineNo+1)
-		}
 
 		nextPath := append(append([]string(nil), pathKeys...), key)
 		if err := checkComposeDirective(lineNo+1, nextPath, key, val, &warnings); err != nil {
 			return nil, err
 		}
-		if val == "" {
+		if val == "" || isYAMLBlockScalar(val) {
 			stack = append(stack, indentScope{indent: indent, key: key})
 		}
 	}
@@ -192,23 +205,20 @@ func checkComposeDirective(lineNo int, keyPath []string, key, rawVal string, war
 	lowVal := strings.ToLower(val)
 
 	switch key {
-	case "include":
-		return fmt.Errorf("第 %d 行：禁止使用 include 指令", lineNo)
+	case "driver_opts", "build", "extends", "include", "secrets", "configs",
+		"env_file", "cgroup", "cgroup_parent", "uts", "userns_mode", "volumes_from":
+		return fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止使用 %s 指令", lineNo, key)
 	case "privileged":
-		if isYAMLTruthy(lowVal) {
+		if isYAMLTruthy(lowVal) || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
 			return fmt.Errorf("第 %d 行：严禁部署 privileged 特权容器", lineNo)
 		}
 	case "pid":
-		if lowVal == "host" {
+		if lowVal == "host" || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
 			return fmt.Errorf("第 %d 行：严禁使用 pid: host 共享宿主机进程命名空间", lineNo)
 		}
 	case "ipc":
-		if lowVal == "host" {
+		if lowVal == "host" || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
 			return fmt.Errorf("第 %d 行：严禁使用 ipc: host 共享宿主机 IPC 命名空间", lineNo)
-		}
-	case "userns_mode":
-		if lowVal == "host" {
-			return fmt.Errorf("第 %d 行：严禁使用 userns_mode: host 绕过用户命名空间隔离", lineNo)
 		}
 	case "devices":
 		if val != "" && val != "[]" {
@@ -233,19 +243,6 @@ func checkComposeDirective(lineNo int, keyPath []string, key, rawVal string, war
 		if slices.Contains(keyPath, "volumes") && val != "" {
 			if err := validateHostBindPath(lineNo, val); err != nil {
 				return err
-			}
-		}
-	case "env_file", "path":
-		if slices.Contains(keyPath, "env_file") && val != "" && !strings.HasPrefix(val, "[") {
-			if isUnsafeRelativePath(val) {
-				return fmt.Errorf("第 %d 行：禁止越界 env_file 路径 %q", lineNo, val)
-			}
-		}
-		if key == "env_file" && strings.HasPrefix(val, "[") {
-			for _, item := range splitInlineYAMLList(val) {
-				if isUnsafeRelativePath(item) {
-					return fmt.Errorf("第 %d 行：禁止越界 env_file 路径 %q", lineNo, item)
-				}
 			}
 		}
 	case "cap_add":
@@ -325,18 +322,6 @@ func isBlockedCap(capName string) bool {
 	return slices.Contains(BlockedLinuxCapabilities, up)
 }
 
-func isUnsafeRelativePath(p string) bool {
-	p = strings.TrimSpace(p)
-	if p == "" {
-		return false
-	}
-	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") || strings.Contains(p, "..") || strings.Contains(p, `\`) {
-		return true
-	}
-	cleaned := path.Clean(p)
-	return cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/")
-}
-
 func splitYAMLKeyValue(s string) (key, val string, ok bool) {
 	idx := strings.IndexByte(s, ':')
 	if idx <= 0 {
@@ -368,13 +353,130 @@ func stripYAMLComment(line string) string {
 	return line
 }
 
+func hasYAMLBackslashEscape(trimmed string) bool {
+	if strings.HasSuffix(trimmed, `\`) {
+		return true
+	}
+	inSingle, inDouble, seenColon := false, false, false
+	for i := 0; i < len(trimmed); i++ {
+		c := trimmed[i]
+		if c == '\'' && !inDouble {
+			inSingle = !inSingle
+		} else if c == '"' && !inSingle {
+			inDouble = !inDouble
+		} else if c == '\\' {
+			if inSingle || inDouble || !seenColon {
+				return true
+			}
+		} else if c == ':' && !inSingle && !inDouble {
+			seenColon = true
+		}
+	}
+	return false
+}
+
+func validateYAMLFlowSyntax(lineNo int, trimmed string) error {
+	inSingle, inDouble := false, false
+	bracketDepth := 0
+	for i := 0; i < len(trimmed); i++ {
+		c := trimmed[i]
+		if c == '\'' && !inDouble {
+			inSingle = !inSingle
+			continue
+		}
+		if c == '"' && !inSingle {
+			inDouble = !inDouble
+			continue
+		}
+		if inSingle || inDouble {
+			continue
+		}
+		switch c {
+		case '{':
+			j := i + 1
+			for j < len(trimmed) && (trimmed[j] == ' ' || trimmed[j] == '\t') {
+				j++
+			}
+			if j >= len(trimmed) || trimmed[j] != '}' {
+				return fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止使用非空内联流式映射或跨行流式映射", lineNo)
+			}
+			i = j
+		case '}':
+			return fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止使用非空或未闭合流式映射", lineNo)
+		case '[':
+			bracketDepth++
+			if bracketDepth > 1 {
+				return fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止使用嵌套流式序列", lineNo)
+			}
+		case ']':
+			bracketDepth--
+			if bracketDepth < 0 {
+				return fmt.Errorf("第 %d 行：存在未匹配的流式序列闭合括号", lineNo)
+			}
+		}
+	}
+	if inSingle || inDouble {
+		return fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止跨行或未闭合的引号字符串", lineNo)
+	}
+	if bracketDepth != 0 {
+		return fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止跨行或未闭合的流式序列", lineNo)
+	}
+	return nil
+}
+
+func isYAMLBlockScalar(rawVal string) bool {
+	v := strings.TrimSpace(rawVal)
+	return strings.HasPrefix(v, "|") || strings.HasPrefix(v, ">")
+}
+
 func hasYAMLAnchorOrAlias(trimmed string) bool {
-	for _, tok := range strings.Fields(trimmed) {
-		clean := strings.Trim(tok, "[],")
-		if len(clean) > 1 && (clean[0] == '&' || clean[0] == '*') && !strings.Contains(clean, "/") {
+	inSingle, inDouble := false, false
+	var cur strings.Builder
+	tokens := make([]string, 0, 4)
+	flush := func() {
+		if cur.Len() > 0 {
+			tokens = append(tokens, cur.String())
+			cur.Reset()
+		}
+	}
+	for i := 0; i < len(trimmed); i++ {
+		c := trimmed[i]
+		if c == '\'' && !inDouble {
+			inSingle = !inSingle
+			flush()
+			continue
+		}
+		if c == '"' && !inSingle {
+			inDouble = !inDouble
+			flush()
+			continue
+		}
+		if inSingle || inDouble {
+			continue
+		}
+		if c == ' ' || c == '\t' {
+			flush()
+			continue
+		}
+		cur.WriteByte(c)
+	}
+	flush()
+
+	for _, tok := range tokens {
+		if strings.Contains(tok, "!!") {
 			return true
 		}
+		clean := strings.Trim(tok, "[]{},")
+		if clean == "" {
+			continue
+		}
 		if clean == "<<" || strings.HasPrefix(clean, "<<:") {
+			return true
+		}
+		if len(clean) > 1 && (clean[0] == '&' || clean[0] == '*') {
+			return true
+		}
+		if clean[0] == '!' {
 			return true
 		}
 	}
@@ -426,7 +528,12 @@ func appendWarnUnique(list *[]string, msg string) {
 
 // BuildSafeDockerUpdatePayload 构造兼容无 swapaccount=1 内核的 Docker 容器资源限额更新载荷。
 func BuildSafeDockerUpdatePayload(memoryLimitMB int64, cpuQuotaPercent float64) ([]byte, error) {
-	payload := make(map[string]any, 3)
+	return BuildSafeDockerUpdatePayloadWithRestart(memoryLimitMB, cpuQuotaPercent, "", 0)
+}
+
+// BuildSafeDockerUpdatePayloadWithRestart 构造含可选重启策略（RestartPolicy）的 Docker /update 载荷。
+func BuildSafeDockerUpdatePayloadWithRestart(memoryLimitMB int64, cpuQuotaPercent float64, restartPolicy string, restartMaxRetry int) ([]byte, error) {
+	payload := make(map[string]any, 4)
 	if memoryLimitMB > 0 {
 		if memoryLimitMB < 6 || memoryLimitMB > 65536 {
 			return nil, errors.New("memory_limit_mb 超出合理范围 (6..65536 MiB)")
@@ -441,8 +548,32 @@ func BuildSafeDockerUpdatePayload(memoryLimitMB int64, cpuQuotaPercent float64) 
 		}
 		payload["NanoCPUs"] = int64(cpuQuotaPercent * 1e7)
 	}
+	rp := strings.TrimSpace(restartPolicy)
+	if rp != "" {
+		switch rp {
+		case "no", "always", "unless-stopped":
+			payload["RestartPolicy"] = map[string]any{
+				"Name":              rp,
+				"MaximumRetryCount": 0,
+			}
+		case "on-failure":
+			maxRetry := restartMaxRetry
+			if maxRetry < 0 || maxRetry > 100 {
+				return nil, errors.New("restart_max_retry 超出允许范围 (0..100)")
+			}
+			if maxRetry == 0 {
+				maxRetry = 5
+			}
+			payload["RestartPolicy"] = map[string]any{
+				"Name":              rp,
+				"MaximumRetryCount": maxRetry,
+			}
+		default:
+			return nil, fmt.Errorf("不支持的重启策略 %q（仅支持 no / on-failure / unless-stopped / always）", rp)
+		}
+	}
 	if len(payload) == 0 {
-		return nil, errors.New("至少需要指定 memory_limit_mb 或 cpu_percent 之一")
+		return nil, errors.New("至少需要指定 memory_mb、cpus 或 restart_policy 之一")
 	}
 	return json.Marshal(payload)
 }

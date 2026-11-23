@@ -48,9 +48,22 @@ const (
 	ChanSub2GeminiOAuth ChannelKind = "sub2api_gemini_oauth"
 )
 
-var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
+var alwaysBlockedUpstreamPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("169.254.0.0/16"),    // AWS/GCP/Azure/OpenStack IMDS & Link-Local
+	netip.MustParsePrefix("100.64.0.0/10"),     // 阿里云 100.100.100.200 元数据 & CGNAT
+	netip.MustParsePrefix("0.0.0.0/8"),         // 本网络保留段
+	netip.MustParsePrefix("fd00:ec2::254/128"), // AWS IPv6 IMDS
+	netip.MustParsePrefix("fe80::/10"),         // IPv6 Link-Local
+	netip.MustParsePrefix("64:ff9b::/96"),      // NAT64 well-known
+	netip.MustParsePrefix("64:ff9b:1::/48"),    // NAT64 local
+	netip.MustParsePrefix("2002::/16"),         // 6to4
+	netip.MustParsePrefix("2001::/32"),         // Teredo
+}
 
-// NewSafeHTTPClient 构造具备 SSRF 防护的 HTTP 客户端；allowPrivate 为 false 时拒绝连接回环、私网及云元数据 IP。
+// NewSafeHTTPClient 构造具备 SSRF 防护的 HTTP 客户端：
+//   - 禁用环境变量代理（Proxy: nil）与自动重定向跟随（防止 307/308 跨源泄漏 API Key）；
+//   - 无论 allowPrivate 为何值，均无条件阻断云元数据（169.254.0.0/16、100.64.0.0/10、fd00:ec2::254、fe80::/10、metadata.google.internal）、0.0.0.0/8、NAT64、6to4 与 Teredo；
+//   - allowPrivate 为 false 时额外拒绝回环与私网地址。
 func NewSafeHTTPClient(allowPrivate bool, timeout time.Duration) *http.Client {
 	if timeout <= 0 {
 		timeout = 120 * time.Second
@@ -59,49 +72,72 @@ func NewSafeHTTPClient(allowPrivate bool, timeout time.Duration) *http.Client {
 		Timeout:   15 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}
+	checkIP := func(ip netip.Addr) bool {
+		if allowPrivate {
+			return isAlwaysBlockedUpstreamIP(ip)
+		}
+		return isBlockedUpstreamIP(ip)
+	}
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 nil,
 		MaxIdleConns:          64,
 		MaxIdleConnsPerHost:   16,
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: timeout,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			if allowPrivate {
-				return dialer.DialContext(ctx, network, addr)
-			}
 			host, port, err := net.SplitHostPort(addr)
 			if err != nil {
 				return nil, fmt.Errorf("ssrf: invalid target %q", addr)
 			}
-			if ip, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil {
-				if isBlockedUpstreamIP(ip) {
-					return nil, fmt.Errorf("SSRF_BLOCKED: refusing private or loopback upstream %s", ip.String())
+			cleanHost := strings.Trim(strings.TrimSpace(host), "[]")
+			if strings.EqualFold(cleanHost, "metadata.google.internal") || strings.EqualFold(cleanHost, "metadata.goog") {
+				return nil, fmt.Errorf("SSRF_BLOCKED: refusing cloud metadata host %s", cleanHost)
+			}
+			if ip, err := netip.ParseAddr(cleanHost); err == nil {
+				if checkIP(ip) {
+					return nil, fmt.Errorf("SSRF_BLOCKED: refusing blocked upstream %s", ip.String())
 				}
 				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
 			}
-			ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+			ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", cleanHost)
 			if err != nil {
 				return nil, err
 			}
 			if len(ips) == 0 {
-				return nil, fmt.Errorf("ssrf: no ip resolved for %s", host)
+				return nil, fmt.Errorf("ssrf: no ip resolved for %s", cleanHost)
 			}
 			for _, ip := range ips {
-				if isBlockedUpstreamIP(ip) {
-					return nil, fmt.Errorf("SSRF_BLOCKED: upstream %s resolved to blocked ip %s", host, ip.String())
+				if checkIP(ip) {
+					return nil, fmt.Errorf("SSRF_BLOCKED: upstream %s resolved to blocked ip %s", cleanHost, ip.String())
 				}
 			}
 			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].Unmap().String(), port))
 		},
 	}
-	return &http.Client{Transport: transport}
+	return &http.Client{
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func isAlwaysBlockedUpstreamIP(addr netip.Addr) bool {
+	a := addr.Unmap()
+	if !a.IsValid() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() || a.IsMulticast() || a.IsUnspecified() {
+		return true
+	}
+	for _, p := range alwaysBlockedUpstreamPrefixes {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 func isBlockedUpstreamIP(addr netip.Addr) bool {
 	a := addr.Unmap()
-	return !a.IsValid() || a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() ||
-		a.IsLinkLocalMulticast() || a.IsMulticast() || a.IsUnspecified() ||
-		(a.Is4() && cgnatPrefix.Contains(a))
+	return isAlwaysBlockedUpstreamIP(a) || a.IsLoopback() || a.IsPrivate()
 }
 
 // ======================== 模型倍率、Sub2API OAuth 自动刷新与并发信号量 ========================

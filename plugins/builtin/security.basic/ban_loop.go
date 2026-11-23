@@ -19,6 +19,12 @@ import (
 
 // ======================== 轻量增量防爆破巡检循环与 fail2ban 旁观共存 ========================
 
+const (
+	// 单次巡检最多逐条淘汰 6 个最早过期封禁条目，为随后的 ApplyBans 留出配额余量，
+	// 严格遵守宿主 12 次/分钟的自治写配额上限。
+	maxEvictionsPerBanTick = 6
+)
+
 type banCursorState struct {
 	Cursor    string `json:"cursor"`
 	UpdatedAt string `json:"updated_at"`
@@ -84,8 +90,8 @@ func (i *instance) runBanCycle(ctx context.Context) {
 		return
 	}
 
-	// 第 2 步：按 KV 持久化游标增量扫描 journald SSH 认证失败事件。
-	cursor := i.loadBanCursor(ctx, host)
+	// 第 2 步：按已摄取游标（优先内存游标，回退 KV 持久化游标）增量扫描 journald SSH 认证失败事件。
+	cursor := i.currentBanCursor(ctx, host)
 	sinceSec := cfg.BanWindowSeconds
 	if sinceSec == 0 || sinceSec > maxBanWindowSeconds {
 		sinceSec = defaultBanWindowSeconds
@@ -110,21 +116,24 @@ func (i *instance) runBanCycle(ctx context.Context) {
 		return
 	}
 
-	// 第 3 步：窗口内按源 IP 聚合失败次数并过滤白名单，提取达到阈值的攻击源。
+	// 第 3 步：窗口内按源 IP 聚合失败次数并过滤白名单，提取达到阈值的攻击源；
+	// 日志一旦记入 failureBuckets 立即独立推进已摄取游标，防止后续 ApplyBans 短暂失败时重复统计同一批日志。
 	nowMs := i.nowTime().UnixMilli()
 	candidates := i.aggregateCandidates(scanResp.GetFailures(), nowMs, cfg)
+	if nextCur := strings.TrimSpace(scanResp.GetNextCursor()); nextCur != "" && nextCur != cursor {
+		i.setIngestedBanCursor(nextCur)
+		i.saveBanCursor(ctx, host, nextCur)
+	}
 
-	// 第 4 步：有候选封禁源时读取当前集合，超 4096 上限前先按最早过期裁剪再下发 ApplyBans。
+	// 第 4 步：有候选封禁源时读取当前集合，按每轮受控配额预算淘汰最早过期条目再下发 ApplyBans。
 	activeCount := i.readBanCountBestEffort(ctx, host)
-	applyOK := true
 	if len(candidates) > 0 {
-		appliedCount, addedIPs, applyErr := i.applyCandidateBans(ctx, host, candidates, cfg.BanTTLSeconds)
+		appliedCount, addedIPs, clearedIPs, applyErr := i.applyCandidateBans(ctx, host, candidates, cfg.BanTTLSeconds)
 		if applyErr != nil {
-			applyOK = false
 			i.setBanError(applyErr.Error())
 		} else {
 			activeCount = appliedCount
-			i.clearBannedBuckets(candidates)
+			i.clearBannedBuckets(clearedIPs)
 			if len(addedIPs) > 0 {
 				ipPreview := strings.Join(addedIPs, ", ")
 				if len(addedIPs) > 5 {
@@ -148,12 +157,6 @@ func (i *instance) runBanCycle(ctx context.Context) {
 		}
 	}
 
-	// 第 5 步：仅在封禁下发成功（applyOK）后才推进游标，防止短暂失败永久丢失爆破事件。
-	if applyOK {
-		if nextCur := strings.TrimSpace(scanResp.GetNextCursor()); nextCur != "" && nextCur != cursor {
-			i.saveBanCursor(ctx, host, nextCur)
-		}
-	}
 	i.persistOverview(ctx, host, activeCount, false, activeConflicts)
 }
 
@@ -248,17 +251,17 @@ func (i *instance) aggregateCandidates(failures []*banv1.AuthFailure, nowMs int6
 	return candidates
 }
 
-func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host, candidates []string, ttlSec uint32) (int, []string, error) {
+func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host, candidates []string, ttlSec uint32) (int, []string, []string, error) {
 	banRead, banReadMeta, err := banClientReadOnly(ctx, host)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	listResp, err := banRead.ListBans(ctx, &banv1.ListBansRequest{Context: banReadMeta})
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	if err := protoError(listResp.GetError()); err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 
 	existing := listResp.GetBans()
@@ -268,26 +271,30 @@ func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host,
 			existingSet[b.GetIp()] = struct{}{}
 		}
 	}
+	alreadyBanned := make([]string, 0)
 	toAdd := make([]*banv1.BanEntry, 0, len(candidates))
 	addedIPs := make([]string, 0, len(candidates))
 	for _, ip := range candidates {
 		if _, already := existingSet[ip]; already {
+			alreadyBanned = append(alreadyBanned, ip)
 			continue
 		}
 		toAdd = append(toAdd, &banv1.BanEntry{Ip: ip, TtlSeconds: ttlSec})
 		addedIPs = append(addedIPs, ip)
 	}
 	if len(toAdd) == 0 {
-		return len(existing), nil, nil
+		return len(existing), nil, alreadyBanned, nil
 	}
 
 	banWrite, banWriteMeta, err := banClientWriteAutonomous(ctx, host, "ban_loop")
 	if err != nil {
-		return len(existing), nil, err
+		return len(existing), nil, nil, err
 	}
 	revision := listResp.GetRevision()
 
-	// 超出 4096 集合容量上限前，按最早过期顺序主动淘汰旧条目。
+	// 超出 4096 集合容量上限前，按最早过期顺序主动淘汰旧条目；单轮最多淘汰 maxEvictionsPerBanTick 条，
+	// 防止耗尽宿主 12 次/分钟的自治写配额导致 ApplyBans 失败。
+	evicted := 0
 	if overflow := len(existing) + len(toAdd) - maxBanEntries; overflow > 0 {
 		sorted := append([]*banv1.ActiveBan(nil), existing...)
 		slices.SortFunc(sorted, func(a, b *banv1.ActiveBan) int {
@@ -299,7 +306,8 @@ func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host,
 			}
 			return strings.Compare(a.GetIp(), b.GetIp())
 		})
-		for idx := 0; idx < overflow && idx < len(sorted); idx++ {
+		evictLimit := min(overflow, len(sorted), maxEvictionsPerBanTick)
+		for idx := 0; idx < evictLimit; idx++ {
 			victim := sorted[idx]
 			if victim == nil || victim.GetIp() == "" {
 				continue
@@ -310,20 +318,25 @@ func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host,
 				ExpectedRevision: revision,
 			})
 			if err != nil {
-				return len(existing), nil, err
+				return len(existing) - evicted, nil, nil, err
 			}
 			if err := protoError(rmResp.GetError()); err != nil {
-				return len(existing), nil, err
+				return len(existing) - evicted, nil, nil, err
 			}
+			evicted++
 			if rmResp.GetRevision() != "" {
 				revision = rmResp.GetRevision()
 			}
 		}
 	}
 
-	if len(toAdd) > maxBanEntries {
-		toAdd = toAdd[:maxBanEntries]
-		addedIPs = addedIPs[:maxBanEntries]
+	availableSlots := maxBanEntries - (len(existing) - evicted)
+	if availableSlots <= 0 {
+		return len(existing) - evicted, nil, alreadyBanned, nil
+	}
+	if len(toAdd) > availableSlots {
+		toAdd = toAdd[:availableSlots]
+		addedIPs = addedIPs[:availableSlots]
 	}
 	applyResp, err := banWrite.ApplyBans(ctx, &banv1.ApplyBansRequest{
 		Context:          banWriteMeta,
@@ -331,12 +344,13 @@ func (i *instance) applyCandidateBans(ctx context.Context, host *pluginsdk.Host,
 		ExpectedRevision: revision,
 	})
 	if err != nil {
-		return len(existing), nil, err
+		return len(existing) - evicted, nil, nil, err
 	}
 	if err := protoError(applyResp.GetError()); err != nil {
-		return len(existing), nil, err
+		return len(existing) - evicted, nil, nil, err
 	}
-	return int(applyResp.GetActiveCount()), addedIPs, nil
+	cleared := append(alreadyBanned, addedIPs...)
+	return int(applyResp.GetActiveCount()), addedIPs, cleared, nil
 }
 
 func (i *instance) clearBannedBuckets(ips []string) {
@@ -361,6 +375,22 @@ func (i *instance) readBanCountBestEffort(ctx context.Context, host *pluginsdk.H
 		return i.activeBanCount
 	}
 	return len(resp.GetBans())
+}
+
+func (i *instance) currentBanCursor(ctx context.Context, host *pluginsdk.Host) string {
+	i.mu.RLock()
+	cur := i.ingestedBanCursor
+	i.mu.RUnlock()
+	if cur != "" {
+		return cur
+	}
+	return i.loadBanCursor(ctx, host)
+}
+
+func (i *instance) setIngestedBanCursor(cursor string) {
+	i.mu.Lock()
+	i.ingestedBanCursor = cursor
+	i.mu.Unlock()
 }
 
 func (i *instance) loadBanCursor(ctx context.Context, host *pluginsdk.Host) string {

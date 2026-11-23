@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -159,8 +161,12 @@ func (s *Server) Start(ctx context.Context, req *platformv1.StartRequest) (*plat
 		if hostSock == "" {
 			hostSock = os.Getenv(EnvHostSocket)
 		}
-		if hostSock != "" {
-			bridge, bErr := StartPublicStreamBridge(hostSock, streamer, nil)
+		streamSock := strings.TrimSpace(os.Getenv(EnvPublicStreamSocket))
+		if streamSock == "" && hostSock != "" {
+			streamSock = filepath.Join(filepath.Dir(hostSock), PublicStreamSocketName)
+		}
+		if streamSock != "" {
+			bridge, bErr := StartPublicStreamBridgeAt(streamSock, hostSock, streamer, nil)
 			if bErr != nil {
 				in.log.Warn("failed to start public stream bridge; falling back to buffered ABI", slog.String("error", bErr.Error()))
 			} else if bridge != nil {

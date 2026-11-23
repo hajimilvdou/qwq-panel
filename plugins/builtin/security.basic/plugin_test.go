@@ -201,18 +201,20 @@ func (s *fakeFirewallService) DetectManagers(_ context.Context, _ *firewallv1.De
 
 type fakeSSHDService struct {
 	sshdv1.UnimplementedSshdServiceServer
-	mu              sync.Mutex
-	listeningPorts  []uint32
-	revision        string
-	verifyReachable bool
-	hasExternalConn bool
-	stages          []sshdv1.PortChangeStage
-	lastSetPortOpID string
-	lastPolicyReq   *sshdv1.SetLoginPolicyRequest
-	txSeq           int
-	activeTxRef     string
-	pendingOldPort  uint32
-	failErr         *pb.ErrorDetail
+	mu               sync.Mutex
+	listeningPorts   []uint32
+	revision         string
+	verifyReachable  bool
+	hasExternalConn  bool
+	stages           []sshdv1.PortChangeStage
+	lastSetPortOpID  string
+	lastPolicyReq    *sshdv1.SetLoginPolicyRequest
+	txSeq            int
+	activeTxRef      string
+	pendingOldPort   uint32
+	dropInTxPort     uint32
+	lastRollbackPort uint32
+	failErr          *pb.ErrorDetail
 }
 
 func newFakeSSHDService() *fakeSSHDService {
@@ -256,7 +258,8 @@ func (s *fakeSSHDService) GetDropIn(_ context.Context, _ *sshdv1.GetDropInReques
 		Exists:             true,
 		Revision:           s.revision,
 		Content:            "Port 22\n",
-		TransactionPending: false,
+		TransactionPending: s.dropInTxPort > 0,
+		TransactionPort:    s.dropInTxPort,
 	}, nil
 }
 
@@ -280,6 +283,7 @@ func (s *fakeSSHDService) SetPort(_ context.Context, req *sshdv1.SetPortRequest)
 		s.revision = fmt.Sprintf("sshd-commit-%d", s.txSeq)
 		s.activeTxRef = ""
 	case sshdv1.PortChangeStage_PORT_CHANGE_STAGE_ROLLBACK:
+		s.lastRollbackPort = req.GetNewPort()
 		if s.pendingOldPort != 0 {
 			s.listeningPorts = []uint32{s.pendingOldPort}
 		}
@@ -424,18 +428,20 @@ func (s *fakeAccountService) SetPassword(_ context.Context, req *accountv1.SetPa
 
 type fakeBanService struct {
 	banv1.UnimplementedBanServiceServer
-	mu            sync.Mutex
-	bans          map[string]int64
-	revision      string
-	failures      []*banv1.AuthFailure
-	nextCursor    string
-	scanCalls     int
-	applyCalls    int
-	lastApplyOpID string
-	removedIPs    []string
-	appliedIPs    []string
-	failErr       *pb.ErrorDetail
-	revSequence   int
+	mu                sync.Mutex
+	bans              map[string]int64
+	revision          string
+	failures          []*banv1.AuthFailure
+	replayUntilCursor bool
+	nextCursor        string
+	scanCalls         int
+	applyCalls        int
+	lastApplyOpID     string
+	removedIPs        []string
+	appliedIPs        []string
+	failErr           *pb.ErrorDetail
+	applyFailErr      *pb.ErrorDetail
+	revSequence       int
 }
 
 func newFakeBanService() *fakeBanService {
@@ -451,12 +457,21 @@ func (s *fakeBanService) nextErrLocked() *pb.ErrorDetail {
 	return err
 }
 
-func (s *fakeBanService) ScanAuthFailures(_ context.Context, _ *banv1.ScanAuthFailuresRequest) (*banv1.ScanAuthFailuresResponse, error) {
+func (s *fakeBanService) ScanAuthFailures(_ context.Context, req *banv1.ScanAuthFailuresRequest) (*banv1.ScanAuthFailuresResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.scanCalls++
 	if err := s.nextErrLocked(); err != nil {
 		return &banv1.ScanAuthFailuresResponse{Error: err}, nil
+	}
+	if s.replayUntilCursor {
+		if req.GetCursor() == s.nextCursor {
+			return &banv1.ScanAuthFailuresResponse{NextCursor: s.nextCursor}, nil
+		}
+		return &banv1.ScanAuthFailuresResponse{
+			Failures:   append([]*banv1.AuthFailure(nil), s.failures...),
+			NextCursor: s.nextCursor,
+		}, nil
 	}
 	out := append([]*banv1.AuthFailure(nil), s.failures...)
 	s.failures = nil
@@ -471,6 +486,11 @@ func (s *fakeBanService) ApplyBans(_ context.Context, req *banv1.ApplyBansReques
 	defer s.mu.Unlock()
 	s.applyCalls++
 	s.lastApplyOpID = req.GetContext().GetOperationId()
+	if s.applyFailErr != nil {
+		err := s.applyFailErr
+		s.applyFailErr = nil
+		return &banv1.ApplyBansResponse{Error: err}, nil
+	}
 	if err := s.nextErrLocked(); err != nil {
 		return &banv1.ApplyBansResponse{Error: err}, nil
 	}
@@ -1140,4 +1160,175 @@ func TestBanLoopIncrementalScanApplyAndEviction(t *testing.T) {
 		}
 		return false
 	})
+}
+
+func TestAccountSetPasswordAcceptsSealedSecretEnvelope(t *testing.T) {
+	h := newSecurityTestHarness(t, `{"ban_enabled":false}`, time.Hour, time.Hour)
+
+	// 1. OperationProtector 封存的 {"$secret":"sec_123"} password 信封必须成功解析并透传 secret_ref
+	res1 := runSecurityJob(t, h.srv, "security.account.set_password", map[string]any{
+		"user":     "root",
+		"password": map[string]any{"$secret": "sec_123"},
+	}, nil)
+	if res1.GetError() != nil {
+		t.Fatalf("password $secret envelope 应被接受，实际错误: %+v", res1.GetError())
+	}
+	h.account.mu.Lock()
+	got1 := h.account.lastSecretRef
+	h.account.mu.Unlock()
+	if got1 != "sec_123" {
+		t.Fatalf("期望透传 secret_ref=sec_123，实际 %q", got1)
+	}
+
+	// 2. secret_ref 字段同样支持 {"$secret":"sec_456"} 信封
+	res2 := runSecurityJob(t, h.srv, "security.account.set_password", map[string]any{
+		"user":       "root",
+		"secret_ref": map[string]any{"$secret": "sec_456"},
+	}, nil)
+	if res2.GetError() != nil {
+		t.Fatalf("secret_ref $secret envelope 应被接受，实际错误: %+v", res2.GetError())
+	}
+	h.account.mu.Lock()
+	got2 := h.account.lastSecretRef
+	h.account.mu.Unlock()
+	if got2 != "sec_456" {
+		t.Fatalf("期望透传 secret_ref=sec_456，实际 %q", got2)
+	}
+}
+
+func TestSSHDPortSagaRollbackIntermediateStageAndKVLessDropIn(t *testing.T) {
+	h := newSecurityTestHarness(t, `{"ban_enabled":false}`, time.Hour, time.Hour)
+
+	// Part A: 防火墙恢复短暂失败时，已持久化 SSHD_ROLLED_BACK，重试不再重复调用 SetPort(ROLLBACK)
+	prep := runSecurityJob(t, h.srv, "security.sshd.change_port_prepare", map[string]any{"new_port": 2244}, nil)
+	if prep.GetError() != nil {
+		t.Fatalf("prepare 失败: %+v", prep.GetError())
+	}
+	var prepOut sshdPortSagaResponse
+	if err := json.Unmarshal(prep.GetResultJson(), &prepOut); err != nil {
+		t.Fatal(err)
+	}
+
+	// 注入一次防火墙读取错误，使 restoreFirewallPorts 短暂失败
+	h.fw.mu.Lock()
+	h.fw.failErr = &pb.ErrorDetail{Code: "UNAVAILABLE", Message: "transient firewall error"}
+	h.fw.mu.Unlock()
+
+	rbFail := runSecurityJob(t, h.srv, "security.sshd.change_port_rollback", map[string]any{"transaction_ref": prepOut.TransactionRef}, nil)
+	if rbFail.GetError() == nil {
+		t.Fatal("预期防火墙恢复短暂失败时 rollback 返回错误")
+	}
+	rawSaga, ok := h.kv.rawValue(kvKeyPortSaga)
+	if !ok {
+		t.Fatal("防火墙恢复失败时 KV 应保留中间态以便重试")
+	}
+	var midSaga portSagaState
+	if err := json.Unmarshal(rawSaga, &midSaga); err != nil || midSaga.Stage != sagaStageSSHDRolledBack {
+		t.Fatalf("期望持久化中间态 %s，实际 %+v err=%v", sagaStageSSHDRolledBack, midSaga, err)
+	}
+
+	// 第二次重试回滚应跳过 SetPort(ROLLBACK)，直接完成防火墙恢复与 KV 清理
+	rbOK := runSecurityJob(t, h.srv, "security.sshd.change_port_rollback", map[string]any{"transaction_ref": prepOut.TransactionRef}, nil)
+	if rbOK.GetError() != nil {
+		t.Fatalf("二次重试 rollback 失败: %+v", rbOK.GetError())
+	}
+	if h.kv.hasKey(kvKeyPortSaga) {
+		t.Fatal("二次重试 rollback 完成后 KV 应已清理")
+	}
+	rollbackCount := 0
+	for _, st := range h.sshd.stageSnapshot() {
+		if st == sshdv1.PortChangeStage_PORT_CHANGE_STAGE_ROLLBACK {
+			rollbackCount++
+		}
+	}
+	if rollbackCount != 1 {
+		t.Fatalf("SetPort(ROLLBACK) 只能执行 1 次，实际执行 %d 次", rollbackCount)
+	}
+
+	// Part B: KV 缺失但操作员传入 transaction_ref 时，应先查询 sshd.GetDropIn 填充 TransactionPort
+	h.sshd.mu.Lock()
+	h.sshd.dropInTxPort = 2255
+	h.sshd.lastRollbackPort = 0
+	h.sshd.mu.Unlock()
+	kvLessRB := runSecurityJob(t, h.srv, "security.sshd.change_port_rollback", map[string]any{"transaction_ref": "tx-orphan-99"}, nil)
+	if kvLessRB.GetError() != nil {
+		t.Fatalf("KV 缺失手动回滚失败: %+v", kvLessRB.GetError())
+	}
+	var kvLessOut sshdPortSagaResponse
+	if err := json.Unmarshal(kvLessRB.GetResultJson(), &kvLessOut); err != nil {
+		t.Fatal(err)
+	}
+	h.sshd.mu.Lock()
+	gotPort := h.sshd.lastRollbackPort
+	h.sshd.mu.Unlock()
+	if gotPort != 2255 || kvLessOut.NewPort != 2255 {
+		t.Fatalf("KV 缺失回滚应从 GetDropIn 填充 TransactionPort=2255，实际 rpc=%d resp=%d", gotPort, kvLessOut.NewPort)
+	}
+}
+
+func TestBanLoopEvictionBudgetCapAndCursorAdvancesIndependently(t *testing.T) {
+	// 1. 满 4096 条目且单轮出现 10 个超阈值攻击源时，单轮最多淘汰 maxEvictionsPerBanTick(6) 条并封禁 6 个，避免耗尽 12/min 自治写配额
+	cfg := `{"ban_enabled":true,"ban_threshold":5,"ban_window_seconds":600,"ban_ttl_seconds":3600}`
+	h := newSecurityTestHarness(t, cfg, 40*time.Millisecond, time.Hour)
+	nowMs := time.Unix(h.clockSec.Load(), 0).UTC().UnixMilli()
+
+	h.ban.mu.Lock()
+	for idx := 0; idx < maxBanEntries; idx++ {
+		ip := fmt.Sprintf("10.%d.%d.%d", (idx>>16)&0xff, (idx>>8)&0xff, idx&0xff)
+		h.ban.bans[ip] = nowMs + int64(1000+idx*10)
+	}
+	for i := 1; i <= 10; i++ {
+		h.ban.failures = append(h.ban.failures, &banv1.AuthFailure{
+			Ip:         fmt.Sprintf("198.51.100.%d", i),
+			User:       "root",
+			OccurredAt: nowMs - 1000,
+			Count:      5,
+		})
+	}
+	h.ban.nextCursor = "cursor-burst-1"
+	h.ban.mu.Unlock()
+
+	rc := &pb.RequestContext{InstanceId: "default", NodeId: "local", Locale: "zh-CN"}
+	if _, err := h.srv.Activate(t.Context(), &pb.ActivateRequest{Context: rc}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 经过两轮巡检，10 个攻击源分批完成封禁（第一轮 6 个、第二轮 4 个），总计淘汰 10 个且每轮不超预算
+	waitUntil(t, 3*time.Second, "10 个攻击源分批完成淘汰与封禁", func() bool {
+		h.ban.mu.Lock()
+		defer h.ban.mu.Unlock()
+		return len(h.ban.appliedIPs) == 10 && len(h.ban.removedIPs) == 10 && h.ban.applyCalls >= 2
+	})
+
+	// 2. ApplyBans 短暂失败时，游标仍独立推进（已摄取日志不再重复累加），因此低于阈值的 IP 不会被重复计数误封
+	h2 := newSecurityTestHarness(t, cfg, 30*time.Millisecond, time.Hour)
+	nowMs2 := time.Unix(h2.clockSec.Load(), 0).UTC().UnixMilli()
+	h2.ban.mu.Lock()
+	h2.ban.failures = []*banv1.AuthFailure{
+		{Ip: "198.51.100.50", User: "root", OccurredAt: nowMs2 - 1000, Count: 5}, // 达阈值
+		{Ip: "198.51.100.51", User: "root", OccurredAt: nowMs2 - 1000, Count: 3}, // 低于阈值，若被重复读取则会变 6 误封
+	}
+	h2.ban.replayUntilCursor = true
+	h2.ban.nextCursor = "cursor-once-1"
+	h2.ban.applyFailErr = &pb.ErrorDetail{Code: "UNAVAILABLE", Message: "transient apply failure"}
+	h2.ban.mu.Unlock()
+
+	if _, err := h2.srv.Activate(t.Context(), &pb.ActivateRequest{Context: rc}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 首轮 ApplyBans 失败但游标立即推进到 cursor-once-1，次轮重试仅封禁 198.51.100.50 而绝不误封 198.51.100.51
+	waitUntil(t, 3*time.Second, "次轮重试仅封禁达阈值 IP 并推进游标", func() bool {
+		h2.ban.mu.Lock()
+		applied := slices.Contains(h2.ban.appliedIPs, "198.51.100.50") && h2.ban.applyCalls >= 2
+		h2.ban.mu.Unlock()
+		rawCur, ok := h2.kv.rawValue(kvKeyBanCursor)
+		return applied && ok && strings.Contains(string(rawCur), "cursor-once-1")
+	})
+	h2.ban.mu.Lock()
+	applied2 := append([]string(nil), h2.ban.appliedIPs...)
+	h2.ban.mu.Unlock()
+	if !slices.Equal(applied2, []string{"198.51.100.50"}) {
+		t.Fatalf("低于阈值的 IP 不应因 ApplyBans 失败重试而被重复计数误封，实际: %v", applied2)
+	}
 }

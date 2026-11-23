@@ -69,7 +69,7 @@ func (s *Service) save(transaction *transactionRecord) error {
 }
 
 func (s *Service) setPort(ctx context.Context, pluginID string, mutation PortMutation) sandbox.CapabilityResponse {
-	if mutation.Kind != "port" || !validRevision(mutation.ExpectedRevision) || mutation.NewPort == 0 || mutation.NewPort > 65535 || !validPortMutationOperationID(mutation.Stage, mutation.OperationID) || sandbox.ValidateID(mutation.InstanceID) != nil || (mutation.Stage != "ADD_NEW" && mutation.Stage != "COMMIT_NEW" && mutation.Stage != "ROLLBACK") {
+	if mutation.Kind != "port" || !validRevision(mutation.ExpectedRevision) || (mutation.Stage != "ROLLBACK" && mutation.NewPort == 0) || mutation.NewPort > 65535 || !validPortMutationOperationID(mutation.Stage, mutation.OperationID) || sandbox.ValidateID(mutation.InstanceID) != nil || (mutation.Stage != "ADD_NEW" && mutation.Stage != "COMMIT_NEW" && mutation.Stage != "ROLLBACK") {
 		return bridge.Failure("VALIDATION_FAILED", "端口事务参数无效")
 	}
 	before, err := s.Repository.Read(ctx, Match{})
@@ -99,7 +99,7 @@ func (s *Service) setPort(ctx context.Context, pluginID string, mutation PortMut
 			return bridge.Failure("PRECONDITION_FAILED", "宿主管理端口已变化")
 		}
 	}
-	if slices.Contains(management, mutation.NewPort) || slices.Contains(mutation.HostPorts, mutation.NewPort) {
+	if mutation.NewPort != 0 && (slices.Contains(management, mutation.NewPort) || slices.Contains(mutation.HostPorts, mutation.NewPort)) {
 		return bridge.Failure("VALIDATION_FAILED", "SSH 端口与管理面冲突")
 	}
 	policy, err := parseDropIn(before.Content)
@@ -144,6 +144,10 @@ func (s *Service) setPort(ctx context.Context, pluginID string, mutation PortMut
 		}
 		transaction = &transactionRecord{Kind: "port", Reference: hex.EncodeToString(nonce[:]), PluginID: pluginID, InstanceID: mutation.InstanceID, OperationID: mutation.OperationID, NewPort: mutation.NewPort, Before: slices.Clone(before.Content), BeforePorts: slices.Clone(before.Ports), ExternalRevision: before.ExternalRevision, OriginalRevision: before.Revision, CreatedAt: s.now()}
 	} else {
+		effectivePort := mutation.NewPort
+		if mutation.Stage == "ROLLBACK" && effectivePort == 0 && transaction != nil {
+			effectivePort = transaction.NewPort
+		}
 		if transaction == nil || !VerifyPortTransactionContinuation(PortTransactionIdentity{
 			Kind:           transaction.Kind,
 			Reference:      transaction.Reference,
@@ -153,7 +157,7 @@ func (s *Service) setPort(ctx context.Context, pluginID string, mutation PortMut
 			CurrentOpID:    mutation.OperationID,
 			CandidateRef:   mutation.TransactionRef,
 			CandidateStage: mutation.Stage,
-		}, pluginID, mutation.InstanceID, mutation.NewPort) {
+		}, pluginID, mutation.InstanceID, effectivePort) {
 			return bridge.Failure("PERMISSION_DENIED", "事务与当前派发身份不匹配")
 		}
 		if before.ExternalRevision != transaction.ExternalRevision || (before.Revision != transaction.AppliedRevision && before.Revision != transaction.ExpectedRevision) {

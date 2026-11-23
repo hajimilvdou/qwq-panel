@@ -13,6 +13,9 @@
     },
     "force": {
       "type": "boolean"
+    },
+    "cleanup_linked_proxies": {
+      "type": "boolean"
     }
   }
 }

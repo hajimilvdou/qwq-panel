@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -117,16 +119,33 @@ func newBasicAuthCache() *basicAuthCache {
 	return &basicAuthCache{entries: make(map[[32]byte]time.Time, 64)}
 }
 
-func basicAuthCacheKey(siteID, hash, authHeader string) [32]byte {
+func basicAuthCacheKey(siteID, expectedUser, hash, suppliedUser, authHeader string) [32]byte {
 	h := sha256.New()
 	_, _ = h.Write([]byte(siteID))
 	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(expectedUser))
+	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(hash))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(suppliedUser))
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(authHeader))
 	var out [32]byte
 	h.Sum(out[:0])
 	return out
+}
+
+func matchPathPrefix(reqPath, prefix string) bool {
+	if prefix == "" || prefix == "/" {
+		return true
+	}
+	if strings.HasSuffix(prefix, "/") {
+		return strings.HasPrefix(reqPath, prefix)
+	}
+	if !strings.HasPrefix(reqPath, prefix) {
+		return false
+	}
+	return len(reqPath) == len(prefix) || reqPath[len(prefix)] == '/'
 }
 
 func (c *basicAuthCache) HasValid(key [32]byte, now time.Time) bool {
@@ -161,12 +180,13 @@ func (c *basicAuthCache) Put(key [32]byte, now time.Time) {
 
 // BuiltinProxy 实现零外部依赖、低内存占用的内置 Go 反向代理路由器（支持无锁原子热重载、WebSocket、限流、BasicAuth 与安全 SNI TLS）。
 type BuiltinProxy struct {
-	table          atomic.Pointer[routeTable]
-	trustedProxies atomic.Pointer[[]netip.Prefix]
-	transport      *http.Transport
-	authCache      *basicAuthCache
-	sni            *SNICertStore
-	now            func() time.Time
+	table             atomic.Pointer[routeTable]
+	trustedProxies    atomic.Pointer[[]netip.Prefix]
+	transport         *http.Transport
+	insecureTransport *http.Transport
+	authCache         *basicAuthCache
+	sni               *SNICertStore
+	now               func() time.Time
 }
 
 func newBuiltinProxy(nowFn func() time.Time, sni *SNICertStore) *BuiltinProxy {
@@ -174,7 +194,18 @@ func newBuiltinProxy(nowFn func() time.Time, sni *SNICertStore) *BuiltinProxy {
 		nowFn = time.Now
 	}
 	tr := NewSafeIngressTransport(true)
-	p := &BuiltinProxy{transport: tr, authCache: newBasicAuthCache(), sni: sni, now: nowFn}
+	insecureTr := tr.Clone()
+	insecureTr.TLSClientConfig = &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, //nolint:gosec // 仅限单站点显式开启 upstream_tls_insecure 且上游为 https:// 时使用（如 Portainer 自签证书）
+	}
+	p := &BuiltinProxy{
+		transport:         tr,
+		insecureTransport: insecureTr,
+		authCache:         newBasicAuthCache(),
+		sni:               sni,
+		now:               nowFn,
+	}
 	p.table.Store(&routeTable{byHost: map[string][]*compiledRoute{}, loaded: nowFn()})
 	return p
 }
@@ -200,8 +231,14 @@ func (p *BuiltinProxy) getTrustedProxies() []netip.Prefix {
 
 // Close 释放共享传输池中的空闲连接。
 func (p *BuiltinProxy) Close() {
-	if p != nil && p.transport != nil {
+	if p == nil {
+		return
+	}
+	if p.transport != nil {
 		p.transport.CloseIdleConnections()
+	}
+	if p.insecureTransport != nil {
+		p.insecureTransport.CloseIdleConnections()
 	}
 }
 
@@ -220,8 +257,12 @@ func (p *BuiltinProxy) Reload(sites []SiteRecord) int {
 			continue
 		}
 		siteCopy := s
+		routeTransport := p.transport
+		if s.UpstreamTLSInsecure && strings.EqualFold(target.Scheme, "https") && p.insecureTransport != nil {
+			routeTransport = p.insecureTransport
+		}
 		rp := &httputil.ReverseProxy{
-			Transport: p.transport,
+			Transport: routeTransport,
 			Rewrite: func(pr *httputil.ProxyRequest) {
 				pr.SetURL(target)
 				pr.SetXForwarded()
@@ -234,6 +275,14 @@ func (p *BuiltinProxy) Reload(sites []SiteRecord) int {
 					resp.Header.Set(k, v)
 				}
 				return nil
+			},
+			ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+				var maxErr *http.MaxBytesError
+				if errors.As(err, &maxErr) {
+					http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+					return
+				}
+				http.Error(w, "Bad Gateway", http.StatusBadGateway)
 			},
 		}
 		hostKey := strings.ToLower(s.Domain)
@@ -284,7 +333,7 @@ func (p *BuiltinProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var rt *compiledRoute
 	for _, cand := range candidates {
-		if cand.site.PathPrefix == "/" || strings.HasPrefix(r.URL.Path, cand.site.PathPrefix) {
+		if matchPathPrefix(r.URL.Path, cand.site.PathPrefix) {
 			rt = cand
 			break
 		}
@@ -311,9 +360,9 @@ func (p *BuiltinProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if rt.site.HasBasicAuth {
 		authHdr := r.Header.Get("Authorization")
-		cacheKey := basicAuthCacheKey(rt.site.ID, rt.site.BasicAuthHash, authHdr)
-		if authHdr == "" || !p.authCache.HasValid(cacheKey, now) {
-			user, pass, ok := r.BasicAuth()
+		user, pass, ok := r.BasicAuth()
+		cacheKey := basicAuthCacheKey(rt.site.ID, rt.site.BasicAuthUser, rt.site.BasicAuthHash, user, authHdr)
+		if !ok || authHdr == "" || !p.authCache.HasValid(cacheKey, now) {
 			userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(rt.site.BasicAuthUser)) == 1
 			if !ok || !userMatch || bcrypt.CompareHashAndPassword([]byte(rt.site.BasicAuthHash), []byte(pass)) != nil {
 				w.Header().Set("WWW-Authenticate", `Basic realm="qwq-ingress"`)
@@ -322,6 +371,14 @@ func (p *BuiltinProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			p.authCache.Put(cacheKey, now)
 		}
+	}
+	if rt.site.MaxBodyMB > 0 {
+		maxBytes := int64(rt.site.MaxBodyMB) << 20
+		if r.ContentLength > maxBytes {
+			http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	}
 	rt.proxy.ServeHTTP(w, r)
 }
@@ -342,6 +399,13 @@ func isBlockedUpstreamMetadataIP(ip netip.Addr) bool {
 }
 
 func dialSafeUpstreamProbe(ctx context.Context, network, address string) (net.Conn, error) {
+	return dialSafeUpstreamProbeWithResolver(ctx, network, address, net.DefaultResolver.LookupNetIP)
+}
+
+func dialSafeUpstreamProbeWithResolver(ctx context.Context, network, address string, lookup netIPLookupFunc) (net.Conn, error) {
+	if lookup == nil {
+		lookup = net.DefaultResolver.LookupNetIP
+	}
 	host, portStr, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
@@ -361,16 +425,23 @@ func dialSafeUpstreamProbe(ctx context.Context, network, address string) (net.Co
 		}
 		addrs = []netip.Addr{ip.Unmap()}
 	} else {
-		ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		if err != nil || len(ips) == 0 {
+		ips, err := lookup(ctx, "ip", host)
+		if err != nil {
 			return nil, err
 		}
-		for _, ip := range ips {
-			if isBlockedUpstreamMetadataIP(ip) {
-				return nil, errors.New("blocked metadata or 100.64.0.0/10 upstream IP")
-			}
-			addrs = append(addrs, ip.Unmap())
+		if len(ips) == 0 {
+			return nil, errors.New("upstream hostname resolved to no IP addresses")
 		}
+		for _, ip := range ips {
+			u := ip.Unmap()
+			if !u.IsValid() || u.IsLoopback() || u.IsPrivate() || isBlockedUpstreamMetadataIP(u) {
+				return nil, fmt.Errorf("SSRF_DNS_REBIND_BLOCKED: upstream %s resolved to non-public address %s", host, u)
+			}
+			addrs = append(addrs, u)
+		}
+	}
+	if len(addrs) == 0 {
+		return nil, errors.New("upstream hostname resolved to no IP addresses")
 	}
 	d := net.Dialer{Timeout: 3 * time.Second}
 	var lastErr error
@@ -380,6 +451,9 @@ func dialSafeUpstreamProbe(ctx context.Context, network, address string) (net.Co
 			return conn, nil
 		}
 		lastErr = err
+	}
+	if lastErr == nil {
+		return nil, errors.New("upstream dial failed")
 	}
 	return nil, lastErr
 }
@@ -399,6 +473,25 @@ var sharedUpstreamProbeClient = &http.Client{
 	},
 }
 
+var sharedInsecureUpstreamProbeClient = &http.Client{
+	Timeout: 3 * time.Second,
+	Transport: &http.Transport{
+		Proxy:               nil,
+		DialContext:         dialSafeUpstreamProbe,
+		MaxIdleConns:        8,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     30 * time.Second,
+		TLSHandshakeTimeout: 3 * time.Second,
+		TLSClientConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true, //nolint:gosec // 仅在站点显式开启 upstream_tls_insecure 且目标为 https:// 时探测自签上游
+		},
+	},
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 func probeUpstream(ctx context.Context, s SiteRecord) UpstreamProbeResult {
 	res := UpstreamProbeResult{SiteID: s.ID, Domain: s.Domain, UpstreamURL: s.UpstreamURL}
 	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -409,7 +502,11 @@ func probeUpstream(ctx context.Context, s SiteRecord) UpstreamProbeResult {
 		res.Error = err.Error()
 		return res
 	}
-	resp, err := sharedUpstreamProbeClient.Do(req)
+	client := sharedUpstreamProbeClient
+	if s.UpstreamTLSInsecure && strings.HasPrefix(strings.ToLower(s.UpstreamURL), "https://") {
+		client = sharedInsecureUpstreamProbeClient
+	}
+	resp, err := client.Do(req)
 	res.LatencyMS = time.Since(start).Milliseconds()
 	if err != nil {
 		res.Error = err.Error()

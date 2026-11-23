@@ -182,6 +182,29 @@ func (s *stackStore) listStacks(ctx context.Context) ([]ComposeStack, error) {
 	return out, rows.Err()
 }
 
+func (s *stackStore) getStack(ctx context.Context, name string) (ComposeStack, bool, error) {
+	safeName, err := validateStackName(name)
+	if err != nil {
+		return ComposeStack{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var st ComposeStack
+	var warnRaw string
+	err = s.db.QueryRowContext(ctx,
+		`SELECT name, compose_yaml, work_dir, status, warnings_json, last_error, revision, created_at, updated_at
+		 FROM compose_stacks WHERE name = ?`, safeName).Scan(
+		&st.Name, &st.ComposeYAML, &st.WorkDir, &st.Status, &warnRaw, &st.LastError, &st.Revision, &st.CreatedAt, &st.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ComposeStack{}, false, nil
+	}
+	if err != nil {
+		return ComposeStack{}, false, err
+	}
+	_ = json.Unmarshal([]byte(warnRaw), &st.Warnings)
+	return st, true, nil
+}
+
 func (s *stackStore) deleteStack(ctx context.Context, name string) (bool, string, error) {
 	safeName, err := validateStackName(name)
 	if err != nil {

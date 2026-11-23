@@ -27,12 +27,15 @@ import {
   clampHeight,
   cleanToast,
   extractOversizedApiCallId,
+  isEnsurePluginAllowed,
   normalizePluginPath,
   parseHello,
   parsePluginMessage,
   routeAllowed,
   subjectAllowed,
   throttleGate,
+  type EnsurePluginsParams,
+  type EnsurePluginsResult,
   type HostSettings,
   type PluginToShell,
   type ShellToPlugin,
@@ -102,6 +105,8 @@ export interface BridgeDeps {
   onConfirm?: (req: BridgeConfirmRequest) => Promise<boolean>;
   /** 宿主剪贴板写入委托（STEP-16） */
   onCopy?: (req: BridgeCopyRequest) => Promise<void>;
+  /** 宿主受控官方联动组件补装/启用委托（STEP-04，仅允许白名单内组件） */
+  onEnsurePlugins?: (req: EnsurePluginsParams) => Promise<EnsurePluginsResult>;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (h: unknown) => void;
@@ -127,6 +132,7 @@ export class PluginBridge {
   #subjects = new Set<string>();
   #unsub: (() => void) | null = null;
   #confirmInflight = false;
+  #ensureInflight = false;
   #gate: RateGate;
   #toastGate: () => boolean;
   #setTimer: (fn: () => void, ms: number) => unknown;
@@ -256,6 +262,9 @@ export class PluginBridge {
       case 'ui.copy':
         void this.#copy(msg, gen, port);
         return;
+      case 'ui.ensure_plugins':
+        void this.#ensurePlugins(msg, gen, port);
+        return;
       case 'api.invoke':
         void this.#invoke(msg, gen, port);
         return;
@@ -321,6 +330,65 @@ export class PluginBridge {
       sendForConn({ t: 'ui.copy.result', id: msg.id, ok: true, data: { copied: true } });
     } catch {
       sendForConn({ t: 'ui.copy.result', id: msg.id, ok: false, problem: { code: 'COPY_FAILED', detail: '复制失败' } });
+    }
+  }
+
+  async #ensurePlugins(msg: Extract<PluginToShell, { t: 'ui.ensure_plugins' }>, gen: number, port: MessagePort): Promise<void> {
+    const sendForConn = (out: ShellToPlugin) => {
+      if (this.#connGen !== gen || this.#port !== port) return;
+      this.#send(out);
+    };
+    const unique = Array.from(new Set(msg.plugins.map((s) => s.trim()).filter(Boolean)));
+    if (unique.length === 0) {
+      sendForConn({
+        t: 'ui.ensure_plugins.result',
+        id: msg.id,
+        ok: false,
+        problem: { code: 'INVALID_ARGUMENT', status: 400, detail: '插件列表不能为空' },
+      });
+      return;
+    }
+    const disallowed = unique.filter((id) => !isEnsurePluginAllowed(id));
+    if (disallowed.length > 0) {
+      sendForConn({
+        t: 'ui.ensure_plugins.result',
+        id: msg.id,
+        ok: false,
+        problem: {
+          code: 'PERMISSION_DENIED',
+          status: 403,
+          detail: `不允许请求非白名单组件：${disallowed.join(', ')}`,
+        },
+      });
+      return;
+    }
+    if (!this.deps.onEnsurePlugins) {
+      sendForConn({
+        t: 'ui.ensure_plugins.result',
+        id: msg.id,
+        ok: false,
+        problem: { code: 'UNAVAILABLE', status: 501, detail: '宿主未启用组件一键启用能力' },
+      });
+      return;
+    }
+    if (this.#ensureInflight) {
+      sendForConn({
+        t: 'ui.ensure_plugins.result',
+        id: msg.id,
+        ok: false,
+        problem: { code: 'RATE_LIMITED', status: 429 },
+      });
+      return;
+    }
+    this.#ensureInflight = true;
+    try {
+      const reason = msg.reason ? cleanToast(msg.reason, 240) : undefined;
+      const data = await this.deps.onEnsurePlugins({ plugins: unique, reason });
+      sendForConn({ t: 'ui.ensure_plugins.result', id: msg.id, ok: true, data });
+    } catch (err) {
+      sendForConn({ t: 'ui.ensure_plugins.result', id: msg.id, ok: false, problem: this.deps.toProblem(err) });
+    } finally {
+      this.#ensureInflight = false;
     }
   }
 
@@ -402,6 +470,7 @@ export class PluginBridge {
     this.#connAbort?.abort();
     this.#connAbort = null;
     this.#confirmInflight = false;
+    this.#ensureInflight = false;
     this.#unsub?.();
     this.#unsub = null;
     this.#subjects.clear();

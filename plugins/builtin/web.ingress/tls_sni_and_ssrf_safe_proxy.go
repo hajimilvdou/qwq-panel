@@ -213,9 +213,11 @@ func (s *SNICertStore) RemoveDomain(domain string) {
 	s.certTable.Store(&next)
 }
 
-// ReloadFromBindings 遍历启用站点的 CertID（certbind_*），加载已物化证书并原子合并入 SNI 表。
+// ReloadFromBindings 遍历启用站点的 CertID（certbind_*），加载已物化证书并原子替换 SNI 表。
+// 单站点证书缺失或解析失败时跳过该站点继续加载其余有效站点，且不保留已删除/停用域名的旧证书。
 func (s *SNICertStore) ReloadFromBindings(domainToBindingRef map[string]string) (loaded int, err error) {
 	parsed := make(map[string]*tls.Certificate, len(domainToBindingRef))
+	var errs []error
 	for domain, ref := range domainToBindingRef {
 		cleanRef := filepath.Base(strings.TrimSpace(ref))
 		if cleanRef == "" || cleanRef == "." || cleanRef == ".." {
@@ -224,32 +226,35 @@ func (s *SNICertStore) ReloadFromBindings(domainToBindingRef map[string]string) 
 		fullPath, keyPath := MaterializedCertPaths(s.dataDir, cleanRef)
 		certBytes, cerr := os.ReadFile(fullPath)
 		if cerr != nil {
-			return loaded, fmt.Errorf("read materialized cert for %s (%s): %w", domain, cleanRef, cerr)
+			errs = append(errs, fmt.Errorf("read materialized cert for %s (%s): %w", domain, cleanRef, cerr))
+			continue
 		}
 		keyBytes, kerr := os.ReadFile(keyPath)
 		if kerr != nil {
-			return loaded, fmt.Errorf("read materialized key for %s (%s): %w", domain, cleanRef, kerr)
+			errs = append(errs, fmt.Errorf("read materialized key for %s (%s): %w", domain, cleanRef, kerr))
+			continue
 		}
 		pair, perr := tls.X509KeyPair(certBytes, keyBytes)
 		clear(keyBytes)
 		if perr != nil {
-			return loaded, fmt.Errorf("parse keypair for %s: %w", domain, perr)
+			errs = append(errs, fmt.Errorf("parse keypair for %s: %w", domain, perr))
+			continue
 		}
-		parsed[normalizeSNIDomain(domain)] = &pair
+		norm := normalizeSNIDomain(domain)
+		if norm == "" {
+			continue
+		}
+		parsed[norm] = &pair
 		loaded++
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	cur := s.certTable.Load()
-	next := make(map[string]*tls.Certificate, len(*cur)+len(parsed))
-	for k, v := range *cur {
-		next[k] = v
-	}
+	next := make(map[string]*tls.Certificate, len(parsed))
 	for k, v := range parsed {
 		next[k] = v
 	}
 	s.certTable.Store(&next)
-	return loaded, nil
+	return loaded, errors.Join(errs...)
 }
 
 // LoadBinding 从宿主物化目录核验 SHA-256 摘要并原子热加载单个 TLS 绑定，供 ingress.tls.reload 调用。

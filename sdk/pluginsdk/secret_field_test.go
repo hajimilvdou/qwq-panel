@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -143,8 +145,15 @@ func TestCapabilityContextAutonomous(t *testing.T) {
 }
 
 func TestPublicStreamBridgeStreamingAndClose(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("/tmp", "qwq-ps-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	fakeHostSock := filepath.Join(dir, "host.sock")
+	if err := os.WriteFile(fakeHostSock, nil, 0o600); err != nil {
+		t.Fatalf("create fake host.sock: %v", err)
+	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -185,5 +194,66 @@ func TestPublicStreamBridgeStreamingAndClose(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || string(body) != "data: one\n\ndata: two\n\n" {
 		t.Fatalf("unexpected stream response: status=%d body=%q", resp.StatusCode, string(body))
+	}
+}
+
+func TestPublicStreamBridgeEnvOverrideAndFailClosedVerifier(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "qwq-ps-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	fakeHostSock := filepath.Join(dir, "h", "host.sock")
+	if err := os.MkdirAll(filepath.Dir(fakeHostSock), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fakeHostSock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	customSock := filepath.Join(dir, "s", PublicStreamSocketName)
+	t.Setenv(EnvPublicStreamSocket, customSock)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	})
+
+	// 1. EnvPublicStreamSocket overrides the fallback HostDir path.
+	bridge, err := StartPublicStreamBridge(fakeHostSock, handler, func(net.Conn) error { return nil })
+	if err != nil {
+		t.Fatalf("StartPublicStreamBridge with env override failed: %v", err)
+	}
+	if bridge.SocketPath() != customSock {
+		t.Fatalf("SocketPath = %q, want %q", bridge.SocketPath(), customSock)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = bridge.Close(ctx)
+
+	// 2. A rejecting verifier closes incoming connections fail-closed.
+	rejectSock := filepath.Join(dir, "reject", PublicStreamSocketName)
+	rejectedBridge, err := StartPublicStreamBridgeAt(rejectSock, fakeHostSock, handler, func(net.Conn) error {
+		return errors.New("unauthorized peer")
+	})
+	if err != nil {
+		t.Fatalf("StartPublicStreamBridgeAt reject failed: %v", err)
+	}
+	defer func() {
+		c2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel2()
+		_ = rejectedBridge.Close(c2)
+	}()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", rejectedBridge.SocketPath())
+			},
+		},
+		Timeout: time.Second,
+	}
+	if resp, err := client.Get("http://plugin.qwq.internal/health"); err == nil {
+		_ = resp.Body.Close()
+		t.Fatalf("expected connection rejection when peer verifier fails, got status %d", resp.StatusCode)
 	}
 }

@@ -256,7 +256,7 @@
         },
         {
           "name": "secret.reveal",
-          "scope": "self"
+          "scope": "operation"
         }
       ],
       "request_schema": "schemas/probe.settings.update.request.json",
@@ -305,7 +305,7 @@
         },
         {
           "name": "secret.reveal",
-          "scope": "self"
+          "scope": "operation"
         },
         {
           "name": "network.listen",
@@ -504,7 +504,7 @@
     },
     {
       "name": "secret.reveal",
-      "scope": "self",
+      "scope": "operation",
       "reason": "安全读取导入的探针自定义证书私钥、告警 Webhook 凭据与独立管理口令密文"
     },
     {

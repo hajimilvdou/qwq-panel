@@ -20,6 +20,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -141,6 +142,9 @@ func isAllowedDockerEndpoint(method, p string) bool {
 		return false
 	}
 	segs := strings.Split(strings.TrimPrefix(p, "/"), "/")
+	if IsAllowedNetworkOrInspectEndpoint(method, p, segs) {
+		return true
+	}
 	switch method {
 	case http.MethodGet:
 		if p == "/info" || p == "/containers/json" || p == "/images/json" {
@@ -293,6 +297,8 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 // Service 将 ControlledDockerCapabilityRunner 适配为 sandbox.CapabilityRunner。
 type Service struct {
 	Runner *ControlledDockerCapabilityRunner
+	// ReservedPortsFunc 返回 helper 侧独立核验的保留端口（如 SSH 监听端口），与宿主注入的面板端口合并防抢占。
+	ReservedPortsFunc func(context.Context) []uint16
 }
 
 // NewService 创建默认固定宿主机路径的受控 Docker 能力服务。
@@ -302,10 +308,49 @@ func NewService() *Service {
 			SocketPath: DefaultDockerSocket,
 			StacksRoot: DefaultStacksRoot,
 		},
+		ReservedPortsFunc: discoverHostSSHReservedPorts,
 	}
 }
 
-// Run 处理 docker.api.read / docker.api.write / docker.compose 封闭能力 verb。
+func discoverHostSSHReservedPorts(ctx context.Context) []uint16 {
+	ports := []uint16{22}
+	seen := map[uint16]bool{22: true}
+	bin, err := exec.LookPath("sshd")
+	if err != nil {
+		return ports
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(runCtx, bin, "-T").Output()
+	if err != nil {
+		return ports
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && strings.EqualFold(fields[0], "port") {
+			if p, perr := strconv.ParseUint(fields[1], 10, 16); perr == nil && p > 0 {
+				if !seen[uint16(p)] {
+					seen[uint16(p)] = true
+					ports = append(ports, uint16(p))
+				}
+			}
+		}
+	}
+	return ports
+}
+
+// BindableIPsOutput 是 docker.bindable_ips 的出参。
+type BindableIPsOutput struct {
+	IPs []HostBindableIP `json:"ips"`
+}
+
+// CreateNetworkOutput 是 docker.network.create 的出参。
+type CreateNetworkOutput struct {
+	NetworkID string `json:"network_id"`
+	Name      string `json:"name"`
+}
+
+// Run 处理 docker.* 封闭能力 verb。
 func (s *Service) Run(ctx context.Context, req sandbox.CapabilityRequest) (sandbox.CapabilityResponse, error) {
 	if s == nil || s.Runner == nil {
 		return sandbox.CapabilityResponse{Code: "UNAVAILABLE", Error: "受控 Docker 能力服务未配置"}, nil
@@ -317,8 +362,92 @@ func (s *Service) Run(ctx context.Context, req sandbox.CapabilityRequest) (sandb
 		return s.handleProxyAPI(ctx, req.ParamsJSON, true)
 	case "docker.compose":
 		return s.handleCompose(ctx, req.ParamsJSON)
+	case "docker.bindable_ips":
+		return s.handleBindableIPs()
+	case "docker.network.create":
+		return s.handleCreateNetwork(ctx, req.ParamsJSON)
+	case "docker.network.membership":
+		return s.handleNetworkMembership(ctx, req.ParamsJSON)
+	case "docker.recreate_ports":
+		return s.handleRecreatePorts(ctx, req.ParamsJSON)
 	default:
 		return sandbox.CapabilityResponse{Code: "UNIMPLEMENTED", Error: "不支持的 docker 能力操作"}, nil
+	}
+}
+
+func (s *Service) handleBindableIPs() (sandbox.CapabilityResponse, error) {
+	ips, err := ListHostBindableIPs()
+	if err != nil {
+		return sandbox.CapabilityResponse{Code: "UNAVAILABLE", Error: err.Error()}, nil
+	}
+	return okResponse(BindableIPsOutput{IPs: ips})
+}
+
+func (s *Service) handleCreateNetwork(ctx context.Context, payload []byte) (sandbox.CapabilityResponse, error) {
+	var in CreateNetworkInput
+	if err := sandbox.DecodeHelperDocument(payload, &in); err != nil {
+		return sandbox.CapabilityResponse{Code: "VALIDATION_FAILED", Error: "docker.network.create 请求参数格式无效"}, nil
+	}
+	id, err := s.Runner.CreateControlledBridgeNetwork(ctx, in)
+	if err != nil {
+		return sandbox.CapabilityResponse{Code: classifyDockerErrCode(err), Error: err.Error()}, nil
+	}
+	return okResponse(CreateNetworkOutput{NetworkID: id, Name: strings.TrimSpace(in.Name)})
+}
+
+func (s *Service) handleNetworkMembership(ctx context.Context, payload []byte) (sandbox.CapabilityResponse, error) {
+	var in NetworkMembershipInput
+	if err := sandbox.DecodeHelperDocument(payload, &in); err != nil {
+		return sandbox.CapabilityResponse{Code: "VALIDATION_FAILED", Error: "docker.network.membership 请求参数格式无效"}, nil
+	}
+	if err := s.Runner.MutateContainerNetwork(ctx, in); err != nil {
+		return sandbox.CapabilityResponse{Code: classifyDockerErrCode(err), Error: err.Error()}, nil
+	}
+	return okResponse(map[string]bool{"ok": true})
+}
+
+func (s *Service) handleRecreatePorts(ctx context.Context, payload []byte) (sandbox.CapabilityResponse, error) {
+	var in RecreatePortsInput
+	if err := sandbox.DecodeHelperDocument(payload, &in); err != nil {
+		return sandbox.CapabilityResponse{Code: "VALIDATION_FAILED", Error: "docker.recreate_ports 请求参数格式无效"}, nil
+	}
+	reserved := make([]uint16, 0, len(in.ReservedHostPorts)+4)
+	reserved = append(reserved, in.ReservedHostPorts...)
+	if s.ReservedPortsFunc != nil {
+		reserved = append(reserved, s.ReservedPortsFunc(ctx)...)
+	}
+	out, err := s.Runner.RecreateContainerWithPortBindings(ctx, in, reserved)
+	if err != nil {
+		return sandbox.CapabilityResponse{Code: classifyDockerErrCode(err), Error: err.Error()}, nil
+	}
+	return okResponse(out)
+}
+
+func classifyDockerErrCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.HasPrefix(msg, "INVALID_"),
+		strings.HasPrefix(msg, "DUPLICATE_PORT_RULE"),
+		strings.HasPrefix(msg, "TOO_MANY_PORT_RULES"),
+		strings.HasPrefix(msg, "UNSUPPORTED_NETWORK_"):
+		return "VALIDATION_FAILED"
+	case strings.HasPrefix(msg, "PRIVILEGED_CONTAINER_REFUSED"),
+		strings.HasPrefix(msg, "PORT_RESERVED_HOST"):
+		return "PERMISSION_DENIED"
+	case strings.HasPrefix(msg, "WRITABLE_LAYER_DIRTY"),
+		strings.HasPrefix(msg, "PORT_IN_USE"),
+		strings.HasPrefix(msg, "PORT_EXHAUSTED"),
+		strings.HasPrefix(msg, "LAST_NETWORK_PROTECTED"),
+		strings.HasPrefix(msg, "NETWORK_MODE_"),
+		strings.HasPrefix(msg, "MANAGED_COMPOSE_CONTAINER"):
+		return "FAILED_PRECONDITION"
+	case strings.Contains(msg, "不存在") || strings.Contains(msg, "(404)"):
+		return "NOT_FOUND"
+	default:
+		return "FAILED_PRECONDITION"
 	}
 }
 

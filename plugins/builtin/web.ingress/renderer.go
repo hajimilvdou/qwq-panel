@@ -75,10 +75,22 @@ func renderCaddyfile(sites []SiteRecord, dataDir string) string {
 			fmt.Fprintf(&b, "        %s \"%s\"\n", k, s.ExtraHeaders[k])
 		}
 		b.WriteString("    }\n")
+		if s.MaxBodyMB > 0 {
+			fmt.Fprintf(&b, "    request_body {\n        max_size %dMB\n    }\n", s.MaxBodyMB)
+		}
+		isHTTPSInsecure := s.UpstreamTLSInsecure && strings.HasPrefix(strings.ToLower(s.UpstreamURL), "https://")
 		if s.PathPrefix != "/" {
-			fmt.Fprintf(&b, "    handle %s* {\n        reverse_proxy %s\n    }\n", s.PathPrefix, s.UpstreamURL)
+			if isHTTPSInsecure {
+				fmt.Fprintf(&b, "    handle %s* {\n        reverse_proxy %s {\n            transport http {\n                tls_insecure_skip_verify\n            }\n        }\n    }\n", s.PathPrefix, s.UpstreamURL)
+			} else {
+				fmt.Fprintf(&b, "    handle %s* {\n        reverse_proxy %s\n    }\n", s.PathPrefix, s.UpstreamURL)
+			}
 		} else {
-			fmt.Fprintf(&b, "    reverse_proxy %s\n", s.UpstreamURL)
+			if isHTTPSInsecure {
+				fmt.Fprintf(&b, "    reverse_proxy %s {\n        transport http {\n            tls_insecure_skip_verify\n        }\n    }\n", s.UpstreamURL)
+			} else {
+				fmt.Fprintf(&b, "    reverse_proxy %s\n", s.UpstreamURL)
+			}
 		}
 		b.WriteString("}\n\n")
 	}
@@ -126,6 +138,11 @@ func renderNginxConfig(sites []SiteRecord, dataDir string) string {
 			}
 		}
 		fmt.Fprintf(&b, "    server_name %s;\n", s.Domain)
+		if s.MaxBodyMB > 0 {
+			fmt.Fprintf(&b, "    client_max_body_size %dm;\n", s.MaxBodyMB)
+		} else {
+			b.WriteString("    client_max_body_size 0;\n")
+		}
 		b.WriteString("    add_header X-Content-Type-Options nosniff always;\n")
 		b.WriteString("    add_header X-Frame-Options SAMEORIGIN always;\n")
 		if s.ForceHTTPS && s.TLSMode != "off" {
@@ -140,6 +157,9 @@ func renderNginxConfig(sites []SiteRecord, dataDir string) string {
 			fmt.Fprintf(&b, "        limit_req zone=%s burst=%d nodelay;\n", zone, s.RateLimitBurst)
 		}
 		fmt.Fprintf(&b, "        proxy_pass %s;\n", s.UpstreamURL)
+		if s.UpstreamTLSInsecure && strings.HasPrefix(strings.ToLower(s.UpstreamURL), "https://") {
+			b.WriteString("        proxy_ssl_verify off;\n")
+		}
 		b.WriteString("        proxy_http_version 1.1;\n")
 		b.WriteString("        proxy_set_header Host $host;\n")
 		b.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")

@@ -102,7 +102,7 @@
     },
     {
       "name": "secret.reveal",
-      "scope": "self",
+      "scope": "operation",
       "reason": "解密管理操作与配置中封存的上游渠道凭据及 LinuxDo OAuth 密钥"
     },
     {
@@ -175,7 +175,7 @@
       "capabilities": [
         {
           "name": "secret.reveal",
-          "scope": "self"
+          "scope": "operation"
         },
         {
           "name": "state.kv.write",
@@ -219,7 +219,7 @@
       "capabilities": [
         {
           "name": "secret.reveal",
-          "scope": "self"
+          "scope": "operation"
         },
         {
           "name": "network.egress",
@@ -325,7 +325,7 @@
       "capabilities": [
         {
           "name": "secret.reveal",
-          "scope": "self"
+          "scope": "operation"
         }
       ],
       "request_schema": "schemas/relay.users.create.request.json",

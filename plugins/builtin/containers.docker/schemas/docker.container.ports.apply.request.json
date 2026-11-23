@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "container_id"
+  ],
+  "properties": {
+    "container_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "rules": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "container_port"
+        ],
+        "properties": {
+          "bind_mode": {
+            "type": "string",
+            "enum": [
+              "loopback",
+              "public",
+              "specific_ip"
+            ]
+          },
+          "bind_ip": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "include_ipv6": {
+            "type": "boolean"
+          },
+          "host_port": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "container_port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "tcp",
+              "udp",
+              "both"
+            ]
+          }
+        }
+      }
+    },
+    "bindings": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object"
+      }
+    },
+    "commit_writable_layer": {
+      "type": "boolean"
+    },
+    "allow_discard_writable_layer": {
+      "type": "boolean"
+    },
+    "start_after_recreate": {
+      "type": "boolean"
+    }
+  }
+}

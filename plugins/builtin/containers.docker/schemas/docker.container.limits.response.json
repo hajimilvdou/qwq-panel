@@ -20,6 +20,9 @@
     },
     "cpus": {
       "type": "number"
+    },
+    "restart_policy": {
+      "type": "string"
     }
   }
 }

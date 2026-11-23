@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -577,8 +578,17 @@ func TestDisabledUserRejectedAndSMTPMetadataBlocked(t *testing.T) {
 		t.Fatalf("封禁用户 LinuxDo 登录应返回 USER_DISABLED，实际: %v", err)
 	}
 
-	// SMTP 元数据 IP 硬拦截验证（AWS/GCP 169.254.169.254、阿里云 100.100.100.200、metadata.google.internal）。
-	for _, badHost := range []string{"169.254.169.254", "100.100.100.200", "metadata.google.internal"} {
+	// SMTP 元数据及隧道地址硬拦截验证（AWS/GCP 169.254.169.254、阿里云 100.100.100.200、metadata.google.internal、0.0.0.0、NAT64、6to4、Teredo）。
+	for _, badHost := range []string{
+		"169.254.169.254",
+		"100.100.100.200",
+		"0.0.0.0",
+		"fd00:ec2::254",
+		"64:ff9b::169.254.169.254",
+		"2002:a9fe:a9fe::1",
+		"2001:0:4136:e378::1",
+		"metadata.google.internal",
+	} {
 		err := SendVerificationEmailBounded(ctx, RelaySMTPConfig{
 			Host: badHost,
 			Port: 587,
@@ -588,4 +598,111 @@ func TestDisabledUserRejectedAndSMTPMetadataBlocked(t *testing.T) {
 			t.Fatalf("SMTP 主机 %s 应命中 SSRF_BLOCKED，实际: %v", badHost, err)
 		}
 	}
+}
+
+func TestAuthorizeAndReserveRejectsInsufficientBalanceAndSubKey(t *testing.T) {
+	ctx := context.Background()
+	eng, cleanup := newTestLedger(t, nil)
+	defer cleanup()
+
+	// 1. 仅剩 1 micro 的账号不能以 50_000 micros 预扣放行
+	poorUser, err := eng.CreateUserByAdmin(ctx, "poor_user", "PoorPass123!", "", "default", 1, 0, "none")
+	if err != nil {
+		t.Fatalf("CreateUserByAdmin 失败: %v", err)
+	}
+	poorKey, err := eng.MintSubKey(ctx, poorUser.ID, "poor-key", 0, nil, nil, 60, 0)
+	if err != nil {
+		t.Fatalf("MintSubKey 失败: %v", err)
+	}
+	if _, _, err := eng.AuthorizeAndReserve(poorKey, "gpt-4o", "198.51.100.1", 50_000); err == nil || !errors.Is(err, ErrQuotaExhausted) || !strings.HasPrefix(err.Error(), "QUOTA_EXHAUSTED") {
+		t.Fatalf("余额 1 micro 申请预扣 50000 应返回 ErrQuotaExhausted，实际: %v", err)
+	}
+	if bal, _, ok := eng.MemoryBalance(poorUser.ID); !ok || bal != 1 {
+		t.Fatalf("拒绝预扣后余额应保持 1 micro，实际 bal=%d ok=%v", bal, ok)
+	}
+
+	// 2. 主账号充裕但子令牌限额 10_000 小于本次预扣 50_000，同样必须拒绝
+	richUser, err := eng.CreateUserByAdmin(ctx, "rich_user", "RichPass123!", "", "default", 5_000_000, 0, "none")
+	if err != nil {
+		t.Fatalf("CreateUserByAdmin 失败: %v", err)
+	}
+	cappedKey, err := eng.MintSubKey(ctx, richUser.ID, "capped-key", 10_000, nil, nil, 60, 0)
+	if err != nil {
+		t.Fatalf("MintSubKey 失败: %v", err)
+	}
+	if _, _, err := eng.AuthorizeAndReserve(cappedKey, "gpt-4o", "198.51.100.1", 50_000); err == nil || !errors.Is(err, ErrQuotaExhausted) || !strings.HasPrefix(err.Error(), "QUOTA_EXHAUSTED") {
+		t.Fatalf("子令牌剩余 10000 申请预扣 50000 应返回 ErrQuotaExhausted，实际: %v", err)
+	}
+}
+
+func TestDisabledUserSessionInvalidatedAndEvicted(t *testing.T) {
+	ctx := context.Background()
+	eng, cleanup := newTestLedger(t, nil)
+	defer cleanup()
+
+	u, err := eng.CreateUserByAdmin(ctx, "sess_user", "SessPass123!", "", "default", 1_000_000, 0, "none")
+	if err != nil {
+		t.Fatalf("CreateUserByAdmin 失败: %v", err)
+	}
+	sess := eng.CreateSession(u.ID)
+	if gotUID, ok := eng.ValidateSession(sess); !ok || gotUID != u.ID {
+		t.Fatalf("活跃用户会话校验失败: uid=%q ok=%v", gotUID, ok)
+	}
+
+	// 管理员停用用户后，既有门户会话应被立即驱逐且校验失败
+	if _, err := eng.AdjustUserQuota(ctx, u.ID, 0, "", "disabled", nil, "", "disable account"); err != nil {
+		t.Fatalf("AdjustUserQuota 停用失败: %v", err)
+	}
+	if gotUID, ok := eng.ValidateSession(sess); ok || gotUID != "" {
+		t.Fatalf("停用用户的既有会话必须失效，实际 uid=%q ok=%v", gotUID, ok)
+	}
+
+	// 即使存在未驱逐会话，ValidateSession 检查 StatusActive 也必须拒绝
+	staleSess := eng.CreateSession(u.ID)
+	if gotUID, ok := eng.ValidateSession(staleSess); ok || gotUID != "" {
+		t.Fatalf("停用用户的会话不应通过 ValidateSession，实际 uid=%q ok=%v", gotUID, ok)
+	}
+}
+
+func TestConcurrentAdjustUserQuotaAndEffectiveGroupRaceFree(t *testing.T) {
+	ctx := context.Background()
+	eng, cleanup := newTestLedger(t, nil)
+	defer cleanup()
+
+	u, err := eng.CreateUserByAdmin(ctx, "race_grp", "RaceGrp123!", "", "default", 10_000_000, 0, "none")
+	if err != nil {
+		t.Fatalf("CreateUserByAdmin 失败: %v", err)
+	}
+	key, err := eng.MintSubKey(ctx, u.ID, "race-grp-key", 0, nil, nil, 0, 0)
+	if err != nil {
+		t.Fatalf("MintSubKey 失败: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	groups := []string{"default", "pro", "vip"}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for idx := 0; idx < 30; idx++ {
+			_, _ = eng.AdjustUserQuota(ctx, u.ID, 0, groups[idx%len(groups)], "", nil, "", "rotate")
+		}
+	}()
+	for r := 0; r < 4; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := 0; idx < 100; idx++ {
+				tok, resv, err := eng.AuthorizeAndReserve(key, "gpt-4o", "198.51.100.1", 1_000)
+				if err != nil {
+					continue
+				}
+				grp := tok.EffectiveGroup()
+				if grp != "default" && grp != "pro" && grp != "vip" {
+					t.Errorf("unexpected group %q", grp)
+				}
+				resv.Settle(0, UsageLogRecord{})
+			}
+		}()
+	}
+	wg.Wait()
 }

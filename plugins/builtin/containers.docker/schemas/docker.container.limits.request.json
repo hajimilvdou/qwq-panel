@@ -20,6 +20,20 @@
       "type": "number",
       "minimum": 0.1,
       "maximum": 64
+    },
+    "restart_policy": {
+      "type": "string",
+      "enum": [
+        "no",
+        "on-failure",
+        "unless-stopped",
+        "always"
+      ]
+    },
+    "restart_max_retry": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
     }
   }
 }

@@ -84,6 +84,94 @@ func TestValidateComposeYAMLStrictRejectsAllBypassPayloads(t *testing.T) {
 			name: "path traversal env_file",
 			yaml: "services:\n  app:\n    image: nginx:alpine\n    env_file:\n      - ../../etc/shadow\n",
 		},
+		{
+			name: "any env_file directive",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    env_file:\n      - ./app.env\n",
+		},
+		{
+			name: "flow mapping service privileged",
+			yaml: "services:\n  app: { image: nginx:alpine, privileged: true }\n",
+		},
+		{
+			name: "flow mapping driver_opts bind mount",
+			yaml: "services:\n  app:\n    image: nginx:alpine\nvolumes:\n  rootvol:\n    driver_opts: { type: none, o: bind, device: / }\n",
+		},
+		{
+			name: "top level driver_opts block bind mount",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    volumes:\n      - rootvol:/host\nvolumes:\n  rootvol:\n    driver: local\n    driver_opts:\n      type: none\n      o: bind\n      device: /\n",
+		},
+		{
+			name: "hex escape privileged key",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    \"\\x70rivileged\": true\n",
+		},
+		{
+			name: "unicode escape pid key",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    \"\\u0070id\": host\n",
+		},
+		{
+			name: "hex escape host mount path",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    volumes:\n      - \"\\x2fetc:/host\"\n",
+		},
+		{
+			name: "multiline flow sequence volumes",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    volumes: [\n      \"/:/host\"\n    ]\n",
+		},
+		{
+			name: "compose variable interpolation privileged",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    privileged: ${X:-true}\n",
+		},
+		{
+			name: "compose variable interpolation volumes",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    volumes:\n      - \"${V:-/}:/host\"\n",
+		},
+		{
+			name: "yaml merge key",
+			yaml: "services:\n  app:\n    <<: *base\n    image: nginx:alpine\n",
+		},
+		{
+			name: "yaml slash anchor alias",
+			yaml: "x-a: &a/b true\nservices:\n  app:\n    image: nginx:alpine\n    privileged: *a/b\n",
+		},
+		{
+			name: "secrets directive",
+			yaml: "services:\n  app:\n    image: nginx:alpine\nsecrets:\n  host_shadow:\n    file: /etc/shadow\n",
+		},
+		{
+			name: "configs directive",
+			yaml: "services:\n  app:\n    image: nginx:alpine\nconfigs:\n  host_cfg:\n    file: /etc/passwd\n",
+		},
+		{
+			name: "build directive",
+			yaml: "services:\n  app:\n    build: .\n",
+		},
+		{
+			name: "extends directive",
+			yaml: "services:\n  app:\n    extends:\n      file: /etc/evil.yml\n      service: evil\n",
+		},
+		{
+			name: "cgroup host directive",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    cgroup: host\n",
+		},
+		{
+			name: "cgroup_parent directive",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    cgroup_parent: /system.slice\n",
+		},
+		{
+			name: "uts host directive",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    uts: host\n",
+		},
+		{
+			name: "userns_mode directive",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    userns_mode: host\n",
+		},
+		{
+			name: "volumes_from directive",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    volumes_from:\n      - other\n",
+		},
+		{
+			name: "block scalar privileged",
+			yaml: "services:\n  app:\n    image: nginx:alpine\n    privileged: |\n      true\n",
+		},
 	}
 	for _, tc := range rejected {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,19 +183,24 @@ func TestValidateComposeYAMLStrictRejectsAllBypassPayloads(t *testing.T) {
 }
 
 func TestValidateComposeYAMLStrictAllowsSafeNamedAndRelativeVolumes(t *testing.T) {
-	safeYAML := `services:
+	safeYAML := `# Safe production compose comment with ${IGNORED_IN_COMMENT} and {ignored}
+services:
   web:
     image: nginx:alpine
     restart: unless-stopped
+    command: ["nginx", "-g", "daemon off;"]
     ports:
       - "127.0.0.1:8080:80"
+    environment:
+      APP_ENV: prod
+      CRON_SPEC: "*/5 * * * *"
+      JSON_BLOB: '{"ok":true}'
     volumes:
       - app_data:/var/lib/app
       - ./data:/usr/share/nginx/html:ro
-    env_file:
-      - ./app.env
 volumes:
-  app_data:
+  app_data: {}
+networks: {}
 `
 	warnings, err := ValidateComposeYAMLStrict(safeYAML)
 	if err != nil {
@@ -115,6 +208,11 @@ volumes:
 	}
 	if len(warnings) != 0 {
 		t.Fatalf("expected zero warnings for safe YAML, got %v", warnings)
+	}
+
+	emptyTopLevelYAML := "services:\n  app:\n    image: nginx:alpine\nvolumes: {}\nnetworks: {}\n"
+	if _, err := ValidateComposeYAMLStrict(emptyTopLevelYAML); err != nil {
+		t.Fatalf("expected empty flow mappings volumes: {} / networks: {} to succeed, got: %v", err)
 	}
 
 	hostNetYAML := "services:\n  app:\n    image: nginx:alpine\n    network_mode: host\n"

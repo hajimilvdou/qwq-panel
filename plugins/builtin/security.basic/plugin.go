@@ -231,6 +231,7 @@ type instance struct {
 	activeConflicts      []string
 	spark                []float64
 	lastBanError         string
+	ingestedBanCursor    string
 	failureBuckets       map[string][]failureRecord
 	sagaMu               sync.Mutex
 	now                  func() time.Time
@@ -471,10 +472,17 @@ type keysRemoveRequest struct {
 }
 
 type accountSetPasswordRequest struct {
-	User             string `json:"user"`
-	Password         string `json:"password"`
-	SecretRef        string `json:"secret_ref"`
-	ExpectedRevision string `json:"expected_revision"`
+	User             string                `json:"user"`
+	Password         pluginsdk.SecretField `json:"password"`
+	SecretRef        pluginsdk.SecretField `json:"secret_ref"`
+	ExpectedRevision string                `json:"expected_revision"`
+}
+
+func extractSecretRefField(f pluginsdk.SecretField) string {
+	if ref := strings.TrimSpace(f.SecretRef); ref != "" {
+		return ref
+	}
+	return strings.TrimSpace(f.Plain)
 }
 
 type activeBanDTO struct {
@@ -1023,10 +1031,10 @@ func (i *instance) handleAccountSetPassword(ctx context.Context, req pluginsdk.R
 	if err := validateUser(in.User); err != nil {
 		return pluginsdk.Result{}, err
 	}
-	// 优先读取显式 secret_ref；若调用方填写的是 x-secret password，宿主已将其替换为密文引用。
-	secretRef := strings.TrimSpace(in.SecretRef)
+	// 优先读取显式 secret_ref；若调用方填写的是 x-secret password，宿主 OperationProtector 已将其封存为 {"$secret":"..."} 引用信封。
+	secretRef := extractSecretRefField(in.SecretRef)
 	if secretRef == "" {
-		secretRef = strings.TrimSpace(in.Password)
+		secretRef = extractSecretRefField(in.Password)
 	}
 	if secretRef == "" {
 		return pluginsdk.Result{}, invalidField("/password", "REQUIRED", "必须提供由宿主注入的口令密文引用")

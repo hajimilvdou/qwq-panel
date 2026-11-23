@@ -704,12 +704,27 @@ func TestAIRelaySecretFieldPortalHeadersLogoutRevokeAndDynamicReserve(t *testing
 	fakeHost.mu.Lock()
 	eventCount := len(fakeHost.events)
 	var firstEvtType string
+	var firstEvtPayload []byte
 	if eventCount > 0 {
 		firstEvtType = fakeHost.events[0].GetType()
+		firstEvtPayload = fakeHost.events[0].GetPayloadJson()
 	}
 	fakeHost.mu.Unlock()
 	if eventCount == 0 || firstEvtType != "relay.alert" {
 		t.Fatalf("全部上游 502 熔断后应发布 relay.alert 事件，实际 count=%d type=%q", eventCount, firstEvtType)
+	}
+	var alertBody struct {
+		Severity string            `json:"severity"`
+		Title    string            `json:"title"`
+		Message  string            `json:"message"`
+		DedupKey string            `json:"dedup_key"`
+		Tags     map[string]string `json:"tags"`
+	}
+	if err := json.Unmarshal(firstEvtPayload, &alertBody); err != nil {
+		t.Fatalf("解析 relay.alert 载荷失败: %v", err)
+	}
+	if alertBody.Severity != "critical" || alertBody.Title == "" || alertBody.Message == "" || alertBody.DedupKey == "" || alertBody.Tags["model"] != "gpt-4o" {
+		t.Fatalf("relay.alert 缺少 AlertEventRelay 必需字段: %+v", alertBody)
 	}
 
 	// 吊销子令牌：DELETE /portal/api/tokens/{id} 后再调 /v1/models 必须返回 401。

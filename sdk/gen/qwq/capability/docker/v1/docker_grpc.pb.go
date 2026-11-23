@@ -21,9 +21,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DockerService_ProxyRead_FullMethodName     = "/qwq.capability.docker.v1.DockerService/ProxyRead"
-	DockerService_ProxyWrite_FullMethodName    = "/qwq.capability.docker.v1.DockerService/ProxyWrite"
-	DockerService_ComposeAction_FullMethodName = "/qwq.capability.docker.v1.DockerService/ComposeAction"
+	DockerService_ProxyRead_FullMethodName              = "/qwq.capability.docker.v1.DockerService/ProxyRead"
+	DockerService_ProxyWrite_FullMethodName             = "/qwq.capability.docker.v1.DockerService/ProxyWrite"
+	DockerService_ComposeAction_FullMethodName          = "/qwq.capability.docker.v1.DockerService/ComposeAction"
+	DockerService_ListBindableIPs_FullMethodName        = "/qwq.capability.docker.v1.DockerService/ListBindableIPs"
+	DockerService_CreateNetwork_FullMethodName          = "/qwq.capability.docker.v1.DockerService/CreateNetwork"
+	DockerService_MutateContainerNetwork_FullMethodName = "/qwq.capability.docker.v1.DockerService/MutateContainerNetwork"
+	DockerService_RecreateContainerPorts_FullMethodName = "/qwq.capability.docker.v1.DockerService/RecreateContainerPorts"
 )
 
 // DockerServiceClient is the client API for DockerService service.
@@ -39,6 +43,18 @@ type DockerServiceClient interface {
 	// Runs host-verified `docker compose up -d` or `down` outside the plugin cgroup.
 	// effect=write, risk=high.
 	ComposeAction(ctx context.Context, in *ComposeActionRequest, opts ...grpc.CallOption) (*ComposeActionResponse, error)
+	// Lists host bindable IP addresses (127.0.0.1, ::1, 0.0.0.0, ::, and active NIC IPs).
+	// effect=read, risk=low.
+	ListBindableIPs(ctx context.Context, in *ListBindableIPsRequest, opts ...grpc.CallOption) (*ListBindableIPsResponse, error)
+	// Creates a controlled Docker bridge/overlay network (never host/macvlan/ipvlan).
+	// effect=write, risk=medium.
+	CreateNetwork(ctx context.Context, in *CreateNetworkRequest, opts ...grpc.CallOption) (*CreateNetworkResponse, error)
+	// Connects or disconnects a container to/from a Docker network with optional aliases and static IP.
+	// effect=write, risk=medium.
+	MutateContainerNetwork(ctx context.Context, in *MutateContainerNetworkRequest, opts ...grpc.CallOption) (*MutateContainerNetworkResponse, error)
+	// Atomically recreates a container with new port bindings using a rollback-safe Saga.
+	// effect=write, risk=high.
+	RecreateContainerPorts(ctx context.Context, in *RecreateContainerPortsRequest, opts ...grpc.CallOption) (*RecreateContainerPortsResponse, error)
 }
 
 type dockerServiceClient struct {
@@ -79,6 +95,46 @@ func (c *dockerServiceClient) ComposeAction(ctx context.Context, in *ComposeActi
 	return out, nil
 }
 
+func (c *dockerServiceClient) ListBindableIPs(ctx context.Context, in *ListBindableIPsRequest, opts ...grpc.CallOption) (*ListBindableIPsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListBindableIPsResponse)
+	err := c.cc.Invoke(ctx, DockerService_ListBindableIPs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) CreateNetwork(ctx context.Context, in *CreateNetworkRequest, opts ...grpc.CallOption) (*CreateNetworkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateNetworkResponse)
+	err := c.cc.Invoke(ctx, DockerService_CreateNetwork_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) MutateContainerNetwork(ctx context.Context, in *MutateContainerNetworkRequest, opts ...grpc.CallOption) (*MutateContainerNetworkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MutateContainerNetworkResponse)
+	err := c.cc.Invoke(ctx, DockerService_MutateContainerNetwork_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) RecreateContainerPorts(ctx context.Context, in *RecreateContainerPortsRequest, opts ...grpc.CallOption) (*RecreateContainerPortsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecreateContainerPortsResponse)
+	err := c.cc.Invoke(ctx, DockerService_RecreateContainerPorts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DockerServiceServer is the server API for DockerService service.
 // All implementations must embed UnimplementedDockerServiceServer
 // for forward compatibility.
@@ -92,6 +148,18 @@ type DockerServiceServer interface {
 	// Runs host-verified `docker compose up -d` or `down` outside the plugin cgroup.
 	// effect=write, risk=high.
 	ComposeAction(context.Context, *ComposeActionRequest) (*ComposeActionResponse, error)
+	// Lists host bindable IP addresses (127.0.0.1, ::1, 0.0.0.0, ::, and active NIC IPs).
+	// effect=read, risk=low.
+	ListBindableIPs(context.Context, *ListBindableIPsRequest) (*ListBindableIPsResponse, error)
+	// Creates a controlled Docker bridge/overlay network (never host/macvlan/ipvlan).
+	// effect=write, risk=medium.
+	CreateNetwork(context.Context, *CreateNetworkRequest) (*CreateNetworkResponse, error)
+	// Connects or disconnects a container to/from a Docker network with optional aliases and static IP.
+	// effect=write, risk=medium.
+	MutateContainerNetwork(context.Context, *MutateContainerNetworkRequest) (*MutateContainerNetworkResponse, error)
+	// Atomically recreates a container with new port bindings using a rollback-safe Saga.
+	// effect=write, risk=high.
+	RecreateContainerPorts(context.Context, *RecreateContainerPortsRequest) (*RecreateContainerPortsResponse, error)
 	mustEmbedUnimplementedDockerServiceServer()
 }
 
@@ -110,6 +178,18 @@ func (UnimplementedDockerServiceServer) ProxyWrite(context.Context, *ProxyWriteR
 }
 func (UnimplementedDockerServiceServer) ComposeAction(context.Context, *ComposeActionRequest) (*ComposeActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ComposeAction not implemented")
+}
+func (UnimplementedDockerServiceServer) ListBindableIPs(context.Context, *ListBindableIPsRequest) (*ListBindableIPsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListBindableIPs not implemented")
+}
+func (UnimplementedDockerServiceServer) CreateNetwork(context.Context, *CreateNetworkRequest) (*CreateNetworkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateNetwork not implemented")
+}
+func (UnimplementedDockerServiceServer) MutateContainerNetwork(context.Context, *MutateContainerNetworkRequest) (*MutateContainerNetworkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MutateContainerNetwork not implemented")
+}
+func (UnimplementedDockerServiceServer) RecreateContainerPorts(context.Context, *RecreateContainerPortsRequest) (*RecreateContainerPortsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecreateContainerPorts not implemented")
 }
 func (UnimplementedDockerServiceServer) mustEmbedUnimplementedDockerServiceServer() {}
 func (UnimplementedDockerServiceServer) testEmbeddedByValue()                       {}
@@ -186,6 +266,78 @@ func _DockerService_ComposeAction_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DockerService_ListBindableIPs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListBindableIPsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).ListBindableIPs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_ListBindableIPs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).ListBindableIPs(ctx, req.(*ListBindableIPsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DockerService_CreateNetwork_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateNetworkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).CreateNetwork(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_CreateNetwork_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).CreateNetwork(ctx, req.(*CreateNetworkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DockerService_MutateContainerNetwork_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MutateContainerNetworkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).MutateContainerNetwork(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_MutateContainerNetwork_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).MutateContainerNetwork(ctx, req.(*MutateContainerNetworkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DockerService_RecreateContainerPorts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecreateContainerPortsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).RecreateContainerPorts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_RecreateContainerPorts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).RecreateContainerPorts(ctx, req.(*RecreateContainerPortsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DockerService_ServiceDesc is the grpc.ServiceDesc for DockerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -204,6 +356,22 @@ var DockerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ComposeAction",
 			Handler:    _DockerService_ComposeAction_Handler,
+		},
+		{
+			MethodName: "ListBindableIPs",
+			Handler:    _DockerService_ListBindableIPs_Handler,
+		},
+		{
+			MethodName: "CreateNetwork",
+			Handler:    _DockerService_CreateNetwork_Handler,
+		},
+		{
+			MethodName: "MutateContainerNetwork",
+			Handler:    _DockerService_MutateContainerNetwork_Handler,
+		},
+		{
+			MethodName: "RecreateContainerPorts",
+			Handler:    _DockerService_RecreateContainerPorts_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
