@@ -56,13 +56,18 @@
     </ul>
   </nav>
 
-  <div class="server">
+  <a
+    href="/settings/system"
+    class="server"
+    title="查看本机系统信息与节点状态"
+    aria-current={router.path === '/settings/system' ? 'page' : undefined}
+  >
     <Mood {mood} size="sm" />
     <div class="server-text">
       <b class="ellipsis">{node?.name ?? '本机'}</b>
       <small>{lost ? '连接中断' : online ? '在线' : '离线'}</small>
     </div>
-  </div>
+  </a>
 </aside>
 
 <style>
@@ -156,6 +161,15 @@
     border-radius: var(--r-md);
     background: var(--surface-2);
     border: 1px solid var(--line);
+    cursor: pointer;
+    transition:
+      background var(--dur-1) var(--ease),
+      border-color var(--dur-1) var(--ease);
+  }
+  .server:hover,
+  .server[aria-current='page'] {
+    background: var(--surface-3);
+    border-color: var(--line-strong);
   }
   .server-text {
     display: flex;

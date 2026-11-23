@@ -92,9 +92,11 @@ export QWQ_THIRD_PARTY_DIR=$W/THIRD_PARTY_LICENSES
 pack_official_plugin() {
   local src_dir=$1 arch=$2 out_pkg=$3
   local stage="$W/pkgstage-$arch-$(basename "$src_dir")"
+  local plugin_ldf
+  plugin_ldf=$(qwq_plugin_ldflags "$CLEAN_VER")
   rm -rf "$stage"
   mkdir -p "$stage/bin"
-  GOARCH=$arch go build -trimpath -ldflags "$QWQ_BASE_LDFLAGS" -o "$stage/bin/plugin" "./$src_dir"
+  GOARCH=$arch go build -trimpath -ldflags "$plugin_ldf" -o "$stage/bin/plugin" "./$src_dir"
   chmod 0755 "$stage/bin/plugin"
   for sub in schemas ui attestations LICENSES; do
     if [[ -d "$src_dir/$sub" ]]; then

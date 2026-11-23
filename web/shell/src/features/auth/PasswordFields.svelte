@@ -38,6 +38,16 @@
     </li>
   {/each}
 </ul>
+{#if !check.long}
+  <div class="class-pills" aria-label="已命中的字符种类（4 选 3）">
+    {#each check.classes as c (c.id)}
+      <span class="pill" class:ok={c.ok}>
+        <Icon name={c.ok ? 'check' : 'info'} size={12} />
+        {c.label}
+      </span>
+    {/each}
+  </div>
+{/if}
 <Input
   label="再输一次"
   type="password"
@@ -66,6 +76,28 @@
     gap: 6px;
   }
   li.ok {
+    color: var(--ok-text);
+  }
+  .class-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: calc(var(--s-2) * -1);
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--text-3);
+    font-size: var(--fs-2xs);
+  }
+  .pill.ok {
+    background: var(--ok-soft);
+    border-color: color-mix(in oklab, var(--ok) 35%, transparent);
     color: var(--ok-text);
   }
 </style>

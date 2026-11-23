@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -25,6 +27,14 @@ const DefaultGracePeriod = 10 * time.Second
 // DefaultReleaseGracePeriod bounds the waits of ReleaseInstance, which has no
 // grace_period_ms field.
 const DefaultReleaseGracePeriod = 5 * time.Second
+
+// BuildVersion, when injected at release build time via
+// -ldflags "-X github.com/qwq-panel/qwq/sdk/pluginsdk.BuildVersion=X.Y.Z",
+// overrides the embedded manifest's development version so GetDescriptor
+// reports the exact packaged release version matching manifest.json.
+var BuildVersion string
+
+var buildVersionSemverRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$`)
 
 // Options configures [Serve].
 type Options struct {
@@ -84,6 +94,12 @@ func Serve(ctx context.Context, opts Options) (*Server, error) {
 	m, err := manifest.Parse(opts.Manifest)
 	if err != nil {
 		return nil, fmt.Errorf("pluginsdk: invalid manifest: %w", err)
+	}
+	if bv := strings.TrimPrefix(strings.TrimSpace(BuildVersion), "v"); bv != "" {
+		if !buildVersionSemverRE.MatchString(bv) {
+			return nil, fmt.Errorf("pluginsdk: invalid BuildVersion %q", BuildVersion)
+		}
+		m.Version = bv
 	}
 	// The SDK implements ABI abi.Major.abi.Minor; a manifest that requires a
 	// newer minor asks for RPCs or semantics this SDK does not have.

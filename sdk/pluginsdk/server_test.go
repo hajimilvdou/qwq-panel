@@ -6,10 +6,37 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 
 	platformv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
 )
+
+func TestServeBuildVersionOverride(t *testing.T) {
+	prev := BuildVersion
+	t.Cleanup(func() { BuildVersion = prev })
+
+	// 1. Valid release version (with or without leading "v") overrides embedded manifest version.
+	BuildVersion = "v0.1.10"
+	env := newTestEnv(t, newTestPlugin())
+	resp, err := env.client.GetDescriptor(testContext(t), &platformv1.GetDescriptorRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.GetDescriptor_().GetPluginVersion(); got != "0.1.10" {
+		t.Fatalf("GetDescriptor().PluginVersion = %q, want %q", got, "0.1.10")
+	}
+
+	// 2. Malformed BuildVersion is rejected cleanly.
+	BuildVersion = "not-a-semver"
+	if _, err := Serve(testContext(t), Options{
+		Plugin:    newTestPlugin(),
+		Manifest:  fixtureManifest(0, defaultOps, defaultCaps),
+		Registrar: grpc.NewServer(),
+	}); err == nil {
+		t.Fatal("expected Serve to reject malformed BuildVersion")
+	}
+}
 
 func TestDescriptorMatchesManifest(t *testing.T) {
 	env := newTestEnv(t, newTestPlugin())

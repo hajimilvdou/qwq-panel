@@ -18,3 +18,11 @@ qwq_ldflags() {
   [[ $v =~ ^[0-9A-Za-z._+-]+$ ]] || { echo "qwq_ldflags: 非法版本号 $v" >&2; return 2; }
   printf '%s -X github.com/qwq-panel/qwq/internal/buildinfo.Version=%s' "$QWQ_BASE_LDFLAGS" "$v"
 }
+
+# qwq_plugin_ldflags <version>：为官方插件注入发布版本号，确保 GetDescriptor() 与 manifest.json 一致。
+qwq_plugin_ldflags() {
+  local v=${1:?qwq_plugin_ldflags <version>}
+  v=${v#v}
+  [[ $v =~ ^[0-9A-Za-z._+-]+$ ]] || { echo "qwq_plugin_ldflags: 非法版本号 $v" >&2; return 2; }
+  printf '%s -X github.com/qwq-panel/qwq/sdk/pluginsdk.BuildVersion=%s' "$QWQ_BASE_LDFLAGS" "$v"
+}

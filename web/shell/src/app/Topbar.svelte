@@ -81,7 +81,18 @@
       ]}
     >
       {#snippet trigger(props)}
-        <button type="button" class="avatar-btn" {...props}><Avatar {name} size="md" /></button>
+        <button
+          type="button"
+          class="avatar-btn"
+          aria-haspopup={props['aria-haspopup']}
+          aria-expanded={props['aria-expanded']}
+          aria-controls={props['aria-controls']}
+          aria-label={props['aria-label']}
+          onclick={props.onclick}
+          onkeydown={props.onkeydown}
+        >
+          <Avatar {name} size="md" />
+        </button>
       {/snippet}
     </Menu>
   </div>
@@ -154,7 +165,17 @@
     display: none;
   }
   .avatar-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border-radius: 50%;
+    transition: transform var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
+  }
+  .avatar-btn:hover {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .avatar-btn:active {
+    transform: scale(0.96);
   }
   .top.capsule {
     top: 12px;
