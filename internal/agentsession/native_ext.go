@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/qwq-panel/qwq/internal/operations"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
@@ -318,10 +319,9 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 		return ErrWaitingApproval
 	case errors.Is(err, ErrLoopStepLimit):
 		if cfg.SoftLanding {
-			_ = emit(Event{
-				Type:  EventMessageDelta,
-				Delta: "\n\n（已达到单轮工具步数上限，以上为当前阶段性核查结论；如需继续执行请发送确认指令。）",
-			})
+			const note = "\n\n（已达到单轮工具步数上限，以上为当前阶段性核查结论；如需继续执行请发送确认指令。）"
+			_ = emit(Event{Type: EventMessageDelta, Delta: note})
+			_ = emit(Event{Type: EventMessageCompleted})
 			return nil
 		}
 		return problem.New(problem.Unavailable,
@@ -437,20 +437,54 @@ func (p *streamingOpenAIProvider) Complete(ctx context.Context, req ProviderRequ
 		body.StreamOptions = map[string]any{"include_usage": true}
 	}
 
+	resp, cancel, err := p.doOpenAIHTTP(ctx, body)
+	if err != nil {
+		return ProviderResponse{}, err
+	}
+	// OpenCode/DSH compatibility: many OpenAI-compatible gateways (Ollama,
+	// vLLM, OneAPI, non-reasoner endpoints) return HTTP 400 when optional
+	// `stream_options` or `reasoning_effort` fields are sent. Retry once cleanly
+	// without those optional extensions before failing.
+	if resp.StatusCode == http.StatusBadRequest && (body.StreamOptions != nil || body.ReasoningEffort != "") {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<10))
+		_ = resp.Body.Close()
+		cancel()
+		body.StreamOptions = nil
+		body.ReasoningEffort = ""
+		resp, cancel, err = p.doOpenAIHTTP(ctx, body)
+		if err != nil {
+			return ProviderResponse{}, err
+		}
+	}
+	defer cancel()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ProviderResponse{}, modelStatusError(resp.StatusCode)
+	}
+
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(ct, "text/event-stream") {
+		return p.parseSSE(resp.Body, stepStart, req.Messages)
+	}
+	return p.parseJSON(resp.Body, stepStart, req.Messages)
+}
+
+func (p *streamingOpenAIProvider) doOpenAIHTTP(ctx context.Context, body streamChatRequest) (*http.Response, context.CancelFunc, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
-		return ProviderResponse{}, problem.Wrap(err)
+		return nil, nil, problem.Wrap(err)
 	}
 	timeout := p.cfg.timeout()
 	if p.core.timeout > 0 && p.core.timeout < timeout {
 		timeout = p.core.timeout
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, p.cfg.BaseURL+"/chat/completions", bytes.NewReader(raw))
 	if err != nil {
-		return ProviderResponse{}, problem.New(problem.Unavailable, "The native core's base_url cannot be used.")
+		cancel()
+		return nil, nil, problem.New(problem.Unavailable, "The native core's base_url cannot be used.")
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if body.Stream {
@@ -464,25 +498,96 @@ func (p *streamingOpenAIProvider) Complete(ctx context.Context, req ProviderRequ
 
 	resp, err := p.core.client.Do(httpReq)
 	if err != nil {
+		cancel()
 		if errors.Is(err, errEgressDenied) {
-			return ProviderResponse{}, problem.New(problem.PermissionDenied, "%s", egressDeniedDetail)
+			return nil, nil, problem.New(problem.PermissionDenied, "%s", egressDeniedDetail)
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
-			return ProviderResponse{}, problem.New(problem.Timeout, "The model did not answer before its deadline.")
+			return nil, nil, problem.New(problem.Timeout, "The model did not answer before its deadline.")
 		}
-		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint could not be reached.")
+		return nil, nil, problem.New(problem.Unavailable, "The model endpoint could not be reached.")
 	}
-	defer resp.Body.Close()
+	return resp, cancel, nil
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return ProviderResponse{}, modelStatusError(resp.StatusCode)
-	}
+// thinkTagSplitter separates leading `<think>...</think>` blocks emitted inline
+// inside `delta.content` by Ollama / DeepSeek-R1 / QwQ endpoints into
+// reasoning vs visible answer deltas across arbitrary SSE chunk boundaries.
+type thinkTagSplitter struct {
+	state int // 0=detecting, 1=inside <think>, 2=passthrough
+	buf   string
+}
 
-	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	if strings.Contains(ct, "text/event-stream") {
-		return p.parseSSE(resp.Body, stepStart, req.Messages)
+const (
+	thinkOpenTag  = "<think>"
+	thinkCloseTag = "</think>"
+)
+
+func (s *thinkTagSplitter) Feed(chunk string) (reasoning, text string) {
+	if chunk == "" {
+		return "", ""
 	}
-	return p.parseJSON(resp.Body, stepStart, req.Messages)
+	if s.state == 2 {
+		return "", chunk
+	}
+	s.buf += chunk
+	if s.state == 0 {
+		trimmed := strings.TrimLeft(s.buf, " \t\r\n")
+		if trimmed == "" {
+			return "", ""
+		}
+		if strings.HasPrefix(trimmed, thinkOpenTag) {
+			s.state = 1
+			s.buf = trimmed[len(thinkOpenTag):]
+		} else if strings.HasPrefix(thinkOpenTag, trimmed) {
+			// Wait for more bytes to decide whether stream starts with <think>.
+			return "", ""
+		} else {
+			s.state = 2
+			out := s.buf
+			s.buf = ""
+			return "", out
+		}
+	}
+	if s.state == 1 {
+		if idx := strings.Index(s.buf, thinkCloseTag); idx >= 0 {
+			reason := s.buf[:idx]
+			rest := strings.TrimLeft(s.buf[idx+len(thinkCloseTag):], "\r\n")
+			s.buf = ""
+			s.state = 2
+			return reason, rest
+		}
+		// Keep a short tail in case `</think>` is split across SSE chunks,
+		// stepping back to a valid UTF-8 rune boundary so multi-byte characters
+		// (e.g. CJK) are never bisected across emitted deltas.
+		keep := len(thinkCloseTag) - 1
+		if len(s.buf) > keep {
+			cut := len(s.buf) - keep
+			for cut > 0 && !utf8.RuneStart(s.buf[cut]) {
+				cut--
+			}
+			if cut == 0 {
+				return "", ""
+			}
+			reason := s.buf[:cut]
+			s.buf = s.buf[cut:]
+			return reason, ""
+		}
+		return "", ""
+	}
+	return "", ""
+}
+
+func (s *thinkTagSplitter) Flush() (reasoning, text string) {
+	if s.buf == "" {
+		return "", ""
+	}
+	rem := s.buf
+	s.buf = ""
+	if s.state == 1 {
+		return rem, ""
+	}
+	return "", rem
 }
 
 func (p *streamingOpenAIProvider) parseJSON(r io.Reader, stepStart time.Time, msgs []ModelMessage) (ProviderResponse, error) {
@@ -498,6 +603,7 @@ func (p *streamingOpenAIProvider) parseJSON(r io.Reader, stepStart time.Time, ms
 			Message struct {
 				chatMessage
 				ReasoningContent string `json:"reasoning_content"`
+				Reasoning        string `json:"reasoning"`
 			} `json:"message"`
 		} `json:"choices"`
 		Usage *openAIUsage `json:"usage"`
@@ -506,11 +612,25 @@ func (p *streamingOpenAIProvider) parseJSON(r io.Reader, stepStart time.Time, ms
 		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint returned an invalid response.")
 	}
 	msg := out.Choices[0].Message
-	if msg.ReasoningContent != "" {
-		_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": msg.ReasoningContent})
+	reason := msg.ReasoningContent
+	if reason == "" {
+		reason = msg.Reasoning
 	}
-	p.recordUsage(stepStart, time.Since(stepStart), out.Usage, msg.Content, msgs)
-	return toProviderResponse(msg.Content, msg.ToolCalls), nil
+	content := msg.Content
+	if reason == "" && strings.Contains(content, thinkOpenTag) {
+		var sp thinkTagSplitter
+		r1, t1 := sp.Feed(content)
+		r2, t2 := sp.Flush()
+		if r1+r2 != "" {
+			reason = r1 + r2
+			content = t1 + t2
+		}
+	}
+	if reason != "" {
+		_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": reason})
+	}
+	p.recordUsage(stepStart, time.Since(stepStart), out.Usage, content, msgs)
+	return toProviderResponse(content, msg.ToolCalls), nil
 }
 
 func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msgs []ModelMessage) (ProviderResponse, error) {
@@ -521,9 +641,35 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 		contentBuf   strings.Builder
 		firstTokenAt time.Time
 		usage        *openAIUsage
-		toolAcc      = map[int]*chatToolCall{}
-		toolOrder    []int
+		toolSlots    []*chatToolCall
+		toolByIndex  = map[int]*chatToolCall{}
+		toolByID     = map[string]*chatToolCall{}
+		thinkSplit   thinkTagSplitter
+		sawReasonKey bool
 	)
+
+	emitReasoning := func(s string) {
+		if s == "" {
+			return
+		}
+		if firstTokenAt.IsZero() {
+			firstTokenAt = time.Now()
+		}
+		_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": s})
+	}
+	emitContent := func(s string) {
+		if s == "" {
+			return
+		}
+		if firstTokenAt.IsZero() {
+			firstTokenAt = time.Now()
+		}
+		contentBuf.WriteString(s)
+		if p.emit != nil {
+			p.streamedDelta = true
+			_ = p.emit(Event{Type: EventMessageDelta, Delta: s})
+		}
+	}
 
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -535,13 +681,17 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 			continue
 		}
 		var chunk struct {
+			Error *struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+			} `json:"error"`
 			Choices []struct {
 				Delta struct {
 					Content          string `json:"content"`
 					ReasoningContent string `json:"reasoning_content"`
 					Reasoning        string `json:"reasoning"`
 					ToolCalls        []struct {
-						Index    int    `json:"index"`
+						Index    *int   `json:"index"`
 						ID       string `json:"id"`
 						Type     string `json:"type"`
 						Function struct {
@@ -556,6 +706,9 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
 		}
+		if chunk.Error != nil && len(chunk.Choices) == 0 {
+			return ProviderResponse{}, problem.New(problem.Unavailable, "The model stream returned an error.")
+		}
 		if chunk.Usage != nil {
 			usage = chunk.Usage
 		}
@@ -568,30 +721,46 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 			reason = d.Reasoning
 		}
 		if reason != "" {
-			if firstTokenAt.IsZero() {
-				firstTokenAt = time.Now()
-			}
-			_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": reason})
+			sawReasonKey = true
+			emitReasoning(reason)
 		}
 		if d.Content != "" {
-			if firstTokenAt.IsZero() {
-				firstTokenAt = time.Now()
-			}
-			contentBuf.WriteString(d.Content)
-			if p.emit != nil {
-				p.streamedDelta = true
-				_ = p.emit(Event{Type: EventMessageDelta, Delta: d.Content})
+			if sawReasonKey {
+				emitContent(d.Content)
+			} else {
+				rPart, tPart := thinkSplit.Feed(d.Content)
+				emitReasoning(rPart)
+				emitContent(tPart)
 			}
 		}
 		for _, tc := range d.ToolCalls {
-			acc, ok := toolAcc[tc.Index]
-			if !ok {
+			var acc *chatToolCall
+			if tc.ID != "" {
+				acc = toolByID[tc.ID]
+			}
+			if acc == nil && tc.Index != nil {
+				if candidate := toolByIndex[*tc.Index]; candidate != nil {
+					// If the server reused index 0 for a brand-new tool call ID
+					// (common in Ollama / Mistral), allocate a fresh slot instead
+					// of corrupting the previous call's name and JSON arguments.
+					if tc.ID == "" || candidate.ID == "" || candidate.ID == tc.ID {
+						acc = candidate
+					}
+				}
+			}
+			if acc == nil && tc.Index == nil && tc.ID == "" && len(toolSlots) > 0 {
+				acc = toolSlots[len(toolSlots)-1]
+			}
+			if acc == nil {
 				acc = &chatToolCall{Type: "function"}
-				toolAcc[tc.Index] = acc
-				toolOrder = append(toolOrder, tc.Index)
+				toolSlots = append(toolSlots, acc)
+				if tc.Index != nil {
+					toolByIndex[*tc.Index] = acc
+				}
 			}
 			if tc.ID != "" {
 				acc.ID = tc.ID
+				toolByID[tc.ID] = acc
 			}
 			if tc.Function.Name != "" {
 				acc.Function.Name += tc.Function.Name
@@ -601,10 +770,18 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 			}
 		}
 	}
+	if err := sc.Err(); err != nil {
+		return ProviderResponse{}, problem.New(problem.Unavailable, "The model stream was interrupted before completion.")
+	}
+	if !sawReasonKey {
+		rRem, tRem := thinkSplit.Flush()
+		emitReasoning(rRem)
+		emitContent(tRem)
+	}
 
-	calls := make([]chatToolCall, 0, len(toolOrder))
-	for _, idx := range toolOrder {
-		calls = append(calls, *toolAcc[idx])
+	calls := make([]chatToolCall, 0, len(toolSlots))
+	for _, acc := range toolSlots {
+		calls = append(calls, *acc)
 	}
 	ttft := time.Since(stepStart)
 	if !firstTokenAt.IsZero() {
@@ -644,9 +821,12 @@ func (p *streamingOpenAIProvider) recordUsage(stepStart time.Time, ttft time.Dur
 func toProviderResponse(content string, calls []chatToolCall) ProviderResponse {
 	out := ProviderResponse{Content: content}
 	for _, call := range calls {
+		rawArgs := strings.TrimSpace(call.Function.Arguments)
 		var args json.RawMessage
-		if call.Function.Arguments != "" {
-			args = json.RawMessage(call.Function.Arguments)
+		if rawArgs == "" {
+			args = json.RawMessage("{}")
+		} else {
+			args = json.RawMessage(rawArgs)
 		}
 		out.ToolCalls = append(out.ToolCalls, ModelToolCall{
 			CallID: call.ID, Name: call.Function.Name, Arguments: args,
@@ -695,8 +875,9 @@ func anthropicThinkingBudget(model, configured string) int {
 }
 
 // completeAnthropic executes one Messages API turn against an Anthropic-compatible
-// endpoint (official Anthropic API or third-party Claude relay) with full tool
-// calling, extended thinking effort mapping, and usage telemetry.
+// endpoint (official Anthropic API or third-party Claude relay) with true SSE
+// streaming (plus automatic JSON fallback), tool calling, extended thinking
+// signature preservation, and usage telemetry.
 func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req ProviderRequest, stepStart time.Time) (ProviderResponse, error) {
 	var sysParts []string
 	var msgs []map[string]any
@@ -759,6 +940,9 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 		"max_tokens": maxTokens,
 		"messages":   msgs,
 	}
+	if p.cfg.wantStream() {
+		payload["stream"] = true
+	}
 	if len(sysParts) > 0 {
 		payload["system"] = strings.Join(sysParts, "\n\n")
 	}
@@ -793,6 +977,11 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 		return ProviderResponse{}, problem.New(problem.Unavailable, "The native core's base_url cannot be used.")
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if p.cfg.wantStream() {
+		httpReq.Header.Set("Accept", "text/event-stream, application/json")
+	} else {
+		httpReq.Header.Set("Accept", "application/json")
+	}
 	applyProviderAuthHeaders(httpReq, ProviderKindAnthropic, p.apiKey)
 
 	resp, err := p.core.client.Do(httpReq)
@@ -810,7 +999,15 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 	if resp.StatusCode != http.StatusOK {
 		return ProviderResponse{}, modelStatusError(resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxModelResponse+1))
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(ct, "text/event-stream") {
+		return p.parseAnthropicSSE(resp.Body, stepStart, req.Messages)
+	}
+	return p.parseAnthropicJSON(resp.Body, stepStart, req.Messages)
+}
+
+func (p *streamingOpenAIProvider) parseAnthropicJSON(r io.Reader, stepStart time.Time, msgs []ModelMessage) (ProviderResponse, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxModelResponse+1))
 	if err != nil {
 		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint did not answer.")
 	}
@@ -845,8 +1042,12 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 				textBuf.WriteString(blk.Text)
 			}
 		case "tool_use":
+			args := blk.Input
+			if len(bytes.TrimSpace(args)) == 0 {
+				args = json.RawMessage("{}")
+			}
 			toolCalls = append(toolCalls, ModelToolCall{
-				CallID: blk.ID, Name: blk.Name, Arguments: blk.Input,
+				CallID: blk.ID, Name: blk.Name, Arguments: args,
 			})
 		}
 	}
@@ -859,6 +1060,178 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 		}
 		usage.PromptTokensDetails.CachedTokens = out.Usage.CacheReadInputTokens
 	}
-	p.recordUsage(stepStart, time.Since(stepStart), usage, textBuf.String(), req.Messages)
+	p.recordUsage(stepStart, time.Since(stepStart), usage, textBuf.String(), msgs)
+	return ProviderResponse{Content: textBuf.String(), ToolCalls: toolCalls}, nil
+}
+
+func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.Time, msgs []ModelMessage) (ProviderResponse, error) {
+	sc := bufio.NewScanner(io.LimitReader(r, 4<<20))
+	sc.Buffer(make([]byte, 0, 64<<10), 512<<10)
+
+	type blockAcc struct {
+		typ       string
+		id        string
+		name      string
+		text      strings.Builder
+		thinking  strings.Builder
+		signature strings.Builder
+		inputJSON strings.Builder
+		data      string
+	}
+	var (
+		blocks       = map[int]*blockAcc{}
+		blockOrder   []int
+		textBuf      strings.Builder
+		firstTokenAt time.Time
+		usage        openAIUsage
+		hasUsage     bool
+	)
+
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var ev struct {
+			Type    string `json:"type"`
+			Index   int    `json:"index"`
+			Message *struct {
+				Usage *struct {
+					InputTokens              int64 `json:"input_tokens"`
+					CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+					CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+			ContentBlock *struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+				Name string `json:"name"`
+				Data string `json:"data"`
+			} `json:"content_block"`
+			Delta *struct {
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				Thinking    string `json:"thinking"`
+				Signature   string `json:"signature"`
+				PartialJSON string `json:"partial_json"`
+			} `json:"delta"`
+			Usage *struct {
+				OutputTokens int64 `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+			continue
+		}
+		switch ev.Type {
+		case "error":
+			return ProviderResponse{}, problem.New(problem.Unavailable, "The model stream returned an error.")
+		case "message_start":
+			if ev.Message != nil && ev.Message.Usage != nil {
+				hasUsage = true
+				u := ev.Message.Usage
+				usage.PromptTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+				usage.PromptTokensDetails.CachedTokens = u.CacheReadInputTokens
+			}
+		case "content_block_start":
+			if ev.ContentBlock != nil {
+				acc := &blockAcc{
+					typ:  ev.ContentBlock.Type,
+					id:   ev.ContentBlock.ID,
+					name: ev.ContentBlock.Name,
+					data: ev.ContentBlock.Data,
+				}
+				if _, exists := blocks[ev.Index]; !exists {
+					blockOrder = append(blockOrder, ev.Index)
+				}
+				blocks[ev.Index] = acc
+			}
+		case "content_block_delta":
+			if ev.Delta == nil {
+				continue
+			}
+			acc := blocks[ev.Index]
+			if acc == nil {
+				acc = &blockAcc{}
+				blocks[ev.Index] = acc
+				blockOrder = append(blockOrder, ev.Index)
+			}
+			switch ev.Delta.Type {
+			case "thinking_delta":
+				if ev.Delta.Thinking != "" {
+					if firstTokenAt.IsZero() {
+						firstTokenAt = time.Now()
+					}
+					acc.thinking.WriteString(ev.Delta.Thinking)
+					_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": ev.Delta.Thinking})
+				}
+			case "signature_delta":
+				acc.signature.WriteString(ev.Delta.Signature)
+			case "text_delta":
+				if ev.Delta.Text != "" {
+					if firstTokenAt.IsZero() {
+						firstTokenAt = time.Now()
+					}
+					acc.text.WriteString(ev.Delta.Text)
+					textBuf.WriteString(ev.Delta.Text)
+					if p.emit != nil {
+						p.streamedDelta = true
+						_ = p.emit(Event{Type: EventMessageDelta, Delta: ev.Delta.Text})
+					}
+				}
+			case "input_json_delta":
+				acc.inputJSON.WriteString(ev.Delta.PartialJSON)
+			}
+		case "message_delta":
+			if ev.Usage != nil {
+				hasUsage = true
+				usage.CompletionTokens = ev.Usage.OutputTokens
+				usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return ProviderResponse{}, problem.New(problem.Unavailable, "The model stream was interrupted before completion.")
+	}
+
+	recorded := make([]AnthropicResponseContentBlock, 0, len(blockOrder))
+	var toolCalls []ModelToolCall
+	for _, idx := range blockOrder {
+		acc := blocks[idx]
+		blk := AnthropicResponseContentBlock{
+			Type:      acc.typ,
+			ID:        acc.id,
+			Name:      acc.name,
+			Text:      acc.text.String(),
+			Thinking:  acc.thinking.String(),
+			Signature: acc.signature.String(),
+			Data:      acc.data,
+		}
+		if acc.typ == "tool_use" {
+			rawInput := strings.TrimSpace(acc.inputJSON.String())
+			if rawInput == "" {
+				rawInput = "{}"
+			}
+			blk.Input = json.RawMessage(rawInput)
+			toolCalls = append(toolCalls, ModelToolCall{
+				CallID: acc.id, Name: acc.name, Arguments: blk.Input,
+			})
+		}
+		recorded = append(recorded, blk)
+	}
+	p.thinkingKeeper.RecordAssistantTurn(recorded)
+
+	ttft := time.Since(stepStart)
+	if !firstTokenAt.IsZero() {
+		ttft = firstTokenAt.Sub(stepStart)
+	}
+	var usagePtr *openAIUsage
+	if hasUsage {
+		usagePtr = &usage
+	}
+	p.recordUsage(stepStart, ttft, usagePtr, textBuf.String(), msgs)
 	return ProviderResponse{Content: textBuf.String(), ToolCalls: toolCalls}, nil
 }

@@ -310,12 +310,15 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 		if e.Delta == "" {
 			return nil
 		}
-		b := rt.deltaLocked(e.MessageID)
-		if b == nil {
-			e.MessageID = s.ids.New(messagePrefix)
+		if e.MessageID == "" {
+			if rt.currentMessage == "" {
+				rt.currentMessage = s.ids.New(messagePrefix)
+			}
+			e.MessageID = rt.currentMessage
+		} else if rt.currentMessage == "" {
 			rt.currentMessage = e.MessageID
-			b = rt.deltaLocked(e.MessageID)
 		}
+		b := rt.deltaLocked(e.MessageID)
 		remain := maxAssistantBytes - b.Len()
 		if remain <= 0 {
 			return nil
@@ -346,12 +349,28 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 			}
 		}
 		var content string
-		if b := rt.deltaLocked(e.MessageID); b != nil {
+		var streamed bool
+		if b := rt.delta[e.MessageID]; b != nil {
 			content = b.String()
+			streamed = content != ""
 			delete(rt.delta, e.MessageID)
 		}
-		if content == "" {
+		if !streamed {
 			content = clipText(e.Delta, maxAssistantBytes)
+		} else if e.Delta == "" || e.Delta == content {
+			// Deltas were already streamed to live SSE subscribers; strip
+			// duplicate full text from the completion frame so clients don't
+			// append the entire message a second time.
+			e.Delta = ""
+		} else {
+			remain := maxAssistantBytes - len(content)
+			if remain > 0 {
+				tail := clipText(e.Delta, remain)
+				content += tail
+				e.Delta = tail
+			} else {
+				e.Delta = ""
+			}
 		}
 		msg := &Message{
 			SessionID: rt.session.ID, Seq: e.Seq, MessageID: e.MessageID, Role: RoleAssistant, Content: content, CreatedAt: e.At,
@@ -369,7 +388,9 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 		if _, err := s.insertMessage(ctx, owner, msg, rt.session.Status, s.cfg.RetainMessages); err != nil {
 			return err
 		}
-		rt.currentMessage = ""
+		if rt.currentMessage == e.MessageID {
+			rt.currentMessage = ""
+		}
 		rt.lastAssistant = e.MessageID
 	case EventToolCall:
 		if e.CallID == "" {

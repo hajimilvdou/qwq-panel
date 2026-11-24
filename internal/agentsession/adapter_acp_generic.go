@@ -199,7 +199,6 @@ func (c *GenericACPCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 
 	var (
 		textBuf strings.Builder
-		msgID   = string(c.name) + "_msg_" + turn.SessionID
 		startAt = time.Now()
 		firstAt time.Time
 		tele    = TelemetrySnapshot{Turns: 1, Steps: 1, Context: ContextBreakdown{MaxTokens: 200_000}}
@@ -239,11 +238,11 @@ func (c *GenericACPCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 						tele.TTFTMS = firstAt.Sub(startAt).Milliseconds()
 					}
 					textBuf.WriteString(u.Content.Text)
-					return emit(Event{Type: EventMessageDelta, SessionID: turn.SessionID, MessageID: msgID, Delta: u.Content.Text})
+					return emit(Event{Type: EventMessageDelta, SessionID: turn.SessionID, Delta: u.Content.Text})
 				}
 			case "agent_thought_chunk":
 				if u.Content.Text != "" {
-					return emitExtended(emit, EventReasoningDelta, map[string]string{"message_id": msgID, "delta": u.Content.Text})
+					return emitExtended(emit, EventReasoningDelta, map[string]string{"delta": u.Content.Text})
 				}
 			case "plan":
 				items := make([]PlanItem, 0, len(u.Entries))
@@ -385,7 +384,7 @@ func (c *GenericACPCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 	}
 
 	if textBuf.Len() > 0 {
-		_ = emit(Event{Type: EventMessageCompleted, SessionID: turn.SessionID, MessageID: msgID, Delta: textBuf.String()})
+		_ = emit(Event{Type: EventMessageCompleted, SessionID: turn.SessionID})
 	}
 	tele.ModelMS = time.Since(startAt).Milliseconds()
 	tele.ComputeDerived()

@@ -129,15 +129,30 @@ export function reduce(s: TranscriptState, e: AgentSessionEvent, now = Date.now(
     else if (create) next.items = [...next.items, { ...create, ...patch }];
   };
 
+  const closeReasoning = () => {
+    if (next.items.some((x) => x.kind === 'reasoning' && x.streaming)) {
+      next.items = next.items.map((x) => (x.kind === 'reasoning' && x.streaming ? { ...x, streaming: false } : x));
+    }
+  };
+
   switch (e.type) {
     case 'message.delta':
     case 'message.completed': {
-      const id = e.message_id ?? `m${e.seq}`;
-      const i = findLast(next.items, (x) => x.kind === 'assistant' && x.id === id);
+      closeReasoning();
       const streaming = e.type === 'message.delta';
+      const hasId = typeof e.message_id === 'string' && e.message_id.length > 0;
+      const id = hasId ? e.message_id! : `m${e.seq}`;
+      let i = hasId ? findLast(next.items, (x) => x.kind === 'assistant' && x.id === id) : -1;
+      /* 防御：若后端/适配器未带 message_id，合并到当前正在流式输出的助手气泡，绝不按单字拆屏 */
+      if (i < 0 && !hasId) {
+        i = findLast(next.items, (x) => x.kind === 'assistant' && x.streaming);
+      }
       if (i >= 0) {
         const cur = next.items[i] as Extract<TranscriptItem, { kind: 'assistant' }>;
-        next.items = replaceAt(next.items, i, { ...cur, text: cur.text + (e.delta ?? ''), streaming });
+        const delta = e.delta ?? '';
+        /* 防御：completed 携带整段重复全文时不二次拼接 */
+        const nextText = !streaming && delta !== '' && delta === cur.text ? cur.text : cur.text + delta;
+        next.items = replaceAt(next.items, i, { ...cur, text: nextText, streaming });
       } else if (e.delta) {
         next.items = [...next.items, { kind: 'assistant', id, text: e.delta, at, streaming }];
       }
@@ -145,6 +160,7 @@ export function reduce(s: TranscriptState, e: AgentSessionEvent, now = Date.now(
       break;
     }
     case 'tool_call':
+      closeReasoning();
       patchTool(
         (t) => t.id === e.call_id,
         { status: 'running', risk: e.risk },

@@ -44,6 +44,18 @@ describe('transcript', () => {
     expect(s.seq).toBe(3);
   });
 
+  it('无 message_id 增量自动合并至同气泡；completed 重复全文不翻倍；正文开始时收起思考态', () => {
+    const s = run(empty(), [
+      ev(1, { type: 'reasoning.delta' as AgentSessionEvent['type'], delta: '思考中' }),
+      ev(2, { type: 'message.delta', delta: '签名' }),
+      ev(3, { type: 'message.delta', delta: '校验' }),
+      ev(4, { type: 'message.completed', delta: '签名校验' }),
+    ]);
+    expect(s.items).toHaveLength(2);
+    expect(s.items[0]).toMatchObject({ kind: 'reasoning', text: '思考中', streaming: false });
+    expect(s.items[1]).toMatchObject({ kind: 'assistant', text: '签名校验', streaming: false });
+  });
+
   it('审批时序：tool_call → approval_required → approval_decided → tool_result → turn.completed', () => {
     let s = run(empty(), [
       ev(1, { type: 'tool_call', call_id: 'c1', action: 'sec/fw', risk: 'high' }),

@@ -484,6 +484,11 @@ func (b *runtimePluginConfigBackend) PutPluginConfig(ctx context.Context, target
 	if triggerApply && deps.Ops != nil && deps.Catalog != nil {
 		if _, ok := deps.Catalog.Get(targetPluginID + "/core.apply"); ok {
 			shouldApply = true
+		} else {
+			if len(extracted) > 0 && deps.Secrets != nil {
+				_ = deps.Secrets.DiscardExtracted(ctx, extracted)
+			}
+			return "", "", problem.New(problem.PluginUnavailable, "目标核心插件 %s 尚未安装或未启用", targetPluginID)
 		}
 	}
 
@@ -546,10 +551,34 @@ func (b *runtimePluginConfigBackend) PutPluginConfig(ctx context.Context, target
 		}
 		if resp != nil && resp.Operation != nil {
 			applyOpID = strings.TrimSpace(resp.Operation.ID)
-			if resp.Operation.Status == operations.Failed || resp.Operation.Status == operations.Rejected {
+			finalOp := resp.Operation
+			// core.apply 为异步 mode="job"：短暂轮询至终态，让上游调用立即获知真实启动结果或报错细节。
+			if applyOpID != "" && !isTerminalOperationStatus(finalOp.Status) {
+				waitCtx, cancelWait := context.WithTimeout(ctx, 12*time.Second)
+				ticker := time.NewTicker(150 * time.Millisecond)
+				sysActor := actor.SystemActor("pluginconfig")
+			waitLoop:
+				for {
+					select {
+					case <-waitCtx.Done():
+						break waitLoop
+					case <-ticker.C:
+						if cur, gerr := deps.Ops.Get(waitCtx, sysActor, applyOpID); gerr == nil && cur != nil {
+							finalOp = cur
+							if isTerminalOperationStatus(cur.Status) {
+								break waitLoop
+							}
+						}
+					}
+				}
+				ticker.Stop()
+				cancelWait()
+			}
+			if finalOp.Status == operations.Failed || finalOp.Status == operations.Rejected ||
+				finalOp.Status == operations.Canceled || finalOp.Status == operations.Expired {
 				msg := "core.apply failed"
-				if resp.Operation.Error != nil && resp.Operation.Error.Detail != "" {
-					msg = resp.Operation.Error.Detail
+				if finalOp.Error != nil && finalOp.Error.Detail != "" {
+					msg = finalOp.Error.Detail
 				}
 				return revStr, applyOpID, problem.New(problem.PluginUnavailable, "%s", msg)
 			}
@@ -557,4 +586,13 @@ func (b *runtimePluginConfigBackend) PutPluginConfig(ctx context.Context, target
 	}
 
 	return revStr, applyOpID, nil
+}
+
+func isTerminalOperationStatus(s operations.Status) bool {
+	switch s {
+	case operations.Succeeded, operations.Failed, operations.Canceled, operations.Rejected, operations.Expired:
+		return true
+	default:
+		return false
+	}
 }

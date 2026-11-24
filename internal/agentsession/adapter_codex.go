@@ -236,7 +236,6 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 	var (
 		turnDone = make(chan error, 1)
 		textBuf  strings.Builder
-		msgID    = "codex_msg_" + turn.SessionID
 		startAt  = time.Now()
 		firstAt  time.Time
 		tele     = TelemetrySnapshot{Turns: 1, Steps: 1, Context: ContextBreakdown{MaxTokens: maxCtx}}
@@ -254,7 +253,7 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 					tele.TTFTMS = firstAt.Sub(startAt).Milliseconds()
 				}
 				textBuf.WriteString(p.Delta)
-				return emit(Event{Type: EventMessageDelta, SessionID: turn.SessionID, MessageID: msgID, Delta: p.Delta})
+				return emit(Event{Type: EventMessageDelta, SessionID: turn.SessionID, Delta: p.Delta})
 			}
 
 		case "item/reasoning/delta":
@@ -266,7 +265,7 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 					firstAt = time.Now()
 					tele.TTFTMS = firstAt.Sub(startAt).Milliseconds()
 				}
-				return emitExtended(emit, EventReasoningDelta, map[string]string{"message_id": msgID, "delta": p.Delta})
+				return emitExtended(emit, EventReasoningDelta, map[string]string{"delta": p.Delta})
 			}
 
 		case "turn/plan/updated":
@@ -359,7 +358,7 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 			}
 			_ = json.Unmarshal(params, &p)
 			if textBuf.Len() > 0 {
-				_ = emit(Event{Type: EventMessageCompleted, SessionID: turn.SessionID, MessageID: msgID, Delta: textBuf.String()})
+				_ = emit(Event{Type: EventMessageCompleted, SessionID: turn.SessionID})
 			}
 			if strings.EqualFold(p.Status, "failed") {
 				select {

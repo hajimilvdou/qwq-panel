@@ -292,7 +292,6 @@ func (c *OpenCodeCore) consumeOpenCodeSSE(
 		startAt = time.Now()
 		firstAt time.Time
 		textBuf strings.Builder
-		msgID   = "oc_msg_" + qwqSessionID
 		tele    = TelemetrySnapshot{Turns: 1, Context: ContextBreakdown{MaxTokens: 200_000}}
 	)
 
@@ -368,7 +367,7 @@ func (c *OpenCodeCore) consumeOpenCodeSSE(
 						tele.TTFTMS = firstAt.Sub(startAt).Milliseconds()
 					}
 					textBuf.WriteString(delta)
-					if err := emit(Event{Type: EventMessageDelta, SessionID: qwqSessionID, MessageID: msgID, Delta: delta}); err != nil {
+					if err := emit(Event{Type: EventMessageDelta, SessionID: qwqSessionID, Delta: delta}); err != nil {
 						return err
 					}
 				}
@@ -378,7 +377,7 @@ func (c *OpenCodeCore) consumeOpenCodeSSE(
 					delta = p.Part.Text
 				}
 				if delta != "" {
-					_ = emitExtended(emit, EventReasoningDelta, map[string]string{"message_id": msgID, "delta": delta})
+					_ = emitExtended(emit, EventReasoningDelta, map[string]string{"delta": delta})
 				}
 			case "tool":
 				callID := p.Part.CallID
@@ -444,7 +443,7 @@ func (c *OpenCodeCore) consumeOpenCodeSSE(
 
 		case "session.idle":
 			if textBuf.Len() > 0 {
-				_ = emit(Event{Type: EventMessageCompleted, SessionID: qwqSessionID, MessageID: msgID, Delta: textBuf.String()})
+				_ = emit(Event{Type: EventMessageCompleted, SessionID: qwqSessionID})
 			}
 			return nil
 
@@ -509,6 +508,7 @@ func (c *OpenCodeCore) runCLIJSON(ctx context.Context, cfg OpenCodeConfig, turn 
 
 	sc := bufio.NewScanner(proc.Stdout())
 	sc.Buffer(make([]byte, 0, 64<<10), maxCLILine)
+	emittedText := false
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 {
@@ -525,12 +525,19 @@ func (c *OpenCodeCore) runCLIJSON(ctx context.Context, cfg OpenCodeConfig, turn 
 			continue
 		}
 		if ev.Type == "text" && ev.Part.Text != "" {
+			emittedText = true
 			if err := emit(Event{Type: EventMessageDelta, SessionID: turn.SessionID, Delta: ev.Part.Text}); err != nil {
 				return err
 			}
 		}
 	}
-	return sc.Err()
+	if err := sc.Err(); err != nil {
+		return err
+	}
+	if emittedText {
+		_ = emit(Event{Type: EventMessageCompleted, SessionID: turn.SessionID})
+	}
+	return nil
 }
 
 func (c *OpenCodeCore) doJSON(ctx context.Context, method, url string, body any, out any) error {

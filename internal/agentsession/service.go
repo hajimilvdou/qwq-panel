@@ -70,16 +70,16 @@ func (c Config) withDefaults() Config {
 		c.MaxHistory = 40
 	}
 	if c.RingSize <= 0 || c.RingSize > maxEventRing {
-		c.RingSize = 256
+		c.RingSize = maxEventRing
 	}
 	if c.SubscriberBuffer <= 0 {
-		c.SubscriberBuffer = 256
+		c.SubscriberBuffer = 1024
 	}
 	if c.Heartbeat <= 0 {
 		c.Heartbeat = 15 * time.Second
 	}
 	if c.TurnTimeout <= 0 {
-		c.TurnTimeout = 2 * time.Minute
+		c.TurnTimeout = 5 * time.Minute
 	}
 	if c.ListLimit <= 0 {
 		c.ListLimit = 50
@@ -1097,6 +1097,9 @@ func (s *Service) runTurn(turnCtx context.Context, rt *sessionRuntime) {
 	// must still record the outcome.
 	finishCtx := context.WithoutCancel(turnCtx)
 	waiting := errors.Is(err, ErrWaitingApproval)
+	if !waiting {
+		s.flushPendingAssistant(finishCtx, rt)
+	}
 	switch {
 	case waiting:
 		// A withdrawal that won the race has already closed the turn.
@@ -1437,6 +1440,26 @@ func (s *Service) emit(ctx context.Context, rt *sessionRuntime, e Event) error {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	return s.publishLocked(ctx, rt, e)
+}
+
+// flushPendingAssistant persists any streamed assistant deltas that were not
+// yet closed by EventMessageCompleted (for instance on user cancel, mid-stream
+// error, or a core that only emitted deltas), so partial output survives reload.
+func (s *Service) flushPendingAssistant(ctx context.Context, rt *sessionRuntime) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.closed || rt.currentMessage == "" {
+		return
+	}
+	b := rt.delta[rt.currentMessage]
+	if b == nil || b.Len() == 0 {
+		rt.currentMessage = ""
+		return
+	}
+	_ = s.publishLocked(ctx, rt, Event{
+		Type:      EventMessageCompleted,
+		MessageID: rt.currentMessage,
+	})
 }
 
 // pendingSnapshot returns the pending approval, if any.

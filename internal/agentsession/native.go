@@ -24,7 +24,7 @@ import (
 
 // Defaults of the built-in native core.
 const (
-	defaultModelTimeout = 60 * time.Second
+	defaultModelTimeout = 120 * time.Second
 	maxModelTimeout     = 300 * time.Second
 	defaultMaxSteps     = 8
 	maxModelResponse    = 1 << 20

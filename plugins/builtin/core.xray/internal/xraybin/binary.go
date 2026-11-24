@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -21,8 +22,23 @@ import (
 	"github.com/qwq-panel/qwq/sdk/manifest"
 )
 
-// PinnedDigest 来自 X0 三方核验的 v26.11.9 发布二进制；升级必须重新完成供应链门禁。
-const PinnedDigest = "e87bce586acdb9136aa5b1f1d9c8db9f1ea1d145b6d86368c7f6f662f9f6a66d"
+// PinnedDigest 来自 X0 三方核验的 v26.11.9 发布二进制（linux/amd64）；升级必须重新完成供应链门禁。
+const (
+	PinnedDigest      = "e87bce586acdb9136aa5b1f1d9c8db9f1ea1d145b6d86368c7f6f662f9f6a66d"
+	PinnedDigestARM64 = "c2d1e66a130556d32089adcf38202fcb6f9027e41fb456cc2cda9a5fabdc093a"
+)
+
+// PinnedDigestFor 返回受信任官方目标架构（linux/amd64、linux/arm64）对应的锁定 Xray 核心摘要。
+func PinnedDigestFor(target string) (string, bool) {
+	switch target {
+	case "linux/amd64":
+		return PinnedDigest, true
+	case "linux/arm64":
+		return PinnedDigestARM64, true
+	default:
+		return "", false
+	}
+}
 
 var (
 	ErrBinary    = errors.New("xraybin: packaged binary is not trusted")
@@ -39,10 +55,19 @@ func Locate() (*Binary, error) {
 	if err != nil {
 		return nil, ErrBinary
 	}
-	return locate(executable, PinnedDigest, sandbox.TrustPolicy{})
+	target := "linux/" + runtime.GOARCH
+	digest, ok := PinnedDigestFor(target)
+	if !ok {
+		return nil, ErrBinary
+	}
+	return locateForTarget(executable, target, digest, sandbox.TrustPolicy{})
 }
 
 func locate(executable, digest string, trust sandbox.TrustPolicy) (*Binary, error) {
+	return locateForTarget(executable, "linux/amd64", digest, trust)
+}
+
+func locateForTarget(executable, target, digest string, trust sandbox.TrustPolicy) (*Binary, error) {
 	if !filepath.IsAbs(executable) || filepath.Base(executable) != "plugin" || filepath.Base(filepath.Dir(executable)) != "bin" {
 		return nil, ErrBinary
 	}
@@ -77,7 +102,7 @@ func locate(executable, digest string, trust sandbox.TrustPolicy) (*Binary, erro
 		return nil, ErrBinary
 	}
 	m, err := manifest.Parse(raw)
-	if err != nil || m.ID != "core.xray" || m.Entrypoint != "bin/plugin" || m.Target != "linux/amd64" || m.Files["bin/xray"] != "sha256:"+digest {
+	if err != nil || m.ID != "core.xray" || m.Entrypoint != "bin/plugin" || m.Target != target || m.Files["bin/xray"] != "sha256:"+digest {
 		return nil, ErrBinary
 	}
 	f, err = openRegular(r, "bin/xray", trust.UID, 128<<20, true)

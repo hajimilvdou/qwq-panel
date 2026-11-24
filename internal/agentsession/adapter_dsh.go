@@ -193,6 +193,7 @@ func (c *DSHCore) runHeadless(ctx context.Context, cfg DSHConfig, turn Turn, emi
 	sc := bufio.NewScanner(proc.Stdout())
 	sc.Buffer(make([]byte, 0, 64<<10), maxCLILine)
 	events := 0
+	emittedText := false
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 {
@@ -212,8 +213,11 @@ func (c *DSHCore) runHeadless(ctx context.Context, cfg DSHConfig, turn Turn, emi
 		}
 		switch strings.ToLower(ev.Type) {
 		case "delta", "message.delta":
-			if err := emit(Event{Type: EventMessageDelta, SessionID: turn.SessionID, Delta: ev.Delta}); err != nil {
-				return err
+			if ev.Delta != "" {
+				emittedText = true
+				if err := emit(Event{Type: EventMessageDelta, SessionID: turn.SessionID, Delta: ev.Delta}); err != nil {
+					return err
+				}
 			}
 		case "reasoning", "reasoning.delta":
 			_ = emitExtended(emit, EventReasoningDelta, map[string]string{"delta": ev.Delta})
@@ -226,5 +230,11 @@ func (c *DSHCore) runHeadless(ctx context.Context, cfg DSHConfig, turn Turn, emi
 			}
 		}
 	}
-	return sc.Err()
+	if err := sc.Err(); err != nil {
+		return err
+	}
+	if emittedText {
+		_ = emit(Event{Type: EventMessageCompleted, SessionID: turn.SessionID})
+	}
+	return nil
 }

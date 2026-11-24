@@ -420,6 +420,14 @@ func buildCatalogItemsFromIndex(
 				deps = append(deps, d)
 			}
 		}
+		if len(deps) == 0 {
+			for _, def := range officialCatalogDefaults {
+				if def.ID == pid && len(def.Dependencies) > 0 {
+					deps = append(deps, def.Dependencies...)
+					break
+				}
+			}
+		}
 		name := strings.TrimSpace(rec.Name)
 		if name == "" {
 			name = pid

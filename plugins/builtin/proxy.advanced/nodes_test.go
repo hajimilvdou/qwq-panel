@@ -537,3 +537,24 @@ func TestNodesEncryptionRedactionMultiProfileSyncAndBrutalPPV2(t *testing.T) {
 		t.Fatalf("ListBrutalBindings 未持久化 proxy_protocol_v2: %+v err=%v", listBrutal, err)
 	}
 }
+
+func TestNormalizeRealityPrivateKeyFromXUIStandardBase64(t *testing.T) {
+	// 32-byte key whose standard base64 contains '+', '/', and '=' padding.
+	raw := make([]byte, 32)
+	for i := range raw {
+		raw[i] = byte(0xfb - i)
+	}
+	stdPadded := base64.StdEncoding.EncodeToString(raw)
+	wantRawURL := base64.RawURLEncoding.EncodeToString(raw)
+
+	cfg := nodeConfig{PrivateKey: stdPadded}
+	if err := fillRealityDefaults(&cfg); err != nil {
+		t.Fatalf("fillRealityDefaults(std base64) failed: %v", err)
+	}
+	if cfg.PrivateKey != wantRawURL {
+		t.Fatalf("PrivateKey = %q, want canonical RawURLEncoding %q", cfg.PrivateKey, wantRawURL)
+	}
+	if cfg.PublicKey == "" {
+		t.Fatal("expected derived Reality PublicKey")
+	}
+}

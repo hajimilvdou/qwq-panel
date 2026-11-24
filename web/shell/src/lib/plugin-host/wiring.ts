@@ -439,7 +439,14 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
     subscribe: (fn) => {
       const relay = (e: { type: string; subject: string; occurred_at: string; payload: Record<string, unknown> }) =>
         fn({ type: e.type, subject: e.subject, occurred_at: e.occurred_at, payload: e.payload });
-      const offs = [events.on('resource.changed', relay), events.on('plugin.*', relay)];
+      const offs = [
+        events.on('resource.changed', relay),
+        events.on('plugin.*', relay),
+        events.on('operation.updated', (e) => {
+          const st = (e.payload as { status?: string } | undefined)?.status;
+          if (st && TERMINAL.has(st as 'SUCCEEDED')) relay(e);
+        }),
+      ];
       return () => offs.forEach((off) => off());
     },
     newKey: newIdempotencyKey,

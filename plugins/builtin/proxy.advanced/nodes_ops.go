@@ -455,12 +455,16 @@ func fillRealityDefaults(cfg *nodeConfig) error {
 		}
 		cfg.PrivateKey = priv
 		cfg.PublicKey = pub
-	} else if cfg.PublicKey == "" {
-		pub, err := deriveRealityPubKey(cfg.PrivateKey)
+	} else {
+		// 统一归一化为 RawURLEncoding，兼容直接粘贴 x-ui / 3x-ui 的标准 Base64 私钥并自动推导公钥。
+		normPriv, pub, err := normalizeRealityPrivateKey(cfg.PrivateKey)
 		if err != nil {
 			return err
 		}
-		cfg.PublicKey = pub
+		cfg.PrivateKey = normPriv
+		if cfg.PublicKey == "" {
+			cfg.PublicKey = pub
+		}
 	}
 	if cfg.ShortID == "" {
 		cfg.ShortID = generateShortIDHex(4)
@@ -1045,6 +1049,15 @@ func (i *instance) trySyncManagedNodesToCore(ctx context.Context, host *pluginsd
 		TargetPluginId: "core.xray",
 	})
 	if err != nil || protoError(getResp.GetError()) != nil {
+		reason := ""
+		if pErr := protoError(getResp.GetError()); pErr != nil {
+			reason = pErr.Error()
+		} else if err != nil {
+			reason = err.Error()
+		}
+		if reason != "" {
+			return false, "", "读取 core.xray 当前配置失败，节点已持久化至本地：" + reason
+		}
 		return false, "", "读取 core.xray 当前配置失败，节点已持久化至本地"
 	}
 
@@ -1174,6 +1187,15 @@ func (i *instance) trySyncManagedNodesToCore(ctx context.Context, host *pluginsd
 		TriggerApply:     true,
 	})
 	if err != nil || protoError(putResp.GetError()) != nil {
+		reason := ""
+		if pErr := protoError(putResp.GetError()); pErr != nil {
+			reason = pErr.Error()
+		} else if err != nil {
+			reason = err.Error()
+		}
+		if reason != "" {
+			return false, "", "节点已保存本地，但同步至 core.xray 失败：" + reason
+		}
 		return false, "", "节点已保存本地，同步至 core.xray 时被拒绝"
 	}
 	note := ""

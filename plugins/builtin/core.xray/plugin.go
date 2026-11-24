@@ -24,8 +24,11 @@ var manifestJSON []byte
 // Manifest 返回独立副本，避免调用方修改嵌入的描述符。
 func Manifest() []byte { return append([]byte(nil), manifestJSON...) }
 
-// packageVersion 与编译器嵌入的 manifest 共用身份，更新包不会保留旧版本字符串。
+// packageVersion 与编译器嵌入的 manifest 共用身份；发布构建可通过 BuildVersion 注入。
 var packageVersion = sync.OnceValues(func() (string, error) {
+	if pluginsdk.BuildVersion != "" {
+		return pluginsdk.BuildVersion, nil
+	}
 	parsed, err := manifest.Parse(Manifest())
 	if err != nil {
 		return "", pluginsdk.Errorf("INVALID_MANIFEST", "驱动包身份无效")

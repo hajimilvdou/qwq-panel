@@ -152,3 +152,63 @@ func TestOutputBoundContinuesDraining(t *testing.T) {
 		t.Fatal("output memory or draining bound broken")
 	}
 }
+
+func TestLocatorSupportsARM64AndRejectsTargetMismatch(t *testing.T) {
+	if got, ok := PinnedDigestFor("linux/amd64"); !ok || got != PinnedDigest {
+		t.Fatalf("PinnedDigestFor(linux/amd64) = %q, %v", got, ok)
+	}
+	if got, ok := PinnedDigestFor("linux/arm64"); !ok || got != PinnedDigestARM64 {
+		t.Fatalf("PinnedDigestFor(linux/arm64) = %q, %v", got, ok)
+	}
+	if _, ok := PinnedDigestFor("linux/386"); ok {
+		t.Fatal("unsupported target accepted")
+	}
+
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.Mkdir(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "plugin"), []byte("fixture"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "xray"), []byte(script), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("../../manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifest.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(script))
+	digest := hex.EncodeToString(sum[:])
+	m.Target = "linux/arm64"
+	m.Files["bin/xray"] = "sha256:" + digest
+	encoded, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "manifest.json"), encoded, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bin, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700); _ = os.Chmod(bin, 0o700) })
+
+	trust := sandbox.TrustPolicy{UID: os.Geteuid(), StopAt: root}
+	executable := filepath.Join(bin, "plugin")
+	if _, err := locateForTarget(executable, "linux/arm64", digest, trust); err != nil {
+		t.Fatalf("arm64 target rejected: %v", err)
+	}
+	if _, err := locateForTarget(executable, "linux/amd64", digest, trust); err != ErrBinary {
+		t.Fatalf("mismatched target accepted: %v", err)
+	}
+}

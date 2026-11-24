@@ -132,24 +132,32 @@ func generateRealityKeyPair() (privRawURL, pubRawURL string, err error) {
 	return base64.RawURLEncoding.EncodeToString(privBytes), base64.RawURLEncoding.EncodeToString(pubBytes), nil
 }
 
-func deriveRealityPubKey(privEncoded string) (string, error) {
+func normalizeRealityPrivateKey(privEncoded string) (privRawURL, pubRawURL string, err error) {
 	trimmed := strings.TrimSpace(privEncoded)
-	raw, err := base64.RawURLEncoding.DecodeString(trimmed)
-	if err != nil {
-		raw, err = base64.StdEncoding.DecodeString(trimmed)
-		if err != nil {
-			return "", pluginsdk.Errorf("INVALID_ARGUMENT", "Reality 私钥必须是合法 Base64 编码")
+	var raw []byte
+	for _, enc := range []*base64.Encoding{
+		base64.RawURLEncoding,
+		base64.URLEncoding,
+		base64.RawStdEncoding,
+		base64.StdEncoding,
+	} {
+		if decoded, derr := enc.DecodeString(trimmed); derr == nil {
+			raw = decoded
+			break
 		}
+	}
+	if raw == nil {
+		return "", "", pluginsdk.Errorf("INVALID_ARGUMENT", "Reality 私钥必须是合法 Base64 编码")
 	}
 	defer clear(raw)
 	if len(raw) != 32 {
-		return "", pluginsdk.Errorf("INVALID_ARGUMENT", "Reality 私钥必须为 32 字节")
+		return "", "", pluginsdk.Errorf("INVALID_ARGUMENT", "Reality 私钥必须为 32 字节")
 	}
 	priv, err := ecdh.X25519().NewPrivateKey(raw)
 	if err != nil {
-		return "", pluginsdk.Errorf("INVALID_ARGUMENT", "Reality X25519 私钥无效")
+		return "", "", pluginsdk.Errorf("INVALID_ARGUMENT", "Reality X25519 私钥无效")
 	}
-	return base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()), nil
+	return base64.RawURLEncoding.EncodeToString(raw), base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()), nil
 }
 
 func generateShortIDHex(byteLen int) string {

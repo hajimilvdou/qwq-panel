@@ -321,7 +321,7 @@ func ParseClaudeStreamJSON(ctx context.Context, r io.Reader, emit Emit) error {
 	start := time.Now()
 	var (
 		firstTokenAt time.Time
-		msgID        = "claude_msg_1"
+		msgID        string
 		emittedText  bool
 		telemetry    = TelemetrySnapshot{Turns: 1}
 	)

@@ -144,6 +144,9 @@ type ExtendedEventEnvelope struct {
 // running against an unmodified Event struct, ensuring zero-loss transport even
 // before types.go adds first-class fields.
 func emitExtended(emit Emit, typ string, payload any) error {
+	if emit == nil {
+		return nil
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return err
