@@ -123,7 +123,21 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 		_ = store.Close()
 		return nil, err
 	}
+	var (
+		dncCacheMu   sync.Mutex
+		dncCacheAt   time.Time
+		dncCacheCaps HostDNCCapabilities
+	)
 	domains := NewDomainBindingCoordinator(info.DataDir, sealingSecret, nil, func() HostDNCCapabilities {
+		now := time.Now()
+		dncCacheMu.Lock()
+		if !dncCacheAt.IsZero() && now.Sub(dncCacheAt) < 60*time.Second {
+			cached := dncCacheCaps
+			dncCacheMu.Unlock()
+			return cached
+		}
+		dncCacheMu.Unlock()
+
 		caps := HostDNCCapabilities{
 			RunningInPanel: true,
 		}
@@ -151,6 +165,10 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 		}); perr == nil && (resp.GetError() == nil || resp.GetError().GetCode() == "") {
 			caps.CertificatesPluginReady = true
 		}
+		dncCacheMu.Lock()
+		dncCacheCaps = caps
+		dncCacheAt = now
+		dncCacheMu.Unlock()
 		return caps
 	})
 	clear(sealingSecret)
@@ -918,8 +936,12 @@ func (i *instance) registerOperations() {
 		keyBytes := []byte(resolvedKey)
 		defer clear(keyBytes)
 
-		i.store.mu.Lock()
+		// Copy settings under RLock so ValidateAndApply (which probes DNC plugins
+		// over gRPC) never blocks store.mu write lock for seconds.
+		i.store.mu.RLock()
 		candidate := i.store.settings
+		i.store.mu.RUnlock()
+
 		candidate.DomainEnabled = true
 		candidate.CustomDomain = in.CustomDomain
 		candidate.BindingTrack = in.BindingTrack
@@ -928,10 +950,11 @@ func (i *instance) registerOperations() {
 		candidate.TrustCloudflareIPs = in.TrustCloudflareIPs
 		summary, err := i.domains.ValidateAndApply(time.Now(), &candidate, []byte(in.CertPEM), keyBytes)
 		if err != nil {
-			i.store.mu.Unlock()
 			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", err.Error())
 		}
-		candidate.Revision = nextRevision(candidate.Revision)
+
+		i.store.mu.Lock()
+		candidate.Revision = nextRevision(i.store.settings.Revision)
 		i.store.settings = candidate
 		i.store.mu.Unlock()
 		_ = i.store.PersistSettings(ctx, candidate)

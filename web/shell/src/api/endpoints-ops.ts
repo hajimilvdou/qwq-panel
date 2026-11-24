@@ -42,8 +42,13 @@ export const account = {
     http.patch<Mutating>('/api/v1/sessions/current/profile', body, { idempotency: key }).then(toOpResult),
   changePassword: (current_password: string, new_password: string, key: string) =>
     http.put<void>('/api/v1/sessions/current/password', { current_password, new_password }, { idempotency: key }),
-  beginTotp: (key: string) =>
-    http.post<TotpEnrollment>('/api/v1/sessions/current/mfa/totp', undefined, { idempotency: key }).then((r) => r.data),
+  beginTotp: (key: string, mfaCode?: string) =>
+    http
+      .post<TotpEnrollment>('/api/v1/sessions/current/mfa/totp', undefined, {
+        idempotency: key,
+        headers: mfaCode ? { 'X-QWQ-MFA-Code': mfaCode } : undefined,
+      })
+      .then((r) => r.data),
   confirmTotp: (code: string, key: string) =>
     http
       .post<TotpConfirmResult>('/api/v1/sessions/current/mfa/totp/confirm', { code }, { idempotency: key })

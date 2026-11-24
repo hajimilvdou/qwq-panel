@@ -4,6 +4,7 @@
   版本、运行角色、TLS 状态与指纹、面板入口安全设置（端口、密道、伪装页、反代域名自动免密道）。
 -->
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { Alert, Button, Card, Chip, CopyButton, Dialog, ErrorState, Input, OtpInput, Select, Skeleton, Switch } from '$ui';
   import type { DisguiseMode, PanelAccessSettings, PanelAccessUpdateRequest } from '$api/additions';
   import { system } from '$api/endpoints';
@@ -13,7 +14,18 @@
   import { session } from '$lib/session.svelte';
   import { toasts } from '$lib/toast.svelte';
 
-  const info = useResource({ key: 'system.info', load: () => system.info() });
+  let serverClockFetchedAt = $state(0);
+  const info = useResource({
+    key: 'system.info',
+    load: async () => {
+      const data = await system.info();
+      serverClockFetchedAt = Date.now();
+      return data;
+    },
+  });
+  onMount(() => {
+    void info.refresh();
+  });
   const isAdmin = $derived(session.user?.role === 'admin');
   const access = useResource<PanelAccessSettings | null>({
     key: 'system.access',
@@ -40,6 +52,11 @@
     { value: '::', label: '::（开放 IPv4 + IPv6 双栈公网直连）' },
   ];
 
+  const PROXY_LISTEN_OPTIONS: readonly { value: string; label: string }[] = [
+    { value: '127.0.0.1', label: '127.0.0.1（仅本机反向代理 / SSH 隧道，推荐）' },
+    { value: '::1', label: '::1（仅本机 IPv6 回环反向代理）' },
+  ];
+
   let listenHost = $state('127.0.0.1');
   let portText = $state('');
   let entryPath = $state('');
@@ -51,6 +68,7 @@
   let saving = $state(false);
   let saveError = $state('');
   let reboundUrl = $state('');
+  let reboundLoopbackWarning = $state(false);
 
   /* 两步验证弹窗状态（修改面板监听入口触发 MFA_REQUIRED 时弹出） */
   let mfaOpen = $state(false);
@@ -59,18 +77,20 @@
   let mfaErr = $state('');
   let pendingBody = $state<PanelAccessUpdateRequest | null>(null);
 
+  const isProxyTLS = $derived(access.data?.tls_mode === 'proxy');
   const listenOptions = $derived.by(() => {
-    if (BASE_LISTEN_OPTIONS.some((o) => o.value === listenHost) || !listenHost) return BASE_LISTEN_OPTIONS;
-    return [...BASE_LISTEN_OPTIONS, { value: listenHost, label: `${listenHost}（自定义网卡地址）` }];
+    const base = isProxyTLS ? PROXY_LISTEN_OPTIONS : BASE_LISTEN_OPTIONS;
+    if (base.some((o) => o.value === listenHost) || !listenHost) return base;
+    return [...base, { value: listenHost, label: `${listenHost}（自定义网卡地址）` }];
   });
 
-  /** 检测服务器时钟与本地浏览器偏差（>30s 时提示同步 NTP，防 TOTP 与 Reality 失灵） */
+  /** 检测服务器时钟与本地浏览器偏差（仅对比拉取瞬间时间戳，避免 60s 缓存误报） */
   const clockDriftSec = $derived.by(() => {
     const st = info.data?.server_time;
-    if (!st) return 0;
+    if (!st || !serverClockFetchedAt) return 0;
     const ms = Date.parse(st);
     if (!Number.isFinite(ms)) return 0;
-    return Math.round(Math.abs(ms - Date.now()) / 1000);
+    return Math.round(Math.abs(ms - serverClockFetchedAt) / 1000);
   });
 
   $effect(() => {
@@ -93,10 +113,16 @@
         access.data?.bypass_reason === 'public_origin'),
   );
 
+  function isLoopbackAddress(h: string): boolean {
+    const norm = h.trim().toLowerCase().replace(/^\[|\]$/g, '');
+    return norm === '127.0.0.1' || norm === '::1' || norm === 'localhost';
+  }
+
   function buildReboundPanelUrl(opts: {
     panelDomain: string;
     autoDisableOnDomain: boolean;
     listenHost: string;
+    tlsMode: string;
     port: number;
     effectiveEntryPath: string;
   }): string {
@@ -104,17 +130,23 @@
     const curProto = typeof location !== 'undefined' ? location.protocol : 'https:';
     const curHost = typeof location !== 'undefined' ? location.hostname : '';
     const curPort = typeof location !== 'undefined' ? location.port : '';
-    if (dom && curHost === dom && curPort === '') {
-      return opts.effectiveEntryPath && !opts.autoDisableOnDomain
-        ? `https://${dom}/${opts.effectiveEntryPath}`
-        : `https://${dom}/`;
+    // Reverse-proxy domain with auto-disable never exposes the internal panel port.
+    if (dom && opts.autoDisableOnDomain) {
+      return `https://${dom}/`;
     }
+    if (dom && curHost === dom && curPort === '') {
+      return opts.effectiveEntryPath ? `https://${dom}/${opts.effectiveEntryPath}` : `https://${dom}/`;
+    }
+    const targetProto = opts.tlsMode === 'proxy' ? 'http:' : curProto;
     let rawHost = dom || curHost || opts.listenHost || '127.0.0.1';
     if (rawHost === '0.0.0.0' || rawHost === '::') {
       rawHost = curHost || '127.0.0.1';
     }
+    if (isLoopbackAddress(opts.listenHost) && !dom) {
+      rawHost = opts.listenHost;
+    }
     const bracketedHost = rawHost.includes(':') && !rawHost.startsWith('[') ? `[${rawHost}]` : rawHost;
-    const base = `${curProto}//${bracketedHost}:${opts.port}`;
+    const base = `${targetProto}//${bracketedHost}:${opts.port}`;
     return opts.effectiveEntryPath ? `${base}/${opts.effectiveEntryPath}` : `${base}/`;
   }
 
@@ -165,10 +197,17 @@
       await Promise.all([access.refresh(), info.refresh()]);
       toasts.success(updated.port_changed ? `面板监听地址已热切换至 ${updated.listen}` : '面板入口与伪装设置已生效');
       if (updated.port_changed) {
+        const curHost = typeof location !== 'undefined' ? location.hostname : '';
+        reboundLoopbackWarning =
+          isLoopbackAddress(updated.listen_host) &&
+          Boolean(curHost) &&
+          !isLoopbackAddress(curHost) &&
+          !updated.panel_domain;
         reboundUrl = buildReboundPanelUrl({
           panelDomain: updated.panel_domain,
           autoDisableOnDomain: updated.auto_disable_on_domain,
           listenHost: updated.listen_host,
+          tlsMode: updated.tls_mode,
           port: updated.port,
           effectiveEntryPath: updated.effective_entry_path,
         });
@@ -183,7 +222,8 @@
           mfaCode = '';
           mfaErr = '';
         } else {
-          mfaErr = v.message || '两步验证码不正确或已过期，请重试';
+          mfaCode = '';
+          mfaErr = '两步验证码或恢复码不正确或已过期，请重试（刚开启两步验证请等下一个 30 秒新码）';
         }
       } else {
         mfaOpen = false;
@@ -199,6 +239,7 @@
     if (!access.data || saving) return;
     saveError = '';
     reboundUrl = '';
+    reboundLoopbackWarning = false;
     const parsedPort = Number.parseInt(portText.trim(), 10);
     if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
       saveError = '监听端口必须是 1 ~ 65535 之间的整数';
@@ -290,11 +331,18 @@
           {/if}
 
           {#if reboundUrl}
-            <Alert tone="warn" title="监听端口已热切换，请使用新地址访问（旧端口将在 5 秒后关闭）">
+            <Alert
+              tone="warn"
+              title={reboundLoopbackWarning
+                ? '已切换为仅本机回环监听（公网直连将在 5 秒后关闭，请改用 SSH 隧道接入）'
+                : '监听地址已热切换，请使用新地址访问（旧入口将在 5 秒后关闭）'}
+            >
               <div class="url-row">
                 <code class="mono">{reboundUrl}</code>
                 <CopyButton text={reboundUrl} label="复制新地址" />
-                <a class="jump" href={reboundUrl}>前往新地址 →</a>
+                {#if !reboundLoopbackWarning}
+                  <a class="jump" href={reboundUrl} data-external>前往新地址 →</a>
+                {/if}
               </div>
             </Alert>
           {/if}
@@ -307,9 +355,11 @@
             label="监听范围"
             bind:value={listenHost}
             options={listenOptions}
-            hint={listenHost === '127.0.0.1' || listenHost === '::1'
-              ? '仅允许本机 SSH 隧道或本机反向代理接入；如需外部直接访问面板、拉取代理订阅或接收探针上报，请切为 0.0.0.0 或 ::'
-              : '已开放公网监听：强烈建议保留安全密道或绑定 HTTPS 反代域名，防火墙将自动同步放行面板端口'}
+            hint={isProxyTLS
+              ? '当前处于反向代理 TLS 模式（明文 HTTP 后端），为保证口令与会话安全，仅允许监听本机回环地址（127.0.0.1 或 ::1）'
+              : listenHost === '127.0.0.1' || listenHost === '::1'
+                ? '仅允许本机 SSH 隧道或本机反向代理接入；如需外部直接访问面板、拉取代理订阅或接收探针上报，请切为 0.0.0.0 或 ::'
+                : '已开放公网监听：强烈建议保留安全密道或绑定 HTTPS 反代域名，防火墙将自动同步放行面板端口'}
           />
 
           <div class="inline-field">
@@ -415,14 +465,21 @@
     size="sm"
   >
     {#if mfaUseRecovery}
-      <Input
-        label="恢复码"
-        mono
-        placeholder="xxxx-xxxx"
-        bind:value={mfaCode}
-        autofocus
-        disabled={saving}
-      />
+      <form
+        onsubmit={(e) => {
+          e.preventDefault();
+          submitMfa();
+        }}
+      >
+        <Input
+          label="恢复码"
+          mono
+          placeholder="xxxx-xxxx"
+          bind:value={mfaCode}
+          autofocus
+          disabled={saving}
+        />
+      </form>
     {:else}
       <div class="otp">
         <OtpInput bind:value={mfaCode} autofocus disabled={saving} oncomplete={(c) => submitMfa(c)} />

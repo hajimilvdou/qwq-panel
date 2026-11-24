@@ -444,7 +444,7 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
           dock.open({ approvalId: r.approvalId });
         } else if (!TERMINAL.has(r.status) && !meta?.signal?.aborted) {
           return {
-            status: r.status,
+            status: 'FAILED',
             operation_id: r.operationId,
             approval_id: r.approvalId,
             result: r.result,
@@ -476,8 +476,12 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
     newKey: newIdempotencyKey,
     onCopy: async ({ text, label }) => {
       const ok = await copyTextWithFallback(text);
-      if (ok) toasts.success(label || '已复制到剪贴板');
-      else toasts.error('当前浏览器限制自动复制，请手动选中文本复制');
+      if (ok) {
+        toasts.success(label || '已复制到剪贴板');
+      } else {
+        toasts.error('当前浏览器限制自动复制，请手动选中文本复制');
+        throw new Error('当前浏览器限制自动复制，请手动选中文本复制');
+      }
     },
     onEnsurePlugins: defaultEnsurePlugins,
     ...hooks,

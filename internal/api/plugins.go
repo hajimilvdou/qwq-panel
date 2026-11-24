@@ -1116,7 +1116,19 @@ func (a *api) executePluginUninstall(ctx context.Context, req operations.HostReq
 	if a.d.Plugins == nil {
 		return nil, pluginUnavailable()
 	}
-	pluginID := args.PluginID
+	pluginID := strings.TrimSpace(args.PluginID)
+	if pluginID == "security.basic" {
+		return nil, problem.New(problem.StateConflict, "基础安全防护插件为系统必装底座，不支持卸载。")
+	}
+	dependents, err := a.d.Plugins.Dependents(ctx, pluginID)
+	if err != nil {
+		return nil, err
+	}
+	if len(dependents) > 0 {
+		conflict := problem.New(problem.StateConflict, "Plugin %s is still required by other plugins.", pluginID)
+		conflict.Dependents = dependents
+		return nil, conflict
+	}
 	if err := a.d.Plugins.Uninstall(ctx, pluginID, args.PurgeData); err != nil {
 		return nil, err
 	}
@@ -1366,7 +1378,13 @@ func (a *api) tryServeStoppedOnDemandWidgetSnapshot(
 		return false
 	}
 	p, err := a.d.Plugins.Get(r.Context(), pluginID)
-	if err != nil || p.ActiveStatus != "active" || p.ActiveVersion == "" || p.Runtime == nil || p.Runtime.State != "stopped" {
+	if err != nil || !strings.EqualFold(p.ActiveStatus, "active") || p.ActiveVersion == "" || p.Runtime == nil {
+		return false
+	}
+	if p.Enabled != nil && !*p.Enabled {
+		return false
+	}
+	if p.Runtime.State != "standby" && p.Runtime.State != "stopped" {
 		return false
 	}
 	var manifestRaw string

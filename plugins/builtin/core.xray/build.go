@@ -106,6 +106,15 @@ func buildPackage(options buildOptions) (result error) {
 	if err := copyFile(options.xray, filepath.Join(stage, "bin", "xray"), 0o755); err != nil {
 		return err
 	}
+	xrayDir := filepath.Dir(options.xray)
+	for _, asset := range []string{"geoip.dat", "geosite.dat"} {
+		srcAsset := filepath.Join(xrayDir, asset)
+		if info, statErr := os.Stat(srcAsset); statErr == nil && !info.IsDir() && info.Size() > 0 {
+			if err := copyFile(srcAsset, filepath.Join(stage, "bin", asset), 0o644); err != nil {
+				return err
+			}
+		}
+	}
 	rawManifest, err := os.ReadFile(filepath.Join(root, pluginDirectory, "manifest.json"))
 	if err != nil {
 		return err

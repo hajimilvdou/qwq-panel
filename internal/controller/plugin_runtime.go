@@ -444,8 +444,35 @@ type PluginRuntime struct {
 	// managementPortsFn 返回宿主当前活跃管理端口，未绑定时回退静态 ManagementPorts。
 	managementPortsFn atomic.Pointer[func() []uint32]
 
+	// pluginEnabledFn 查询插件持久启停状态，用于公开路由表过滤与按需 attach 守卫。
+	pluginEnabledFn atomic.Pointer[func(pluginID string) bool]
+
 	// publicGateway 负责 ADR-0024 /p/{plugin_id}/{route}/ 公开 HTTP 路由转发。
 	publicGateway *pluginpublic.Gateway
+}
+
+// SetPluginEnabled binds the persistent enablement predicate used by public
+// route synchronization and dispatch so disabled plugins are neither exposed
+// nor implicitly resurrected.
+func (rt *PluginRuntime) SetPluginEnabled(fn func(pluginID string) bool) {
+	if rt == nil {
+		return
+	}
+	if fn == nil {
+		rt.pluginEnabledFn.Store(nil)
+		return
+	}
+	rt.pluginEnabledFn.Store(&fn)
+}
+
+func (rt *PluginRuntime) isPluginEnabled(pluginID string) bool {
+	if rt == nil {
+		return false
+	}
+	if p := rt.pluginEnabledFn.Load(); p != nil && *p != nil {
+		return (*p)(pluginID)
+	}
+	return true
 }
 
 // NewPluginRuntime validates opts and builds the supervisor. It performs no I/O

@@ -188,8 +188,10 @@ func (a *Authority) run(ctx context.Context, caller certificates.Caller, certifi
 		if state.Phase == "finalizing" {
 			return issued, outcome("原 finalize 已发送但结果未确认，只允许读取原订单")
 		}
-		if err := a.caa.CheckCAA(ctx, scope.Provider, scope.Spec.SANs, state.AccountURI); err != nil {
-			return issued, err
+		if !scope.IsHTTP01() {
+			if err := a.caa.CheckCAA(ctx, scope.Provider, scope.Spec.SANs, state.AccountURI); err != nil {
+				return issued, err
+			}
 		}
 		state.Phase = "finalizing"
 		revision, err = a.save(ctx, caller, state, revision)

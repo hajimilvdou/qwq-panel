@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS probe_portal_settings (
     panel_dns_provider_id       TEXT NOT NULL DEFAULT '',   -- Track A: 借用 domain.dns provider
     panel_dns_zone_id           TEXT NOT NULL DEFAULT '',   -- Track A: 借用 domain.dns zone
     panel_cert_binding_ref      TEXT NOT NULL DEFAULT '',   -- Track A: 借用 tls.certificates certbind_*
-    builtin_listen_addr         TEXT NOT NULL DEFAULT '127.0.0.1:19080',
+    builtin_listen_addr         TEXT NOT NULL DEFAULT '127.0.0.1:8443',
     builtin_acme_email          TEXT NOT NULL DEFAULT '',
     builtin_cert_fingerprint    TEXT NOT NULL DEFAULT '',
     builtin_cert_expires_at     INTEGER NOT NULL DEFAULT 0,

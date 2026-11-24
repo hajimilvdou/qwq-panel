@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -198,6 +199,12 @@ func (i *instance) syncCoreXrayLockedWithWARP(ctx context.Context, host *plugins
 	}
 	mergedJSON, err := mergeCoreXrayConfigWithWARPAndNodes(getResp.GetRedactedConfigJson(), activeUsers, managedNodes, warpCfg, writeNewWARPSecret)
 	if err != nil {
+		if errors.Is(err, errCoreXrayNoProfileYet) {
+			// core.xray has not been initialized with any inbound/profile yet
+			// (e.g. creating plans/users before the first managed node). Skip
+			// pushing an invalid empty `{}` so the user & token succeed cleanly.
+			return getResp.GetRevision(), nil
+		}
 		return "", err
 	}
 
@@ -309,14 +316,21 @@ func (i *instance) syncTrafficShapingLocked(ctx context.Context, host *pluginsdk
 
 // ======================== core.xray 脱敏配置合并（$secret_present -> $keep_secret） ========================
 
+var errCoreXrayNoProfileYet = errors.New("core.xray has no configured profiles or inbound yet")
+
 func mergeCoreXrayConfigWithWARPAndNodes(redactedRaw []byte, activeUsers []userRecord, managedNodes []proxyNodeRecord, warpCfg *warpWithSecrets, writeNewWARPSecret bool) ([]byte, error) {
 	trimmed := bytes.TrimSpace(redactedRaw)
 	if len(trimmed) == 0 {
-		return nil, pluginsdk.Errorf("PRECONDITION_FAILED", "目标插件 core.xray 尚未初始化配置")
+		return nil, errCoreXrayNoProfileYet
 	}
 	var doc map[string]any
 	if err := json.Unmarshal(trimmed, &doc); err != nil {
 		return nil, fmt.Errorf("decode core.xray config: %w", err)
+	}
+	_, hasProfiles := doc["profiles"].([]any)
+	_, hasInbound := doc["inbound"].(map[string]any)
+	if !hasProfiles && !hasInbound {
+		return nil, errCoreXrayNoProfileYet
 	}
 	// 先将所有既有脱敏槽位 {"$secret_present":true} 转换为 {"$keep_secret":true}。
 	replaceSecretPresentWithKeep(doc)

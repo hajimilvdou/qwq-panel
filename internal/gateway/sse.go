@@ -169,8 +169,14 @@ func (g *Gateway) streamEvents(w http.ResponseWriter, r *http.Request) {
 			heartbeatCount++
 			if heartbeatCount%2 == 0 && g.cfg.Auth != nil && sseCreds.Session != "" {
 				if _, aerr := g.cfg.Auth.Authenticate(r.Context(), sseCreds); aerr != nil {
-					_ = sw.Control("session.expired", map[string]string{"reason": "session_invalid"}, 0)
-					return
+					if r.Context().Err() != nil {
+						return
+					}
+					if problem.HasCode(aerr, problem.Unauthenticated) {
+						_ = sw.Control("session.expired", map[string]string{"reason": "session_invalid"}, 0)
+						return
+					}
+					g.log.WarnContext(r.Context(), "sse session liveness check failed transiently", slog.Any("error", aerr))
 				}
 			}
 			if err := sw.Control("heartbeat", StreamHeartbeat{

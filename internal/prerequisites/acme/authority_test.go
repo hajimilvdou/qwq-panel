@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qwq-panel/qwq/internal/prerequisites/certificates"
 	"github.com/qwq-panel/qwq/internal/prerequisites/dns"
@@ -214,5 +215,49 @@ func TestACMECleanupKeepsOtherTXTAndRejectsOtherOwner(t *testing.T) {
 	}
 	if len(f.dns.records) != 1 || f.dns.records[0].ID != "other-record" || f.dns.deleted != 1 {
 		t.Fatal("cleanup deleted unrelated TXT")
+	}
+}
+
+type fixtureHTTP01Presenter struct {
+	presented map[string]string
+	cleaned   []string
+}
+
+func (p *fixtureHTTP01Presenter) Present(_ context.Context, token, keyAuth string, _ time.Duration) error {
+	if p.presented == nil {
+		p.presented = make(map[string]string)
+	}
+	p.presented[token] = keyAuth
+	return nil
+}
+
+func (p *fixtureHTTP01Presenter) CleanUp(_ context.Context, token string) error {
+	delete(p.presented, token)
+	p.cleaned = append(p.cleaned, token)
+	return nil
+}
+
+func TestRealACMEHTTP01IssuesAndCleansUpWithoutDNSScope(t *testing.T) {
+	f := newAuthorityFixture(t, []string{"app.example.com"})
+	presenter := &fixtureHTTP01Presenter{}
+	f.authority.http01 = presenter
+
+	httpScope := f.scope
+	httpScope.ChallengeType = "http-01"
+	httpScope.Provider = dns.Scope{}
+	f.guard.scope = httpScope
+
+	issued, err := f.authority.Issue(context.Background(), f.caller, "certificate-1", "attempt-http01", httpScope, nil)
+	if err != nil || issued.Material == "" || issued.Trust != tlsmgr.StagingTrust {
+		t.Fatalf("http-01 issue failed: issued=%+v err=%v", issued, err)
+	}
+	if len(presenter.presented) != 0 || len(presenter.cleaned) != 1 {
+		t.Fatalf("expected http-01 token presented and cleaned once, got presented=%v cleaned=%v", presenter.presented, presenter.cleaned)
+	}
+	if f.ca.orders != 1 || f.ca.finalizes != 1 || f.dns.created != 0 {
+		t.Fatalf("unexpected CA/DNS counts: orders=%d finalizes=%d dnsCreated=%d", f.ca.orders, f.ca.finalizes, f.dns.created)
+	}
+	if err := f.authority.Cancel(context.Background(), f.caller, "certificate-1", "attempt-http01", httpScope); err != nil {
+		t.Fatalf("http-01 cancel failed: %v", err)
 	}
 }

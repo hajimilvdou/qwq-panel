@@ -165,7 +165,7 @@ func (a *Authority) authorizeHTTP01(
 			selected = candidate
 		}
 	}
-	if selected == nil || !allowedURL(state.Scope.CA, selected.URI) || selected.Token == "" || len(selected.Token) > 256 || strings.ContainsAny(selected.Token, "\x00\r\n") {
+	if selected == nil || !allowedURL(state.Scope.CA, selected.URI) || !validHTTP01Token(selected.Token) {
 		return fault.New("CA_UNAVAILABLE", "CA 缺少受控 HTTP-01 challenge")
 	}
 	index := slices.IndexFunc(state.Challenges, func(item challenge) bool { return item.AuthorizationURI == uri })
@@ -188,17 +188,21 @@ func (a *Authority) authorizeHTTP01(
 	if err := a.http01.Present(ctx, item.Token, item.Value, 10*time.Minute); err != nil {
 		return err
 	}
+	cleaned := false
+	defer func() {
+		if cleaned {
+			return
+		}
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = a.http01.CleanUp(cleanCtx, item.Token)
+	}()
 	item.Presented = true
 	var err error
 	*revision, err = a.saveDetached(ctx, caller, *state, *revision)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		_ = a.http01.CleanUp(cleanCtx, item.Token)
-	}()
 
 	if err := report(progress, "verifying", uint32(30+(authIndex+1)*40/max(1, totalAuths))); err != nil {
 		return err
@@ -222,9 +226,30 @@ func (a *Authority) authorizeHTTP01(
 		return fault.New("CA_REJECTED", "HTTP-01 域名验证未通过，请确认域名 A/AAAA 记录指向本机公网 IP 且 80 端口可从公网访问")
 	}
 	item.Validated = true
-	item.Cleaned = true
+	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	cleanErr := a.http01.CleanUp(cleanCtx, item.Token)
+	cancel()
+	if cleanErr == nil {
+		cleaned = true
+		item.Cleaned = true
+	}
 	*revision, err = a.saveDetached(ctx, caller, *state, *revision)
 	return err
+}
+
+func validHTTP01Token(token string) bool {
+	if len(token) == 0 || len(token) > 256 {
+		return false
+	}
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		isAlpha := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		isDigit := c >= '0' && c <= '9'
+		if !isAlpha && !isDigit && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Authority) ensureDNS(ctx context.Context, caller certificates.Caller, state *journal, revision *string, index int) error {

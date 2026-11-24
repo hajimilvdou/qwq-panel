@@ -2643,6 +2643,8 @@ paths:
       x-qwq-idempotency: exempt
       x-qwq-idempotency-reason: Idempotent PUT protected by optimistic expected_revision check.
       x-qwq-action-exempt: Direct host panel access and stealth disguise configuration; audited directly by the host API.
+      parameters:
+        - $ref: '#/components/parameters/MfaCodeHeader'
       requestBody:
         description: Desired panel access, secret entry path, disguise, and reverse-proxy domain settings.
         required: true

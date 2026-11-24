@@ -93,6 +93,7 @@ export function openStream(opts: SseOptions): SseHandle {
     const headers: Record<string, string> = { Accept: 'text/event-stream' };
     const last = opts.lastEventId?.();
     if (last) headers['Last-Event-ID'] = last;
+    if (attempt > 0 || last) headers['X-QWQ-Background-Poll'] = '1';
 
     let res: Response;
     try {

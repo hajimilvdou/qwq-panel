@@ -184,6 +184,13 @@ func normalizeNodeDraft(in nodeUpsertRequest, existing *proxyNodeRecord, usedPor
 	}
 
 	server := strings.TrimSpace(in.Server)
+	if idx := strings.Index(server, "://"); idx >= 0 {
+		server = server[idx+3:]
+	}
+	if slash := strings.IndexByte(server, '/'); slash >= 0 {
+		server = server[:slash]
+	}
+	server = strings.TrimSpace(server)
 	if server == "" {
 		if existing != nil && existing.Server != "" {
 			server = existing.Server
@@ -607,7 +614,11 @@ func (i *instance) handleNodesList(ctx context.Context, req pluginsdk.Request) (
 		if nodes[idx].Source == "managed" {
 			managedCount++
 			if nodes[idx].Enabled {
-				nodes[idx].Listening = activePorts[nodes[idx].ID] || probeLocalPortListening(nodes[idx].Port)
+				if nodes[idx].Protocol == corev2.ProtocolHysteria2 {
+					nodes[idx].Listening = activePorts[nodes[idx].ID]
+				} else {
+					nodes[idx].Listening = probeLocalPortListening(nodes[idx].Port)
+				}
 			}
 		} else {
 			externalCount++

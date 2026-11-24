@@ -62,10 +62,36 @@ func NewACMEHTTP01ChallengeStore(nowFn func() time.Time) *ACMEHTTP01ChallengeSto
 	}
 }
 
+func isBase64URLSegment(s string, maxLen int) bool {
+	if len(s) == 0 || len(s) > maxLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isAlpha := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		isDigit := c >= '0' && c <= '9'
+		if !isAlpha && !isDigit && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidACMEKeyAuth(token, keyAuth string) bool {
+	if !isBase64URLSegment(token, 256) || len(keyAuth) > 512 {
+		return false
+	}
+	tokPart, thumbPart, ok := strings.Cut(keyAuth, ".")
+	if !ok || tokPart != token || strings.Contains(thumbPart, ".") {
+		return false
+	}
+	return isBase64URLSegment(thumbPart, 256)
+}
+
 func (s *ACMEHTTP01ChallengeStore) Present(token, keyAuth string, ttl time.Duration) error {
 	token = strings.TrimSpace(token)
 	keyAuth = strings.TrimSpace(keyAuth)
-	if token == "" || len(token) > 256 || strings.ContainsAny(token, "/\\ \t\r\n") || strings.Contains(token, "..") || keyAuth == "" || len(keyAuth) > 512 {
+	if !isValidACMEKeyAuth(token, keyAuth) {
 		return errors.New("非法的 ACME HTTP-01 challenge 参数")
 	}
 	if ttl <= 0 || ttl > 30*time.Minute {
@@ -112,6 +138,7 @@ func (s *ACMEHTTP01ChallengeStore) ServeChallengeIfMatched(w http.ResponseWriter
 		return false
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {

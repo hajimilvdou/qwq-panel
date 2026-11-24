@@ -3,11 +3,13 @@
 package pluginui
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"net/http"
 	"strings"
+	"time"
 )
 
 //go:embed kit/v1/kit.js kit/v1/kit-base.css
@@ -43,18 +45,6 @@ func serveSharedKit(w http.ResponseWriter, req *http.Request) bool {
 	header.Set("Cache-Control", "public, max-age=0, must-revalidate")
 	header.Set("Content-Security-Policy", csp(nil))
 
-	if match := req.Header.Get("If-None-Match"); match != "" {
-		for _, part := range strings.Split(match, ",") {
-			tag := strings.TrimSpace(part)
-			if tag == etag || tag == "W/"+etag || tag == "*" {
-				w.WriteHeader(http.StatusNotModified)
-				return true
-			}
-		}
-	}
-	w.WriteHeader(http.StatusOK)
-	if req.Method != http.MethodHead {
-		_, _ = w.Write(data)
-	}
+	http.ServeContent(w, req, name, time.Time{}, bytes.NewReader(data))
 	return true
 }

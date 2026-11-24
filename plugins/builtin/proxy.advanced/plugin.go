@@ -240,6 +240,8 @@ type instance struct {
 	shapingDegradedReason string
 	lastSyncError         string
 	spark                 []float64
+	coreObfsAvail         *bool
+	coreObfsCheckedAt     time.Time
 
 	syncMu               sync.Mutex
 	store                *proxyStore
@@ -521,19 +523,39 @@ func (i *instance) handleOverview(ctx context.Context, req pluginsdk.Request) (p
 	}
 
 	var obfsAvail *bool
-	if host := req.Host(); host != nil && host.Conn() != nil {
-		if capResp, cerr := host.InvokePlugin(ctx, pluginsdk.InvokeRequest{
-			TargetPluginID: "core.xray",
-			Operation:      "core.capabilities",
-			APIVersion:     "v1",
-			Payload:        []byte("{}"),
-		}); cerr == nil && capResp.GetError() == nil && len(capResp.GetPayloadJson()) > 0 {
-			var capDoc struct {
-				ObfsAvailable *bool `json:"obfs_available"`
-			}
-			if json.Unmarshal(capResp.GetPayloadJson(), &capDoc) == nil && capDoc.ObfsAvailable != nil {
-				v := *capDoc.ObfsAvailable
-				obfsAvail = &v
+	now := i.now()
+	i.mu.RLock()
+	if i.coreObfsAvail != nil && now.Sub(i.coreObfsCheckedAt) < 60*time.Second {
+		v := *i.coreObfsAvail
+		obfsAvail = &v
+	}
+	i.mu.RUnlock()
+	if obfsAvail == nil {
+		if host := req.Host(); host != nil && host.Conn() != nil {
+			// proxy.overview is a read-only invoke (unpersisted op.ID); use a
+			// fresh background context so host routes it through invokeBackgroundRead
+			// authorized by plugin.invoke.background without parent_not_dispatched.
+			capCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			capResp, cerr := host.InvokePlugin(capCtx, pluginsdk.InvokeRequest{
+				TargetPluginID: "core.xray",
+				Operation:      "core.capabilities",
+				APIVersion:     "v1",
+				Payload:        []byte("{}"),
+			})
+			cancel()
+			if cerr == nil && capResp.GetError() == nil && len(capResp.GetPayloadJson()) > 0 {
+				var capDoc struct {
+					ObfsAvailable *bool `json:"obfs_available"`
+				}
+				if json.Unmarshal(capResp.GetPayloadJson(), &capDoc) == nil && capDoc.ObfsAvailable != nil {
+					v := *capDoc.ObfsAvailable
+					obfsAvail = &v
+					i.mu.Lock()
+					vCopy := v
+					i.coreObfsAvail = &vCopy
+					i.coreObfsCheckedAt = now
+					i.mu.Unlock()
+				}
 			}
 		}
 	}
@@ -607,11 +629,12 @@ func (i *instance) handlePlansUpsert(ctx context.Context, req pluginsdk.Request,
 		return pluginsdk.Result{}, err
 	}
 
-	// 更新套餐限速时同步刷新内核 HTB 规则（容器降级不阻塞套餐保存）。
+	// 更新套餐限速时同步刷新 core.xray 流量标记与内核 HTB 规则（容器降级不阻塞套餐保存）。
 	var degraded bool
 	var reason string
 	if !created && req.Host() != nil && req.Host().Conn() != nil {
 		i.syncMu.Lock()
+		_, _ = i.syncCoreXrayLocked(ctx, req.Host())
 		degraded, reason, err = i.syncTrafficShapingLocked(ctx, req.Host())
 		i.syncMu.Unlock()
 		if err != nil {

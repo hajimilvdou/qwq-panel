@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -467,7 +468,7 @@ func (p *streamingOpenAIProvider) Complete(ctx context.Context, req ProviderRequ
 	}
 
 	primaryBase, fallbackBase := normalizeOpenAICompatBaseURL(p.cfg.BaseURL)
-	resp, stopHeaderTimer, cancel, err := p.doOpenAIHTTP(ctx, primaryBase, body)
+	resp, reqCtx, stopHeaderTimer, cancelCause, err := p.doOpenAIHTTP(ctx, primaryBase, body)
 	if err != nil {
 		return ProviderResponse{}, err
 	}
@@ -478,31 +479,32 @@ func (p *streamingOpenAIProvider) Complete(ctx context.Context, req ProviderRequ
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<10))
 		_ = resp.Body.Close()
 		stopHeaderTimer()
-		cancel()
-		resp, stopHeaderTimer, cancel, err = p.doOpenAIHTTP(ctx, fallbackBase, body)
+		cancelCause(nil)
+		resp, reqCtx, stopHeaderTimer, cancelCause, err = p.doOpenAIHTTP(ctx, fallbackBase, body)
 		if err != nil {
 			return ProviderResponse{}, err
 		}
 		primaryBase = fallbackBase
 	}
 	// OpenCode/DSH compatibility: many OpenAI-compatible gateways (Ollama,
-	// vLLM, OneAPI, non-reasoner endpoints) return HTTP 400 when optional
-	// `stream_options` or `reasoning_effort` fields are sent. Retry once cleanly
-	// without those optional extensions before failing.
-	if resp.StatusCode == http.StatusBadRequest && (body.StreamOptions != nil || body.ReasoningEffort != "") {
+	// vLLM, LiteLLM, OneAPI, non-reasoner endpoints) return HTTP 400 or 422
+	// when optional `stream_options` or `reasoning_effort` fields are sent.
+	// Retry once cleanly without those optional extensions before failing.
+	if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) &&
+		(body.StreamOptions != nil || body.ReasoningEffort != "") {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<10))
 		_ = resp.Body.Close()
 		stopHeaderTimer()
-		cancel()
+		cancelCause(nil)
 		body.StreamOptions = nil
 		body.ReasoningEffort = ""
-		resp, stopHeaderTimer, cancel, err = p.doOpenAIHTTP(ctx, primaryBase, body)
+		resp, reqCtx, stopHeaderTimer, cancelCause, err = p.doOpenAIHTTP(ctx, primaryBase, body)
 		if err != nil {
 			return ProviderResponse{}, err
 		}
 	}
 	defer stopHeaderTimer()
-	defer cancel()
+	defer cancelCause(nil)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -514,28 +516,27 @@ func (p *streamingOpenAIProvider) Complete(ctx context.Context, req ProviderRequ
 	if strings.Contains(ct, "text/event-stream") {
 		stopHeaderTimer()
 		idle := p.streamIdleTimeout(p.effectiveTimeout())
-		streamReader := newIdleTimeoutReader(ctx, resp.Body, idle, maxSSEWireBytes)
+		streamReader := newIdleTimeoutReader(reqCtx, cancelCause, resp.Body, idle, maxSSEWireBytes)
 		return p.parseSSE(streamReader, stepStart, req.Messages)
 	}
 	return p.parseJSON(resp.Body, stepStart, req.Messages)
 }
 
-func (p *streamingOpenAIProvider) doOpenAIHTTP(ctx context.Context, baseURL string, body streamChatRequest) (*http.Response, func(), context.CancelFunc, error) {
+func (p *streamingOpenAIProvider) doOpenAIHTTP(ctx context.Context, baseURL string, body streamChatRequest) (*http.Response, context.Context, func(), context.CancelCauseFunc, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
-		return nil, nil, nil, problem.Wrap(err)
+		return nil, nil, nil, nil, problem.Wrap(err)
 	}
 	timeout := p.effectiveTimeout()
 	reqCtx, cancelCause := context.WithCancelCause(ctx)
 	hdrTimer := time.AfterFunc(timeout, func() { cancelCause(context.DeadlineExceeded) })
 	stopTimer := func() { hdrTimer.Stop() }
-	cancel := func() { cancelCause(nil) }
 
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(raw))
 	if err != nil {
 		stopTimer()
-		cancel()
-		return nil, nil, nil, problem.New(problem.Unavailable, "The native core's base_url cannot be used.")
+		cancelCause(nil)
+		return nil, nil, nil, nil, problem.New(problem.Unavailable, "The native core's base_url cannot be used.")
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if body.Stream {
@@ -551,16 +552,16 @@ func (p *streamingOpenAIProvider) doOpenAIHTTP(ctx context.Context, baseURL stri
 	if err != nil {
 		cause := context.Cause(reqCtx)
 		stopTimer()
-		cancel()
+		cancelCause(nil)
 		if errors.Is(err, errEgressDenied) {
-			return nil, nil, nil, problem.New(problem.PermissionDenied, "%s", egressDeniedDetail)
+			return nil, nil, nil, nil, problem.New(problem.PermissionDenied, "%s", egressDeniedDetail)
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(cause, context.DeadlineExceeded) || errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
-			return nil, nil, nil, problem.New(problem.Timeout, "The model did not answer before its deadline.")
+			return nil, nil, nil, nil, problem.New(problem.Timeout, "The model did not answer before its deadline.")
 		}
-		return nil, nil, nil, problem.New(problem.Unavailable, "The model endpoint could not be reached.")
+		return nil, nil, nil, nil, problem.New(problem.Unavailable, "The model endpoint could not be reached.")
 	}
-	return resp, stopTimer, cancel, nil
+	return resp, reqCtx, stopTimer, cancelCause, nil
 }
 
 // thinkTagSplitter separates leading `<think>...</think>` blocks emitted inline
@@ -662,6 +663,9 @@ func (p *streamingOpenAIProvider) parseJSON(r io.Reader, stepStart time.Time, ms
 		Usage *openAIUsage `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil || len(out.Choices) == 0 {
+		if msg := extractSafeUpstreamErrorMsg(data, p.apiKey); msg != "" {
+			return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型返回错误：%s", msg)
+		}
 		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint returned an invalid response.")
 	}
 	msg := out.Choices[0].Message
@@ -734,10 +738,7 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 				payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 				if payload != "" && payload != "[DONE]" {
 					var chunk struct {
-						Error *struct {
-							Message string `json:"message"`
-							Type    string `json:"type"`
-						} `json:"error"`
+						Error   any `json:"error"`
 						Choices []struct {
 							Delta struct {
 								Content          string `json:"content"`
@@ -758,7 +759,7 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 					}
 					if json.Unmarshal([]byte(payload), &chunk) == nil {
 						if chunk.Error != nil && len(chunk.Choices) == 0 {
-							msg := sanitizeUpstreamErrorDetail(chunk.Error.Message, p.apiKey)
+							msg := extractSafeUpstreamErrorMsg([]byte(payload), p.apiKey)
 							if msg != "" {
 								return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型流式返回错误：%s", msg)
 							}
@@ -850,6 +851,9 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 	for _, acc := range toolSlots {
 		calls = append(calls, *acc)
 	}
+	if contentBuf.Len() == 0 && reasonBuf.Len() == 0 && len(calls) == 0 {
+		return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型流式响应未返回有效内容。")
+	}
 	ttft := time.Since(stepStart)
 	if !firstTokenAt.IsZero() {
 		ttft = firstTokenAt.Sub(stepStart)
@@ -903,11 +907,7 @@ func toProviderResponse(content, reasoning string, calls []chatToolCall) Provide
 }
 
 func anthropicMessagesURL(baseURL string) string {
-	u := strings.TrimRight(baseURL, "/")
-	if strings.HasSuffix(u, "/v1") {
-		return u + "/messages"
-	}
-	return u + "/v1/messages"
+	return normalizeAnthropicCLIBaseURL(baseURL) + "/v1/messages"
 }
 
 func anthropicThinkingBudget(model, configured string) int {
@@ -1035,19 +1035,61 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 		payload["temperature"] = *p.cfg.Temperature
 	}
 
+	resp, reqCtx, stopHeaderTimer, cancelCause, err := p.doAnthropicHTTP(ctx, payload)
+	if err != nil {
+		return ProviderResponse{}, err
+	}
+	// If an Anthropic-compatible gateway rejects auto-injected extended thinking
+	// parameters with 400/422, retry once cleanly without `thinking`.
+	if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) &&
+		payload["thinking"] != nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<10))
+		_ = resp.Body.Close()
+		stopHeaderTimer()
+		cancelCause(nil)
+		delete(payload, "thinking")
+		payload["max_tokens"] = maxTokens
+		if p.cfg.Temperature != nil {
+			payload["temperature"] = *p.cfg.Temperature
+		}
+		resp, reqCtx, stopHeaderTimer, cancelCause, err = p.doAnthropicHTTP(ctx, payload)
+		if err != nil {
+			return ProviderResponse{}, err
+		}
+	}
+	defer stopHeaderTimer()
+	defer cancelCause(nil)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+		return ProviderResponse{}, formatUpstreamHTTPError(resp.StatusCode, errBody, p.apiKey)
+	}
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(ct, "text/event-stream") {
+		stopHeaderTimer()
+		idle := p.streamIdleTimeout(p.effectiveTimeout())
+		streamReader := newIdleTimeoutReader(reqCtx, cancelCause, resp.Body, idle, maxSSEWireBytes)
+		return p.parseAnthropicSSE(streamReader, stepStart, req.Messages)
+	}
+	return p.parseAnthropicJSON(resp.Body, stepStart, req.Messages)
+}
+
+func (p *streamingOpenAIProvider) doAnthropicHTTP(ctx context.Context, payload map[string]any) (*http.Response, context.Context, func(), context.CancelCauseFunc, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return ProviderResponse{}, problem.Wrap(err)
+		return nil, nil, nil, nil, problem.Wrap(err)
 	}
 	timeout := p.effectiveTimeout()
 	reqCtx, cancelCause := context.WithCancelCause(ctx)
 	hdrTimer := time.AfterFunc(timeout, func() { cancelCause(context.DeadlineExceeded) })
-	defer hdrTimer.Stop()
-	defer cancelCause(nil)
+	stopTimer := func() { hdrTimer.Stop() }
 
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, anthropicMessagesURL(p.cfg.BaseURL), bytes.NewReader(raw))
 	if err != nil {
-		return ProviderResponse{}, problem.New(problem.Unavailable, "The native core's base_url cannot be used.")
+		stopTimer()
+		cancelCause(nil)
+		return nil, nil, nil, nil, problem.New(problem.Unavailable, "The native core's base_url cannot be used.")
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if p.cfg.wantStream() {
@@ -1060,28 +1102,17 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 	resp, err := p.core.client.Do(httpReq)
 	if err != nil {
 		cause := context.Cause(reqCtx)
+		stopTimer()
+		cancelCause(nil)
 		if errors.Is(err, errEgressDenied) {
-			return ProviderResponse{}, problem.New(problem.PermissionDenied, "%s", egressDeniedDetail)
+			return nil, nil, nil, nil, problem.New(problem.PermissionDenied, "%s", egressDeniedDetail)
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(cause, context.DeadlineExceeded) || errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
-			return ProviderResponse{}, problem.New(problem.Timeout, "The model did not answer before its deadline.")
+			return nil, nil, nil, nil, problem.New(problem.Timeout, "The model did not answer before its deadline.")
 		}
-		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint could not be reached.")
+		return nil, nil, nil, nil, problem.New(problem.Unavailable, "The model endpoint could not be reached.")
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
-		return ProviderResponse{}, formatUpstreamHTTPError(resp.StatusCode, errBody, p.apiKey)
-	}
-	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	if strings.Contains(ct, "text/event-stream") {
-		hdrTimer.Stop()
-		idle := p.streamIdleTimeout(timeout)
-		streamReader := newIdleTimeoutReader(ctx, resp.Body, idle, maxSSEWireBytes)
-		return p.parseAnthropicSSE(streamReader, stepStart, req.Messages)
-	}
-	return p.parseAnthropicJSON(resp.Body, stepStart, req.Messages)
+	return resp, reqCtx, stopTimer, cancelCause, nil
 }
 
 func (p *streamingOpenAIProvider) parseAnthropicJSON(r io.Reader, stepStart time.Time, msgs []ModelMessage) (ProviderResponse, error) {
@@ -1094,6 +1125,8 @@ func (p *streamingOpenAIProvider) parseAnthropicJSON(r io.Reader, stepStart time
 	}
 
 	var out struct {
+		Type    string                          `json:"type"`
+		Error   any                             `json:"error"`
 		Content []AnthropicResponseContentBlock `json:"content"`
 		Usage   *struct {
 			InputTokens              int64 `json:"input_tokens"`
@@ -1104,6 +1137,15 @@ func (p *streamingOpenAIProvider) parseAnthropicJSON(r io.Reader, stepStart time
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
 		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint returned an invalid response.")
+	}
+	if out.Type == "error" || out.Error != nil {
+		if msg := extractSafeUpstreamErrorMsg(data, p.apiKey); msg != "" {
+			return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型返回错误：%s", msg)
+		}
+		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint returned an error.")
+	}
+	if len(out.Content) == 0 {
+		return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型响应未返回有效内容。")
 	}
 	p.thinkingKeeper.RecordAssistantTurn(out.Content)
 
@@ -1173,11 +1215,9 @@ func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.
 				payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 				if payload != "" && payload != "[DONE]" {
 					var ev struct {
-						Type  string `json:"type"`
-						Index int    `json:"index"`
-						Error *struct {
-							Message string `json:"message"`
-						} `json:"error"`
+						Type    string `json:"type"`
+						Index   int    `json:"index"`
+						Error   any    `json:"error"`
 						Message *struct {
 							Usage *struct {
 								InputTokens              int64 `json:"input_tokens"`
@@ -1203,14 +1243,13 @@ func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.
 						} `json:"usage"`
 					}
 					if json.Unmarshal([]byte(payload), &ev) == nil {
-						switch ev.Type {
-						case "error":
-							if ev.Error != nil {
-								if msg := sanitizeUpstreamErrorDetail(ev.Error.Message, p.apiKey); msg != "" {
-									return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型流式返回错误：%s", msg)
-								}
+						if ev.Type == "error" || (ev.Error != nil && ev.Type == "") {
+							if msg := extractSafeUpstreamErrorMsg([]byte(payload), p.apiKey); msg != "" {
+								return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型流式返回错误：%s", msg)
 							}
 							return ProviderResponse{}, problem.New(problem.Unavailable, "The model stream returned an error.")
+						}
+						switch ev.Type {
 						case "message_start":
 							if ev.Message != nil && ev.Message.Usage != nil {
 								hasUsage = true
@@ -1320,6 +1359,9 @@ func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.
 		}
 		recorded = append(recorded, blk)
 	}
+	if textBuf.Len() == 0 && len(toolCalls) == 0 && len(recorded) == 0 {
+		return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型流式响应未返回有效内容。")
+	}
 	p.thinkingKeeper.RecordAssistantTurn(recorded)
 
 	ttft := time.Since(stepStart)
@@ -1397,14 +1439,15 @@ func normalizeAnthropicCLIBaseURL(raw string) string {
 }
 
 type idleTimeoutReader struct {
-	parent    context.Context
-	raw       io.ReadCloser
-	idleLimit time.Duration
-	maxBytes  int64
-	readTotal int64
+	reqCtx      context.Context
+	cancelCause context.CancelCauseFunc
+	raw         io.Reader
+	idleLimit   time.Duration
+	maxBytes    int64
+	readTotal   int64
 }
 
-func newIdleTimeoutReader(ctx context.Context, body io.ReadCloser, idleLimit time.Duration, maxBytes int64) *idleTimeoutReader {
+func newIdleTimeoutReader(reqCtx context.Context, cancelCause context.CancelCauseFunc, body io.Reader, idleLimit time.Duration, maxBytes int64) *idleTimeoutReader {
 	if idleLimit <= 0 {
 		idleLimit = defaultChunkIdleWait
 	}
@@ -1412,44 +1455,47 @@ func newIdleTimeoutReader(ctx context.Context, body io.ReadCloser, idleLimit tim
 		maxBytes = maxSSEWireBytes
 	}
 	return &idleTimeoutReader{
-		parent:    ctx,
-		raw:       body,
-		idleLimit: idleLimit,
-		maxBytes:  maxBytes,
+		reqCtx:      reqCtx,
+		cancelCause: cancelCause,
+		raw:         body,
+		idleLimit:   idleLimit,
+		maxBytes:    maxBytes,
 	}
 }
 
 func (ir *idleTimeoutReader) Read(p []byte) (int, error) {
-	if err := ir.parent.Err(); err != nil {
+	if err := ir.reqCtx.Err(); err != nil {
+		if cause := context.Cause(ir.reqCtx); cause != nil {
+			return 0, cause
+		}
 		return 0, err
 	}
-	type res struct {
-		n   int
-		err error
-	}
-	ch := make(chan res, 1)
-	go func() {
-		n, err := ir.raw.Read(p)
-		ch <- res{n: n, err: err}
-	}()
-	timer := time.NewTimer(ir.idleLimit)
-	defer timer.Stop()
-
-	select {
-	case <-ir.parent.Done():
-		_ = ir.raw.Close()
-		return 0, ir.parent.Err()
-	case <-timer.C:
-		_ = ir.raw.Close()
-		return 0, fmt.Errorf("%w（连续 %s 无数据返回）", errSSEIdleTimeout, ir.idleLimit)
-	case r := <-ch:
-		ir.readTotal += int64(r.n)
-		if ir.readTotal > ir.maxBytes {
-			_ = ir.raw.Close()
-			return r.n, errSSEWireLimitExceeded
+	var timedOut atomic.Bool
+	timer := time.AfterFunc(ir.idleLimit, func() {
+		timedOut.Store(true)
+		if ir.cancelCause != nil {
+			ir.cancelCause(fmt.Errorf("%w（连续 %s 无数据返回）", errSSEIdleTimeout, ir.idleLimit))
 		}
-		return r.n, r.err
+	})
+	n, err := ir.raw.Read(p)
+	timer.Stop()
+	if timedOut.Load() {
+		return n, fmt.Errorf("%w（连续 %s 无数据返回）", errSSEIdleTimeout, ir.idleLimit)
 	}
+	if err != nil {
+		if cause := context.Cause(ir.reqCtx); errors.Is(cause, errSSEIdleTimeout) {
+			return n, cause
+		}
+		return n, err
+	}
+	ir.readTotal += int64(n)
+	if ir.readTotal > ir.maxBytes {
+		if ir.cancelCause != nil {
+			ir.cancelCause(errSSEWireLimitExceeded)
+		}
+		return n, errSSEWireLimitExceeded
+	}
+	return n, nil
 }
 
 func readSSELineUnlimited(br *bufio.Reader, maxLineBytes int) (string, error) {

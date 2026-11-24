@@ -7,6 +7,7 @@ import (
 
 	"github.com/qwq-panel/qwq/internal/gateway"
 	"github.com/qwq-panel/qwq/internal/identity"
+	"github.com/qwq-panel/qwq/internal/panelaccess"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 )
 
@@ -105,7 +106,14 @@ func (a *api) deleteSession(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.g.ClearSessionCookie(w)
+	tlsMode := a.d.Config.HTTP.TLS.Mode
+	if a.d.Access != nil {
+		if snap := a.d.Access.Snapshot(); snap.TLSMode != "" {
+			tlsMode = snap.TLSMode
+		}
+	}
+	gateSecure := panelaccess.ShouldUseSecureGateCookie(tlsMode, r, a.trustedProxies)
+	a.g.ClearSessionCookieWithGateSecure(w, gateSecure)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -302,10 +302,15 @@ func (g *Gateway) resolveClientIP(r *http.Request) string {
 				return a.String()
 			}
 		}
+		return remote.String()
 	}
-	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
-		if a, err := netip.ParseAddr(xri); err == nil {
-			return a.Unmap().String()
+	if xriVals := r.Header.Values("X-Real-IP"); len(xriVals) == 1 {
+		if xri := strings.TrimSpace(xriVals[0]); xri != "" {
+			if a, err := netip.ParseAddr(xri); err == nil {
+				if a = a.Unmap(); !g.isTrusted(a) {
+					return a.String()
+				}
+			}
 		}
 	}
 	return remote.String()
@@ -347,10 +352,12 @@ func (g *Gateway) checkHostAndOrigin(r *http.Request) error {
 		return csrfFailed("The request has no valid Host header.")
 	}
 	// Behind a trusted reverse proxy the browser's Host arrives in
-	// X-Forwarded-Host; only that proxy may set it.
+	// X-Forwarded-Host; only that proxy may set it, and ambiguous multi-value
+	// headers are ignored (matching panelaccess & pluginpublic).
 	if a, err := netip.ParseAddr(hostOnly(r.RemoteAddr)); err == nil && g.isTrusted(a.Unmap()) {
-		if xfh := r.Header.Get("X-Forwarded-Host"); xfh != "" {
-			if h := normalizeHost(firstHeaderValue(xfh)); h != "" {
+		xfhValues := r.Header.Values("X-Forwarded-Host")
+		if len(xfhValues) == 1 && !strings.Contains(xfhValues[0], ",") {
+			if h := normalizeHost(xfhValues[0]); h != "" {
 				host = h
 			}
 		}
@@ -506,14 +513,6 @@ func isLoopbackHost(h string) bool {
 	}
 	a, err := netip.ParseAddr(strings.Trim(name, "[]"))
 	return err == nil && a.Unmap().IsLoopback()
-}
-
-// firstHeaderValue returns the first value of a comma-separated header.
-func firstHeaderValue(v string) string {
-	if i := strings.IndexByte(v, ','); i >= 0 {
-		return strings.TrimSpace(v[:i])
-	}
-	return strings.TrimSpace(v)
 }
 
 // mutating reports whether a method changes state and therefore needs CSRF

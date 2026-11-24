@@ -174,7 +174,9 @@ func (d *fixtureDNS) Observe(ctx context.Context, _ dns.Scope, name string, _ dn
 	now := time.Now().UTC()
 	return []dns.Observation{{Source: "fixture-authoritative", Kind: dns.Authoritative, Values: values, CollectedAt: now}, {Source: "fixture-recursive", Kind: dns.Recursive, Values: values, CollectedAt: now}}, ctx.Err()
 }
-func (*fixtureDNS) CheckCAA(context.Context, dns.Scope, []string, string) error { return nil }
+func (*fixtureDNS) CheckCAA(_ context.Context, scope dns.Scope, _ []string, _ string) error {
+	return dns.ValidateScope(scope)
+}
 
 type fixtureCA struct {
 	mu                          sync.Mutex
@@ -334,8 +336,33 @@ func (c *fixtureCA) RoundTrip(request *http.Request) (*http.Response, error) {
 		if c.validated[san] {
 			status = "valid"
 		}
-		result := map[string]any{"status": status, "identifier": map[string]string{"type": "dns", "value": strings.TrimPrefix(san, "*.")}, "wildcard": strings.HasPrefix(san, "*."), "challenges": []any{map[string]any{"type": "dns-01", "url": fmt.Sprintf("%s/acme/challenge/%d", fixtureCAOrigin, index), "token": base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("fixture-challenge-%d", index))), "status": status}}}
+		challenges := []any{
+			map[string]any{
+				"type":   "dns-01",
+				"url":    fmt.Sprintf("%s/acme/challenge/%d", fixtureCAOrigin, index),
+				"token":  base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("fixture-challenge-%d", index))),
+				"status": status,
+			},
+		}
+		if !strings.HasPrefix(san, "*.") {
+			challenges = append(challenges, map[string]any{
+				"type":   "http-01",
+				"url":    fmt.Sprintf("%s/acme/challenge/http/%d", fixtureCAOrigin, index),
+				"token":  base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("fixture-http01-%d", index))),
+				"status": status,
+			})
+		}
+		result := map[string]any{"status": status, "identifier": map[string]string{"type": "dns", "value": strings.TrimPrefix(san, "*.")}, "wildcard": strings.HasPrefix(san, "*."), "challenges": challenges}
 		return c.result(200, result, fixtureCAOrigin+path), nil
+	}
+	if strings.HasPrefix(path, "/acme/challenge/http/") {
+		index := 0
+		_, _ = fmt.Sscanf(path, "/acme/challenge/http/%d", &index)
+		c.validated[c.sans[index]] = true
+		if len(c.validated) == len(c.sans) {
+			c.status = "ready"
+		}
+		return c.result(200, map[string]any{"type": "http-01", "url": fixtureCAOrigin + path, "status": "valid"}, ""), nil
 	}
 	if strings.HasPrefix(path, "/acme/challenge/") {
 		index := 0

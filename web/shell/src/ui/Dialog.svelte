@@ -42,8 +42,18 @@
   let dlg: HTMLDialogElement;
 
   $effect(() => {
-    if (open && !dlg.open) dlg.showModal();
-    else if (!open && dlg.open) dlg.close();
+    if (open && !dlg.open) {
+      dlg.showModal();
+      requestAnimationFrame(() => {
+        if (!dlg?.open) return;
+        const target = dlg.querySelector<HTMLElement>(
+          '.body [autofocus]:not([disabled]), .body input:not([disabled]):not([type="hidden"])',
+        );
+        target?.focus();
+      });
+    } else if (!open && dlg.open) {
+      dlg.close();
+    }
   });
 
   function handleClose() {

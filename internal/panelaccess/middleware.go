@@ -158,7 +158,7 @@ func (m *Manager) WrapWithOptions(next http.Handler, opts WrapOptions) http.Hand
 			// Browser navigation to /<entryPath>: issue HMAC gate cookie and 302 redirect.
 			// In tls_mode="proxy" over plain HTTP (before TLS reverse proxy is wired),
 			// avoid setting Secure so the browser does not drop _g and loop.
-			secureCookie := r.TLS != nil || (snap.TLSMode != "" && snap.TLSMode != config.TLSProxy) || isHTTPSRequestTrusted(r, opts.TrustedProxies)
+			secureCookie := ShouldUseSecureGateCookie(snap.TLSMode, r, opts.TrustedProxies)
 			snap.SetGateCookieForPath(w, rawEntry, secureCookie)
 			target := rest
 			if r.URL.RawQuery != "" {
@@ -331,6 +331,44 @@ func isRemoteTrustedProxy(remoteAddr string, trusted []netip.Prefix) bool {
 		}
 	}
 	return false
+}
+
+// ParseTrustedProxies parses raw IP/CIDR strings into netip.Prefix slices.
+func ParseTrustedProxies(raws []string) []netip.Prefix {
+	if len(raws) == 0 {
+		return nil
+	}
+	out := make([]netip.Prefix, 0, len(raws))
+	for _, raw := range raws {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(s); err == nil {
+			out = append(out, p)
+			continue
+		}
+		if a, err := netip.ParseAddr(s); err == nil {
+			u := a.Unmap()
+			out = append(out, netip.PrefixFrom(u, u.BitLen()))
+		}
+	}
+	return out
+}
+
+// ShouldUseSecureGateCookie determines whether the stealth entry-gate cookie
+// (_g) should carry the Secure attribute for this request.
+func ShouldUseSecureGateCookie(tlsMode string, r *http.Request, trusted []netip.Prefix) bool {
+	if r != nil && r.TLS != nil {
+		return true
+	}
+	if tlsMode != "" && tlsMode != config.TLSProxy {
+		return true
+	}
+	if r == nil {
+		return false
+	}
+	return isHTTPSRequestTrusted(r, trusted)
 }
 
 func isHTTPSRequestTrusted(r *http.Request, trusted []netip.Prefix) bool {

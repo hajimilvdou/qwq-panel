@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/actor"
@@ -112,8 +113,9 @@ func (s *Service) DisableOwnTOTP(ctx context.Context, userID, code, clientIP str
 	if wait, ok := s.thr.Attempt(key, clientIP); !ok {
 		return User{}, rateLimited(wait)
 	}
+	trimmed := strings.TrimSpace(code)
 	method := "recovery_code"
-	if isTOTPShaped(code) {
+	if isTOTPShaped(trimmed) {
 		method = "totp"
 	}
 	var updated User
@@ -123,7 +125,7 @@ func (s *Service) DisableOwnTOTP(ctx context.Context, userID, code, clientIP str
 			return err
 		}
 		updated, err = s.DisableTOTP(ctx, tx, DisableTOTPInput{
-			UserID: cur.ID, ExpectedRevision: cur.Revision, Method: method, Code: code, Actor: by,
+			UserID: cur.ID, ExpectedRevision: cur.Revision, Method: method, Code: trimmed, Actor: by,
 		})
 		return err
 	})

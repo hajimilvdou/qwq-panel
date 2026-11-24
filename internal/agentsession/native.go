@@ -910,7 +910,7 @@ func isSlashControlMessage(role, content string) bool {
 	}
 	cmd := strings.Fields(trimmed)[0]
 	switch strings.ToLower(cmd) {
-	case "/help", "/status", "/clear", "/compact", "/model", "/effort", "/mode":
+	case "/help", "/status", "/clear", "/compact", "/model", "/effort", "/mode", "/plan", "/context", "/skills", "/mcp":
 		return true
 	default:
 		return false

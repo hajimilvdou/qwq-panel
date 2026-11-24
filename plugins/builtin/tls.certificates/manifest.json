@@ -39,7 +39,7 @@
     "schemas/renewal.configure.request.json": "sha256:4816c9d35f55f24bb8d01b53bf100debe82b919b63790f3838fee35392a15db9",
     "schemas/renewal.target.request.json": "sha256:98617422a6140266126f3172aac462a55f35c00fb4228f04f4fc82ee9101fc3d",
     "schemas/renewal.view.response.json": "sha256:b7a5e6a68129bdfc3fd5013576682fa27140cbb274a7a6045af017ad4444d0e7",
-    "ui/certs.js": "sha256:6055418f31af3dc1a1034906aea08d3892ccaba93d8b67a54a96a2d15ab65882",
+    "ui/certs.js": "sha256:ca92b3be31697ddd68ce216622ebd85ace8207b9d07e67a64a4ffec0361ab7e2",
     "ui/index.html": "sha256:3f42358e19d8bc214518b78f33cd9cef46b8c46cb893b113593fe060cd837645",
     "ui/plugin.css": "sha256:f8293f926aee2f53350cf62571d521fd96dc293f4a71707aa6f9a552c152f236"
   },

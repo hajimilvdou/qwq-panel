@@ -317,17 +317,7 @@ func (a *api) getAgentSession(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	rec, err := svc.Get(r.Context(), act, id)
-	if err != nil {
-		a.fail(w, r, err)
-		return
-	}
-	msgs, err := svc.Messages(r.Context(), act, id, 0)
-	if err != nil {
-		a.fail(w, r, err)
-		return
-	}
-	approvals, err := svc.PendingApprovals(r.Context(), act, id)
+	snap, err := svc.SessionSnapshot(r.Context(), act, id)
 	if err != nil {
 		a.fail(w, r, err)
 		return
@@ -338,18 +328,18 @@ func (a *api) getAgentSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var inFlightDTO *agentInFlightDTO
-	if inf := svc.InFlight(r.Context(), act, id); inf != nil {
+	if snap.InFlight != nil {
 		inFlightDTO = &agentInFlightDTO{
-			MessageID: inf.MessageID,
-			Reasoning: inf.Reasoning,
-			Content:   inf.Content,
-			HeadSeq:   inf.HeadSeq,
+			MessageID: snap.InFlight.MessageID,
+			Reasoning: snap.InFlight.Reasoning,
+			Content:   snap.InFlight.Content,
+			HeadSeq:   snap.InFlight.HeadSeq,
 		}
 	}
 	a.writeResource(w, r, http.StatusOK, agentSessionDetail{
-		agentSessionDTO: newAgentSessionDTO(rec),
-		Messages:        newAgentMessageDTOs(msgs),
-		Approvals:       newAgentApprovalDTOs(approvals),
+		agentSessionDTO: newAgentSessionDTO(snap.Session),
+		Messages:        newAgentMessageDTOs(snap.Messages),
+		Approvals:       newAgentApprovalDTOs(snap.Approvals),
 		InFlight:        inFlightDTO,
 	}, fields)
 }

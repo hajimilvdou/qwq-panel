@@ -327,8 +327,10 @@ func (m *pluginManager) runtimeState(pluginID string, enabled bool, startup stri
 		case updater.VersionQuarantined, updater.VersionRejected:
 			return &api.PluginRuntime{State: "quarantined", Detail: active.RejectedReason}
 		case updater.VersionActive:
-			out := &api.PluginRuntime{State: "running"}
-			if !m.updater.UnitRunning(pluginID) && startup == "on_demand" {
+			out := &api.PluginRuntime{State: "stopped"}
+			if m.updater.UnitRunning(pluginID) {
+				out.State = "running"
+			} else if startup == "on_demand" {
 				out.State = "standby"
 			}
 			m.fillMemory(out, pluginID, active, hasActive)

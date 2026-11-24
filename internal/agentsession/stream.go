@@ -299,6 +299,84 @@ func agentStreamLimit(name string, max int64) error {
 		RetryAfterSec: 1, Limit: &problem.Limit{Name: name, Max: max}}
 }
 
+// SessionDetailSnapshot bundles a coherent view of the persisted session,
+// transcript messages, pending approvals, and in-flight live streaming buffer
+// captured under rt.mu so in_flight.head_seq never outruns returned messages.
+type SessionDetailSnapshot struct {
+	Session   *Session
+	Messages  []Message
+	Approvals []PendingApproval
+	InFlight  *InFlightSnapshot
+}
+
+// SessionSnapshot returns a consistent snapshot of session metadata, messages,
+// pending approvals, and any in-flight live delta buffer.
+func (s *Service) SessionSnapshot(ctx context.Context, owner actor.Actor, sessionID string) (*SessionDetailSnapshot, error) {
+	rec, err := s.loadFor(ctx, owner, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	rt := s.runtimeFor(rec)
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	freshRec, err := s.loadFor(ctx, owner, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	msgs, err := s.messages(ctx, sessionID, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	if msgs == nil {
+		msgs = []Message{}
+	}
+	recs, err := s.toolCallsWithStatus(ctx, sessionID, ToolAwaitingApproval)
+	if err != nil {
+		return nil, err
+	}
+	approvals := make([]PendingApproval, 0, len(recs))
+	for _, r := range recs {
+		pa := PendingApproval{
+			CallID: r.CallID, ApprovalID: r.ApprovalID, OperationID: r.OperationID,
+			Action: r.Action, Args: r.Args, Status: r.Status, CreatedAt: r.CreatedAt,
+		}
+		if tool, ok := s.toolFor(ctx, r.Action); ok {
+			pa.Summary, pa.Description = tool.Summary, tool.Description
+		}
+		approvals = append(approvals, pa)
+	}
+	var inFlight *InFlightSnapshot
+	if rt.running && !rt.closed {
+		var content string
+		if rt.currentMessage != "" {
+			if b := rt.delta[rt.currentMessage]; b != nil {
+				content = b.String()
+			}
+		}
+		reasoning := rt.reasoning.String()
+		if content != "" || reasoning != "" {
+			msgID := rt.currentMessage
+			if msgID == "" {
+				msgID = "in_flight"
+			}
+			inFlight = &InFlightSnapshot{
+				MessageID: msgID,
+				Reasoning: reasoning,
+				Content:   content,
+				HeadSeq:   rt.seq,
+			}
+		}
+	}
+	return &SessionDetailSnapshot{
+		Session:   freshRec,
+		Messages:  msgs,
+		Approvals: approvals,
+		InFlight:  inFlight,
+	}, nil
+}
+
 // InFlight returns the in-memory streaming snapshot (buffered assistant text
 // and reasoning deltas not yet persisted to SQLite) when a turn is actively
 // streaming, or nil when idle / between messages.
@@ -349,13 +427,39 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 	// If an external adapter or core emits a tool_call while unclosed assistant
 	// text is buffered in memory, auto-flush it first so last_seq never jumps
 	// ahead of unpersisted deltas and post-tool text gets its own bubble.
-	if e.Type == EventToolCall && rt.currentMessage != "" {
-		if b := rt.delta[rt.currentMessage]; b != nil && b.Len() > 0 {
-			if err := s.publishLocked(ctx, rt, Event{
-				Type:      EventMessageCompleted,
-				MessageID: rt.currentMessage,
-			}); err != nil {
-				return err
+	if e.Type == EventToolCall {
+		if rt.currentMessage != "" {
+			if b := rt.delta[rt.currentMessage]; b != nil && b.Len() > 0 {
+				if err := s.publishLocked(ctx, rt, Event{
+					Type:      EventMessageCompleted,
+					MessageID: rt.currentMessage,
+				}); err != nil {
+					return err
+				}
+			} else {
+				// Reasoning-only pre-tool step: drop stale host placeholder ID
+				// and reasoning buffer so they do not bleed into the next step.
+				rt.currentMessage = ""
+				rt.reasoning.Reset()
+			}
+		} else if rt.reasoning.Len() > 0 {
+			rt.reasoning.Reset()
+		}
+	}
+	// Ignore redundant empty completion frames from external adapters whose
+	// buffered text was already auto-flushed before a tool call.
+	if e.Type == EventMessageCompleted {
+		targetID := e.MessageID
+		if targetID == "" {
+			targetID = rt.currentMessage
+		}
+		hasDelta := targetID != "" && rt.delta[targetID] != nil && rt.delta[targetID].Len() > 0
+		if !hasDelta && e.Delta == "" && len(e.ToolCalls) == 0 && e.ReasoningContent == "" && rt.reasoning.Len() == 0 {
+			if targetID != "" && targetID == rt.lastAssistant {
+				return nil
+			}
+			if e.MessageID == "" && rt.currentMessage == "" && rt.lastAssistant != "" {
+				return nil
 			}
 		}
 	}
@@ -388,7 +492,9 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 				rt.currentMessage = s.ids.New(messagePrefix)
 			}
 			e.MessageID = rt.currentMessage
-		} else if rt.currentMessage == "" {
+		} else if rt.currentMessage == "" || (rt.currentMessage != e.MessageID && rt.delta[rt.currentMessage] == nil) {
+			// Adopt explicit provider message ID when currentMessage was unset
+			// or only a reasoning-only host placeholder with no text deltas.
 			rt.currentMessage = e.MessageID
 		}
 		b := rt.deltaLocked(e.MessageID)
@@ -448,11 +554,14 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 		msg := &Message{
 			SessionID: rt.session.ID, Seq: e.Seq, MessageID: e.MessageID, Role: RoleAssistant, Content: content, CreatedAt: e.At,
 		}
-		reasoning := e.ReasoningContent
+		reasoning := clipText(e.ReasoningContent, maxAssistantBytes)
 		if reasoning == "" {
-			reasoning = rt.reasoning.String()
+			reasoning = clipText(rt.reasoning.String(), maxAssistantBytes)
 		}
 		rt.reasoning.Reset()
+		// Clear ReasoningContent from the broadcast Event so rt.ring does not
+		// pin unbounded reasoning text invisible to maxRingBytes accounting.
+		e.ReasoningContent = ""
 		if len(e.ToolCalls) > 0 || reasoning != "" {
 			for i := range e.ToolCalls {
 				e.ToolCalls[i].Arguments = storableArgs(e.ToolCalls[i].Arguments)

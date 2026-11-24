@@ -296,7 +296,14 @@ func CapAnthropicMaxTokens(model string, requestedMaxTokens int, thinkingBudget 
 	switch {
 	case strings.Contains(norm, "claude-3-5-"), strings.Contains(norm, "claude-3-haiku"), strings.Contains(norm, "claude-3-opus"):
 		hardCap = 8192
-	case strings.Contains(norm, "claude-opus-4-2025"), strings.Contains(norm, "claude-opus-4-0"), strings.Contains(norm, "claude-opus-4-1"):
+	case strings.Contains(norm, "claude-opus-4-2025"),
+		strings.Contains(norm, "claude-opus-4-0"), strings.Contains(norm, "claude-opus-4.0"),
+		strings.Contains(norm, "claude-opus-4-1"), strings.Contains(norm, "claude-opus-4.1"),
+		strings.Contains(norm, "claude-4-opus"),
+		(strings.Contains(norm, "claude-opus-4") &&
+			!strings.Contains(norm, "claude-opus-4-5") && !strings.Contains(norm, "claude-opus-4.5") &&
+			!strings.Contains(norm, "claude-opus-4-6") && !strings.Contains(norm, "claude-opus-4.6") &&
+			!strings.Contains(norm, "claude-opus-4-7") && !strings.Contains(norm, "claude-opus-4.7")):
 		hardCap = 32000
 	}
 	cappedMax = requestedMaxTokens

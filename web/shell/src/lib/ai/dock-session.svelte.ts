@@ -7,7 +7,6 @@
  *   dockSession.send(text)         没有会话时先建一个（内置核心、"重要操作先问我"、默认 AI 服务）
  *   dockSession.attach() / detach() 悬浮窗展开或会话运行中才保持会话流
  * ========================================================================== */
-import { newIdempotencyKey } from '$api/client';
 import { agent } from '$api/endpoints';
 import { resources } from '../resource.svelte';
 import { lastSession } from './agent-sessions.svelte';
@@ -51,10 +50,8 @@ class DockSession {
       });
       resources.invalidate('agent-sessions');
       this.switchTo(s.session_id);
-      /* 新会话：直接发，switchTo 已建立会话流从 seq 0 完整回放并推流，禁止 reload 清空流式气泡 */
-      await agent.send(s.session_id, text, newIdempotencyKey());
-      return;
     }
+    if (!this.stream && this.id) this.#ensureStream();
     await this.stream?.send(text);
   }
 

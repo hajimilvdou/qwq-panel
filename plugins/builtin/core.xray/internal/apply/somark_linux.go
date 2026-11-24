@@ -19,6 +19,12 @@ var (
 // kernel permission to set SO_MARK on outbound sockets (typically requires
 // CAP_NET_ADMIN / CAP_NET_RAW). When EPERM is returned, RenderV2 omits
 // sockopt.mark so proxy traffic forwards normally instead of 100% failing.
+// SocketMarkPermitted reports whether the current sandbox process can set
+// SO_MARK on outbound sockets.
+func SocketMarkPermitted() bool {
+	return probeSocketMarkPermitted()
+}
+
 func probeSocketMarkPermitted() bool {
 	socketMarkProbeOnce.Do(func() {
 		fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)

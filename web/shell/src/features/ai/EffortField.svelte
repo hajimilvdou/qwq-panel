@@ -11,7 +11,6 @@
 <script lang="ts">
   import { Input } from '$ui';
   import {
-    FALLBACK_EFFORT,
     GENERIC_EFFORT_LEVELS,
     MODEL_EFFORT_CATALOG,
     resolveModelEffort,
@@ -39,7 +38,7 @@
   const placeholder = $derived(
     resolved.profile
       ? `留空自动匹配 ${resolved.profile.defaultEffort}，或直接输入自定义代号`
-      : `留空默认 ${FALLBACK_EFFORT}，或直接输入自定义代号（如 max / minimal / 16384）`,
+      : '留空默认不额外注入，或直接输入自定义代号（如 high / max / minimal / 16384）',
   );
 </script>
 
@@ -73,10 +72,10 @@
       type="button"
       class="chip"
       class:on={!value.trim()}
-      title="留空：命中内置清单自动套用，未命中默认 high"
+      title="留空：命中内置推理清单时自动套用推荐挡位，未命中则不额外注入"
       onclick={() => (value = '')}
     >
-      自动 ({resolved.profile ? resolved.profile.defaultEffort : FALLBACK_EFFORT})
+      自动 ({resolved.profile ? resolved.profile.defaultEffort : '不注入'})
     </button>
     {#each chips as lv (lv)}
       <button
@@ -92,7 +91,7 @@
 
   {#if catalogOpen}
     <div class="catalog" role="region" aria-label="内置主流 AI 模型思考挡位清单">
-      <p class="cat-tip">填写模型名后系统会自动按下方清单匹配挡位；若不在清单内且未自定义，则自动使用 <code>high</code>。任何时候都可在上方直接输入自定义代号或数字预算。</p>
+      <p class="cat-tip">填写模型名后系统会自动按下方推理模型清单匹配挡位；若不在清单内且未自定义，则默认不额外注入（避免非推理接口返回 400）。任何时候都可在上方直接输入自定义代号或数字预算。</p>
       <div class="cat-list">
         {#each MODEL_EFFORT_CATALOG as item (item.family)}
           <div class="cat-row" class:hit={resolved.profile?.family === item.family}>

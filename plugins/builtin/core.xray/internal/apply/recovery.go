@@ -170,11 +170,6 @@ func generationInboundID(generation *state.Generation) string {
 				return p.ID
 			}
 		}
-		for _, p := range generation.SummaryV2.Profiles {
-			if p.Protocol != corev2.ProtocolAnyTLS {
-				return p.ID
-			}
-		}
 		if len(generation.SummaryV2.Profiles) > 0 {
 			return "api-only"
 		}

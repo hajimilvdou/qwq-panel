@@ -189,7 +189,14 @@
 
 <Dialog bind:open={disableOpen} title="关闭两步验证" description="关闭后只靠密码登录，安全性会降低。输入当前验证码或恢复码确认。" size="sm">
   {#if disableUseRecovery}
-    <Input label="恢复码" mono placeholder="xxxx-xxxx" bind:value={disableCode} autofocus disabled={disableBusy} />
+    <form
+      onsubmit={(e) => {
+        e.preventDefault();
+        void disableTotp();
+      }}
+    >
+      <Input label="恢复码" mono placeholder="xxxx-xxxx" bind:value={disableCode} autofocus disabled={disableBusy} />
+    </form>
   {:else}
     <div class="otp">
       <OtpInput bind:value={disableCode} autofocus disabled={disableBusy} oncomplete={(c) => disableTotp(c)} />

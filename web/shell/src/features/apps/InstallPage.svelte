@@ -68,26 +68,44 @@
   let ctrl: AbortController | null = null;
   let picker = $state<HTMLInputElement>();
 
+  let stagedUploadId: string | null = null;
+  function releaseStagedUpload(id = stagedUploadId) {
+    if (!id) return;
+    if (stagedUploadId === id) stagedUploadId = null;
+    void plugins.discardUpload(id).catch(() => {});
+  }
+
   async function take(f: File | undefined | null) {
     if (!f || uploading) return;
     uploadErr = fileProblem(f) ?? '';
     if (uploadErr) return;
+    releaseStagedUpload();
     ctrl?.abort();
     const myCtrl = new AbortController();
     ctrl = myCtrl;
     file = f;
     uploading = true;
     progress = 0;
+    let uploadedId: string | null = null;
     try {
       const up = await plugins.upload(f, (l, t) => (progress = t ? l / t : 0), myCtrl.signal);
-      if (myCtrl.signal.aborted) return;
+      uploadedId = up.upload_id;
+      if (myCtrl.signal.aborted) {
+        releaseStagedUpload(uploadedId);
+        return;
+      }
       progress = 1;
       const inspected = await plugins.inspect(up.upload_id);
-      if (myCtrl.signal.aborted) return;
+      if (myCtrl.signal.aborted) {
+        releaseStagedUpload(uploadedId);
+        return;
+      }
+      stagedUploadId = up.upload_id;
       ins = inspected;
       accepted = defaultAccepted(ins.manifest?.capabilities ?? []);
       step = 'check';
     } catch (err) {
+      if (uploadedId) releaseStagedUpload(uploadedId);
       if (!myCtrl.signal.aborted) {
         const v = describeError(err);
         if (v.code !== 'ABORTED') uploadErr = v.code === 'PAYLOAD_TOO_LARGE' ? '安装包不能超过 64 MiB' : v.message;
@@ -121,21 +139,32 @@
       fetchErr = '仅支持公开的 https:// 安装包地址';
       return;
     }
+    releaseStagedUpload();
     ctrl?.abort();
     const myCtrl = new AbortController();
     ctrl = myCtrl;
     fetching = true;
     fetchErr = '';
+    let uploadedId: string | null = null;
     try {
       const body = cleanSha ? { url: cleanUrl, expected_sha256: cleanSha } : { url: cleanUrl };
       const up = await plugins.fetchFromUrl(body, myCtrl.signal);
-      if (myCtrl.signal.aborted) return;
+      uploadedId = up.upload_id;
+      if (myCtrl.signal.aborted) {
+        releaseStagedUpload(uploadedId);
+        return;
+      }
       const inspected = await plugins.inspect(up.upload_id);
-      if (myCtrl.signal.aborted) return;
+      if (myCtrl.signal.aborted) {
+        releaseStagedUpload(uploadedId);
+        return;
+      }
+      stagedUploadId = up.upload_id;
       ins = inspected;
       accepted = defaultAccepted(ins.manifest?.capabilities ?? []);
       step = 'check';
     } catch (err) {
+      if (uploadedId) releaseStagedUpload(uploadedId);
       if (!myCtrl.signal.aborted) {
         const v = describeError(err);
         if (v.code !== 'ABORTED') {
@@ -150,7 +179,10 @@
     }
   }
 
-  onDestroy(() => ctrl?.abort());
+  onDestroy(() => {
+    ctrl?.abort();
+    releaseStagedUpload();
+  });
 
   /* ---------------------------------------------------------------- 检查 / 授权 */
   let ins = $state<PluginPackageInspection | null>(null);
@@ -184,6 +216,7 @@
   }
 
   function restart() {
+    releaseStagedUpload();
     step = 'upload';
     ins = null;
     file = null;
@@ -226,6 +259,7 @@
       const body = { upload_id: ins.upload_id, accepted_capabilities: acceptedList(caps, accepted) };
       if (ins.installed) await plugins.update(m.id, { ...body, expected_revision: ins.installed.revision }, intent.key);
       else await plugins.install(body, intent.key);
+      stagedUploadId = null;
       current = ROLLOUT_STEPS.length - 1;
       finished = true;
       off?.();

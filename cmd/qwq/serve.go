@@ -170,6 +170,10 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		// The updater is the single owner of unit starts and the ABI
 		// bootstrap; the supervisor only attaches from here on (PLG-07).
 		rt.SetRestore(up.EnsureActive)
+		rt.SetPluginEnabled(func(pluginID string) bool {
+			en, eerr := up.Enabled(life, pluginID)
+			return eerr == nil && en
+		})
 		recoverSagas(life, up, sagaRecoverTimeout, logger)
 		restoreActive(life, up, restoreTimeout, logger)
 	}
@@ -235,8 +239,6 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "qwq serve-controller: init panel access settings: %v\n", err)
 		return 1
 	}
-	// 启动时同步当前生效面板端口至 qwq-capability（确保 panel-port.json 与活跃防火墙保留端口一致）。
-	syncCapabilityPanelPort(accessMgr.Snapshot().Port)
 	if rt != nil {
 		rt.SetManagementPortsFunc(func() []uint32 {
 			if p := accessMgr.Snapshot().Port; p > 0 && p <= 65535 {

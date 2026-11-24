@@ -60,7 +60,7 @@ previously issued, unused link. Exit status: 0 issued, 1 error, 2 usage,
 	}
 	defer closeDB()
 
-	listenAddr, effectiveEntryPath, _, panelDomain, bypassReason := panelaccess.ReadEffectiveFromDB(ctx, local.DB, cfg.HTTP)
+	listenAddr, effectiveEntryPath, rawEntryPath, panelDomain, bypassReason := panelaccess.ReadEffectiveFromDB(ctx, local.DB, cfg.HTTP)
 	effectiveHTTP := cfg.HTTP
 	effectiveHTTP.Listen = listenAddr
 	effectiveHTTP.PanelDomain = panelDomain
@@ -83,7 +83,7 @@ previously issued, unused link. Exit status: 0 issued, 1 error, 2 usage,
 		host, portStr, perr := net.SplitHostPort(listenAddr)
 		if perr == nil {
 			if p, aerr := strconv.Atoi(portStr); aerr == nil && p > 0 {
-				fmt.Fprint(stderr, formatAccessHelp(host, p, effectiveEntryPath, panelDomain, cfg.HTTP.TLS.Mode))
+				fmt.Fprint(stderr, formatAccessHelp(host, p, rawEntryPath, panelDomain, cfg.HTTP.TLS.Mode))
 			}
 		}
 		return exitInitialized

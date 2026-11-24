@@ -63,3 +63,46 @@ func TestLiveHTTPListenerReclaimRetiringWildcardPort(t *testing.T) {
 		t.Fatalf("Rebind back to %s: %v", addrA, err)
 	}
 }
+
+func TestLiveHTTPListenerSamePortHostSwitchAndAbortRollback(t *testing.T) {
+	srv := &http.Server{Handler: http.NewServeMux()}
+	live := newLiveHTTPListener(srv, false, nil)
+	defer live.Close()
+
+	// Reserve a free port on wildcard first to avoid colliding with host services.
+	probe, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("reserve wildcard port: %v", err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	_ = probe.Close()
+
+	loopbackAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	publicAddr := fmt.Sprintf("0.0.0.0:%d", port)
+
+	if _, err := live.Start(loopbackAddr); err != nil {
+		t.Fatalf("Start(%s): %v", loopbackAddr, err)
+	}
+	// Same-port loopback -> wildcard must succeed without EADDRINUSE.
+	staged, err := live.PrepareBind(publicAddr)
+	if err != nil {
+		t.Fatalf("PrepareBind(%s) from %s failed: %v", publicAddr, loopbackAddr, err)
+	}
+	// Aborting must restore loopbackAddr so it remains active.
+	staged.Abort()
+	live.mu.Lock()
+	curAfterAbort := live.currentReqAddr
+	hasCur := live.current != nil
+	live.mu.Unlock()
+	if !hasCur || curAfterAbort != loopbackAddr {
+		t.Fatalf("after Abort: hasCur=%v reqAddr=%q, want %q", hasCur, curAfterAbort, loopbackAddr)
+	}
+
+	// Commit same-port loopback -> wildcard -> loopback.
+	if err := live.Rebind(publicAddr); err != nil {
+		t.Fatalf("Rebind(%s): %v", publicAddr, err)
+	}
+	if err := live.Rebind(loopbackAddr); err != nil {
+		t.Fatalf("Rebind back to %s: %v", loopbackAddr, err)
+	}
+}

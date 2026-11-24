@@ -181,8 +181,12 @@ func (r *CustomDomainRouter) effectiveHost(req *http.Request) string {
 }
 
 func (r *CustomDomainRouter) isTrustedProxy(ip netip.Addr) bool {
+	unmapped := ip.Unmap()
+	if unmapped.IsLoopback() {
+		return true
+	}
 	for _, p := range r.trustedProxies {
-		if p.Contains(ip) {
+		if p.Contains(unmapped) {
 			return true
 		}
 	}

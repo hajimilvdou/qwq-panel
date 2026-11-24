@@ -276,6 +276,7 @@ func (p *BuiltinProxy) Reload(sites []SiteRecord) int {
 			Rewrite: func(pr *httputil.ProxyRequest) {
 				pr.SetURL(target)
 				pr.SetXForwarded()
+				pr.Out.Header.Del("X-Real-IP")
 				pr.Out.Host = target.Host
 			},
 			ModifyResponse: func(resp *http.Response) error {

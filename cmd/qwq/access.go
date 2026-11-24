@@ -57,6 +57,10 @@ func runAccessShow(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "qwq access show: 不接受多余位置参数 %q\n", strings.Join(fs.Args(), " "))
+		return 2
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "qwq access show: %v\n", err)
@@ -95,6 +99,20 @@ func runAccessReset(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "qwq access reset: 不接受多余位置参数 %q（端口请使用 --port N）\n", strings.Join(fs.Args(), " "))
+		return 2
+	}
+	portSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "port" {
+			portSet = true
+		}
+	})
+	if portSet && (*port < 1 || *port > 65535) {
+		fmt.Fprintf(stderr, "qwq access reset: --port 必须在 1..65535 之间（收到 %d）\n", *port)
+		return 2
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "qwq access reset: %v\n", err)
@@ -125,7 +143,7 @@ func runAccessReset(args []string, stdout, stderr io.Writer) int {
 		h := strings.TrimSpace(*listenHost)
 		in.ListenHost = &h
 	}
-	if *port > 0 {
+	if portSet {
 		p := *port
 		in.Port = &p
 	}
@@ -185,8 +203,10 @@ func formatAccessHelp(listenHost string, port int, entryPath, panelDomain, tlsMo
 		fmt.Fprintf(&b, "  反代域名 : https://%s/\n", panelDomain)
 	}
 	fmt.Fprintf(&b, "  直连/救援: %s\n", directURL)
-	if listenHost == "127.0.0.1" || listenHost == "::1" {
+	if listenHost == "127.0.0.1" {
 		fmt.Fprintf(&b, "  SSH 隧道 : ssh -L %d:127.0.0.1:%d root@<你的服务器IP>\n", port, port)
+	} else if listenHost == "::1" {
+		fmt.Fprintf(&b, "  SSH 隧道 : ssh -L %d:[::1]:%d root@<你的服务器IP>\n", port, port)
 	}
 	fmt.Fprintf(&b, "  应急重置 : sudo qwq access reset [--listen 127.0.0.1|0.0.0.0] [--port N] [--entry-path none|<path>] [--clear-domain]\n")
 	return b.String()

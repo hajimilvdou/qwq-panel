@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	platformv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
 
@@ -321,39 +322,53 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 	var ln, httpsLn net.Listener
 	var newBound, newHTTPSBound string
 
-	needHTTPChange := newAddr != oldAddr || (newAddr != "" && i.server == nil)
-	needHTTPSChange := newHTTPSAddr != oldHTTPSAddr || (newHTTPSAddr != "" && i.httpsServer == nil)
+	httpAddrChanged := newAddr != oldAddr
+	httpsAddrChanged := newHTTPSAddr != oldHTTPSAddr
+	needHTTPChange := httpAddrChanged || (newAddr != "" && i.server == nil)
+	needHTTPSChange := httpsAddrChanged || (newHTTPSAddr != "" && i.httpsServer == nil)
+	var nextHTTPErr, nextHTTPSErr string
 
-	// 两阶段切换：先完成所有需要变更的监听绑定，任一失败即关闭已打开的新监听且不改动旧字段。
+	// 两阶段切换：显式修改 listen_addr/https_listen_addr 时严格校验绑定失败即中止；
+	// 若地址未改但启动时端口被占（如 core.xray 占 443），则尽力重试而不阻断无关配置保存。
 	if needHTTPChange && newAddr != "" {
 		ln, err = net.Listen("tcp", newAddr)
 		if err != nil {
-			i.cfgMu.Unlock()
-			return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代监听 %s 失败: %s", newAddr, err.Error())
+			if httpAddrChanged {
+				i.cfgMu.Unlock()
+				return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代监听 %s 失败: %s", newAddr, err.Error())
+			}
+			nextHTTPErr = err.Error()
+			needHTTPChange = false
+		} else {
+			newSrv = &http.Server{
+				Handler:           i.proxy,
+				ReadHeaderTimeout: 10 * time.Second,
+				IdleTimeout:       60 * time.Second,
+			}
+			newBound = ln.Addr().String()
 		}
-		newSrv = &http.Server{
-			Handler:           i.proxy,
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       60 * time.Second,
-		}
-		newBound = ln.Addr().String()
 	}
 	if needHTTPSChange && newHTTPSAddr != "" {
 		rawLn, lerr := net.Listen("tcp", newHTTPSAddr)
 		if lerr != nil {
-			if ln != nil {
-				_ = ln.Close()
+			if httpsAddrChanged {
+				if ln != nil {
+					_ = ln.Close()
+				}
+				i.cfgMu.Unlock()
+				return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代 HTTPS 监听 %s 失败: %s", newHTTPSAddr, lerr.Error())
 			}
-			i.cfgMu.Unlock()
-			return pluginsdk.Errorf("FAILED_PRECONDITION", "热切换反代 HTTPS 监听 %s 失败: %s", newHTTPSAddr, lerr.Error())
+			nextHTTPSErr = lerr.Error()
+			needHTTPSChange = false
+		} else {
+			httpsLn = tls.NewListener(rawLn, i.sni.TLSConfig())
+			newHTTPSSrv = &http.Server{
+				Handler:           i.proxy,
+				ReadHeaderTimeout: 10 * time.Second,
+				IdleTimeout:       60 * time.Second,
+			}
+			newHTTPSBound = rawLn.Addr().String()
 		}
-		httpsLn = tls.NewListener(rawLn, i.sni.TLSConfig())
-		newHTTPSSrv = &http.Server{
-			Handler:           i.proxy,
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       60 * time.Second,
-		}
-		newHTTPSBound = rawLn.Addr().String()
 	}
 
 	if needHTTPChange {
@@ -361,6 +376,8 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 		i.server = newSrv
 		i.boundAddr = newBound
 		i.httpListenErr = ""
+	} else if nextHTTPErr != "" {
+		i.httpListenErr = nextHTTPErr
 	}
 	if needHTTPSChange {
 		oldHTTPSSrv = i.httpsServer
@@ -370,6 +387,8 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 		if i.sni != nil {
 			i.sni.SetHTTPSListenerActive(newHTTPSSrv != nil)
 		}
+	} else if nextHTTPSErr != "" {
+		i.httpsListenErr = nextHTTPSErr
 	}
 	i.cfg = cfg
 	i.cfgMu.Unlock()
@@ -426,9 +445,9 @@ func (i *instance) Invoke(ctx context.Context, req pluginsdk.Request) (pluginsdk
 	case "ingress.tls.inspect":
 		return i.handleTLSInspect(ctx, req.Payload)
 	case "ingress.acme.present":
-		return i.handleACMEPresent(ctx, req.Payload)
+		return i.handleACMEPresent(ctx, req.Call(), req.Payload)
 	case "ingress.acme.cleanup":
-		return i.handleACMECleanup(ctx, req.Payload)
+		return i.handleACMECleanup(ctx, req.Call(), req.Payload)
 	default:
 		return pluginsdk.Response{}, pluginsdk.Errorf("NOT_FOUND", "未知操作: %s", req.Operation)
 	}
@@ -781,7 +800,17 @@ func (i *instance) handleTLSInspect(_ context.Context, payload []byte) (pluginsd
 	return jsonResp(obs)
 }
 
-func (i *instance) handleACMEPresent(_ context.Context, payload []byte) (pluginsdk.Response, error) {
+func requireHostACMEActor(call pluginsdk.Call) error {
+	if call.Actor == nil || call.Actor.GetKind() != platformv1.ActorKind_ACTOR_KIND_SYSTEM || call.Actor.GetId() != "host:acme-http01" {
+		return pluginsdk.Errorf("PERMISSION_DENIED", "ACME HTTP-01 验证通道仅允许宿主证书引擎内部调用")
+	}
+	return nil
+}
+
+func (i *instance) handleACMEPresent(_ context.Context, call pluginsdk.Call, payload []byte) (pluginsdk.Response, error) {
+	if err := requireHostACMEActor(call); err != nil {
+		return pluginsdk.Response{}, err
+	}
 	var req struct {
 		Token      string `json:"token"`
 		KeyAuth    string `json:"key_auth"`
@@ -810,7 +839,10 @@ func (i *instance) handleACMEPresent(_ context.Context, payload []byte) (plugins
 	})
 }
 
-func (i *instance) handleACMECleanup(_ context.Context, payload []byte) (pluginsdk.Response, error) {
+func (i *instance) handleACMECleanup(_ context.Context, call pluginsdk.Call, payload []byte) (pluginsdk.Response, error) {
+	if err := requireHostACMEActor(call); err != nil {
+		return pluginsdk.Response{}, err
+	}
 	var req struct {
 		Token string `json:"token"`
 	}

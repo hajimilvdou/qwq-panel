@@ -381,15 +381,50 @@
     }
   }
 
+  function isLoopbackHost(host) {
+    const h = String(host || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+    return h === '' || h === '127.0.0.1' || h === 'localhost' || h === '::1';
+  }
+
   function updateUserSubModalUrls() {
-    const rawOverride = ($('us-host-override')?.value || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    const rawInput = ($('us-host-override')?.value || '').trim();
     let origin = getPublicOrigin();
-    if (rawOverride) {
-      const proto = location.protocol === 'http:' ? 'http:' : 'https:';
-      const hasPort = /:\d+$/.test(rawOverride) || rawOverride.startsWith('[');
-      const portSuffix = !hasPort && location.port ? `:${location.port}` : '';
-      const hostFmt = rawOverride.includes(':') && !rawOverride.startsWith('[') && !hasPort ? `[${rawOverride}]` : rawOverride;
-      origin = `${proto}//${hostFmt}${portSuffix}`;
+    let baseProto = 'https:';
+    let basePort = '';
+    try {
+      const parsedBase = new URL(origin);
+      baseProto = parsedBase.protocol;
+      basePort = parsedBase.port;
+    } catch {
+      baseProto = location.protocol === 'http:' ? 'http:' : 'https:';
+      basePort = location.port || '';
+    }
+    if (rawInput) {
+      if (/^https?:\/\//i.test(rawInput)) {
+        try {
+          const parsed = new URL(rawInput);
+          origin = parsed.origin;
+        } catch {
+          origin = rawInput.replace(/\/+$/, '');
+        }
+      } else {
+        const cleaned = rawInput.replace(/\/+$/, '');
+        const colonCount = (cleaned.match(/:/g) || []).length;
+        let hostPart = cleaned;
+        let hasExplicitPort = false;
+        if (cleaned.startsWith('[')) {
+          const closeIdx = cleaned.indexOf(']');
+          hasExplicitPort = closeIdx > 0 && /^:\d+$/.test(cleaned.slice(closeIdx + 1));
+        } else if (colonCount >= 2) {
+          // Bare IPv6 address (e.g. 2001:db8::1): always bracket and preserve panel port.
+          hostPart = `[${cleaned}]`;
+          hasExplicitPort = false;
+        } else if (/:\d+$/.test(cleaned)) {
+          hasExplicitPort = true;
+        }
+        const portSuffix = !hasExplicitPort && basePort ? `:${basePort}` : '';
+        origin = `${baseProto}//${hostPart}${portSuffix}`;
+      }
     }
     const cleanPath = String(userSubModal.path || `/p/proxy.advanced/sub/${userSubModal.token}`).replace(/^\/+/, '/');
     const baseUrl = `${origin}${cleanPath}`;
@@ -407,7 +442,15 @@
     $('us-token-code').textContent = userSubModal.token;
     const hostInput = $('us-host-override');
     if (hostInput) {
-      hostInput.value = detectedPublicHost || '';
+      // Only prefill detectedPublicHost when the current panel origin is loopback/empty,
+      // so a working HTTPS domain or public IP origin is never clobbered.
+      let curHostname = '';
+      try {
+        curHostname = new URL(getPublicOrigin()).hostname;
+      } catch {
+        curHostname = '';
+      }
+      hostInput.value = isLoopbackHost(curHostname) && detectedPublicHost ? detectedPublicHost : '';
     }
     updateUserSubModalUrls();
     $('us-meta').textContent = subtitle || '关闭本窗口后明文令牌不再展示';

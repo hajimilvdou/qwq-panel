@@ -51,11 +51,17 @@ func (rt *PluginRuntime) PublicGateway() *pluginpublic.Gateway {
 	return rt.publicGateway
 }
 
-// ServePublicRoute 实现 pluginpublic.Dispatcher：仅转发至已运行插件（live），绝不隐式拉起停用插件。
+// ServePublicRoute 实现 pluginpublic.Dispatcher：拒绝停用插件；若已启用插件尚未 attach（如新安装、重启恢复或 on_demand 待机），按需 attach 后转发。
 func (rt *PluginRuntime) ServePublicRoute(ctx context.Context, pluginID string, req pluginpublic.PublicRequest) (pluginpublic.PublicResponse, error) {
+	if !rt.isPluginEnabled(pluginID) {
+		return pluginpublic.PublicResponse{}, problem.New(problem.PluginUnavailable, "plugin is disabled")
+	}
 	client, err := rt.live(pluginID)
 	if err != nil {
-		return pluginpublic.PublicResponse{}, err
+		client, err = rt.attach(ctx, pluginID)
+		if err != nil {
+			return pluginpublic.PublicResponse{}, err
+		}
 	}
 	prClient, ok := client.(publicRouteClient)
 	if !ok {
@@ -222,8 +228,13 @@ func (rt *PluginRuntime) ServePublicStream(
 	if err := sandbox.ValidateID(pluginID); err != nil {
 		return problem.New(problem.ValidationFailed, "invalid plugin id")
 	}
+	if !rt.isPluginEnabled(pluginID) {
+		return problem.New(problem.PluginUnavailable, "plugin is disabled")
+	}
 	if _, err := rt.live(pluginID); err != nil {
-		return err
+		if _, aerr := rt.attach(ctx, pluginID); aerr != nil {
+			return aerr
+		}
 	}
 	streamSock := resolvePublicStreamSocketPath(rt.opts.RunDir, pluginID)
 	if streamSock == "" {
@@ -366,6 +377,9 @@ func (rt *PluginRuntime) SyncPublicRoutes() {
 			continue
 		}
 		pluginID := e.Name()
+		if !rt.isPluginEnabled(pluginID) {
+			continue
+		}
 		dir, err := rt.opts.PluginDir(pluginID)
 		if err != nil {
 			continue

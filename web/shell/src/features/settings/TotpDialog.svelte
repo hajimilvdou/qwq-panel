@@ -11,7 +11,7 @@
 -->
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { Alert, Button, Checkbox, CopyButton, Dialog, OtpInput, QrCode, Skeleton } from '$ui';
+  import { Alert, Button, Checkbox, CopyButton, Dialog, Input, OtpInput, QrCode, Skeleton } from '$ui';
   import { account } from '$api/endpoints';
   import type { TotpEnrollment } from '$api/additions';
   import { describeError } from '$lib/errors';
@@ -24,11 +24,13 @@
   }
   let { open = $bindable() }: Props = $props();
 
-  type Stage = 'begin' | 'scan' | 'codes';
+  type Stage = 'begin' | 'verify' | 'scan' | 'codes';
   let stage = $state<Stage>('begin');
   let enrollment = $state<TotpEnrollment | null>(null);
   let codes = $state<string[]>([]);
   let code = $state('');
+  let rebindMfaCode = $state('');
+  let rebindUseRecovery = $state(false);
   let saved = $state(false);
   let busy = $state(false);
   let error = $state('');
@@ -49,18 +51,37 @@
     if (downloadUrl) URL.revokeObjectURL(downloadUrl);
   });
 
-  async function begin() {
+  async function begin(mfaCode?: string) {
     busy = true;
     error = '';
     try {
-      enrollment = await account.beginTotp(createIntent().key);
+      enrollment = await account.beginTotp(createIntent().key, mfaCode);
+      rebindMfaCode = '';
       stage = 'scan';
     } catch (e) {
       const v = describeError(e);
-      error = v.code === 'MFA_REQUIRED' ? '需要最近验证过两步验证：请重新登录后再试' : v.message;
+      if (v.code === 'MFA_REQUIRED') {
+        if (stage !== 'verify') {
+          stage = 'verify';
+          rebindMfaCode = '';
+          rebindUseRecovery = false;
+          error = '';
+        } else {
+          rebindMfaCode = '';
+          error = '当前两步验证码或恢复码不正确或已过期，请重试';
+        }
+      } else {
+        error = v.message;
+      }
     } finally {
       busy = false;
     }
+  }
+
+  function submitRebindMfa(val = rebindMfaCode) {
+    const trimmed = val.trim();
+    if (busy || !trimmed) return;
+    void begin(trimmed);
   }
 
   async function confirm(value = code) {
@@ -98,6 +119,8 @@
     enrollment = null;
     codes = [];
     code = '';
+    rebindMfaCode = '';
+    rebindUseRecovery = false;
     saved = false;
     error = '';
   }
@@ -105,13 +128,47 @@
 
 <Dialog
   bind:open
-  title={stage === 'codes' ? '保存恢复码' : '开启两步验证'}
-  description={stage === 'codes' ? '手机丢了时用它登录。每条只能用一次，只显示这一次。' : undefined}
+  title={stage === 'codes' ? '保存恢复码' : stage === 'verify' ? '验证当前两步验证' : '开启两步验证'}
+  description={stage === 'codes'
+    ? '手机丢了时用它登录。每条只能用一次，只显示这一次。'
+    : stage === 'verify'
+      ? '重新绑定两步验证前，请输入当前 6 位动态验证码或恢复码。'
+      : undefined}
   dismissible={stage !== 'codes' || saved}
   onclose={reset}
 >
   {#if stage === 'begin'}
     {#if error}<Alert>{error}</Alert>{:else}<Skeleton height={184} width="184px" label="正在生成密钥" />{/if}
+  {:else if stage === 'verify'}
+    {#if rebindUseRecovery}
+      <form
+        onsubmit={(e) => {
+          e.preventDefault();
+          submitRebindMfa();
+        }}
+      >
+        <Input label="当前恢复码" mono placeholder="xxxx-xxxx" bind:value={rebindMfaCode} autofocus disabled={busy} />
+      </form>
+    {:else}
+      <div class="otp">
+        <OtpInput bind:value={rebindMfaCode} autofocus disabled={busy} oncomplete={(c) => submitRebindMfa(c)} />
+      </div>
+    {/if}
+    <div class="otp">
+      <Button
+        type="button"
+        variant="plain"
+        size="sm"
+        onclick={() => {
+          rebindUseRecovery = !rebindUseRecovery;
+          rebindMfaCode = '';
+          error = '';
+        }}
+      >
+        {rebindUseRecovery ? '改用 6 位动态验证码' : '改用恢复码验证'}
+      </Button>
+    </div>
+    {#if error}<Alert>{error}</Alert>{/if}
   {:else if stage === 'scan' && enrollment}
     <div class="scan">
       <QrCode text={enrollment.otpauth_url} label="用验证器 App 扫描这个二维码" />
@@ -140,7 +197,17 @@
   {/if}
 
   {#snippet footer()}
-    {#if stage === 'scan'}
+    {#if stage === 'verify'}
+      <Button variant="plain" onclick={() => (open = false)}>取消</Button>
+      <Button
+        variant="primary"
+        loading={busy}
+        disabled={rebindUseRecovery ? rebindMfaCode.trim().length < 6 : rebindMfaCode.length !== 6}
+        onclick={() => submitRebindMfa()}
+      >
+        验证并继续
+      </Button>
+    {:else if stage === 'scan'}
       <Button variant="plain" onclick={() => (open = false)}>取消</Button>
       <Button variant="primary" loading={busy} disabled={code.length !== 6} onclick={() => confirm()}>开启</Button>
     {:else if stage === 'codes'}

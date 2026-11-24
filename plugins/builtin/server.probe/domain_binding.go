@@ -328,7 +328,7 @@ func BuildReverseProxySnippets(domain, loopbackListen string) ReverseProxySnippe
 		// 面板公共路由 /p/server.probe/ 由 qwq 主控直接承载（默认 127.0.0.1:8443，可通过 sudo qwq access show 查看当前端口）
 		loopbackListen = "127.0.0.1:8443"
 	}
-	nginx := fmt.Sprintf(`# 宝塔面板 / Nginx 站点反向代理配置（完美支持实时 SSE 流与单向 Agent 上报）
+	nginx := fmt.Sprintf(`# 宝塔面板 / Nginx 站点反向代理配置（默认适配 qwq 自签名 HTTPS；若面板为 tls.mode=proxy 请将 https:// 改为 http:// 并移除 proxy_ssl_verify）
 server {
     listen 80;
     listen 443 ssl http2;
@@ -339,7 +339,8 @@ server {
     # ssl_certificate_key /www/server/panel/vhost/cert/%s/privkey.pem;
 
     location = /api/probe/v1/report {
-        proxy_pass http://%s/p/server.probe/agent/v1/report;
+        proxy_pass https://%s/p/server.probe/agent/v1/report;
+        proxy_ssl_verify off;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -349,7 +350,8 @@ server {
     }
 
     location / {
-        proxy_pass http://%s/p/server.probe/portal/;
+        proxy_pass https://%s/p/server.probe/portal/;
+        proxy_ssl_verify off;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -366,20 +368,26 @@ server {
     encode zstd gzip
     handle /api/probe/v1/report {
         rewrite * /p/server.probe/agent/v1/report
-        reverse_proxy %s {
+        reverse_proxy https://%s {
+            transport http {
+                tls_insecure_skip_verify
+            }
             header_up X-Forwarded-Host {host}
         }
     }
     handle {
         rewrite * /p/server.probe/portal{uri}
-        reverse_proxy %s {
+        reverse_proxy https://%s {
+            transport http {
+                tls_insecure_skip_verify
+            }
             flush_interval -1
             header_up X-Forwarded-Host {host}
         }
     }
 }`, dom, loopbackListen, loopbackListen)
 
-	cfTunnel := fmt.Sprintf(`cloudflared tunnel route dns <tunnel-name> %s && cloudflared tunnel run --url http://%s/p/server.probe/portal/ <tunnel-name>`, dom, loopbackListen)
+	cfTunnel := fmt.Sprintf(`cloudflared tunnel route dns <tunnel-name> %s && cloudflared tunnel run --url https://%s/p/server.probe/portal/ --no-tls-verify <tunnel-name>`, dom, loopbackListen)
 
 	return ReverseProxySnippets{
 		Domain:          dom,

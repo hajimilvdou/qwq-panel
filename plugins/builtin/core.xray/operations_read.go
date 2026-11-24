@@ -9,6 +9,7 @@ import (
 	"errors"
 
 	"github.com/qwq-panel/qwq/internal/sandbox"
+	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/apply"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
 	"github.com/qwq-panel/qwq/sdk/coreapi"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
@@ -207,6 +208,9 @@ func (i *instance) capabilities(ctx context.Context, request pluginsdk.Request) 
 	}
 	if snapshot.coreVersion == "" {
 		result.Unavailable = append(result.Unavailable, capabilityUnavailable{"core_binary", "CORE_BINARY_UNAVAILABLE"})
+	}
+	if !apply.SocketMarkPermitted() {
+		result.Unavailable = append(result.Unavailable, capabilityUnavailable{"per_user_mark", "SO_MARK_UNSUPPORTED"})
 	}
 	return readResponse(result)
 }

@@ -14,14 +14,15 @@ import (
 )
 
 // StagedBind represents a TCP listener that has been pre-bound in Phase 1
-// before SQLite commits the new port. Calling Commit() activates serving and
+// before SQLite commits the new address. Calling Commit() activates serving and
 // schedules retirement of the old listener; calling Abort() closes the new
-// listener immediately with zero impact on the running listener.
+// listener immediately and restores any displaced overlapping listener.
 type StagedBind struct {
-	owner   *liveHTTPListener
-	ln      net.Listener
-	reqAddr string
-	done    bool
+	owner            *liveHTTPListener
+	ln               net.Listener
+	reqAddr          string
+	displacedReqAddr string
+	done             bool
 }
 
 // Commit activates the staged listener and retires the previous listener after
@@ -34,7 +35,8 @@ func (s *StagedBind) Commit() {
 	s.owner.commitBind(s.ln, s.reqAddr)
 }
 
-// Abort releases the pre-bound listener if DB persistence or validation failed.
+// Abort releases the pre-bound listener if DB persistence or validation failed,
+// restoring any overlapping listener that had to be temporarily released.
 func (s *StagedBind) Abort() {
 	if s == nil || s.done {
 		return
@@ -42,6 +44,9 @@ func (s *StagedBind) Abort() {
 	s.done = true
 	if s.ln != nil {
 		_ = s.ln.Close()
+	}
+	if s.displacedReqAddr != "" {
+		s.owner.restoreDisplaced(s.displacedReqAddr)
 	}
 }
 
@@ -91,17 +96,67 @@ func (l *liveHTTPListener) Start(addr string) (net.Addr, error) {
 	return ln.Addr(), nil
 }
 
-// PrepareBind performs Phase 1 of a two-phase port switch: if newAddr is still
-// held by a retiring listener from a recent switch, it reclaims and closes it
-// first to avoid spurious EADDRINUSE, then pre-binds newAddr.
+// PrepareBind performs Phase 1 of a two-phase address switch: if newAddr
+// conflicts with a retiring listener from a recent switch, it reclaims and
+// closes it first. When switching listen host on the same port (e.g.
+// 127.0.0.1:8443 <-> 0.0.0.0:8443 <-> [::]:8443), the current overlapping
+// listener is temporarily released before binding newAddr (existing HTTP
+// connections remain alive in http.Server); if binding or DB commit fails, the
+// previous address is immediately restored.
 func (l *liveHTTPListener) PrepareBind(newAddr string) (*StagedBind, error) {
 	l.reclaimRetiringAddr(newAddr)
 
+	var (
+		displacedLn      net.Listener
+		displacedReqAddr string
+	)
+	l.mu.Lock()
+	if l.current != nil && (addrsConflict(l.currentReqAddr, newAddr) || addrsConflict(l.current.Addr().String(), newAddr)) {
+		displacedLn = l.current
+		displacedReqAddr = l.currentReqAddr
+		if _, p, err := net.SplitHostPort(displacedReqAddr); err != nil || p == "0" || p == "" {
+			displacedReqAddr = displacedLn.Addr().String()
+		}
+		l.current = nil
+		l.currentReqAddr = ""
+	}
+	l.mu.Unlock()
+
+	if displacedLn != nil {
+		_ = displacedLn.Close()
+	}
+
 	newLn, err := net.Listen("tcp", newAddr)
 	if err != nil {
+		if displacedReqAddr != "" {
+			l.restoreDisplaced(displacedReqAddr)
+		}
 		return nil, err
 	}
-	return &StagedBind{owner: l, ln: newLn, reqAddr: newAddr}, nil
+	return &StagedBind{owner: l, ln: newLn, reqAddr: newAddr, displacedReqAddr: displacedReqAddr}, nil
+}
+
+func (l *liveHTTPListener) restoreDisplaced(addr string) {
+	if addr == "" || l.closing.Load() {
+		return
+	}
+	restored, err := net.Listen("tcp", addr)
+	if err != nil {
+		if l.logger != nil {
+			l.logger.Error("failed to restore displaced panel listener", "addr", addr, "error", err)
+		}
+		return
+	}
+	l.mu.Lock()
+	if l.closing.Load() || l.current != nil {
+		l.mu.Unlock()
+		_ = restored.Close()
+		return
+	}
+	l.current = restored
+	l.currentReqAddr = addr
+	l.mu.Unlock()
+	go l.serveOne(restored)
 }
 
 // Rebind performs a single-call hot-rebind using PrepareBind + Commit.
@@ -118,7 +173,7 @@ func (l *liveHTTPListener) reclaimRetiringAddr(targetAddr string) {
 	l.mu.Lock()
 	var toClose []net.Listener
 	for ln, ent := range l.retiring {
-		if sameListenAddr(ent.reqAddr, targetAddr) || sameListenAddr(ent.actualAddr, targetAddr) {
+		if addrsConflict(ent.reqAddr, targetAddr) || addrsConflict(ent.actualAddr, targetAddr) {
 			ent.timer.Stop()
 			delete(l.retiring, ln)
 			toClose = append(toClose, ln)
@@ -128,6 +183,26 @@ func (l *liveHTTPListener) reclaimRetiringAddr(targetAddr string) {
 	for _, ln := range toClose {
 		_ = ln.Close()
 	}
+}
+
+// addrsConflict reports whether two TCP listen addresses cannot coexist on the
+// same host (same port with identical host or either side being a wildcard
+// 0.0.0.0 / :: / "").
+func addrsConflict(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	ha, pa, errA := net.SplitHostPort(a)
+	hb, pb, errB := net.SplitHostPort(b)
+	if errA != nil || errB != nil || pa != pb {
+		return false
+	}
+	na := normalizeListenHost(ha)
+	nb := normalizeListenHost(hb)
+	return na == nb || na == "*" || nb == "*"
 }
 
 // sameListenAddr reports whether two host:port listen specs refer to the same

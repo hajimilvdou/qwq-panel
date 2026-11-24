@@ -50,12 +50,42 @@ func MatchModelEffortProfile(model string) (ModelEffortProfile, bool) {
 	}
 	for _, p := range builtinModelEffortProfiles {
 		for _, pat := range p.Patterns {
-			if strings.HasPrefix(norm, pat) || strings.Contains(norm, pat) {
+			if matchesModelPattern(norm, pat) {
 				return p, true
 			}
 		}
 	}
 	return ModelEffortProfile{}, false
+}
+
+func matchesModelPattern(norm, pat string) bool {
+	if pat == "" {
+		return false
+	}
+	if len(pat) <= 2 {
+		// Short identifiers like "o1"/"o3" must appear at token boundaries so
+		// unrelated names like "mistral-nemo12b", "pro1", or "evo3" do not match.
+		for start := 0; start < len(norm); {
+			idx := strings.Index(norm[start:], pat)
+			if idx < 0 {
+				return false
+			}
+			pos := start + idx
+			end := pos + len(pat)
+			leftOK := pos == 0 || isModelBoundaryByte(norm[pos-1])
+			rightOK := end == len(norm) || isModelBoundaryByte(norm[end])
+			if leftOK && rightOK {
+				return true
+			}
+			start = pos + 1
+		}
+		return false
+	}
+	return strings.HasPrefix(norm, pat) || strings.Contains(norm, pat)
+}
+
+func isModelBoundaryByte(b byte) bool {
+	return b == '-' || b == '_' || b == '.' || b == ':' || b == '/'
 }
 
 // ResolveReasoningEffort returns the effective reasoning effort code for a turn:

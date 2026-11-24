@@ -234,12 +234,14 @@ func (a *Authority) cleanupRegistration(ctx context.Context, p *cleanupPreparati
 	if !found || revision != p.cert.registryRevision || !sameCertificateSpec(state.Spec, p.cert.spec) {
 		return fault.New("PERMISSION_DENIED", "原证书清理登记或 SAN 已变化")
 	}
-	actual, providerRevision, zoneRevision, err := a.resolveScope(ctx, p.scope.Provider.ProviderID, p.scope.Provider.ZoneID)
-	if err != nil {
-		return err
-	}
-	if actual != p.scope.Provider || providerRevision != p.cert.providerRevision || zoneRevision != p.cert.zoneRevision {
-		return fault.New("CREDENTIAL_REVOKED", "原清理提供商或 zone 版本已变化")
+	if !p.scope.IsHTTP01() {
+		actual, providerRevision, zoneRevision, err := a.resolveScope(ctx, p.scope.Provider.ProviderID, p.scope.Provider.ZoneID)
+		if err != nil {
+			return err
+		}
+		if actual != p.scope.Provider || providerRevision != p.cert.providerRevision || zoneRevision != p.cert.zoneRevision {
+			return fault.New("CREDENTIAL_REVOKED", "原清理提供商或 zone 版本已变化")
+		}
 	}
 	return nil
 }

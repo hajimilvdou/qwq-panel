@@ -4,9 +4,12 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/qwq-panel/qwq/internal/actor"
 	"github.com/qwq-panel/qwq/internal/gateway"
@@ -124,9 +127,69 @@ func (a *api) beginTOTP(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
+	if u.MFAEnabled {
+		a.recordTOTPRebindProof(r, act.ID, enr.ExpiresAt)
+	}
 	a.writeResource(w, r, http.StatusOK, totpEnrollmentDTO{
 		Secret: enr.Secret, OTPAuthURL: enr.URL, ExpiresAt: ts(enr.ExpiresAt),
 	}, nil)
+}
+
+func totpRebindProofKey(r *http.Request, userID string) string {
+	tok := sessionToken(r)
+	if tok == "" || userID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(userID + "\x00" + tok))
+	return hex.EncodeToString(sum[:])
+}
+
+func (a *api) recordTOTPRebindProof(r *http.Request, userID string, expiresAt time.Time) {
+	key := totpRebindProofKey(r, userID)
+	if key == "" {
+		return
+	}
+	now := a.d.Clock.Now().UTC()
+	a.totpRebindMu.Lock()
+	defer a.totpRebindMu.Unlock()
+	if a.totpRebinds == nil {
+		a.totpRebinds = make(map[string]time.Time)
+	}
+	for k, exp := range a.totpRebinds {
+		if !now.Before(exp) {
+			delete(a.totpRebinds, k)
+		}
+	}
+	a.totpRebinds[key] = expiresAt
+}
+
+func (a *api) hasTOTPRebindProof(r *http.Request, userID string) bool {
+	key := totpRebindProofKey(r, userID)
+	if key == "" {
+		return false
+	}
+	now := a.d.Clock.Now().UTC()
+	a.totpRebindMu.Lock()
+	defer a.totpRebindMu.Unlock()
+	exp, ok := a.totpRebinds[key]
+	if !ok {
+		return false
+	}
+	if !now.Before(exp) {
+		delete(a.totpRebinds, key)
+		return false
+	}
+	return true
+}
+
+func (a *api) clearTOTPRebindProof(r *http.Request, userID string) {
+	key := totpRebindProofKey(r, userID)
+	if key == "" {
+		return
+	}
+	a.totpRebindMu.Lock()
+	delete(a.totpRebinds, key)
+	a.totpRebindMu.Unlock()
 }
 
 // confirmTOTP confirms the pending secret with a code and returns the recovery
@@ -148,21 +211,38 @@ func (a *api) confirmTOTP(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
+	actForEnable := act
+	usedRebindProof := false
+	if u.MFAEnabled && !actForEnable.MFA {
+		if a.hasTOTPRebindProof(r, act.ID) {
+			actForEnable.MFA = true
+			usedRebindProof = true
+		} else if r.Header.Get(mfaCodeHeader) != "" {
+			if err := a.requireTrustKeyMFA(r, act, "Replacing the second factor requires a fresh second factor."); err != nil {
+				a.fail(w, r, err)
+				return
+			}
+			actForEnable.MFA = true
+		}
+	}
 	var (
 		codes   []string
 		updated identity.User
 	)
 	err = a.d.DB.Update(r.Context(), func(tx *storage.Tx) error {
-		tx.SetOrigin(storage.Origin{Actor: act, TraceID: traceID(r), NodeID: a.d.NodeID})
+		tx.SetOrigin(storage.Origin{Actor: actForEnable, TraceID: traceID(r), NodeID: a.d.NodeID})
 		var ierr error
 		codes, updated, ierr = a.d.Identity.EnableTOTP(r.Context(), tx, identity.EnableTOTPInput{
-			UserID: act.ID, ExpectedRevision: u.Revision, Code: req.Code, Actor: act,
+			UserID: act.ID, ExpectedRevision: u.Revision, Code: req.Code, Actor: actForEnable,
 		})
 		return ierr
 	})
 	if err != nil {
 		a.fail(w, r, err)
 		return
+	}
+	if usedRebindProof {
+		a.clearTOTPRebindProof(r, act.ID)
 	}
 	sess, err := a.currentSessionRow(r)
 	if err != nil {

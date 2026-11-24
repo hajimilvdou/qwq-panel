@@ -11,8 +11,11 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/authz"
@@ -34,36 +37,21 @@ func runRecover(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "qwq recover: 不接受多余位置参数 %q\n", strings.Join(fs.Args(), " "))
+		return 2
+	}
 	interactive := isTerminalReader(stdin)
 	var (
 		targetUser = strings.TrimSpace(*username)
 		password   string
 		err        error
 	)
-	if interactive && (targetUser == "" || !*passwordStdin) {
-		reader := bufio.NewReader(stdin)
-		if targetUser == "" {
-			fmt.Fprint(stdout, "请输入要恢复的管理员用户名 [默认 admin]: ")
-			line, rerr := reader.ReadString('\n')
-			if rerr != nil && len(line) == 0 {
-				fmt.Fprintf(stderr, "qwq recover: 未读取到用户名输入\n")
-				return 2
-			}
-			targetUser = strings.TrimSpace(line)
-			if targetUser == "" {
-				targetUser = "admin"
-			}
-		}
-		if *passwordStdin {
-			password, err = readPassword(reader)
-		} else {
-			password, err = readInteractivePassword(reader, stdout)
-		}
-		if err != nil {
-			fmt.Fprintf(stderr, "qwq recover: %v\n", err)
-			return 2
-		}
-	} else {
+	if interactive && *passwordStdin {
+		fmt.Fprintln(stderr, "qwq recover: --password-stdin 仅适用于管道/重定向输入；交互式终端请省略 --password-stdin")
+		return 2
+	}
+	if !interactive {
 		if targetUser == "" || !*passwordStdin {
 			fmt.Fprintln(stderr, "qwq recover: --username and --password-stdin are required")
 			return 2
@@ -91,6 +79,27 @@ func runRecover(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer closeDB()
+
+	if interactive {
+		reader := bufio.NewReader(stdin)
+		if targetUser == "" {
+			fmt.Fprint(stdout, "请输入要恢复的管理员用户名 [默认 admin]: ")
+			line, rerr := reader.ReadString('\n')
+			if rerr != nil && len(line) == 0 {
+				fmt.Fprintf(stderr, "qwq recover: 未读取到用户名输入\n")
+				return 2
+			}
+			targetUser = strings.TrimSpace(line)
+			if targetUser == "" {
+				targetUser = "admin"
+			}
+		}
+		password, err = readInteractivePassword(reader, stdout)
+		if err != nil {
+			fmt.Fprintf(stderr, "qwq recover: %v\n", err)
+			return 2
+		}
+	}
 	id := local.Identity
 	az, err := authz.New(authz.Options{DB: local.DB, Clock: local.Clock, Logger: logger, Principals: id})
 	if err != nil {
@@ -159,10 +168,30 @@ func disableTerminalEcho() func() {
 	if err := cmd.Run(); err != nil {
 		return func() {}
 	}
+	var once sync.Once
+	restoreNow := func() {
+		once.Do(func() {
+			restore := exec.Command("stty", "echo")
+			restore.Stdin = os.Stdin
+			_ = restore.Run()
+		})
+	}
+	sigCh := make(chan os.Signal, 2)
+	doneCh := make(chan struct{})
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		select {
+		case <-sigCh:
+			restoreNow()
+			fmt.Fprintln(os.Stderr)
+			os.Exit(130)
+		case <-doneCh:
+		}
+	}()
 	return func() {
-		restore := exec.Command("stty", "echo")
-		restore.Stdin = os.Stdin
-		_ = restore.Run()
+		signal.Stop(sigCh)
+		close(doneCh)
+		restoreNow()
 	}
 }
 

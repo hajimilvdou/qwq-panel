@@ -70,7 +70,7 @@
     return errObj.detail || errObj.message || errObj.title || errObj.code || fallback;
   }
 
-  function invoke(operation, payload = {}, timeoutMs = 45000) {
+  function invoke(operation, payload = {}, timeoutMs = 45000, opts = null) {
     if (!port) return Promise.reject(new Error('宿主通道未就绪'));
     const id = String(++seq);
     return new Promise((resolve, reject) => {
@@ -79,8 +79,20 @@
         reject(new Error(`操作 ${operation} 响应超时`));
       }, timeoutMs);
       pending.set(id, { resolve, reject, deadline });
-      send({ t: 'api.invoke', id, operation, payload });
+      const msg = { t: 'api.invoke', id, operation, payload };
+      if (opts && opts.subject) msg.subject = opts.subject;
+      if (opts && opts.expected_revision) msg.expected_revision = opts.expected_revision;
+      send(msg);
     });
+  }
+
+  function certInvokeOpts(certId, allowCreate = false) {
+    const existing = (state.certificates || []).find((c) => c.id === certId)
+      || (state.detailCert && state.detailCert.id === certId ? state.detailCert : null);
+    const rev = existing?.revision || (allowCreate ? 'absent' : '');
+    const opts = { subject: `plugins/tls.certificates/resources/certificates/${certId}` };
+    if (rev) opts.expected_revision = rev;
+    return opts;
   }
 
   function accept(msg) {
@@ -630,7 +642,7 @@
           sans: Array.isArray(cert.sans) && cert.sans.length ? cert.sans : ['test.local'],
           purpose: 'tls_server_test',
         },
-      }, 65000);
+      }, 65000, certInvokeOpts(cert.id, true));
       showBanner(`测试证书作业已完成：${res.state || res.task_id || cert.id}`, 'ok');
       await refreshAll();
     } catch (err) {
@@ -645,7 +657,7 @@
       await invoke('certificates.remove', {
         certificate_id: certId,
         attempt_id: makeAttemptId('rm'),
-      }, 35000);
+      }, 35000, certInvokeOpts(certId, false));
       if (state.selectedCertId === certId) {
         state.selectedCertId = '';
         renderDetailCard(null);
@@ -665,7 +677,7 @@
         certificate_id: certId,
         attempt_id: makeAttemptId('rmgen'),
         generation: Number(generation),
-      }, 35000);
+      }, 35000, certInvokeOpts(certId, false));
       if (res.certificate) renderDetailCard(res.certificate);
       showBanner(`已清理证书 ${certId} 历史代 #${generation}`, 'ok');
       await refreshAll();
@@ -688,7 +700,7 @@
         binding_ref: bindingRef,
         attempt_id: makeAttemptId(op.replace(/\./g, '-')),
         generation: genNum,
-      }, 65000);
+      }, 65000, certInvokeOpts(certId, false));
       if (res.certificate && state.selectedCertId === certId) {
         renderDetailCard(res.certificate);
       }
@@ -752,7 +764,7 @@
         payload.provider_id = providerId;
         payload.zone_id = zoneId;
       }
-      const res = await invoke('certificates.issue', payload, 300000);
+      const res = await invoke('certificates.issue', payload, 300000, certInvokeOpts(certId, true));
       showBanner(`ACME 签发任务已提交：${res.task_id || certId}（状态：${res.state || 'submitted'}）`, 'ok');
       await refreshAll();
       switchTab('list');
@@ -786,7 +798,7 @@
         chain_pem: chainPem,
         private_key: privateKey,
         trust,
-      }, 125000);
+      }, 125000, certInvokeOpts(certId, true));
       $('import-key').value = '';
       showBanner(`外部 PEM 证书导入已提交：${res.task_id || certId}（状态：${res.state || 'submitted'}）`, 'ok');
       await refreshAll();
@@ -815,7 +827,7 @@
         certificate_id: certId,
         attempt_id: makeAttemptId('test'),
         spec: { sans, purpose },
-      }, 65000);
+      }, 65000, certInvokeOpts(certId, true));
       showBanner(`受控测试证书任务已完成：${res.task_id || certId}`, 'ok');
       await refreshAll();
       switchTab('list');

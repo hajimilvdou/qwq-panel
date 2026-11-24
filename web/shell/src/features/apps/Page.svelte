@@ -99,16 +99,16 @@
     busyId = item.plugin_id;
     busyText = '准备下载…';
     storeErr = '';
+    let touched = false;
     try {
       const res = await installOfficialPlugin(item.plugin_id, {
         items: catalog.data?.items,
         onProgress: (p: OfficialInstallProgress) => {
+          touched = true;
           const prefix = p.totalSteps > 1 ? `(${p.stepIndex}/${p.totalSteps}) ` : '';
           busyText = `${prefix}${STAGE_LABEL[p.stage]}`;
         },
       });
-      resources.invalidate('plugins');
-      resources.invalidate('plugin-catalog');
       if (res.updated.length > 0) {
         toasts.success(`${item.name} 已更新至 v${item.version}`);
       } else if (res.installed.length > 1) {
@@ -117,8 +117,12 @@
         toasts.success(`${item.name} 已安装并启用`);
       }
     } catch (err) {
-      storeErr = err instanceof Error ? err.message : describeError(err).message;
+      storeErr = describeError(err).message;
     } finally {
+      if (touched) {
+        resources.invalidate('plugins');
+        resources.invalidate('plugin-catalog');
+      }
       busyId = null;
       busyText = '';
     }

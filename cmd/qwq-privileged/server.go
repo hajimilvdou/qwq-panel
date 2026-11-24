@@ -584,6 +584,7 @@ func (s *helperServer) publish(ctx context.Context, req sandbox.HelperRequest) s
 			return helperFailure(problem.PreconditionFailed,
 				fmt.Sprintf("The version directory %s already exists with different content.", versionDir))
 		}
+		relabelSELinuxPluginBin(ctx, filepath.Join(versionDir, "bin"), s.logger)
 		res.Existing = true
 		return sandbox.HelperResponse{OK: true, Publish: &res}
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
@@ -611,6 +612,7 @@ func (s *helperServer) publish(ctx context.Context, req sandbox.HelperRequest) s
 				return helperFailure(problem.PreconditionFailed,
 					fmt.Sprintf("The version directory %s already exists with different content.", versionDir))
 			}
+			relabelSELinuxPluginBin(ctx, filepath.Join(versionDir, "bin"), s.logger)
 			res.Existing = true
 			return sandbox.HelperResponse{OK: true, Publish: &res}
 		}

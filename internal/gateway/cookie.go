@@ -46,13 +46,20 @@ const GateCookieName = "_g"
 // ClearSessionCookie expires both the session cookie and the stealth entry-gate
 // cookie on explicit user logout.
 func (g *Gateway) ClearSessionCookie(w http.ResponseWriter) {
+	g.ClearSessionCookieWithGateSecure(w, !g.cfg.InsecureCookies)
+}
+
+// ClearSessionCookieWithGateSecure expires both the session cookie and the
+// stealth entry-gate cookie, using gateSecure for the _g cookie so plain-HTTP
+// tls_mode="proxy" sessions clear _g cleanly as well.
+func (g *Gateway) ClearSessionCookieWithGateSecure(w http.ResponseWriter, gateSecure bool) {
 	g.clearSessionCookieOnly(w)
 	http.SetCookie(w, &http.Cookie{
 		Name:     GateCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   !g.cfg.InsecureCookies,
+		Secure:   gateSecure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 		Expires:  time.Unix(1, 0).UTC(),

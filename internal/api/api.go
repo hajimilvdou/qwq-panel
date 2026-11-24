@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/actor"
@@ -164,10 +166,13 @@ type api struct {
 	catalogCache cachedPluginCatalog
 	// startedAt stands in for the node's created_at: a standalone node is the
 	// host process (see nodes.go).
-	startedAt  time.Time
-	routing    *routingrules.Engine
-	selector   *netfacts.CandidateSelector
-	netFactsFn func() (netfacts.HostNetworkFacts, error)
+	startedAt      time.Time
+	routing        *routingrules.Engine
+	selector       *netfacts.CandidateSelector
+	netFactsFn     func() (netfacts.HostNetworkFacts, error)
+	trustedProxies []netip.Prefix
+	totpRebindMu   sync.Mutex
+	totpRebinds    map[string]time.Time
 }
 
 // Register adds every route of the public API to g and registers the host
@@ -183,7 +188,9 @@ func Register(g *gateway.Gateway, d Deps) error {
 	a := &api{g: g, d: d, id: newReplayCache(d.Clock), inspections: newInspectionCache(d.Clock),
 		widgets: newWidgetReads(), startedAt: d.Clock.Now().UTC(),
 		routing: routingrules.NewEngine(nil), selector: netfacts.NewCandidateSelector(),
-		netFactsFn: d.NetFacts}
+		netFactsFn:     d.NetFacts,
+		trustedProxies: panelaccess.ParseTrustedProxies(d.Config.HTTP.TrustedProxies),
+		totpRebinds:    make(map[string]time.Time)}
 	a.registerHostActions()
 	for _, rt := range a.routes() {
 		if err := g.Handle(rt); err != nil {

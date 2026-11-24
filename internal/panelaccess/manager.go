@@ -171,11 +171,14 @@ func ClearGateCookie(w http.ResponseWriter, secure bool) {
 }
 
 // NormalizeListenHost validates and canonicalizes a panel listener bind host.
-// Supports 127.0.0.1, 0.0.0.0, ::1, :: or any specific host unicast IP.
+// Supports 127.0.0.1, 0.0.0.0, ::1, ::, localhost, or any specific host unicast IP.
 func NormalizeListenHost(raw string) (string, error) {
 	h := strings.TrimSpace(raw)
 	h = strings.TrimPrefix(h, "[")
 	h = strings.TrimSuffix(h, "]")
+	if strings.EqualFold(h, "localhost") {
+		return "127.0.0.1", nil
+	}
 	switch h {
 	case "127.0.0.1", "0.0.0.0", "::1", "::":
 		return h, nil
@@ -186,6 +189,14 @@ func NormalizeListenHost(raw string) (string, error) {
 		}
 		return ip.String(), nil
 	}
+}
+
+func isLoopbackListenHost(h string) bool {
+	if h == "127.0.0.1" || h == "::1" || strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(strings.Trim(h, "[]"))
+	return err == nil && ip.Unmap().IsLoopback()
 }
 
 // UpdateInput carries the desired live access configuration from PUT /api/v1/system/access.
@@ -393,15 +404,18 @@ func (m *Manager) Snapshot() Snapshot {
 	return Snapshot{Disguise: config.DisguiseDrop, AutoDisableOnDomain: true}
 }
 
-// Update validates, optionally hot-rebinds the port, persists to SQLite, and
-// atomically publishes the new live settings.
-func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, error) {
+// ValidateUpdate validates UpdateInput and expected_revision against the live
+// snapshot without mutating state, rebinding sockets, or consuming MFA codes.
+func (m *Manager) ValidateUpdate(in UpdateInput) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	_, err := m.validateNext(m.Snapshot(), in, false)
+	return err
+}
 
-	cur := m.Snapshot()
+func (m *Manager) validateNext(cur Snapshot, in UpdateInput, generateRandom bool) (Snapshot, error) {
 	if in.ExpectedRevision != nil && *in.ExpectedRevision != cur.Revision {
-		return cur, false, problem.New(problem.RevisionConflict,
+		return cur, problem.New(problem.RevisionConflict,
 			"Access settings revision mismatch: expected %d, current %d.", *in.ExpectedRevision, cur.Revision)
 	}
 
@@ -409,31 +423,37 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 	if in.ListenHost != nil {
 		nh, err := NormalizeListenHost(*in.ListenHost)
 		if err != nil {
-			return cur, false, problem.New(problem.ValidationFailed, "listen_host: %s", err.Error())
+			return cur, problem.New(problem.ValidationFailed, "listen_host: %s", err.Error())
+		}
+		if cur.TLSMode == config.TLSProxy && !isLoopbackListenHost(nh) {
+			return cur, problem.New(problem.ValidationFailed,
+				"listen_host: 反代模式（tls.mode=proxy）未启用 HTTPS，仅允许监听本机回环地址（127.0.0.1 或 ::1）")
 		}
 		next.ListenHost = nh
 	}
 	if in.Port != nil {
 		if *in.Port < 1 || *in.Port > 65535 {
-			return cur, false, problem.New(problem.ValidationFailed, "port must be between 1 and 65535")
+			return cur, problem.New(problem.ValidationFailed, "port must be between 1 and 65535")
 		}
 		if cur.TLSMode == config.TLSACME && *in.Port != config.ACMEPort {
-			return cur, false, problem.New(problem.ValidationFailed,
+			return cur, problem.New(problem.ValidationFailed,
 				"ACME TLS mode requires port %d", config.ACMEPort)
 		}
 		next.Port = *in.Port
 	}
 
 	if in.GenerateRandomEntryPath {
-		rnd, err := config.GenerateRandomEntryPath()
-		if err != nil {
-			return cur, false, problem.Wrap(err)
+		if generateRandom {
+			rnd, err := config.GenerateRandomEntryPath()
+			if err != nil {
+				return cur, problem.Wrap(err)
+			}
+			next.EntryPath = rnd
 		}
-		next.EntryPath = rnd
 	} else if in.EntryPath != nil {
 		p, err := config.ValidateEntryPath(*in.EntryPath)
 		if err != nil {
-			return cur, false, problem.New(problem.ValidationFailed, "entry_path: %s", err.Error())
+			return cur, problem.New(problem.ValidationFailed, "entry_path: %s", err.Error())
 		}
 		next.EntryPath = p
 	}
@@ -441,14 +461,14 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 	if in.Disguise != nil {
 		d, err := config.NormalizeDisguise(*in.Disguise)
 		if err != nil {
-			return cur, false, problem.New(problem.ValidationFailed, "disguise: %s", err.Error())
+			return cur, problem.New(problem.ValidationFailed, "disguise: %s", err.Error())
 		}
 		next.Disguise = d
 	}
 
 	if in.DisguiseHTML != nil {
 		if len(*in.DisguiseHTML) > config.MaxDisguiseHTMLBytes {
-			return cur, false, problem.New(problem.ValidationFailed,
+			return cur, problem.New(problem.ValidationFailed,
 				"disguise_html exceeds %d bytes", config.MaxDisguiseHTMLBytes)
 		}
 		next.DisguiseHTML = *in.DisguiseHTML
@@ -457,13 +477,28 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 	if in.PanelDomain != nil {
 		dom, err := config.NormalizePanelDomain(*in.PanelDomain)
 		if err != nil {
-			return cur, false, problem.New(problem.ValidationFailed, "panel_domain: %s", err.Error())
+			return cur, problem.New(problem.ValidationFailed, "panel_domain: %s", err.Error())
 		}
 		next.PanelDomain = dom
 	}
 
 	if in.AutoDisableOnDomain != nil {
 		next.AutoDisableOnDomain = *in.AutoDisableOnDomain
+	}
+
+	return next, nil
+}
+
+// Update validates, optionally hot-rebinds the port, persists to SQLite, and
+// atomically publishes the new live settings.
+func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cur := m.Snapshot()
+	next, err := m.validateNext(cur, in, true)
+	if err != nil {
+		return cur, false, err
 	}
 
 	addrChanged := next.Port != cur.Port || next.ListenHost != cur.ListenHost

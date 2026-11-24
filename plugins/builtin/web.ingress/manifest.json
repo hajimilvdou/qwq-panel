@@ -319,13 +319,14 @@
     {
       "name": "ingress.acme.present",
       "api_version": "v1",
-      "permission": "web.ingress:write",
+      "permission": "web.ingress.acme:write",
       "mode": "invoke",
       "effect": "write",
-      "risk": "medium",
+      "risk": "high",
       "idempotent": true,
       "timeout_ms": 5000,
-      "approval": "auto",
+      "approval": "confirm",
+      "approval_summary": "仅限宿主 ACME HTTP-01 验证引擎内部调用",
       "summary": "向内置反代 HTTP 入口临时注入 ACME HTTP-01 验证令牌",
       "capabilities": [
         {
@@ -339,13 +340,14 @@
     {
       "name": "ingress.acme.cleanup",
       "api_version": "v1",
-      "permission": "web.ingress:write",
+      "permission": "web.ingress.acme:write",
       "mode": "invoke",
       "effect": "write",
-      "risk": "low",
+      "risk": "high",
       "idempotent": true,
       "timeout_ms": 5000,
-      "approval": "auto",
+      "approval": "confirm",
+      "approval_summary": "仅限宿主 ACME HTTP-01 验证引擎内部调用",
       "summary": "清理内置反代 HTTP 入口中已完成的 ACME HTTP-01 验证令牌",
       "capabilities": [
         {

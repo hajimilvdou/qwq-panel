@@ -104,11 +104,7 @@ func (a *api) putSystemAccess(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	if err := a.requireTrustKeyMFA(r, act, "Updating panel access settings requires a fresh second factor."); err != nil {
-		a.fail(w, r, err)
-		return
-	}
-	snap, portChanged, err := a.d.Access.Update(r.Context(), panelaccess.UpdateInput{
+	upd := panelaccess.UpdateInput{
 		ListenHost:              req.ListenHost,
 		Port:                    req.Port,
 		EntryPath:               req.EntryPath,
@@ -139,7 +135,18 @@ func (a *api) putSystemAccess(w http.ResponseWriter, r *http.Request) {
 				RequestID: requestID(r),
 			})
 		},
-	})
+	}
+	// Pre-validate fields and expected_revision before consuming a TOTP or
+	// single-use recovery code so invalid requests never burn MFA credentials.
+	if err := a.d.Access.ValidateUpdate(upd); err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	if err := a.requireTrustKeyMFA(r, act, "Updating panel access settings requires a fresh second factor."); err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	snap, portChanged, err := a.d.Access.Update(r.Context(), upd)
 	if err != nil {
 		a.fail(w, r, err)
 		return
@@ -147,7 +154,7 @@ func (a *api) putSystemAccess(w http.ResponseWriter, r *http.Request) {
 	// Keep the administrator's current browser tab authorized immediately when
 	// a secret entry path is configured or rotated (including bare-IP rescue).
 	if rawEntry := config.NormalizeEntryPath(snap.EntryPath); rawEntry != "" {
-		secure := r.TLS != nil || (snap.TLSMode != "" && snap.TLSMode != config.TLSProxy)
+		secure := panelaccess.ShouldUseSecureGateCookie(snap.TLSMode, r, a.trustedProxies)
 		snap.SetGateCookieForPath(w, rawEntry, secure)
 	}
 	a.d.Logger.InfoContext(r.Context(), "panel access settings updated",

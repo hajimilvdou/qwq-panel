@@ -287,16 +287,28 @@ func (s *Service) syncPanelPort(ctx context.Context, params []byte) sandbox.Capa
 	if portState == nil {
 		portState = local.FileState{Directory: "/var/lib/qwq-capability", Name: "panel-port.json", Mode: 0644}
 	}
+	var prevPanelPort uint32
+	if prevRaw, _, rerr := portState.Read(); rerr == nil && len(prevRaw) > 0 {
+		var prev struct {
+			Port uint32 `json:"port"`
+		}
+		if json.Unmarshal(prevRaw, &prev) == nil && prev.Port > 0 && prev.Port <= 65535 {
+			prevPanelPort = prev.Port
+		}
+	}
 	if err := portState.Commit(rawPort); err != nil {
 		return failure("UNAVAILABLE", "写入面板端口状态失败")
 	}
 	current, err := s.readSnapshot(ctx)
-	if err != nil || !current.chainExists {
+	if err != nil {
+		return failure("UNAVAILABLE", "读取当前防火墙规则快照失败")
+	}
+	if !current.chainExists {
 		return sandbox.CapabilityResponse{OK: true}
 	}
 	managers, err := s.Guard.Managers(ctx)
 	if err != nil {
-		return sandbox.CapabilityResponse{OK: true}
+		return failure("UNAVAILABLE", "检测系统既有防火墙管理器失败")
 	}
 	for _, manager := range managers {
 		if manager.Active || manager.Uncertain {
@@ -305,20 +317,33 @@ func (s *Service) syncPanelPort(ctx context.Context, params []byte) sandbox.Capa
 	}
 	required, err := s.Guard.PreservedPorts(ctx)
 	if err != nil {
-		return sandbox.CapabilityResponse{OK: true}
+		return failure("UNAVAILABLE", "识别保留管理端口失败")
 	}
 	required = mergePorts(required, []uint32{req.Port})
 	_, oldPorts, err := snapshotDefinition(current.definition, true)
 	if err != nil {
-		return sandbox.CapabilityResponse{OK: true}
+		return failure("UNAVAILABLE", "解析当前防火墙保留端口失败")
+	}
+	// Retire only the superseded panel port (never drop SSH or other user ports).
+	if prevPanelPort != 0 && prevPanelPort != req.Port {
+		filtered := make([]uint32, 0, len(oldPorts))
+		for _, p := range oldPorts {
+			if p != prevPanelPort {
+				filtered = append(filtered, p)
+			}
+		}
+		oldPorts = filtered
 	}
 	declared := mergePorts(required, oldPorts)
 	desired, err := Normalize(current.definition, required, declared)
 	if err != nil {
-		return sandbox.CapabilityResponse{OK: true}
+		return failure("UNAVAILABLE", "重建防火墙面板保留端口规则失败")
 	}
 	desiredDef, err := desired.Definition()
-	if err != nil || bytes.Equal(desiredDef, current.definition) {
+	if err != nil {
+		return failure("INTERNAL", "编码防火墙目标规则失败")
+	}
+	if bytes.Equal(desiredDef, current.definition) {
 		return sandbox.CapabilityResponse{OK: true}
 	}
 	resp := s.apply(ctx, current, desired, required)

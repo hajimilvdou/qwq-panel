@@ -105,17 +105,36 @@ func (r *PluginConsumerRuntime) Apply(ctx context.Context, binding certificates.
 		return fault.New("CONSUMER_RUNTIME_INVALID", "热加载目标绑定与材料证明不一致或字段缺失")
 	}
 
-	snapshot, err := r.Controller.readPrerequisiteConfiguration(ctx, binding.Consumer.PluginID)
-	if err != nil {
-		return mapConsumerRuntimeError(err, "消费者插件未安装或已提交配置不可确认")
+	spec, supported := SupportedTLSConsumerPlugins[binding.Consumer.PluginID]
+	reloadOp := ConsumerTLSReloadOperation
+	if supported && spec.ReloadOperation != "" {
+		reloadOp = spec.ReloadOperation
 	}
-	defer clear(snapshot.config.Config)
-	if !snapshot.found {
-		return fault.New("CONSUMER_RUNTIME_INVALID", "消费者插件尚无已提交配置")
-	}
-	intent, err := corev2.Decode(snapshot.config.Config)
-	if err != nil || corev2.Validate(intent) != nil {
-		return fault.New("CONSUMER_RUNTIME_INVALID", "已提交的消费者配置无效")
+	if binding.Consumer.PluginID == "core.xray" || !supported {
+		snapshot, err := r.Controller.readPrerequisiteConfiguration(ctx, binding.Consumer.PluginID)
+		if err != nil {
+			return mapConsumerRuntimeError(err, "消费者插件未安装或已提交配置不可确认")
+		}
+		defer clear(snapshot.config.Config)
+		if !snapshot.found {
+			return fault.New("CONSUMER_RUNTIME_INVALID", "消费者插件尚无已提交配置")
+		}
+		intent, err := corev2.Decode(snapshot.config.Config)
+		if err != nil || corev2.Validate(intent) != nil {
+			return fault.New("CONSUMER_RUNTIME_INVALID", "已提交的消费者配置无效")
+		}
+	} else {
+		u := r.Controller.Updater()
+		if u == nil {
+			return fault.New("BACKEND_REQUIRED", "插件配置来源尚未装配")
+		}
+		if _, installed := u.Active(binding.Consumer.PluginID); !installed {
+			return fault.New("CONSUMER_RUNTIME_INVALID", "消费者插件未安装")
+		}
+		enabled, enErr := u.Enabled(ctx, binding.Consumer.PluginID)
+		if enErr != nil || !enabled {
+			return fault.New("CONSUMER_RUNTIME_INVALID", "消费者插件未启用")
+		}
 	}
 
 	payload, err := json.Marshal(ConsumerTLSReloadPayload{
@@ -132,7 +151,7 @@ func (r *PluginConsumerRuntime) Apply(ctx context.Context, binding certificates.
 	}
 	defer clear(payload)
 
-	if _, err := r.invokePlugin(ctx, binding.Consumer.PluginID, ConsumerTLSReloadOperation, payload, true); err != nil {
+	if _, err := r.invokePlugin(ctx, binding.Consumer.PluginID, reloadOp, payload, true); err != nil {
 		return mapConsumerRuntimeError(err, "消费者运行时热加载失败")
 	}
 	return nil
@@ -161,7 +180,11 @@ func (r *PluginConsumerRuntime) Inspect(ctx context.Context, consumer certificat
 		return deployment.RuntimeObservation{}, fault.New("CONSUMER_RUNTIME_INVALID", "消费者状态查询载荷编码失败")
 	}
 
-	raw, err := r.invokePlugin(ctx, consumer.PluginID, ConsumerTLSInspectOperation, payload, false)
+	inspectOp := ConsumerTLSInspectOperation
+	if spec, ok := SupportedTLSConsumerPlugins[consumer.PluginID]; ok && spec.InspectOp != "" {
+		inspectOp = spec.InspectOp
+	}
+	raw, err := r.invokePlugin(ctx, consumer.PluginID, inspectOp, payload, false)
 	if err != nil {
 		if problem.HasCode(err, problem.PluginUnavailable) {
 			return deployment.RuntimeObservation{Running: false}, nil
@@ -204,33 +227,35 @@ func (r *PluginConsumerRuntime) InUse(ctx context.Context, binding certificates.
 		return true, fault.New("BACKEND_REQUIRED", "插件配置来源尚未装配")
 	}
 
-	// 第一步：检查已提交的活跃配置是否仍引用该绑定。
-	snapshot, err := r.Controller.readPrerequisiteConfiguration(ctx, binding.Consumer.PluginID)
-	if err == nil {
-		defer clear(snapshot.config.Config)
-		if snapshot.found {
-			intent, decErr := corev2.Decode(snapshot.config.Config)
-			if decErr != nil {
-				return true, fault.New("CONSUMER_RUNTIME_INVALID", "已提交的消费者配置无法解析")
+	// 第一步：core.xray 检查已提交的活跃配置是否仍引用该绑定；非 corev2 消费者跳过配置解析，直接检查运行时占用。
+	if spec, supported := SupportedTLSConsumerPlugins[binding.Consumer.PluginID]; !supported || spec.PluginID == "core.xray" {
+		snapshot, err := r.Controller.readPrerequisiteConfiguration(ctx, binding.Consumer.PluginID)
+		if err == nil {
+			defer clear(snapshot.config.Config)
+			if snapshot.found {
+				intent, decErr := corev2.Decode(snapshot.config.Config)
+				if decErr != nil {
+					return true, fault.New("CONSUMER_RUNTIME_INVALID", "已提交的消费者配置无法解析")
+				}
+				if ProfileUsesBindingRef(intent, binding.ID) {
+					return true, nil
+				}
 			}
-			if ProfileUsesBindingRef(intent, binding.ID) {
-				return true, nil
+		} else if problem.HasCode(err, problem.PermissionDenied) {
+			// 仅当插件确实已卸载、已禁用或不具备 v2 契约时，才视为配置侧未占用；其余异常一律 fail-closed。
+			version, installed := u.Active(binding.Consumer.PluginID)
+			if installed {
+				enabled, enErr := u.Enabled(ctx, binding.Consumer.PluginID)
+				if enErr != nil {
+					return true, mapConsumerRuntimeError(enErr, "无法确认消费者插件启用状态")
+				}
+				if enabled && supportsPrerequisiteConsumer(version, binding.Consumer.PluginID) {
+					return true, mapConsumerRuntimeError(err, "无法确认已提交的消费者配置占用状态")
+				}
 			}
+		} else {
+			return true, mapConsumerRuntimeError(err, "无法读取消费者配置占用状态")
 		}
-	} else if problem.HasCode(err, problem.PermissionDenied) {
-		// 仅当插件确实已卸载、已禁用或不具备 v2 契约时，才视为配置侧未占用；其余异常一律 fail-closed。
-		version, installed := u.Active(binding.Consumer.PluginID)
-		if installed {
-			enabled, enErr := u.Enabled(ctx, binding.Consumer.PluginID)
-			if enErr != nil {
-				return true, mapConsumerRuntimeError(enErr, "无法确认消费者插件启用状态")
-			}
-			if enabled && supportsPrerequisiteConsumer(version, binding.Consumer.PluginID) {
-				return true, mapConsumerRuntimeError(err, "无法确认已提交的消费者配置占用状态")
-			}
-		}
-	} else {
-		return true, mapConsumerRuntimeError(err, "无法读取消费者配置占用状态")
 	}
 
 	// 第二步：检查运行中的插件实例是否仍持有非零代次。

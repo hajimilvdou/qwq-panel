@@ -303,4 +303,16 @@ func TestFirewallSyncPanelPortHotUpdatesActiveChain(t *testing.T) {
 	if !bytes.Contains(n.doc, []byte(`45001`)) {
 		t.Fatalf("expected active nftables input chain to immediately allow new panel port 45001, got %s", string(n.doc))
 	}
+	// 再次切换至 45002：必须放行 45002 并自动回收退役端口 45001（不再永久残留）
+	resp2, err := s.Run(t.Context(), sandbox.CapabilityRequest{
+		Op:         "firewall.sync-panel-port",
+		ID:         "controller",
+		ParamsJSON: []byte(`{"port":45002}`),
+	})
+	if err != nil || !resp2.OK {
+		t.Fatalf("second firewall.sync-panel-port failed: resp=%+v err=%v", resp2, err)
+	}
+	if !bytes.Contains(n.doc, []byte(`45002`)) || bytes.Contains(n.doc, []byte(`45001`)) {
+		t.Fatalf("expected 45002 allowed and retired 45001 removed, got %s", string(n.doc))
+	}
 }

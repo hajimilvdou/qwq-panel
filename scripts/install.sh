@@ -102,7 +102,7 @@ case $(uname -m) in
   *) die "不支持的架构 $(uname -m)" ;;
 esac
 command -v systemctl >/dev/null && [[ -d /run/systemd/system ]] || die "需要以 systemd 启动的系统"
-for c in tar sha256sum systemd-sysusers systemd-tmpfiles install; do
+for c in tar sha256sum systemd-sysusers systemd-tmpfiles install diff; do
   command -v "$c" >/dev/null || die "缺少命令 $c"
 done
 
@@ -362,10 +362,13 @@ for k in "$R"/share/trust/*.pem "$R"/share/trust/*.policy.json; do
   fi
 done
 if [[ -n $mirror && $mirror != "$DEFAULT_MIRROR" ]]; then
+  [[ $mirror != *$'\n'* && $mirror != *$'\r'* ]] || die "非法 --mirror 地址"
   printf 'QWQ_RELEASE_MIRROR=%s\n' "$mirror" >"$T/controller.env"
-  install -m0640 -o root -g qwq "$T/controller.env" "$ETC/controller.env"
-  changed=1
-  log "已写入自定义发布镜像地址至 $ETC/controller.env"
+  if [[ ! -f $ETC/controller.env ]] || ! cmp -s "$T/controller.env" "$ETC/controller.env"; then
+    install -m0640 -o root -g qwq "$T/controller.env" "$ETC/controller.env"
+    changed=1
+    log "已写入自定义发布镜像地址至 $ETC/controller.env"
+  fi
 fi
 if [[ ! -f $ETC/qwq.json ]]; then
   cat >"$T/qwq.json" <<EOF
@@ -506,12 +509,19 @@ cfg_entry_path=$(sed -nE 's/.*"entry_path"[[:space:]]*:[[:space:]]*"([^"]*)".*/\
 cfg_panel_domain=$(sed -nE 's/.*"panel_domain"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' "$ETC/qwq.json" | head -n 1 || true)
 cfg_tls_mode=$(sed -nE 's/.*"mode"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$ETC/qwq.json" | head -n 1 || true)
 if [[ -f /var/lib/qwq/qwq.db ]] && command -v sqlite3 >/dev/null 2>&1; then
-  db_row=$(sqlite3 -readonly -separator '|' /var/lib/qwq/qwq.db "SELECT listen_port, entry_path, panel_domain FROM panel_access_settings WHERE id = 1;" 2>/dev/null || true)
+  db_row=$(sqlite3 -readonly -separator '|' /var/lib/qwq/qwq.db "SELECT listen_host, listen_port, entry_path, panel_domain FROM panel_access_settings WHERE id = 1;" 2>/dev/null || true)
+  if [[ -z $db_row ]]; then
+    db_row=$(sqlite3 -readonly -separator '|' /var/lib/qwq/qwq.db "SELECT '', listen_port, entry_path, panel_domain FROM panel_access_settings WHERE id = 1;" 2>/dev/null || true)
+  fi
   if [[ -n $db_row ]]; then
-    IFS='|' read -r db_port db_entry db_domain <<<"$db_row"
+    IFS='|' read -r db_host db_port db_entry db_domain <<<"$db_row"
     if [[ $db_port =~ ^[0-9]+$ ]] && ((db_port >= 1 && db_port <= 65535)); then
-      cfg_host=${cfg_listen%:*}
-      cfg_listen="${cfg_host:-127.0.0.1}:${db_port}"
+      cfg_host=${db_host:-${cfg_listen%:*}}
+      cfg_host=${cfg_host:-127.0.0.1}
+      if [[ $cfg_host == *:* && $cfg_host != \[*\] ]]; then
+        cfg_host="[${cfg_host}]"
+      fi
+      cfg_listen="${cfg_host}:${db_port}"
     fi
     cfg_entry_path=$db_entry
     cfg_panel_domain=$db_domain
@@ -524,9 +534,12 @@ cfg_scheme=https
 [[ $cfg_tls_mode == "proxy" ]] && cfg_scheme=http
 cfg_entry_path=${cfg_entry_path#/}
 cfg_entry_path=${cfg_entry_path%/}
+cfg_bind_host=${cfg_listen%:*}
 probe_host="127.0.0.1"
-if [[ $cfg_listen == \[*\]* ]]; then
+if [[ $cfg_bind_host == "[::1]" || $cfg_bind_host == "[::]" || $cfg_bind_host == "::1" || $cfg_bind_host == "::" ]]; then
   probe_host="[::1]"
+elif [[ -n $cfg_bind_host && $cfg_bind_host != "0.0.0.0" && $cfg_bind_host != "127.0.0.1" && $cfg_bind_host != "localhost" ]]; then
+  probe_host="$cfg_bind_host"
 fi
 if [[ -n $cfg_entry_path && $cfg_tls_mode != "proxy" && -z $cfg_panel_domain ]]; then
   LISTEN_CHECK="${cfg_scheme}://${probe_host}:${cfg_port}/${cfg_entry_path}/readyz"

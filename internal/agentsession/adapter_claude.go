@@ -427,6 +427,10 @@ func ParseClaudeStreamJSON(ctx context.Context, r io.Reader, emit Emit) error {
 						Args:   block.Input,
 						Status: string(ToolRunning),
 					})
+					if emittedText {
+						emittedText = false
+						msgID = ""
+					}
 				}
 			}
 

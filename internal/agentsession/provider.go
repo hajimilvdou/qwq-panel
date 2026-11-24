@@ -1033,14 +1033,11 @@ func (s *Service) FetchProviderModels(ctx context.Context, in FetchModelsInput) 
 }
 
 func modelsEndpointURL(kind, baseURL string) string {
-	u := strings.TrimRight(baseURL, "/")
 	if kind == ProviderKindAnthropic {
-		if strings.HasSuffix(u, "/v1") {
-			return u + "/models"
-		}
-		return u + "/v1/models"
+		return normalizeAnthropicCLIBaseURL(baseURL) + "/v1/models"
 	}
-	return u + "/models"
+	primary, _ := normalizeOpenAICompatBaseURL(baseURL)
+	return strings.TrimRight(primary, "/") + "/models"
 }
 
 func applyProviderAuthHeaders(req *http.Request, kind string, apiKey []byte) {

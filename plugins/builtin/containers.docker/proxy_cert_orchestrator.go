@@ -116,11 +116,12 @@ func (h hostPluginInvoker) Invoke(ctx context.Context, targetPlugin, operation, 
 
 // CertCandidate 描述可用于容器 HTTPS 反代复用的托管证书（含泛域名证书）。
 type CertCandidate struct {
-	CertID     string   `json:"cert_id"`
-	Domains    []string `json:"domains"`
-	Issuer     string   `json:"issuer"`
-	ExpiresAt  string   `json:"expires_at"`
-	IsWildcard bool     `json:"is_wildcard"`
+	CertID           string   `json:"cert_id"`
+	Domains          []string `json:"domains"`
+	Issuer           string   `json:"issuer"`
+	ExpiresAt        string   `json:"expires_at"`
+	IsWildcard       bool     `json:"is_wildcard"`
+	LatestGeneration int      `json:"latest_generation,omitempty"`
 }
 
 // ProxyIntegrationReadiness 描述 web.ingress / tls.certificates / domain.dns 联动组件的就绪状态。
@@ -235,11 +236,12 @@ func probeProxyIntegrationStatusWithInvoker(ctx context.Context, inv pluginInvok
 					}
 				}
 				res.AvailableCerts = append(res.AvailableCerts, CertCandidate{
-					CertID:     certRef,
-					Domains:    domains,
-					Issuer:     issuer,
-					ExpiresAt:  expiresAt,
-					IsWildcard: wild,
+					CertID:           certRef,
+					Domains:          domains,
+					Issuer:           issuer,
+					ExpiresAt:        expiresAt,
+					IsWildcard:       wild,
+					LatestGeneration: c.LatestGeneration,
 				})
 			}
 		}
@@ -671,10 +673,18 @@ func UpsertContainerProxyAndCert(
 	}
 	if tlsMode != "off" && certID != "" && !strings.HasPrefix(certID, "certbind_") {
 		siteProfileID := "docker-" + normalizeContainerName(target.ContainerName)
-		boundRef, berr := BindCertificateToWebIngress(ctx, inv, certID, siteProfileID, 1)
+		gen := 1
+		for _, c := range readiness.AvailableCerts {
+			if c.CertID == certID && c.LatestGeneration > 0 {
+				gen = c.LatestGeneration
+				break
+			}
+		}
+		boundRef, berr := BindCertificateToWebIngress(ctx, inv, certID, siteProfileID, gen)
 		if berr != nil {
-			warnings = append(warnings, "证书已就绪，但自动绑定至 web.ingress 失败（"+berr.Error()+"），请在「TLS 证书 → 消费者部署绑定」完成绑定后即可生效。")
+			warnings = append(warnings, "证书已就绪，但自动绑定至 web.ingress 失败（"+berr.Error()+"）；站点已先以 HTTP 模式上线以防 HTTPS 不可访问，请在「TLS 证书 → 消费者部署绑定」完成绑定后再开启 HTTPS。")
 			certID = ""
+			tlsMode = "off"
 		} else {
 			certID = boundRef
 		}
@@ -693,7 +703,7 @@ func UpsertContainerProxyAndCert(
 	if req.WebSocket != nil {
 		wsEnabled = *req.WebSocket
 	}
-	forceHTTPS := tlsMode != "off"
+	forceHTTPS := tlsMode != "off" && certID != ""
 
 	var existingSiteID string
 	_ = db.QueryRowContext(ctx,

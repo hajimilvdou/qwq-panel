@@ -97,7 +97,7 @@
     "schemas/warp.status.response.json": "sha256:ca1da9258a97ab1f47ea5f48657025b16fc3582cf49699b713b36115aa78857b",
     "ui/index.html": "sha256:9d588c89c734c202d384e3325ef465fc8a280ad61e451653cf4dad3f53e78e6d",
     "ui/proxy.css": "sha256:86927c2142f3976264c407ffb9a735e5e3046a32ff140bc2feee409c76d91fca",
-    "ui/proxy.js": "sha256:0b0b89cb4142ed82817b7ecf9ceb69b5bce5921a8a1edb4a727d3d25658c2812"
+    "ui/proxy.js": "sha256:3dd709d8e963cd9062dc5187eb29331b09cbfcafe41dfa301432a55c2ae5261e"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -189,6 +189,11 @@
       "reason": "后台巡检核对 core.xray 运行状态"
     },
     {
+      "name": "plugin.invoke.background",
+      "scope": "core.xray/core.capabilities",
+      "reason": "首页概览与构建器按需缓存查询 core.xray 能力与 simple-obfs 可用性"
+    },
+    {
       "name": "system.traffic.shape",
       "scope": "self",
       "reason": "查询内核 HTB 整形能力并下发 0x5100..0x51FF 逐用户限速类"
@@ -242,6 +247,10 @@
         {
           "name": "plugin.invoke",
           "scope": "core.xray/core.capabilities"
+        },
+        {
+          "name": "plugin.invoke.background",
+          "scope": "core.xray/core.capabilities"
         }
       ],
       "request_schema": "schemas/proxy.overview.request.json",
@@ -282,6 +291,18 @@
         {
           "name": "state.kv.write",
           "scope": "self"
+        },
+        {
+          "name": "plugin.config.read",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.config.write",
+          "scope": "core.xray"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "core.xray/core.apply"
         },
         {
           "name": "system.traffic.shape",

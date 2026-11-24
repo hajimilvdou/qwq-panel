@@ -926,8 +926,44 @@ func TestNormalizeIngressListenAddrsAndACMEHTTP01Challenge(t *testing.T) {
 	}
 	boundAddr := ov["bound_addr"].(string)
 
-	// 即使站点配置了强制 HTTPS 或不存在站点，ACME HTTP-01 challenge 也必须直接返回 200 text/plain
-	presentRes := invokeIngress(t, srv, "ingress.acme.present", map[string]any{
+	// 非宿主 actor 直接调用 ingress.acme.present 必须被拒绝
+	deniedResp := invokeIngressRaw(t, srv, "ingress.acme.present", map[string]any{
+		"token":       "tok_abc123",
+		"key_auth":    "tok_abc123.thumbprint999",
+		"ttl_seconds": 120,
+	})
+	if deniedResp.GetError() == nil || deniedResp.GetError().GetCode() != "PERMISSION_DENIED" {
+		t.Fatalf("expected PERMISSION_DENIED for non-host actor, got %+v", deniedResp.GetError())
+	}
+
+	invokeHostACME := func(op string, payload map[string]any) map[string]any {
+		t.Helper()
+		raw, _ := json.Marshal(payload)
+		resp, ierr := srv.Invoke(t.Context(), &pb.InvokeRequest{
+			Context: &pb.RequestContext{
+				InstanceId:  "default",
+				NodeId:      "local",
+				OperationId: "op-" + op,
+				Locale:      "zh-CN",
+				Actor: &pb.Actor{
+					Kind: pb.ActorKind_ACTOR_KIND_SYSTEM,
+					Id:   "host:acme-http01",
+				},
+			},
+			Operation:   op,
+			ApiVersion:  "v1",
+			PayloadJson: raw,
+		})
+		if ierr != nil || resp.GetError() != nil {
+			t.Fatalf("host invoke %s failed: err=%v biz=%+v", op, ierr, resp.GetError())
+		}
+		var out map[string]any
+		_ = json.Unmarshal(resp.GetPayloadJson(), &out)
+		return out
+	}
+
+	// 即使站点配置了强制 HTTPS 或不存在站点，ACME HTTP-01 challenge 也必须直接返回 200 text/plain + nosniff
+	presentRes := invokeHostACME("ingress.acme.present", map[string]any{
 		"token":       "tok_abc123",
 		"key_auth":    "tok_abc123.thumbprint999",
 		"ttl_seconds": 120,
@@ -942,12 +978,12 @@ func TestNormalizeIngressListenAddrsAndACMEHTTP01Challenge(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || string(body) != "tok_abc123.thumbprint999" {
-		t.Fatalf("unexpected acme challenge response: status=%d body=%q", resp.StatusCode, string(body))
+	if resp.StatusCode != http.StatusOK || string(body) != "tok_abc123.thumbprint999" || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("unexpected acme challenge response: status=%d body=%q nosniff=%q", resp.StatusCode, string(body), resp.Header.Get("X-Content-Type-Options"))
 	}
 
 	// CleanUp 后必须回退 404
-	invokeIngress(t, srv, "ingress.acme.cleanup", map[string]any{"token": "tok_abc123"})
+	invokeHostACME("ingress.acme.cleanup", map[string]any{"token": "tok_abc123"})
 	resp2, err := http.Get("http://" + boundAddr + "/.well-known/acme-challenge/tok_abc123")
 	if err != nil {
 		t.Fatalf("GET after cleanup failed: %v", err)

@@ -11,6 +11,11 @@ export async function copyTextWithFallback(text: string): Promise<boolean> {
     }
   }
   if (typeof document === 'undefined') return false;
+  const active = document.activeElement as HTMLElement | null;
+  const container =
+    (active?.closest?.('dialog[open]') as HTMLElement | null) ??
+    (document.querySelector('dialog[open]') as HTMLElement | null) ??
+    document.body;
   const ta = document.createElement('textarea');
   ta.value = text;
   ta.setAttribute('readonly', 'true');
@@ -18,15 +23,16 @@ export async function copyTextWithFallback(text: string): Promise<boolean> {
   ta.style.top = '-9999px';
   ta.style.left = '-9999px';
   ta.style.opacity = '0';
-  document.body.appendChild(ta);
+  container.appendChild(ta);
   try {
-    ta.focus();
+    ta.focus({ preventScroll: true });
     ta.select();
     ta.setSelectionRange(0, ta.value.length);
     return document.execCommand('copy');
   } catch {
     return false;
   } finally {
-    document.body.removeChild(ta);
+    ta.remove();
+    active?.focus?.({ preventScroll: true });
   }
 }

@@ -8065,7 +8065,10 @@ export interface operations {
     putSystemAccess: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Optional TOTP or recovery code satisfying second-factor checks for sensitive host mutations when the current session is not freshly MFA-verified. */
+                "X-QWQ-MFA-Code"?: components["parameters"]["MfaCodeHeader"];
+            };
             path?: never;
             cookie?: never;
         };

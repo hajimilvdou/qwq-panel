@@ -145,16 +145,30 @@ export function fromMessages(messages: readonly AgentSessionMessage[], status: A
   return { items, seq: Math.max(seq, messages.at(-1)?.seq ?? 0), status };
 }
 
-/** 合并快照与实时流状态，防止 reload / resync 用滞后的 SQLite 快照清零正在流式输出的气泡 */
+/** 合并快照与实时流状态，防止 reload / resync 用滞后的 SQLite 快照清零正在流式输出或刚完成的气泡 */
 export function mergeSnapshotPreservingLiveStream(
   prev: TranscriptState,
   fresh: TranscriptState,
   inFlight?: InFlightSnapshot | null,
 ): TranscriptState {
-  const localPendingUsers = prev.items.filter((x) => x.kind === 'user' && x.state);
+  const localPendingUsers = prev.items.filter(
+    (x) =>
+      x.kind === 'user' &&
+      Boolean(x.state) &&
+      !(x.state === 'sending' && fresh.items.some((f) => f.kind === 'user' && f.text === x.text)),
+  );
   const nowIso = new Date().toISOString();
 
   if (inFlight && inFlight.message_id) {
+    // If live SSE already advanced beyond this HTTP snapshot's head_seq, keep
+    // prev intact so newer streamed deltas are never overwritten or skipped.
+    if (prev.seq > inFlight.head_seq && prev.items.length > 0) {
+      return {
+        ...prev,
+        plan: prev.plan,
+        telemetry: prev.telemetry,
+      };
+    }
     const extras: TranscriptItem[] = [];
     if (inFlight.reasoning) {
       extras.push({
@@ -178,25 +192,20 @@ export function mergeSnapshotPreservingLiveStream(
       ...fresh,
       plan: prev.plan,
       telemetry: prev.telemetry,
-      seq: Math.max(fresh.seq, inFlight.head_seq, prev.seq),
+      seq: Math.max(fresh.seq, inFlight.head_seq),
       items: [...fresh.items, ...extras, ...localPendingUsers],
     };
   }
 
-  if (prev.seq > fresh.seq) {
-    const activeStreamItems = prev.items.filter(
-      (x) => (x.kind === 'assistant' || x.kind === 'reasoning') && x.streaming,
-    );
-    if (activeStreamItems.length > 0) {
-      return {
-        ...fresh,
-        plan: prev.plan,
-        telemetry: prev.telemetry,
-        seq: prev.seq,
-        status: prev.status === 'running' ? 'running' : fresh.status,
-        items: [...fresh.items, ...activeStreamItems, ...localPendingUsers],
-      };
-    }
+  // If live SSE is strictly ahead of this HTTP snapshot (whether still streaming
+  // OR just finished message.completed + turn.completed), never roll back to a
+  // stale snapshot.
+  if (prev.seq > fresh.seq && prev.items.length > 0) {
+    return {
+      ...prev,
+      plan: prev.plan,
+      telemetry: prev.telemetry,
+    };
   }
 
   return {

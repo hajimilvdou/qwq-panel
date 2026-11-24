@@ -539,9 +539,19 @@
       "reason": "动态探测面板 domain.dns 插件是否已安装就绪以推荐域名绑定轨道"
     },
     {
+      "name": "plugin.invoke.background",
+      "scope": "domain.dns/providers.status",
+      "reason": "后台按需缓存探测 domain.dns 插件可用状态"
+    },
+    {
       "name": "plugin.invoke",
       "scope": "tls.certificates/certificates.summary",
       "reason": "动态探测面板 tls.certificates 插件是否已安装就绪以推荐证书绑定轨道"
+    },
+    {
+      "name": "plugin.invoke.background",
+      "scope": "tls.certificates/certificates.summary",
+      "reason": "后台按需缓存探测 tls.certificates 插件可用状态"
     }
   ],
   "dependencies": [

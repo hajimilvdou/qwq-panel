@@ -309,11 +309,14 @@ func extractRemoteIP(remoteAddr string) string {
 }
 
 func (g *Gateway) isTrustedProxyIP(ip netip.Addr) bool {
+	unmapped := ip.Unmap()
+	if unmapped.IsLoopback() {
+		return true
+	}
 	ptr := g.trustedProxies.Load()
 	if ptr == nil {
 		return false
 	}
-	unmapped := ip.Unmap()
 	for _, p := range *ptr {
 		if p.Contains(unmapped) {
 			return true

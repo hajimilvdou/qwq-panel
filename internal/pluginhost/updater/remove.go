@@ -63,12 +63,24 @@ func (u *Updater) Remove(ctx context.Context, req RemoveRequest) error {
 	if err := checkPluginID(req.PluginID); err != nil {
 		return err
 	}
+	if req.PluginID == "security.basic" {
+		return problem.New(problem.StateConflict, "基础安全防护插件为系统必装底座，不支持卸载。")
+	}
 	ctx, cancel := u.withTimeout(ctx, req.Timeout)
 	defer cancel()
 	unlock := u.locks.lock(req.PluginID)
 	defer unlock()
 	if err := u.requireNoRunningSaga(ctx, req.PluginID); err != nil {
 		return err
+	}
+	dependents, err := u.Dependents(req.PluginID)
+	if err != nil {
+		return err
+	}
+	if len(dependents) > 0 {
+		conflict := problem.New(problem.StateConflict, "Plugin %s is still required by other plugins.", req.PluginID)
+		conflict.Dependents = dependents
+		return conflict
 	}
 	versions, err := u.listVersions(ctx, req.PluginID)
 	if err != nil {
