@@ -12,10 +12,25 @@
     "backend": {
       "type": "object"
     },
+    "running": {
+      "type": "boolean"
+    },
     "bound_addr": {
       "type": "string"
     },
     "https_bound_addr": {
+      "type": "string"
+    },
+    "configured_listen_addr": {
+      "type": "string"
+    },
+    "configured_https_listen_addr": {
+      "type": "string"
+    },
+    "http_listen_error": {
+      "type": "string"
+    },
+    "https_listen_error": {
       "type": "string"
     },
     "active_routes": {

@@ -437,6 +437,14 @@ func (u *Updater) stepCommit(ctx context.Context, p *plan) error {
 		if err := u.setVersionActivatedAtTx(ctx, tx, p.saga.PluginID, p.saga.ToVersion, tx.Now()); err != nil {
 			return err
 		}
+		if p.saga.Mode == modeInstall {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_states (plugin_id, enabled, updated_at, revision)
+				VALUES (?, 1, ?, 1)
+				ON CONFLICT (plugin_id) DO UPDATE SET enabled = 1, updated_at = excluded.updated_at, revision = plugin_states.revision + 1`,
+				p.saga.PluginID, storage.FormatTime(tx.Now())); err != nil {
+				return err
+			}
+		}
 		res, err := tx.ExecContext(ctx, `UPDATE plugin_update_sagas SET state = ?, step = ?, error = '', updated_at = ?
 			WHERE saga_id = ? AND state = ?`, SagaCommitted, string(stepCommitted),
 			storage.FormatTime(tx.Now()), p.saga.ID, SagaRunning)

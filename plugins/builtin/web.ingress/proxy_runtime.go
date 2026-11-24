@@ -186,6 +186,7 @@ type BuiltinProxy struct {
 	insecureTransport *http.Transport
 	authCache         *basicAuthCache
 	sni               *SNICertStore
+	acme              *ACMEHTTP01ChallengeStore
 	now               func() time.Time
 }
 
@@ -204,10 +205,19 @@ func newBuiltinProxy(nowFn func() time.Time, sni *SNICertStore) *BuiltinProxy {
 		insecureTransport: insecureTr,
 		authCache:         newBasicAuthCache(),
 		sni:               sni,
+		acme:              NewACMEHTTP01ChallengeStore(nowFn),
 		now:               nowFn,
 	}
 	p.table.Store(&routeTable{byHost: map[string][]*compiledRoute{}, loaded: nowFn()})
 	return p
+}
+
+// ACMEStore 返回内置反代挂载的 HTTP-01 challenge 内存表。
+func (p *BuiltinProxy) ACMEStore() *ACMEHTTP01ChallengeStore {
+	if p == nil {
+		return nil
+	}
+	return p.acme
 }
 
 // SetTrustedProxies 原子更新受信上游代理 CIDR 列表。
@@ -314,8 +324,11 @@ func (p *BuiltinProxy) ActiveCount() int {
 	return t.totalRoutes
 }
 
-// ServeHTTP 实现标准 http.Handler，按 Host + 最长 PathPrefix 分发并执行强制 HTTPS、BasicAuth 快表校验、令牌桶限流与反代转发。
+// ServeHTTP 实现标准 http.Handler，优先响应托管的 ACME HTTP-01 验证，再按 Host + 最长 PathPrefix 分发并执行强制 HTTPS、BasicAuth 快表校验、令牌桶限流与反代转发。
 func (p *BuiltinProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if p.acme != nil && p.acme.ServeChallengeIfMatched(w, r) {
+		return
+	}
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h

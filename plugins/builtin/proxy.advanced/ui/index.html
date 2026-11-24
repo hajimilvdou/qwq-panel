@@ -618,6 +618,9 @@
                 <label>监听端口（可选）
                   <input id="nb-s-port" type="number" min="0" max="65535" placeholder="留空自动分配随机高位端口" />
                 </label>
+                <label class="form-span-full">连接地址（公网 IP 或域名，已自动探测预填）
+                  <input id="nb-s-server" class="mono" placeholder="留空自动探测本机公网 IP" maxlength="253" />
+                </label>
                 <label class="form-span-full">节点标签（可选，逗号分隔）
                   <input id="nb-s-tags" placeholder="如 hk, reality, 主力" />
                 </label>
@@ -1055,6 +1058,9 @@
         <div class="builder-group mt-12">
           <div class="builder-group-title">多客户端真实订阅地址</div>
           <div class="form-grid-2">
+            <label class="form-span-full">订阅连接域名 / 公网 IP 预览（可临时覆写以替换下方链接中的访问主机）
+              <input id="us-host-override" class="mono" placeholder="自动使用当前面板访问地址或探测到的公网 IP" maxlength="253" />
+            </label>
             <label class="form-span-full">Clash / Mihomo 订阅 URL
               <div class="input-row">
                 <input id="us-url-clash" class="mono" readonly />

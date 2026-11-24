@@ -21,7 +21,7 @@ set -euo pipefail
 
 # 发布公钥（PEM，Ed25519）由 release.sh 在打包时写入；为空时只允许 --offline。
 RELEASE_PUBKEY_PEM=''
-DEFAULT_MIRROR=https://github.com/qwq-panel/qwq/releases/download
+DEFAULT_MIRROR=https://github.com/hajimilvdou/qwq-panel/releases/download
 
 PREFIX=/opt/qwq
 UNIT_DIR=/etc/systemd/system
@@ -354,11 +354,19 @@ fi
 install -d -m0750 -o root -g qwq "$ETC"
 install -d -m0755 -o root -g root "$ETC/trust"
 for k in "$R"/share/trust/*.pem "$R"/share/trust/*.policy.json; do
-  if [[ -f $k && ! -e $ETC/trust/${k##*/} ]]; then
-    install -m0644 "$k" "$ETC/trust/"
-    changed=1
+  if [[ -f $k ]]; then
+    bn=${k##*/}
+    if [[ $bn == plugin-trust.pem || $bn == release.pub || ! -e $ETC/trust/$bn ]]; then
+      put 0644 "$k" "$ETC/trust/$bn"
+    fi
   fi
 done
+if [[ -n $mirror && $mirror != "$DEFAULT_MIRROR" ]]; then
+  printf 'QWQ_RELEASE_MIRROR=%s\n' "$mirror" >"$T/controller.env"
+  install -m0640 -o root -g qwq "$T/controller.env" "$ETC/controller.env"
+  changed=1
+  log "已写入自定义发布镜像地址至 $ETC/controller.env"
+fi
 if [[ ! -f $ETC/qwq.json ]]; then
   cat >"$T/qwq.json" <<EOF
 {

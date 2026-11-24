@@ -65,6 +65,15 @@ func (f *fakeUpdater) Remove(_ context.Context, req updater.RemoveRequest) error
 
 func (f *fakeUpdater) Dependents(string) ([]string, error) { return f.dependents, nil }
 
+func (f *fakeUpdater) Enabled(_ context.Context, pluginID string) (bool, error) {
+	if f.enabledID == pluginID {
+		return f.enabledValue, f.enabledErr
+	}
+	return true, nil
+}
+
+func (f *fakeUpdater) UnitRunning(string) bool { return false }
+
 func (f *fakeUpdater) Logs(context.Context, string, string, string, int) (sandbox.LogResult, error) {
 	return f.logResult, f.logErr
 }

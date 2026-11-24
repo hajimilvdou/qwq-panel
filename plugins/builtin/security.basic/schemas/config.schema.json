@@ -33,9 +33,9 @@
     },
     "ban_unit": {
       "type": "string",
-      "enum": ["ssh.service", "sshd.service"],
-      "default": "sshd.service",
-      "description": "增量扫描的 journald SSH 服务单元名。"
+      "enum": ["", "auto", "both", "ssh.service", "sshd.service"],
+      "default": "",
+      "description": "增量扫描的 journald SSH 服务单元名；留空或 auto 同时扫描 ssh.service 与 sshd.service（兼容 Ubuntu 24.04 / Debian / RHEL）。"
     },
     "ban_scan_interval_seconds": {
       "type": "integer",

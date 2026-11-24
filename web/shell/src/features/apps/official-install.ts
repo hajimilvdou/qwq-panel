@@ -97,45 +97,48 @@ export async function installOfficialPlugin(
       opts.signal,
     );
 
-    emit('verifying');
-    const ins = await pluginsApi.inspect(staged.upload_id);
-    const problems = blockers(ins);
-    if (problems.length > 0) {
-      throw new Error(`${item.name} 安装检查未通过：${problems.join('；')}`);
-    }
-    const accepted_capabilities = (ins.manifest?.capabilities ?? []).map((c) => ({
-      name: c.name,
-      scope: c.scope,
-    }));
-
-    if (item.installed) {
-      emit('updating');
-      await pluginsApi.update(
-        item.plugin_id,
-        {
-          upload_id: staged.upload_id,
-          accepted_capabilities,
-          ...(item.installed_revision ? { expected_revision: item.installed_revision } : {}),
-        },
-        newIdempotencyKey(),
-      );
-      updated.push(item.plugin_id);
-    } else {
-      emit('installing');
-      await pluginsApi.install(
-        {
-          upload_id: staged.upload_id,
-          accepted_capabilities,
-        },
-        newIdempotencyKey(),
-      );
-      emit('enabling');
-      try {
-        await pluginsApi.enable(item.plugin_id, newIdempotencyKey());
-      } catch {
-        // 部分插件安装后已处于 ACTIVE，重复 enable 返回冲突时忽略即可
+    let consumed = false;
+    try {
+      emit('verifying');
+      const ins = await pluginsApi.inspect(staged.upload_id);
+      const problems = blockers(ins);
+      if (problems.length > 0) {
+        throw new Error(`${item.name} 安装检查未通过：${problems.join('；')}`);
       }
-      installed.push(item.plugin_id);
+      const accepted_capabilities = (ins.manifest?.capabilities ?? []).map((c) => ({
+        name: c.name,
+        scope: c.scope,
+      }));
+
+      if (item.installed) {
+        emit('updating');
+        await pluginsApi.update(
+          item.plugin_id,
+          {
+            upload_id: staged.upload_id,
+            accepted_capabilities,
+            ...(item.installed_revision ? { expected_revision: item.installed_revision } : {}),
+          },
+          newIdempotencyKey(),
+        );
+        consumed = true;
+        updated.push(item.plugin_id);
+      } else {
+        emit('installing');
+        await pluginsApi.install(
+          {
+            upload_id: staged.upload_id,
+            accepted_capabilities,
+          },
+          newIdempotencyKey(),
+        );
+        consumed = true;
+        installed.push(item.plugin_id);
+      }
+    } finally {
+      if (!consumed) {
+        await pluginsApi.discardUpload(staged.upload_id).catch(() => {});
+      }
     }
   }
 

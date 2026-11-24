@@ -7,6 +7,7 @@ import type { Tone } from '$ui';
 
 export const RUNTIME: Record<PluginRuntime['state'], { label: string; tone: Tone }> = {
   running: { label: '运行中', tone: 'ok' },
+  standby: { label: '按需待命', tone: 'info' },
   starting: { label: '启动中', tone: 'info' },
   stopped: { label: '已停止', tone: 'neutral' },
   crashed: { label: '出错了', tone: 'bad' },

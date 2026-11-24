@@ -10,6 +10,7 @@
  * ========================================================================== */
 import { SvelteMap } from 'svelte/reactivity';
 import { TERMINAL } from '$api/client';
+import { operations as opsApi } from '$api/endpoints';
 import type { Event as DomainEvent, OperationUpdatedPayload } from '$api/types';
 import type { EventBus } from './events.svelte';
 
@@ -27,6 +28,11 @@ class LiveOperations {
   }
 
   watch(id: string, fn: Watcher): () => void {
+    const existing = this.#map.get(id);
+    if (existing && TERMINAL.has(existing.status)) {
+      queueMicrotask(() => fn(existing));
+      return () => {};
+    }
     let set = this.#watchers.get(id);
     if (!set) this.#watchers.set(id, (set = new Set()));
     set.add(fn);
@@ -38,7 +44,36 @@ class LiveOperations {
 
   /** 接入事件总线；返回取消函数 */
   connect(bus: EventBus): () => void {
-    return bus.on('operation.updated', (e) => this.apply(e));
+    const offEv = bus.on('operation.updated', (e) => this.apply(e));
+    const offResync = bus.onResync(() => {
+      for (const id of [...this.#watchers.keys()]) {
+        void opsApi
+          .get(id)
+          .then((op) => {
+            this.apply({
+              event_id: `resync:${op.operation_id}:${op.revision}`,
+              sequence: '0',
+              schema_version: 'v1',
+              delivery_class: 'reliable',
+              occurred_at: op.finished_at ?? op.created_at,
+              type: 'operation.updated',
+              subject: `operations/${op.operation_id}`,
+              payload: {
+                operation_id: op.operation_id,
+                action: op.action,
+                status: op.status,
+                progress: op.progress,
+                revision: op.revision,
+              },
+            });
+          })
+          .catch(() => {});
+      }
+    });
+    return () => {
+      offEv();
+      offResync();
+    };
   }
 
   apply(e: DomainEvent): void {

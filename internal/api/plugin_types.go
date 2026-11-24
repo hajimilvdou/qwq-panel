@@ -103,9 +103,13 @@ type Plugin struct {
 	Icon     string
 	Homepage string
 	License  string
-	// Builtin marks a plugin signed by the host's own publisher (ADR-0005);
-	// the Shell hides the uninstall action for it.
-	Builtin      bool
+	// Builtin marks a mandatory base plugin (currently security.basic);
+	// the Shell hides the uninstall action for it and the host blocks removal.
+	Builtin bool
+	// Enabled reports whether the plugin is currently enabled (nil defaults to true).
+	Enabled *bool
+	// Startup is the active manifest lifecycle.startup ("eager" or "on_demand").
+	Startup      string
 	HasConfig    bool
 	Capabilities []PluginCapability
 	Dependencies []string

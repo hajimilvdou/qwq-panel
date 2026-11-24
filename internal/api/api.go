@@ -258,6 +258,7 @@ func (a *api) routes() []gateway.Route {
 		{Method: http.MethodPost, Pattern: "/api/v1/plugin-packages", Access: sessionOrService, Body: gateway.BodyPackage, Handler: http.HandlerFunc(a.uploadPluginPackage)},
 		{Method: http.MethodPost, Pattern: "/api/v1/plugin-packages/fetch", Access: sessionOrService, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.fetchPluginPackage)},
 		{Method: http.MethodGet, Pattern: "/api/v1/plugin-packages/{upload_id}", Access: sessionOrService, Handler: http.HandlerFunc(a.inspectPluginPackage)},
+		{Method: http.MethodDelete, Pattern: "/api/v1/plugin-packages/{upload_id}", Access: sessionOrService, Handler: http.HandlerFunc(a.deletePluginPackage)},
 		{Method: http.MethodGet, Pattern: "/api/v1/plugin-catalog", Access: sessionOrService, Handler: http.HandlerFunc(a.getPluginCatalog)},
 		{Method: http.MethodGet, Pattern: "/api/v1/plugin-trust-keys", Access: sessionOrService, Handler: http.HandlerFunc(a.listPluginTrustKeys)},
 		{Method: http.MethodPost, Pattern: "/api/v1/plugin-trust-keys", Access: gateway.AccessSession, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.addPluginTrustKey)},

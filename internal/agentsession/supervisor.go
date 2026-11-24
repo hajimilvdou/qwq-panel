@@ -439,12 +439,13 @@ func ResolveProviderForCLI(ctx context.Context, providers ProviderResolver, prov
 	case core == CoreClaudeCode || (core == CoreOpencode && ep.Kind == ProviderKindAnthropic):
 		if len(ep.Key) > 0 {
 			env = append(env, "ANTHROPIC_API_KEY="+string(ep.Key))
-			if core == CoreClaudeCode {
-				env = append(env, "ANTHROPIC_AUTH_TOKEN="+string(ep.Key))
-			}
 		}
 		if ep.BaseURL != "" {
-			env = append(env, "ANTHROPIC_BASE_URL="+ep.BaseURL)
+			base := ep.BaseURL
+			if core == CoreClaudeCode {
+				base = normalizeAnthropicCLIBaseURL(base)
+			}
+			env = append(env, "ANTHROPIC_BASE_URL="+base)
 		}
 	default:
 		if len(ep.Key) > 0 {

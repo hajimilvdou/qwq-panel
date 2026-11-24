@@ -374,6 +374,9 @@ func StartLoopbackMCPServerWithContext(parentCtx context.Context, bridge *MCPBri
 			writeMCPRPCError(w, http.StatusBadRequest, nil, -32700, "Malformed JSON-RPC envelope.")
 			return
 		}
+		// Clear the server's 10s ReadTimeout once the request body is read so
+		// long-running human approval waits never disconnect the MCP client.
+		_ = http.NewResponseController(w).SetReadDeadline(time.Time{})
 		res, callErr := bridge.HandleRequest(r.Context(), env.Method, env.Params)
 		w.Header().Set("Content-Type", "application/json")
 		resp := rpcEnvelope{JSONRPC: "2.0", ID: env.ID}

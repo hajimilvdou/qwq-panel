@@ -387,6 +387,24 @@ func (s *PluginUploads) Remove(id string) error {
 	return s.removeFile(u.path)
 }
 
+// RemoveForPrincipal drops a staged upload only if it belongs to principal.
+// Returns true when an upload was found and removed.
+func (s *PluginUploads) RemoveForPrincipal(id, principal string) bool {
+	if !pluginUploadIDPattern.MatchString(id) {
+		return false
+	}
+	s.mu.Lock()
+	u, ok := s.items[id]
+	if !ok || u.principal != principal {
+		s.mu.Unlock()
+		return false
+	}
+	delete(s.items, id)
+	s.mu.Unlock()
+	_ = s.removeFile(u.path)
+	return true
+}
+
 // Sweep removes every expired upload and returns how many were removed. It is
 // safe to call while other requests receive or resolve uploads.
 func (s *PluginUploads) Sweep() int {

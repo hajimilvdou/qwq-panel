@@ -44,7 +44,7 @@ func (r Runner) Run(ctx context.Context, request sandbox.CapabilityRequest) (san
 		return sandbox.CapabilityResponse{Code: "VALIDATION_FAILED", Error: "能力请求无效"}, nil
 	}
 	switch request.Op {
-	case "firewall.get", "firewall.apply", "firewall.reset", "firewall.detect", "firewall.restore":
+	case "firewall.get", "firewall.apply", "firewall.reset", "firewall.detect", "firewall.restore", "firewall.sync-panel-port":
 		if r.Firewall != nil {
 			return r.Firewall.Run(ctx, request)
 		}
@@ -75,7 +75,8 @@ func SystemRunner() Runner {
 	guard := firewall.SystemGuard{Executor: executor, Config: local.FileState{Directory: "/etc/qwq", Name: "qwq.json"}}
 	transactions := local.FileState{Directory: "/var/lib/qwq-capability", Name: "sshd-transaction.json", LockDirectory: "/run/qwq", LockName: "capability.lock", Mode: 0600}
 	sshConfig := sshd.FileRepository{ConfigDir: "/etc/ssh", TempDir: "/run/qwq", Executor: executor}
-	firewallService := &firewall.Service{Executor: executor, State: state, Guard: guard}
+	panelPortState := local.FileState{Directory: "/var/lib/qwq-capability", Name: "panel-port.json", LockDirectory: "/run/qwq", LockName: "capability.lock", Mode: 0644}
+	firewallService := &firewall.Service{Executor: executor, State: state, Guard: guard, PanelPortState: panelPortState}
 	sshRuntime := sshd.SystemRuntime{Executor: executor, Guard: guard, Firewall: firewallService}
 	accountService := account.NewService(sshConfig)
 	banService := ban.NewService()

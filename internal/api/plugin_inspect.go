@@ -213,6 +213,15 @@ func (c *inspectionCache) clear() {
 	c.mu.Unlock()
 }
 
+func (c *inspectionCache) drop(uploadID string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	delete(c.entries, uploadID)
+	c.mu.Unlock()
+}
+
 // load returns the cached inspection of uploadID or computes it once. The
 // computation runs outside the cache lock; concurrent callers for the same
 // upload wait for the first result instead of unpacking twice.

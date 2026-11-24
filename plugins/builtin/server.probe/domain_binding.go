@@ -324,8 +324,9 @@ func BuildReverseProxySnippets(domain, loopbackListen string) ReverseProxySnippe
 	if dom == "" {
 		dom = "status.example.com"
 	}
-	if loopbackListen == "" {
-		loopbackListen = "127.0.0.1:19080"
+	if loopbackListen == "" || loopbackListen == "127.0.0.1:19080" {
+		// 面板公共路由 /p/server.probe/ 由 qwq 主控直接承载（默认 127.0.0.1:8443，可通过 sudo qwq access show 查看当前端口）
+		loopbackListen = "127.0.0.1:8443"
 	}
 	nginx := fmt.Sprintf(`# 宝塔面板 / Nginx 站点反向代理配置（完美支持实时 SSE 流与单向 Agent 上报）
 server {

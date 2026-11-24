@@ -10,6 +10,7 @@
 -->
 <script lang="ts">
   import { Button, Card, ErrorState, Skeleton } from '$ui';
+  import { isPluginActiveReady } from '$api/endpoints-plugins';
   import { describeError } from '$lib/errors';
   import { page } from '$lib/page.svelte';
   import { normalizePluginPath } from '$lib/plugin-host';
@@ -39,7 +40,7 @@
     return best;
   });
   const allowed = $derived(!!route && session.can(route.permission));
-  const running = $derived(plugin?.runtime?.state === undefined || plugin.runtime.state === 'running');
+  const running = $derived(isPluginActiveReady(plugin));
 
   const redirectTarget = $derived.by(() => {
     if (path !== '/' || route || !plugin?.ui?.routes?.length) return null;

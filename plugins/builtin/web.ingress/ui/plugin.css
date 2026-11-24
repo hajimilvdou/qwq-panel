@@ -110,6 +110,21 @@ body {
   font-weight: 700;
   margin-top: 4px;
 }
+.stat .v.v-sm {
+  font-size: 13px;
+  font-weight: 600;
+  word-break: break-all;
+}
+.listen-alert {
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  border: 1px solid var(--amber);
+  background: var(--amber-soft);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
 .card {
   background: var(--surface);
   border: 1px solid var(--line);

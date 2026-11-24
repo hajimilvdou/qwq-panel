@@ -21,8 +21,9 @@ type IssueCertificateArgs struct {
 	CertificateID string            `json:"certificate_id"`
 	AttemptID     string            `json:"attempt_id"`
 	Spec          certificates.Spec `json:"spec"`
-	ProviderID    string            `json:"provider_id"`
-	ZoneID        string            `json:"zone_id"`
+	ProviderID    string            `json:"provider_id,omitempty"`
+	ZoneID        string            `json:"zone_id,omitempty"`
+	ChallengeType string            `json:"challenge_type,omitempty"`
 	CA            certificates.CA   `json:"ca"`
 	AcceptTerms   bool              `json:"accept_terms"`
 }
@@ -142,13 +143,23 @@ func (a *Authority) certificateIntent(ctx context.Context, value *execution) (*c
 		if !input.AcceptTerms {
 			return nil, false, fault.New("TERMS_REQUIRED", "原证书意图必须明确接受受控 CA 条款")
 		}
-		scope, providerRevision, zoneRevision, err := a.resolveScope(ctx, input.ProviderID, input.ZoneID)
-		if err != nil {
-			return nil, false, err
-		}
 		grant.certificateID, grant.attemptID, grant.spec = input.CertificateID, input.AttemptID, input.Spec
-		grant.issuance = &certificates.IssuanceScope{Provider: scope, CA: input.CA}
-		grant.providerRevision, grant.zoneRevision = providerRevision, zoneRevision
+		if input.ChallengeType == "http-01" {
+			if input.ProviderID != "" || input.ZoneID != "" {
+				return nil, false, fault.New("VALIDATION_FAILED", "HTTP-01 验证模式无需提供 DNS provider_id 或 zone_id")
+			}
+			grant.issuance = &certificates.IssuanceScope{CA: input.CA, ChallengeType: "http-01"}
+		} else {
+			if input.ChallengeType != "" && input.ChallengeType != "dns-01" {
+				return nil, false, fault.New("VALIDATION_FAILED", "不支持的 ACME 验证方式")
+			}
+			scope, providerRevision, zoneRevision, err := a.resolveScope(ctx, input.ProviderID, input.ZoneID)
+			if err != nil {
+				return nil, false, err
+			}
+			grant.issuance = &certificates.IssuanceScope{Provider: scope, CA: input.CA}
+			grant.providerRevision, grant.zoneRevision = providerRevision, zoneRevision
+		}
 		grant.access, grant.acceptTerms = certificates.Issue, true
 	case "certificates.import":
 		input, err := DecodeArguments[ImportCertificateArgs](ctx, a)

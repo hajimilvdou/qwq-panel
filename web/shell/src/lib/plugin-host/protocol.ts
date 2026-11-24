@@ -27,8 +27,8 @@ export const INVOKE_CONCURRENCY = 8;
 export const INVOKE_PER_SECOND = 20;
 export const OPERATION_RE = /^[a-z0-9._-]+$/;
 
-/** 零信任官方联动组件白名单：仅允许插件通过 ui.ensure_plugins 引导启用这 3 个官方组件 */
-export const ENSURE_PLUGIN_ALLOWLIST = ['web.ingress', 'tls.certificates', 'domain.dns'] as const;
+/** 零信任官方联动组件白名单：仅允许插件通过 ui.ensure_plugins 引导启用这些官方组件 */
+export const ENSURE_PLUGIN_ALLOWLIST = ['web.ingress', 'tls.certificates', 'domain.dns', 'core.xray'] as const;
 const ENSURE_PLUGIN_ALLOWLIST_SET: ReadonlySet<string> = new Set(ENSURE_PLUGIN_ALLOWLIST);
 
 export function isEnsurePluginAllowed(pluginId: string): boolean {

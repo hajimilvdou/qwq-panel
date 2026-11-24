@@ -837,7 +837,12 @@ export type paths = {
         get: operations["inspectPluginPackage"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Discard a staged plugin package
+         * @description Deletes a staged plugin package owned by the calling principal so failed preflights or
+         *     cancelled installs immediately release the per-account staging slot.
+         */
+        delete: operations["deletePluginPackage"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3087,12 +3092,28 @@ export type components = {
             /** @description Messages with seq below before_seq */
             items: components["schemas"]["AgentSessionMessage"][];
         };
+        /** @description In-memory buffered streaming content of an active turn not yet persisted to SQLite. */
+        AgentSessionInFlight: {
+            /** @description Identifier of the assistant message currently streaming. */
+            message_id: string;
+            /** @description Buffered reasoning/thinking text so far. */
+            reasoning?: string;
+            /** @description Buffered assistant reply text so far. */
+            content: string;
+            /**
+             * Format: int64
+             * @description Latest runtime event sequence covered by this snapshot.
+             */
+            head_seq: number;
+        };
         /** @description A session with its recent transcript and pending approvals. */
         AgentSessionDetail: components["schemas"]["AgentSession"] & {
             /** @description Retained transcript */
             messages: components["schemas"]["AgentSessionMessage"][];
             /** @description Pending approvals of this session. */
             approvals: components["schemas"]["AgentSessionApproval"][];
+            /** @description Present when a turn is actively streaming unpersisted tokens. */
+            in_flight?: components["schemas"]["AgentSessionInFlight"];
         };
         /** @description A page of agent sessions. */
         AgentSessionList: components["schemas"]["ListMeta"] & {
@@ -3661,6 +3682,7 @@ export type components = {
             /** @description Deployment role of this host. */
             role: string;
             started_at: components["schemas"]["Timestamp"];
+            server_time?: components["schemas"]["Timestamp"];
             /** @description TLS state of the management listener. */
             tls: {
                 /** @description Certificate mode: self_signed, acme or proxy. */
@@ -3799,8 +3821,15 @@ export type components = {
             homepage?: string;
             /** @description Manifest `license` (SPDX expression). */
             license?: string;
-            /** @description `true` when the plugin is signed by the host built-in publisher; absent otherwise. Built-in plugins cannot be uninstalled. */
+            /** @description `true` when the plugin is a mandatory base plugin that cannot be uninstalled; absent otherwise. */
             builtin?: boolean;
+            /** @description Whether the plugin is currently enabled on the host. */
+            enabled?: boolean;
+            /**
+             * @description Lifecycle startup mode declared by the active manifest.
+             * @enum {string}
+             */
+            startup?: "eager" | "on_demand";
             /** @description `false` when the active version declares no configuration schema; the settings tab is hidden then. */
             has_config?: boolean;
             /** @description Capabilities the manifest declares, with the host's sensitivity verdict. */
@@ -3916,10 +3945,10 @@ export type components = {
          */
         PluginRuntime: {
             /**
-             * @description Simplified process state; `crashed` is a restart loop, `unknown` an unattributed failure.
+             * @description Simplified process state; `standby` means an enabled on-demand plugin ready to wake on first request, `crashed` is a restart loop, `unknown` an unattributed failure.
              * @enum {string}
              */
-            state: "running" | "starting" | "stopped" | "crashed" | "quarantined" | "unknown";
+            state: "running" | "standby" | "starting" | "stopped" | "crashed" | "quarantined" | "unknown";
             since?: components["schemas"]["Timestamp"];
             /**
              * Format: int32
@@ -6846,6 +6875,34 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    deletePluginPackage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Opaque upload handle returned by `POST /api/v1/plugin-packages`. */
+                upload_id: components["parameters"]["PluginUploadIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The staged package was discarded. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["Unavailable"];
+            default: components["responses"]["Error"];
+        };
+    };
     getPlugin: {
         parameters: {
             query?: {
@@ -8016,6 +8073,8 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    /** @description Bind listen host (e.g. 127.0.0.1, 0.0.0.0, ::1, :: or a specific unicast IP). */
+                    listen_host?: string;
                     /**
                      * Format: int32
                      * @description TCP port the panel listens on.

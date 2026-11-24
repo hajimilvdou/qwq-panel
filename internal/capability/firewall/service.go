@@ -34,9 +34,10 @@ type Guard interface {
 
 // Service 只执行闭合 firewall verb，所有状态读取/写入在跨进程锁内进行。
 type Service struct {
-	Executor local.Executor
-	State    local.State
-	Guard    Guard
+	Executor       local.Executor
+	State          local.State
+	Guard          Guard
+	PanelPortState local.State
 }
 
 // Mutation 的 HostPorts 由宿主 forwarder 注入，helper 还会并入自己的当前事实。
@@ -66,6 +67,9 @@ func (s *Service) Run(ctx context.Context, request sandbox.CapabilityRequest) (s
 			return failure("UNAVAILABLE", "已保存的防火墙策略未能恢复"), nil
 		}
 		return sandbox.CapabilityResponse{OK: true}, nil
+	}
+	if request.Op == "firewall.sync-panel-port" {
+		return s.syncPanelPort(ctx, params), nil
 	}
 	if request.Op == "firewall.detect" {
 		if decodeObject(params, new(struct{})) != nil {
@@ -259,6 +263,69 @@ func mergePorts(a, b []uint32) []uint32 {
 	ports := append(append([]uint32(nil), a...), b...)
 	slices.Sort(ports)
 	return slices.Compact(ports)
+}
+
+func (s *Service) syncPanelPort(ctx context.Context, params []byte) sandbox.CapabilityResponse {
+	var req struct {
+		Port uint32 `json:"port"`
+	}
+	if decodeObject(params, &req) != nil || req.Port == 0 || req.Port > 65535 {
+		return failure("VALIDATION_FAILED", "面板端口参数无效")
+	}
+	unlock, err := s.State.Lock(ctx)
+	if err != nil {
+		return failure("UNAVAILABLE", "防火墙资源锁不可用")
+	}
+	defer unlock()
+	rawPort, err := json.Marshal(struct {
+		Port uint32 `json:"port"`
+	}{Port: req.Port})
+	if err != nil {
+		return failure("INTERNAL", "编码面板端口配置失败")
+	}
+	portState := s.PanelPortState
+	if portState == nil {
+		portState = local.FileState{Directory: "/var/lib/qwq-capability", Name: "panel-port.json", Mode: 0644}
+	}
+	if err := portState.Commit(rawPort); err != nil {
+		return failure("UNAVAILABLE", "写入面板端口状态失败")
+	}
+	current, err := s.readSnapshot(ctx)
+	if err != nil || !current.chainExists {
+		return sandbox.CapabilityResponse{OK: true}
+	}
+	managers, err := s.Guard.Managers(ctx)
+	if err != nil {
+		return sandbox.CapabilityResponse{OK: true}
+	}
+	for _, manager := range managers {
+		if manager.Active || manager.Uncertain {
+			return sandbox.CapabilityResponse{OK: true}
+		}
+	}
+	required, err := s.Guard.PreservedPorts(ctx)
+	if err != nil {
+		return sandbox.CapabilityResponse{OK: true}
+	}
+	required = mergePorts(required, []uint32{req.Port})
+	_, oldPorts, err := snapshotDefinition(current.definition, true)
+	if err != nil {
+		return sandbox.CapabilityResponse{OK: true}
+	}
+	declared := mergePorts(required, oldPorts)
+	desired, err := Normalize(current.definition, required, declared)
+	if err != nil {
+		return sandbox.CapabilityResponse{OK: true}
+	}
+	desiredDef, err := desired.Definition()
+	if err != nil || bytes.Equal(desiredDef, current.definition) {
+		return sandbox.CapabilityResponse{OK: true}
+	}
+	resp := s.apply(ctx, current, desired, required)
+	if !resp.OK {
+		return resp
+	}
+	return sandbox.CapabilityResponse{OK: true}
 }
 func failure(code, message string) sandbox.CapabilityResponse {
 	return sandbox.CapabilityResponse{Code: code, Error: message}

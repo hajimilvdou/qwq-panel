@@ -1032,6 +1032,7 @@ func (s *Service) beginTurnLocked(rt *sessionRuntime) context.Context {
 	rt.cancel = cancel
 	rt.turnDone = make(chan struct{})
 	rt.delta = map[string]*strings.Builder{}
+	rt.reasoning.Reset()
 	rt.currentMessage = ""
 	rt.lastAssistant = ""
 	rt.wg.Add(1)
@@ -1049,6 +1050,7 @@ func endTurn(rt *sessionRuntime) {
 		rt.turnDone = nil
 	}
 	rt.delta = nil
+	rt.reasoning.Reset()
 	rt.currentMessage = ""
 }
 

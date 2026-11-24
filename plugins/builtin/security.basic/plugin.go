@@ -75,7 +75,7 @@ const (
 	defaultBanThreshold          = 5
 	defaultBanWindowSeconds      = 600
 	defaultBanTTLSeconds         = 3600
-	defaultBanUnit               = "sshd.service"
+	defaultBanUnit               = ""
 	defaultBanScanInterval       = 30
 	defaultPortSagaTimeout       = 600
 	maxBanWindowSeconds          = 3600
@@ -127,6 +127,20 @@ func defaultConfig() securityConfig {
 	}
 }
 
+// normalizeSSHAutoBanUnit 将留空/"auto"/"both" 归一为空串，交由宿主 ban 服务同时扫描
+// ssh.service（Ubuntu 24.04 / Debian）与 sshd.service（RHEL/Rocky/AlmaLinux）。
+func normalizeSSHAutoBanUnit(raw string) (string, error) {
+	u := strings.TrimSpace(raw)
+	switch u {
+	case "", "auto", "both":
+		return "", nil
+	case "ssh.service", "sshd.service":
+		return u, nil
+	default:
+		return "", fmt.Errorf("ban_unit 仅支持留空自动兼容、auto、both、ssh.service 或 sshd.service")
+	}
+}
+
 func parseConfig(raw []byte) (securityConfig, error) {
 	cfg := defaultConfig()
 	trimmed := bytes.TrimSpace(raw)
@@ -172,10 +186,11 @@ func parseConfig(raw []byte) (securityConfig, error) {
 		cfg.BanTTLSeconds = *in.BanTTLSeconds
 	}
 	if in.BanUnit != nil {
-		if *in.BanUnit != "ssh.service" && *in.BanUnit != "sshd.service" {
-			return securityConfig{}, invalidField("/ban_unit", "INVALID_VALUE", "ban_unit 仅支持 ssh.service 或 sshd.service")
+		normUnit, uerr := normalizeSSHAutoBanUnit(*in.BanUnit)
+		if uerr != nil {
+			return securityConfig{}, invalidField("/ban_unit", "INVALID_VALUE", uerr.Error())
 		}
-		cfg.BanUnit = *in.BanUnit
+		cfg.BanUnit = normUnit
 	}
 	if in.BanScanIntervalSeconds != nil {
 		if *in.BanScanIntervalSeconds < 10 || *in.BanScanIntervalSeconds > 300 {

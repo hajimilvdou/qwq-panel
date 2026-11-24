@@ -61,7 +61,7 @@
     {:else if resolved.source === 'catalog' && resolved.profile}
       <span class="badge ok">已匹配 {resolved.profile.family} · 自动 {resolved.effort}</span>
     {:else}
-      <span class="badge muted">{model.trim() ? '未命中内置清单 · 自动兜底 high' : '自动匹配清单 · 未命中默认 high'}</span>
+      <span class="badge muted">{model.trim() ? '未命中推理模型清单 · 默认不额外注入' : '自动匹配推理清单 · 非推理模型不强塞'}</span>
     {/if}
     <button type="button" class="link-btn right" onclick={() => (catalogOpen = !catalogOpen)}>
       {catalogOpen ? '收起清单' : '主流模型挡位清单'}

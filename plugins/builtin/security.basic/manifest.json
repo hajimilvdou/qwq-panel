@@ -25,7 +25,7 @@
     "schemas/bans.add.response.json": "sha256:859a3b4c0df7f617da4ab94bb4b65380f287e5b20ad26aa02f0bca0d218c008c",
     "schemas/bans.list.response.json": "sha256:d774083bd28a103382e89034da413868dcb0b614864233dc71ca9ea36bebeab4",
     "schemas/bans.remove.request.json": "sha256:0c36b8f8016b0f772e036790dda3a25527c63c19e4f63dcef6309802da7fb404",
-    "schemas/config.schema.json": "sha256:c0920d09e3cc74d5380cd5e8b0fc618ad7493ff030ee46df5fd58201715430b6",
+    "schemas/config.schema.json": "sha256:2377dcfd165a6a2b6c6bbed9156f57b93bdefc19774370aa3c74fff6acb70e4c",
     "schemas/conflicts.detect.response.json": "sha256:2b4e3d9a94aa4b11e4e8f92bdedeb8f46b37905183eabffebfa654d82f837c90",
     "schemas/empty.request.json": "sha256:74c931cca7887a4806a898b30616bae25c4929638eaf5d77fe4cd1f3656522bf",
     "schemas/firewall.apply.request.json": "sha256:e7e352139b453dd417f3786034aa3a99f31ebc4640975b6a326360cf3ddbcf7f",
@@ -48,9 +48,9 @@
     "schemas/sshd.set_login_policy.response.json": "sha256:24a128ac1dafb289eca8f383ea39773af8109347d98ef4f640b0c64656bd665e",
     "schemas/sshd.status.request.json": "sha256:8797461339fd07222572571dff7c67658ad403cd5df23c515dfd2923e10428a9",
     "schemas/sshd.status.response.json": "sha256:514d8c4c63524c8c02b51ebcf2395b2b9ec1f0f1d994d6148b4b74360e328c19",
-    "ui/index.html": "sha256:c64ef3d15f4eb4a4852e8aabb3dc01a822d3058e6e2539416a8b74b9b155bf6b",
+    "ui/index.html": "sha256:cbec98b6aad8862ecbc1a14d115eb990285c70ce20163abcd1baee3d6ade945c",
     "ui/plugin.css": "sha256:09f66168c7d39e2ffbc7c8b875a7877498ab3fc8318506c175284e2c2a6d8bd9",
-    "ui/security.js": "sha256:386950c7403980b796a56ecfbd729d1764c6788b96315a462214b43a2bdfd55a"
+    "ui/security.js": "sha256:d1644750240bbdd9b9a69d40e8d4a71fb97ce04d9b351ed7f0a0b09015a76d48"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

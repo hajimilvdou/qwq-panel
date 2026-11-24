@@ -141,6 +141,9 @@ func (g *Gateway) streamEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	heartbeat := g.clock.After(g.stream.Heartbeat)
+	var heartbeatCount int
+	sseCreds := credentialsFrom(r)
+	sseCreds.NoTouch = true
 	for {
 		select {
 		case e, ok := <-sub.Events():
@@ -163,6 +166,13 @@ func (g *Gateway) streamEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-heartbeat:
+			heartbeatCount++
+			if heartbeatCount%2 == 0 && g.cfg.Auth != nil && sseCreds.Session != "" {
+				if _, aerr := g.cfg.Auth.Authenticate(r.Context(), sseCreds); aerr != nil {
+					_ = sw.Control("session.expired", map[string]string{"reason": "session_invalid"}, 0)
+					return
+				}
+			}
 			if err := sw.Control("heartbeat", StreamHeartbeat{
 				HeadSequence: strconv.FormatInt(g.cfg.Events.Head(), 10),
 				ServerTime:   formatTimestamp(g.clock.Now()),

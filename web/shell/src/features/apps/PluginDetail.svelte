@@ -9,6 +9,7 @@
   import { untrack } from 'svelte';
   import { Button, Card, Checkbox, Chip, ConfirmDialog, ErrorState, Skeleton, Tabs } from '$ui';
   import { plugins } from '$api/endpoints';
+  import { isPluginActiveReady } from '$api/endpoints-plugins';
   import type { Plugin } from '$api/types';
   import { describeError, reportError } from '$lib/errors';
   import { createIntent, runIntent, type Intent } from '$lib/ops';
@@ -59,7 +60,7 @@
   /* ---------------------------------------------------------------- 打开 / 启停 / 重启 */
   const entry = $derived(p?.ui?.routes.find((r) => r.nav) ?? p?.ui?.routes[0]);
   const canUpdate = $derived(session.can('host.plugins:update'));
-  const stopped = $derived(p?.runtime?.state === 'stopped' || p?.active_status === 'STOPPED');
+  const stopped = $derived(p?.enabled === false || p?.runtime?.state === 'stopped' || p?.active_status === 'STOPPED');
   let restarting = $state(false);
   let toggling = $state(false);
 
@@ -146,7 +147,7 @@
       </div>
     </div>
     <div class="ops">
-      {#if entry && p.runtime?.state === 'running' && session.can(entry.permission)}
+      {#if entry && isPluginActiveReady(p) && session.can(entry.permission)}
         <Button variant="soft" icon="external" href="/plugins/{encodeURIComponent(p.plugin_id)}{entry.path === '/' ? '' : entry.path}">打开</Button>
       {/if}
       {#if canUpdate}

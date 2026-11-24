@@ -81,7 +81,7 @@ ssh -L <随机端口>:127.0.0.1:<随机端口> root@<你的服务器IP>
 ### 1. 在线升级面板底座与官方插件（推荐）
 
 ```bash
-# （可选但推荐）升级前创建加密备份到 /var/lib/qwq/backups
+# （可选但推荐）升级前创建权限 0600 的全量一致备份到 /var/lib/qwq/backups（含主密钥，请异地妥善保管）
 sudo qwq backup create
 
 # 拉取最新版官方 install.sh
@@ -129,8 +129,10 @@ sudo bash /tmp/qwq-install.sh --offline ./qwq-v0.1.10-linux-amd64.tar.gz --plugi
 ```bash
 sudo qwq doctor              # 环境、沙箱、证书与服务健康自检
 sudo qwq setup-token         # 重新获取首次初始化链接
-sudo qwq recover             # 忘记密码 / MFA 应急恢复
-sudo qwq backup create       # 创建加密全量备份（含配置、证书与信任公钥）
+sudo qwq access show         # 查看当前实时监听端口、安全密道与救援入口
+sudo qwq access reset        # 忘记密道或误配域名时应急重置面板入口
+sudo qwq recover             # 忘记密码 / MFA 应急恢复（支持交互式输入）
+sudo qwq backup create       # 创建权限 0600 的全量一致备份（含数据库、主密钥、配置与证书）
 sudo qwq rotate-master-key   # 在线轮换主加密密钥（支持热重载）
 ```
 

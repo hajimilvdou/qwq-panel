@@ -96,7 +96,7 @@ func runBackup(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprint(stderr, `usage: qwq backup [--config FILE] [--out DIR] [--keep N]
+		fmt.Fprint(stderr, `usage: qwq backup [create] [--config FILE] [--out DIR] [--keep N]
 
 Writes a consistent backup (database snapshot, master key, certificates,
 plugin state, configuration) to DIR/qwq-<time>.tar.gz, mode 0600, and prints
@@ -109,10 +109,13 @@ be able to write DIR. Copy backups off the machine: they contain the master key.
 	configPath := fs.String("config", config.DefaultPath, "bootstrap configuration file")
 	out := fs.String("out", "", "output directory (default <data_dir>/backups)")
 	keep := fs.Int("keep", 0, "keep only the newest N backups in the output directory (0 keeps all)")
+	if len(args) > 0 && strings.EqualFold(strings.TrimSpace(args[0]), "create") {
+		args = args[1:]
+	}
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() != 0 || *keep < 0 {
+	if err := parseBackupPositionalArgs(fs.Args()); err != nil || *keep < 0 {
 		fs.Usage()
 		return 2
 	}
@@ -150,6 +153,18 @@ be able to write DIR. Copy backups off the machine: they contain the master key.
 		return 1
 	}
 	return 0
+}
+
+// parseBackupPositionalArgs accepts either no positional args (`qwq backup`)
+// or the documented `create` subcommand (`qwq backup create`).
+func parseBackupPositionalArgs(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	if len(args) == 1 && strings.EqualFold(strings.TrimSpace(args[0]), "create") {
+		return nil
+	}
+	return errors.New("unexpected positional arguments")
 }
 
 // writeBackup 在 outDir 写出归档并返回其路径。归档先写成 .partial，

@@ -13,11 +13,10 @@ export interface WidgetSlot {
 export function collectWidgets(list: readonly Plugin[] | undefined): WidgetSlot[] {
   const out: WidgetSlot[] = [];
   for (const p of list ?? []) {
-    const sleepingOnDemand =
-      p.runtime?.state === 'stopped' &&
-      (p.active_status === 'ACTIVE' ||
-        (p as { manifest?: { lifecycle?: { startup?: string } } }).manifest?.lifecycle?.startup === 'on_demand');
-    if (p.runtime && p.runtime.state !== 'running' && !sleepingOnDemand) continue;
+    if (p.enabled === false) continue;
+    const st = p.runtime?.state;
+    const ready = !st || st === 'running' || st === 'standby';
+    if (!ready) continue;
     for (const w of (p.ui?.widgets ?? []).slice(0, 16)) out.push({ key: `${p.plugin_id}/${w.id}`, plugin: p, widget: w });
   }
   return out;

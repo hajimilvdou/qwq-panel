@@ -18,6 +18,7 @@ type systemInfoDTO struct {
 	Commit         string       `json:"commit,omitempty"`
 	Role           string       `json:"role"`
 	StartedAt      string       `json:"started_at"`
+	ServerTime     string       `json:"server_time,omitempty"`
 	TLS            systemTLSDTO `json:"tls"`
 	Listen         string       `json:"listen,omitempty"`
 	DataDir        string       `json:"data_dir,omitempty"`
@@ -45,11 +46,12 @@ func (a *api) getSystem(w http.ResponseWriter, r *http.Request) {
 	}
 	info := buildinfo.Read()
 	out := systemInfoDTO{
-		Version:   info.Version,
-		Commit:    info.Revision,
-		Role:      a.d.Config.Role,
-		StartedAt: ts(a.startedAt),
-		TLS:       systemTLSDTO{Mode: a.d.Config.HTTP.TLS.Mode, Domains: a.d.Config.HTTP.TLS.Domains},
+		Version:    info.Version,
+		Commit:     info.Revision,
+		Role:       a.d.Config.Role,
+		StartedAt:  ts(a.startedAt),
+		ServerTime: ts(a.d.Clock.Now().UTC()),
+		TLS:        systemTLSDTO{Mode: a.d.Config.HTTP.TLS.Mode, Domains: a.d.Config.HTTP.TLS.Domains},
 	}
 	if a.d.TLS != nil {
 		status := a.d.TLS.Status(r.Context())

@@ -39,7 +39,16 @@ type authenticator struct {
 
 func (a authenticator) Authenticate(ctx context.Context, c gateway.Credentials) (gateway.Principal, error) {
 	if c.Session != "" {
-		act, sess, err := a.identity.AuthenticateSession(ctx, c.Session)
+		var (
+			act  actor.Actor
+			sess identity.Session
+			err  error
+		)
+		if c.NoTouch {
+			act, sess, err = a.identity.PeekSession(ctx, c.Session)
+		} else {
+			act, sess, err = a.identity.AuthenticateSession(ctx, c.Session)
+		}
 		if err != nil {
 			return gateway.Principal{}, err
 		}

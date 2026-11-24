@@ -351,6 +351,8 @@ type overviewResponse struct {
 	UsedTrafficMarks      int       `json:"used_traffic_marks"`
 	ShapingSupported      bool      `json:"shaping_supported"`
 	ShapingDegradedReason string    `json:"shaping_degraded_reason"`
+	DetectedPublicHost    string    `json:"detected_public_host,omitempty"`
+	CoreObfsAvailable     *bool     `json:"core_obfs_available,omitempty"`
 }
 
 type plansListRequest struct {
@@ -518,6 +520,25 @@ func (i *instance) handleOverview(ctx context.Context, req pluginsdk.Request) (p
 		sub = "尚未创建代理用户"
 	}
 
+	var obfsAvail *bool
+	if host := req.Host(); host != nil && host.Conn() != nil {
+		if capResp, cerr := host.InvokePlugin(ctx, pluginsdk.InvokeRequest{
+			TargetPluginID: "core.xray",
+			Operation:      "core.capabilities",
+			APIVersion:     "v1",
+			Payload:        []byte("{}"),
+		}); cerr == nil && capResp.GetError() == nil && len(capResp.GetPayloadJson()) > 0 {
+			var capDoc struct {
+				ObfsAvailable *bool `json:"obfs_available"`
+			}
+			if json.Unmarshal(capResp.GetPayloadJson(), &capDoc) == nil && capDoc.ObfsAvailable != nil {
+				v := *capDoc.ObfsAvailable
+				obfsAvail = &v
+			}
+		}
+	}
+	detectedHost := detectPrimaryPublicHost(i.configSnapshot().PublicHost, "")
+
 	return marshalResponse(overviewResponse{
 		Value:                 float64(stats.ActiveUsers),
 		Unit:                  "位活跃用户",
@@ -536,6 +557,8 @@ func (i *instance) handleOverview(ctx context.Context, req pluginsdk.Request) (p
 		UsedTrafficMarks:      stats.UsedTrafficMarks,
 		ShapingSupported:      shapingOK,
 		ShapingDegradedReason: degradedReason,
+		DetectedPublicHost:    detectedHost,
+		CoreObfsAvailable:     obfsAvail,
 	})
 }
 

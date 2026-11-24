@@ -432,10 +432,6 @@
 
   /* ------------------------------------------------------------ 窄屏 */
   @media (max-width: 860px) {
-    .dock {
-      right: 16px;
-      bottom: calc(var(--tabbar-h) + 16px);
-    }
     .sheet {
       --gap: 12px;
       --w: calc(100vw - 24px);

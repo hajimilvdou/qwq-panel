@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/actor"
@@ -160,9 +161,48 @@ type MessageToolCall struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-// assistantContent is the content_json of an assistant message with tool calls.
+// assistantContent is the content_json of an assistant message with tool calls
+// or persisted reasoning content.
 type assistantContent struct {
-	ToolCalls []MessageToolCall `json:"tool_calls"`
+	ReasoningContent string            `json:"reasoning_content,omitempty"`
+	ToolCalls        []MessageToolCall `json:"tool_calls,omitempty"`
+}
+
+// persistedErrorMeta is stored in agent_messages.content_json (role="system",
+// kind="error") so first-turn and historical errors survive snapshot reloads
+// while being excluded from model context in historyMessages.
+type persistedErrorMeta struct {
+	Kind   string `json:"kind"`
+	Code   string `json:"code,omitempty"`
+	Detail string `json:"detail"`
+}
+
+func buildPersistedErrorJSON(code, detail string) ([]byte, error) {
+	return json.Marshal(persistedErrorMeta{
+		Kind:   "error",
+		Code:   strings.TrimSpace(code),
+		Detail: strings.TrimSpace(detail),
+	})
+}
+
+func isPersistedErrorMessage(role string, contentJSON []byte) (persistedErrorMeta, bool) {
+	if role != RoleSystem || len(contentJSON) == 0 {
+		return persistedErrorMeta{}, false
+	}
+	var meta persistedErrorMeta
+	if err := json.Unmarshal(contentJSON, &meta); err != nil || meta.Kind != "error" {
+		return persistedErrorMeta{}, false
+	}
+	return meta, true
+}
+
+// InFlightSnapshot carries the in-memory streaming buffer of an active turn so
+// GET /api/v1/agent-sessions/{id} never erases streamed tokens on reload/resync.
+type InFlightSnapshot struct {
+	MessageID string `json:"message_id"`
+	Reasoning string `json:"reasoning,omitempty"`
+	Content   string `json:"content"`
+	HeadSeq   int64  `json:"head_seq"`
 }
 
 // ErrorInfo is the wire and storage form of an error inside an event or a tool
@@ -413,7 +453,10 @@ type Event struct {
 	// ToolCalls accompanies message.completed for an assistant message that
 	// proposes calls; it is how the history keeps the model context valid.
 	ToolCalls []MessageToolCall `json:"tool_calls,omitempty"`
-	At        time.Time         `json:"at,omitempty"`
+	// ReasoningContent carries internal reasoning text to persist on
+	// message.completed without changing the public SSE wire shape.
+	ReasoningContent string    `json:"-"`
+	At               time.Time `json:"at,omitempty"`
 }
 
 // SessionPage is one page of the session list (OpenAPI AgentSessionList).

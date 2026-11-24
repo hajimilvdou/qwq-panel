@@ -122,6 +122,7 @@ type V2Options struct {
 	PermitTestCertificates bool
 	ObfsTargets            map[string]ObfsTarget
 	OutboundPolicy         *OutboundPolicy
+	SkipSocketMark         bool
 }
 
 func (V2Materials) String() string          { return "V2Materials{[REDACTED]}" }

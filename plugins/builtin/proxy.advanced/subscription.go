@@ -169,6 +169,10 @@ type subNode struct {
 
 func renderSubscriptionPayloadFull(cfg proxyConfig, user userRecord, format string, chains []chainWithSecret, brutals []brutalBindingRecord, dbNodes []proxyNodeRecord) ([]byte, string, error) {
 	effCfg := applyBrutalSubPortOverrides(cfg, brutals)
+	effPublicHost := detectPrimaryPublicHost(effCfg.PublicHost, "")
+	if strings.TrimSpace(effCfg.PublicHost) == "" && effPublicHost != "" {
+		effCfg.PublicHost = effPublicHost
+	}
 	nodes := buildUserSubscriptionNodes(effCfg, user)
 
 	seenNames := make(map[string]bool, len(nodes)+len(dbNodes))
@@ -179,8 +183,9 @@ func renderSubscriptionPayloadFull(cfg proxyConfig, user userRecord, format stri
 		if !rec.Enabled {
 			continue
 		}
-		// 托管节点若未配置 server 且缺少 public_host，仅当存在外部节点或显式 server 时才加入。
-		if rec.Source == "managed" && strings.TrimSpace(rec.Server) == "" && strings.TrimSpace(effCfg.PublicHost) == "" {
+		// 托管节点若未配置 server 且缺少 public_host，自动使用 detectPrimaryPublicHost 兜底。
+		resolvedHost := detectPrimaryPublicHost(effCfg.PublicHost, rec.Server)
+		if rec.Source == "managed" && resolvedHost == "" {
 			continue
 		}
 		sn, ok := buildSubNodeFromRecord(rec, effCfg.PublicHost, &user)

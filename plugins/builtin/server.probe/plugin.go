@@ -124,11 +124,34 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 		return nil, err
 	}
 	domains := NewDomainBindingCoordinator(info.DataDir, sealingSecret, nil, func() HostDNCCapabilities {
-		return HostDNCCapabilities{
-			RunningInPanel:          true,
-			DomainDNSPluginReady:    false,
-			CertificatesPluginReady: false,
+		caps := HostDNCCapabilities{
+			RunningInPanel: true,
 		}
+		host := base.Host()
+		if host == nil || host.Conn() == nil {
+			return caps
+		}
+		probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if resp, perr := host.InvokePlugin(probeCtx, pluginsdk.InvokeRequest{
+			TargetPluginID:   "domain.dns",
+			TargetInstanceID: "default",
+			Operation:        "providers.status",
+			APIVersion:       "v1",
+			Payload:          []byte(`{}`),
+		}); perr == nil && (resp.GetError() == nil || resp.GetError().GetCode() == "") {
+			caps.DomainDNSPluginReady = true
+		}
+		if resp, perr := host.InvokePlugin(probeCtx, pluginsdk.InvokeRequest{
+			TargetPluginID:   "tls.certificates",
+			TargetInstanceID: "default",
+			Operation:        "certificates.summary",
+			APIVersion:       "v1",
+			Payload:          []byte(`{}`),
+		}); perr == nil && (resp.GetError() == nil || resp.GetError().GetCode() == "") {
+			caps.CertificatesPluginReady = true
+		}
+		return caps
 	})
 	clear(sealingSecret)
 	store.mu.RLock()

@@ -21,25 +21,35 @@ export interface PasswordCheck {
   long: boolean;
 }
 
-const CLASS_SPECS: readonly { id: PasswordClassStatus['id']; label: string; re: RegExp }[] = [
-  { id: 'upper', label: '大写字母', re: /[A-Z]/ },
-  { id: 'lower', label: '小写字母', re: /[a-z]/ },
-  { id: 'digit', label: '数字', re: /[0-9]/ },
-  { id: 'symbol', label: '符号', re: /[^A-Za-z0-9]/ },
-];
+const UPPER_RE = /\p{Lu}/u;
+const LOWER_RE = /\p{Ll}/u;
+const DIGIT_RE = /\p{Nd}/u;
 
-export function classCount(pw: string): number {
-  return CLASS_SPECS.filter((c) => c.re.test(pw)).length;
+function hasUnicodeSymbol(runes: readonly string[]): boolean {
+  return runes.some((ch) => !UPPER_RE.test(ch) && !LOWER_RE.test(ch) && !DIGIT_RE.test(ch));
 }
 
-export function checkPassword(pw: string): PasswordCheck {
-  const len = [...pw].length;
+export function classCount(pw: string): number {
+  const runes = [...pw];
+  return [UPPER_RE.test(pw), LOWER_RE.test(pw), DIGIT_RE.test(pw), hasUnicodeSymbol(runes)].filter(Boolean).length;
+}
+
+export function checkPassword(pw: string, username = ''): PasswordCheck {
+  const runes = [...pw];
+  const len = runes.length;
+  const nonBlank = pw.trim().length > 0;
+  const notAllSame = len < 2 || new Set(runes).size > 1;
+  const withinMax = len <= 256;
+  const cleanUser = username.trim().toLowerCase();
+  const containsUser = cleanUser.length >= 3 && pw.toLowerCase().includes(cleanUser);
+
   const long = len >= 20;
-  const classes: PasswordClassStatus[] = CLASS_SPECS.map((c) => ({
-    id: c.id,
-    label: c.label,
-    ok: c.re.test(pw),
-  }));
+  const classes: PasswordClassStatus[] = [
+    { id: 'upper', label: '大写字母', ok: UPPER_RE.test(pw) },
+    { id: 'lower', label: '小写字母', ok: LOWER_RE.test(pw) },
+    { id: 'digit', label: '数字', ok: DIGIT_RE.test(pw) },
+    { id: 'symbol', label: '符号', ok: hasUnicodeSymbol(runes) },
+  ];
   const matched = classes.filter((c) => c.ok);
   const count = matched.length;
   let classLabel: string;
@@ -52,9 +62,20 @@ export function checkPassword(pw: string): PasswordCheck {
   } else {
     classLabel = '大写、小写、数字、符号中任选 3 类（无需全含，或满 20 位）';
   }
-  const rules = [
-    { label: '至少 12 位', ok: len >= 12 },
-    { label: classLabel, ok: long || count >= 3 },
+  const rules: { label: string; ok: boolean }[] = [
+    { label: len > 256 ? `长度 12 ~ 256 位（当前 ${len} 位，已超上限）` : '长度 12 ~ 256 位', ok: len >= 12 && withinMax && nonBlank },
+    { label: classLabel, ok: (long || count >= 3) && nonBlank },
   ];
-  return { ok: rules.every((r) => r.ok), rules, classes, long };
+  if (len >= 12 && !notAllSame) {
+    rules.push({ label: '不能全部为同一个重复字符', ok: false });
+  }
+  if (cleanUser.length >= 3) {
+    rules.push({ label: `不能包含用户名「${username.trim()}」`, ok: !containsUser && len > 0 });
+  }
+  return {
+    ok: len >= 12 && withinMax && nonBlank && notAllSame && !containsUser && (long || count >= 3),
+    rules,
+    classes,
+    long,
+  };
 }

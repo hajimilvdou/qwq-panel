@@ -210,7 +210,7 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
-	if eff, _, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort); !IsReasoningEffortDisabled(eff) && !strings.EqualFold(eff, "none") {
+	if eff, matched, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort); (strings.TrimSpace(cfg.ReasoningEffort) != "" || matched) && !IsReasoningEffortDisabled(eff) && !strings.EqualFold(eff, "none") {
 		extraEnv = append(extraEnv, "CLAUDE_CODE_EFFORT_LEVEL="+eff)
 	}
 	if cfg.ResumeSessionID != "" {
@@ -340,12 +340,13 @@ func ParseClaudeStreamJSON(ctx context.Context, r io.Reader, emit Emit) error {
 			Message struct {
 				ID      string `json:"id"`
 				Content []struct {
-					Type     string          `json:"type"`
-					Text     string          `json:"text"`
-					Thinking string          `json:"thinking"`
-					ID       string          `json:"id"`
-					Name     string          `json:"name"`
-					Input    json.RawMessage `json:"input"`
+					Type      string          `json:"type"`
+					Text      string          `json:"text"`
+					Thinking  string          `json:"thinking"`
+					ID        string          `json:"id"`
+					ToolUseID string          `json:"tool_use_id"`
+					Name      string          `json:"name"`
+					Input     json.RawMessage `json:"input"`
 				} `json:"content"`
 			} `json:"message"`
 			Result     string `json:"result"`
@@ -433,9 +434,13 @@ func ParseClaudeStreamJSON(ctx context.Context, r io.Reader, emit Emit) error {
 			// Tool results echoed back in verbose stream-json.
 			for _, block := range ev.Message.Content {
 				if block.Type == "tool_result" {
+					callID := firstNonEmpty(block.ToolUseID, block.ID)
+					if callID == "" {
+						continue
+					}
 					_ = emit(Event{
 						Type:   EventToolResult,
-						CallID: block.ID,
+						CallID: callID,
 						Status: string(ToolSucceeded),
 					})
 				}

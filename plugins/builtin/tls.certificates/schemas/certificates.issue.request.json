@@ -1,13 +1,11 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "description": "通过受控 ACME DNS-01 签发证书请求（严格对齐 hostauth.IssueCertificateArgs）",
+  "description": "通过受控 ACME DNS-01 或 HTTP-01 签发证书请求（严格对齐 hostauth.IssueCertificateArgs）",
   "required": [
     "certificate_id",
     "attempt_id",
     "spec",
-    "provider_id",
-    "zone_id",
     "ca",
     "accept_terms"
   ],
@@ -25,6 +23,15 @@
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9._-]+$",
       "description": "本次签发幂等尝试 ID"
+    },
+    "challenge_type": {
+      "type": "string",
+      "enum": [
+        "dns-01",
+        "http-01"
+      ],
+      "default": "dns-01",
+      "description": "ACME 验证方式：dns-01（支持泛域名，需联动 domain.dns）或 http-01（免 DNS Token，经内置 web.ingress 80 端口验证）"
     },
     "spec": {
       "type": "object",
@@ -58,17 +65,15 @@
     },
     "provider_id": {
       "type": "string",
-      "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[A-Za-z0-9._-]+$",
-      "description": "已授权的 DNS 提供商 ID"
+      "pattern": "^[A-Za-z0-9._-]*$",
+      "description": "已授权的 DNS 提供商 ID（DNS-01 模式必填，HTTP-01 模式留空）"
     },
     "zone_id": {
       "type": "string",
-      "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[A-Za-z0-9._-]+$",
-      "description": "已授权的 DNS 托管域 ID"
+      "pattern": "^[A-Za-z0-9._-]*$",
+      "description": "已授权的 DNS 托管域 ID（DNS-01 模式必填，HTTP-01 模式留空）"
     },
     "ca": {
       "type": "string",

@@ -154,7 +154,7 @@ func (b *Binary) Command(ctx context.Context, candidate string, preflight bool) 
 	args = append(args, "-config", candidate)
 	command := exec.CommandContext(ctx, b.path, args...)
 	command.Dir = b.root
-	command.Env = []string{"LANG=C", "LC_ALL=C", "XRAY_LOCATION_ASSET=" + b.root}
+	command.Env = []string{"LANG=C", "LC_ALL=C", "XRAY_LOCATION_ASSET=" + filepath.Join(b.root, "bin")}
 	command.WaitDelay = time.Second
 	return command, nil
 }

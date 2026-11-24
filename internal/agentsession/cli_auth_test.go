@@ -162,7 +162,7 @@ func TestFetchModelsAndProviderCapabilities(t *testing.T) {
 		t.Fatalf("anthropic models = %v", res.Models)
 	}
 
-	// ResolveProviderForCLI bridges ANTHROPIC_API_KEY + ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL.
+	// ResolveProviderForCLI bridges ANTHROPIC_API_KEY + normalized ANTHROPIC_BASE_URL (without duplicate ANTHROPIC_AUTH_TOKEN).
 	cliEnv, ep, found, cleanup, err := ResolveProviderForCLI(ctx, env.svc, created.ID, CoreClaudeCode)
 	if err != nil || !found {
 		t.Fatalf("ResolveProviderForCLI = found:%v err:%v", found, err)
@@ -172,10 +172,13 @@ func TestFetchModelsAndProviderCapabilities(t *testing.T) {
 		t.Fatalf("resolved endpoint metadata mismatch: %+v", ep)
 	}
 	joined := strings.Join(cliEnv, "\n")
-	for _, want := range []string{"ANTHROPIC_API_KEY=sk-ant-key", "ANTHROPIC_AUTH_TOKEN=sk-ant-key", "ANTHROPIC_BASE_URL=" + srv.URL} {
+	for _, want := range []string{"ANTHROPIC_API_KEY=sk-ant-key", "ANTHROPIC_BASE_URL=" + srv.URL} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %q in %v", want, cliEnv)
 		}
+	}
+	if strings.Contains(joined, "ANTHROPIC_AUTH_TOKEN=") {
+		t.Fatalf("unexpected duplicate ANTHROPIC_AUTH_TOKEN in %v", cliEnv)
 	}
 
 	// Update session config live (effort, model, max_context_tokens, plan_mode).

@@ -201,23 +201,42 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	syncCapabilityPanelPort := func(port int) {
+		if port <= 0 || port > 65535 {
+			return
+		}
+		capClient := sandbox.NewCapabilityClient(sandbox.DefaultCapabilitySocket)
+		callCtx, cancel := context.WithTimeout(life, 5*time.Second)
+		defer cancel()
+		resp, cerr := capClient.Call(callCtx, sandbox.CapabilityRequest{
+			Op:         "firewall.sync-panel-port",
+			ID:         "controller",
+			ParamsJSON: []byte(fmt.Sprintf(`{"port":%d}`, port)),
+		})
+		if cerr == nil && resp.OK {
+			return
+		}
+		if werr := panelaccess.WriteCapabilityPanelPort(panelaccess.DefaultCapabilityPanelPortFile, port); werr != nil {
+			logger.Warn("capability panel-port sync failed (both RPC and file fallback)",
+				"port", port, "rpc_err", cerr, "rpc_code", resp.Code, "file_err", werr)
+		}
+	}
+
 	// Load or seed live panel access settings (port, secret entry path, disguise,
 	// reverse-proxy domain) from SQLite so UI changes persist across restarts.
 	accessMgr, err := panelaccess.NewManager(life, panelaccess.Options{
-		DB:          c.DB(),
-		Clock:       c.Clock(),
-		Bootstrap:   cfg.HTTP,
-		OnAllowHost: c.Gateway().SetDynamicPanelHost,
-		OnPortChange: func(port int) {
-			if werr := panelaccess.WriteCapabilityPanelPort(panelaccess.DefaultCapabilityPanelPortFile, port); werr != nil {
-				logger.Debug("best-effort capability panel-port.json sync skipped", "port", port, "error", werr)
-			}
-		},
+		DB:           c.DB(),
+		Clock:        c.Clock(),
+		Bootstrap:    cfg.HTTP,
+		OnAllowHost:  c.Gateway().SetDynamicPanelHost,
+		OnPortChange: syncCapabilityPanelPort,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "qwq serve-controller: init panel access settings: %v\n", err)
 		return 1
 	}
+	// 启动时同步当前生效面板端口至 qwq-capability（确保 panel-port.json 与活跃防火墙保留端口一致）。
+	syncCapabilityPanelPort(accessMgr.Snapshot().Port)
 	if rt != nil {
 		rt.SetManagementPortsFunc(func() []uint32 {
 			if p := accessMgr.Snapshot().Port; p > 0 && p <= 65535 {

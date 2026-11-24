@@ -39,7 +39,7 @@ func TestInspectPackageFacts(t *testing.T) {
 	if len(insp.Problems) != 0 {
 		t.Fatalf("problems = %+v", insp.Problems)
 	}
-	if !insp.Memory.OK || insp.Memory.RequiredBytes != 48<<20 || insp.Memory.AvailableBytes != 4<<30 {
+	if !insp.Memory.OK || insp.Memory.RequiredBytes != (48<<20)+defaultMemoryReserve || insp.Memory.AvailableBytes != 4<<30 {
 		t.Fatalf("memory = %+v", insp.Memory)
 	}
 	// The verification staged and released its private directory.
@@ -134,7 +134,7 @@ func TestInspectMemoryInsufficient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
-	if insp.Memory.OK || insp.Memory.RequiredBytes != 512<<20 || insp.Memory.AvailableBytes != 32<<20 {
+	if insp.Memory.OK || insp.Memory.RequiredBytes != (512<<20)+defaultMemoryReserve || insp.Memory.AvailableBytes != 32<<20 {
 		t.Fatalf("memory = %+v", insp.Memory)
 	}
 }

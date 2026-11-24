@@ -21,6 +21,7 @@ StartLimitBurst=5
 Type=exec
 User=qwq
 Group=qwq
+EnvironmentFile=-/etc/qwq/controller.env
 ExecStart=/opt/qwq/current/bin/qwq serve-controller --config /etc/qwq/qwq.json
 Restart=on-failure
 RestartSec=2s

@@ -276,3 +276,31 @@ func TestFirewallRollbackAndCrashVisibility(t *testing.T) {
 		}
 	})
 }
+
+func TestFirewallSyncPanelPortHotUpdatesActiveChain(t *testing.T) {
+	s, n, _, _ := firewallFixture()
+	panelPortState := new(fakeState)
+	s.PanelPortState = panelPortState
+
+	// 先激活一条 default-drop 防火墙链（只保留 22, 8443）
+	before := getFirewall(t, s)
+	if res := applyFirewall(t, s, before.Revision); !res.OK {
+		t.Fatalf("initial apply failed: %+v", res)
+	}
+
+	// 热同步面板新端口 45001：必须同时写入 panel-port.json 并在活跃 inet qwq input 中放行 45001
+	resp, err := s.Run(t.Context(), sandbox.CapabilityRequest{
+		Op:         "firewall.sync-panel-port",
+		ID:         "controller",
+		ParamsJSON: []byte(`{"port":45001}`),
+	})
+	if err != nil || !resp.OK {
+		t.Fatalf("firewall.sync-panel-port failed: resp=%+v err=%v", resp, err)
+	}
+	if !bytes.Contains(panelPortState.raw, []byte(`45001`)) {
+		t.Fatalf("expected panel-port.json to contain 45001, got %q", string(panelPortState.raw))
+	}
+	if !bytes.Contains(n.doc, []byte(`45001`)) {
+		t.Fatalf("expected active nftables input chain to immediately allow new panel port 45001, got %s", string(n.doc))
+	}
+}

@@ -82,13 +82,13 @@ function makeBridgePair(onEnsurePlugins?: (req: { plugins: string[]; reason?: st
 }
 
 describe('STEP-04: 零信任 ui.ensure_plugins 桥接协议与处理器', () => {
-  it('白名单仅放行 web.ingress / tls.certificates / domain.dns', () => {
-    expect([...ENSURE_PLUGIN_ALLOWLIST]).toEqual(['web.ingress', 'tls.certificates', 'domain.dns']);
+  it('白名单仅放行 web.ingress / tls.certificates / domain.dns / core.xray', () => {
+    expect([...ENSURE_PLUGIN_ALLOWLIST]).toEqual(['web.ingress', 'tls.certificates', 'domain.dns', 'core.xray']);
     expect(isEnsurePluginAllowed('web.ingress')).toBe(true);
     expect(isEnsurePluginAllowed('tls.certificates')).toBe(true);
     expect(isEnsurePluginAllowed('domain.dns')).toBe(true);
+    expect(isEnsurePluginAllowed('core.xray')).toBe(true);
     expect(isEnsurePluginAllowed('evil.plugin')).toBe(false);
-    expect(isEnsurePluginAllowed('core.xray')).toBe(false);
     expect(isEnsurePluginAllowed('containers.docker')).toBe(false);
 
     expect(parsePluginMessage({ t: 'ui.ensure_plugins', id: 'e1', plugins: ['web.ingress'], reason: '反代需要' })).toEqual({
@@ -101,7 +101,7 @@ describe('STEP-04: 零信任 ui.ensure_plugins 桥接协议与处理器', () => 
     expect(parsePluginMessage({ t: 'ui.ensure_plugins', id: 'e3', plugins: ['web.ingress'], reason: 'x'.repeat(600) })).toBeNull();
   });
 
-  it('PluginBridge 拦截非白名单插件 ID（如 evil.plugin / core.xray）并返回 PERMISSION_DENIED，绝不触发回调', async () => {
+  it('PluginBridge 拦截非白名单插件 ID（如 evil.plugin / containers.docker）并返回 PERMISSION_DENIED，绝不触发回调', async () => {
     const onEnsure = vi.fn();
     const { sendAndWait, cleanup } = makeBridgePair(onEnsure);
     try {
@@ -113,7 +113,7 @@ describe('STEP-04: 零信任 ui.ensure_plugins 桥接协议与处理器', () => 
         problem: { code: 'PERMISSION_DENIED', status: 403 },
       });
 
-      const res2 = await sendAndWait({ t: 'ui.ensure_plugins', id: 'req_2', plugins: ['web.ingress', 'core.xray'] });
+      const res2 = await sendAndWait({ t: 'ui.ensure_plugins', id: 'req_2', plugins: ['web.ingress', 'containers.docker'] });
       expect(res2).toMatchObject({
         t: 'ui.ensure_plugins.result',
         id: 'req_2',
@@ -258,7 +258,7 @@ describe('STEP-04: 零信任 ui.ensure_plugins 桥接协议与处理器', () => 
     });
     expect(confirmAction).not.toHaveBeenCalled();
 
-    await expect(handler({ plugins: ['core.xray'] })).rejects.toBeInstanceOf(EnsurePluginsError);
-    await expect(handler({ plugins: ['core.xray'] })).rejects.toMatchObject({ code: 'PERMISSION_DENIED', status: 403 });
+    await expect(handler({ plugins: ['evil.plugin'] })).rejects.toBeInstanceOf(EnsurePluginsError);
+    await expect(handler({ plugins: ['evil.plugin'] })).rejects.toMatchObject({ code: 'PERMISSION_DENIED', status: 403 });
   });
 });

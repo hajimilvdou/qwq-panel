@@ -113,10 +113,11 @@ func (a *api) beginTOTP(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	if u.MFAEnabled && !act.MFA {
-		a.fail(w, r, problem.New(problem.MFARequired,
-			"Replacing the second factor requires a fresh second factor."))
-		return
+	if u.MFAEnabled {
+		if err := a.requireTrustKeyMFA(r, act, "Replacing the second factor requires a fresh second factor."); err != nil {
+			a.fail(w, r, err)
+			return
+		}
 	}
 	enr, err := a.d.Identity.BeginTOTPEnrollment(r.Context(), act.ID)
 	if err != nil {

@@ -51,6 +51,9 @@ func (e *Engine) Activate(ctx context.Context) (err error) {
 	if metadata == nil || !metadata.Current.Enabled {
 		return nil
 	}
+	if e.options.Binary == nil {
+		return failure("CORE_BINARY_MISMATCH", nil)
+	}
 	if err := e.start(ctx, metadata.Current); err != nil {
 		if cleanupErr := e.stopBounded(ctx); cleanupErr != nil {
 			return failure("RECOVERY_FAILED", contextCause(ctx))

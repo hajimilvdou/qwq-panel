@@ -26,7 +26,7 @@ func sameCertificateIssuance(one, two *certificates.IssuanceScope) bool {
 	if one == nil || two == nil {
 		return one == nil && two == nil
 	}
-	return one.CA == two.CA && one.Provider == two.Provider && sameCertificateSpec(one.Spec, two.Spec)
+	return one.CA == two.CA && one.ChallengeType == two.ChallengeType && one.Provider == two.Provider && sameCertificateSpec(one.Spec, two.Spec)
 }
 
 func (a *Authority) certificateGrant(ctx context.Context, caller certificates.Caller) (*certificateExecution, error) {
@@ -71,6 +71,9 @@ func (a *Authority) certificateGrant(ctx context.Context, caller certificates.Ca
 }
 
 func (a *Authority) checkCertificateProvider(ctx context.Context, grant *certificateExecution) error {
+	if grant.issuance != nil && grant.issuance.IsHTTP01() {
+		return nil
+	}
 	scope := grant.issuance.Provider
 	actual, providerRevision, zoneRevision, err := a.resolveScope(ctx, scope.ProviderID, scope.ZoneID)
 	if err != nil {

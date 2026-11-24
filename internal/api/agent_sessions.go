@@ -139,12 +139,22 @@ func newAgentApprovalDTOs(in []agentsession.PendingApproval) []agentApprovalDTO 
 	return out
 }
 
+// agentInFlightDTO carries buffered streaming text/reasoning of an active turn
+// not yet persisted to SQLite so reloads/resyncs never clear live output.
+type agentInFlightDTO struct {
+	MessageID string `json:"message_id"`
+	Reasoning string `json:"reasoning,omitempty"`
+	Content   string `json:"content"`
+	HeadSeq   int64  `json:"head_seq"`
+}
+
 // agentSessionDetail is AgentSession plus its recent transcript and pending
 // approvals (GET /agent-sessions/{id}).
 type agentSessionDetail struct {
 	agentSessionDTO
 	Messages  []agentMessageDTO  `json:"messages"`
 	Approvals []agentApprovalDTO `json:"approvals"`
+	InFlight  *agentInFlightDTO  `json:"in_flight,omitempty"`
 }
 
 // agentSessionCreateRequest is AgentSessionCreateRequest.
@@ -327,10 +337,20 @@ func (a *api) getAgentSession(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
+	var inFlightDTO *agentInFlightDTO
+	if inf := svc.InFlight(r.Context(), act, id); inf != nil {
+		inFlightDTO = &agentInFlightDTO{
+			MessageID: inf.MessageID,
+			Reasoning: inf.Reasoning,
+			Content:   inf.Content,
+			HeadSeq:   inf.HeadSeq,
+		}
+	}
 	a.writeResource(w, r, http.StatusOK, agentSessionDetail{
 		agentSessionDTO: newAgentSessionDTO(rec),
 		Messages:        newAgentMessageDTOs(msgs),
 		Approvals:       newAgentApprovalDTOs(approvals),
+		InFlight:        inFlightDTO,
 	}, fields)
 }
 
@@ -670,6 +690,7 @@ func (s *agentSSE) ready(payload any) {
 }
 
 func (s *agentSSE) write(frame string) error {
+	_ = s.rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if _, err := s.w.Write([]byte(frame)); err != nil {
 		return err
 	}

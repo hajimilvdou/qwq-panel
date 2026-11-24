@@ -5,8 +5,11 @@ package firewall
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"slices"
+	"strconv"
+	"strings"
 	"unicode"
 )
 
@@ -129,22 +132,99 @@ func normalizeMatch(match *matchObject) (string, error) {
 	return class, err
 }
 
-func portExpression(raw []byte) (any, error) {
+type portRangeElem struct {
+	lo uint32
+	hi uint32
+}
+
+func parseSinglePortOrRangeRaw(raw []byte) (portRangeElem, error) {
 	var port uint32
 	if json.Unmarshal(raw, &port) == nil {
 		if port == 0 || port > 65535 {
-			return nil, errInvalidRuleset
+			return portRangeElem{}, errInvalidRuleset
 		}
-		return port, nil
+		return portRangeElem{lo: port, hi: port}, nil
+	}
+	var rng struct {
+		Range []uint32 `json:"range"`
+	}
+	if decodeObject(raw, &rng) != nil || len(rng.Range) != 2 {
+		return portRangeElem{}, errInvalidRuleset
+	}
+	lo, hi := rng.Range[0], rng.Range[1]
+	if lo == 0 || hi == 0 || lo > 65535 || hi > 65535 || lo > hi {
+		return portRangeElem{}, errInvalidRuleset
+	}
+	return portRangeElem{lo: lo, hi: hi}, nil
+}
+
+func (e portRangeElem) toJSONValue() any {
+	if e.lo == e.hi {
+		return e.lo
+	}
+	return map[string]any{"range": []uint32{e.lo, e.hi}}
+}
+
+func portExpression(raw []byte) (any, error) {
+	if elem, err := parseSinglePortOrRangeRaw(raw); err == nil {
+		return elem.toJSONValue(), nil
 	}
 	var set struct {
-		Ports []uint32 `json:"set"`
+		Items []json.RawMessage `json:"set"`
 	}
-	if decodeObject(raw, &set) != nil || len(set.Ports) == 0 || len(set.Ports) > maxPorts {
+	if decodeObject(raw, &set) != nil || len(set.Items) == 0 || len(set.Items) > maxPorts {
 		return nil, errInvalidRuleset
 	}
-	ports, err := preservedPorts(set.Ports, set.Ports)
-	return map[string]any{"set": ports}, err
+	elems := make([]portRangeElem, 0, len(set.Items))
+	for _, item := range set.Items {
+		elem, err := parseSinglePortOrRangeRaw(item)
+		if err != nil {
+			return nil, errInvalidRuleset
+		}
+		elems = append(elems, elem)
+	}
+	slices.SortFunc(elems, func(a, b portRangeElem) int {
+		if a.lo != b.lo {
+			if a.lo < b.lo {
+				return -1
+			}
+			return 1
+		}
+		if a.hi < b.hi {
+			return -1
+		}
+		if a.hi > b.hi {
+			return 1
+		}
+		return 0
+	})
+	elems = slices.Compact(elems)
+	out := make([]any, 0, len(elems))
+	for _, e := range elems {
+		out = append(out, e.toJSONValue())
+	}
+	return map[string]any{"set": out}, nil
+}
+
+// ParseFirewallPortOrRange 支持单端口 "443" 与端口段 "20000-30000"（如 Hysteria2 端口跳跃）。
+func ParseFirewallPortOrRange(expr string) (nftElem string, startPort, endPort uint16, err error) {
+	s := strings.TrimSpace(expr)
+	if idx := strings.IndexByte(s, '-'); idx > 0 {
+		lo, err1 := strconv.ParseUint(strings.TrimSpace(s[:idx]), 10, 16)
+		hi, err2 := strconv.ParseUint(strings.TrimSpace(s[idx+1:]), 10, 16)
+		if err1 != nil || err2 != nil || lo == 0 || hi == 0 || lo > hi {
+			return "", 0, 0, fmt.Errorf("非法端口范围 %q（格式示例：20000-30000）", expr)
+		}
+		if lo == hi {
+			return strconv.FormatUint(lo, 10), uint16(lo), uint16(hi), nil
+		}
+		return fmt.Sprintf("%d-%d", lo, hi), uint16(lo), uint16(hi), nil
+	}
+	p, perr := strconv.ParseUint(s, 10, 16)
+	if perr != nil || p == 0 {
+		return "", 0, 0, fmt.Errorf("非法端口号 %q（范围 1~65535 或起止段 20000-30000）", expr)
+	}
+	return strconv.FormatUint(p, 10), uint16(p), uint16(p), nil
 }
 
 func addressExpression(raw []byte, ipv4 bool) (any, error) {

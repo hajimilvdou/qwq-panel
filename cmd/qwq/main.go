@@ -39,6 +39,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPrivileged(args[1:], os.Stdin, stdout, stderr)
 	case "recover":
 		return runRecover(args[1:], os.Stdin, stdout, stderr)
+	case "access":
+		return runAccess(args[1:], stdout, stderr)
 	case "setup-token":
 		return runSetupToken(args[1:], stdout, stderr)
 	case "doctor":
@@ -72,6 +74,7 @@ commands:
   serve-agent       run the local plugin supervisor
   privileged        install/render plugin units (root only)
   recover           reset an administrator (root only, local console)
+  access            show or reset live panel listen address, entry path and domain (root only)
   setup-token       print the one-time first-setup link (root only)
   version           print version and ABI information
   doctor            check the host and the installation (read-only)

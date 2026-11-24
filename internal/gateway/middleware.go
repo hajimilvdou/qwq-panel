@@ -78,6 +78,8 @@ type Credentials struct {
 	Session string
 	// Bearer is the Authorization bearer token ("" when absent).
 	Bearer string
+	// NoTouch skips advancing session last_seen_at (background widget polls & SSE liveness checks).
+	NoTouch bool
 }
 
 // Empty reports whether the request carried no credentials at all.
@@ -286,25 +288,36 @@ func (g *Gateway) resolveClientIP(r *http.Request) string {
 	for _, h := range r.Header.Values("X-Forwarded-For") {
 		parts = append(parts, strings.Split(h, ",")...)
 	}
-	for i := len(parts) - 1; i >= 0; i-- {
-		p := strings.TrimSpace(parts[i])
-		if p == "" {
-			continue
+	if len(parts) > 0 {
+		for i := len(parts) - 1; i >= 0; i-- {
+			p := strings.TrimSpace(parts[i])
+			if p == "" {
+				continue
+			}
+			a, err := netip.ParseAddr(p)
+			if err != nil {
+				return remote.String()
+			}
+			if a = a.Unmap(); !g.isTrusted(a) {
+				return a.String()
+			}
 		}
-		a, err := netip.ParseAddr(p)
-		if err != nil {
-			return remote.String()
-		}
-		if a = a.Unmap(); !g.isTrusted(a) {
-			return a.String()
+	}
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+		if a, err := netip.ParseAddr(xri); err == nil {
+			return a.Unmap().String()
 		}
 	}
 	return remote.String()
 }
 
 func (g *Gateway) isTrusted(a netip.Addr) bool {
+	u := a.Unmap()
+	if u.IsLoopback() {
+		return true
+	}
 	for _, p := range g.trusted {
-		if p.Contains(a.Unmap()) {
+		if p.Contains(u) {
 			return true
 		}
 	}
@@ -523,6 +536,9 @@ func credentialsFrom(r *http.Request) Credentials {
 		if scheme, token, ok := strings.Cut(auth, " "); ok && strings.EqualFold(scheme, "Bearer") {
 			c.Bearer = strings.TrimSpace(token)
 		}
+	}
+	if r.Header.Get("X-QWQ-Background-Poll") == "1" {
+		c.NoTouch = true
 	}
 	return c
 }

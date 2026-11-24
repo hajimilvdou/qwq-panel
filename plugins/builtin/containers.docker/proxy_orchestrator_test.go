@@ -316,3 +316,78 @@ func TestBuildSafeDockerUpdatePayloadWithRestart(t *testing.T) {
 		t.Fatal("expected invalid restart policy to be rejected")
 	}
 }
+
+func TestProxyReadinessRealIngressStateAndBindCertificateToWebIngress(t *testing.T) {
+	// 1. 当 web.ingress 未监听任何端口时，IngressRunning 必须如实为 false（绝不假报 true）
+	stoppedInv := &fakePluginInvoker{
+		handler: func(plugin, op string, _ map[string]any) ([]byte, error) {
+			if plugin == "web.ingress" && op == "ingress.overview" {
+				return []byte(`{"running":false,"bound_addr":"","https_bound_addr":""}`), nil
+			}
+			return nil, errors.New("not installed")
+		},
+	}
+	r := probeProxyIntegrationStatusWithInvoker(t.Context(), stoppedInv)
+	if !r.IngressInstalled || r.IngressRunning {
+		t.Fatalf("expected IngressInstalled=true and IngressRunning=false when unbound, got %+v", r)
+	}
+
+	// 2. 拿到原始 certificate_id 时必须触发 tls.certificates/bindings.bind 并将 binding_ref 写入 web.ingress
+	st, err := openStackStore(t.TempDir(), embeddedSchemaSQL, time.Now)
+	if err != nil {
+		t.Fatalf("openStackStore: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	bindCalled := false
+	inv := &fakePluginInvoker{
+		handler: func(plugin, op string, payload map[string]any) ([]byte, error) {
+			switch plugin + "/" + op {
+			case "web.ingress/ingress.overview":
+				return []byte(`{"running":true,"bound_addr":":80","https_bound_addr":":443"}`), nil
+			case "tls.certificates/certificates.list":
+				return []byte(`{"certificates":[{"id":"cert_fresh01","sans":["app.example.com"],"latest_generation":1}]}`), nil
+			case "domain.dns/providers.status":
+				return []byte(`{"total":0}`), nil
+			case "tls.certificates/bindings.bind":
+				bindCalled = true
+				if payload["certificate_id"] != "cert_fresh01" {
+					t.Fatalf("expected certificate_id=cert_fresh01, got %v", payload["certificate_id"])
+				}
+				return []byte(`{"certificate":{"id":"cert_fresh01","bindings":[{"binding_ref":"certbind_web01","plugin_id":"web.ingress"}]}}`), nil
+			case "web.ingress/ingress.site.upsert":
+				if payload["cert_id"] != "certbind_web01" {
+					t.Fatalf("expected web.ingress site cert_id=certbind_web01, got %v", payload["cert_id"])
+				}
+				return []byte(`{"site":{"id":"ing_site_fresh"}}`), nil
+			case "web.ingress/ingress.apply":
+				return []byte(`{"applied":true}`), nil
+			default:
+				return nil, errors.New("unexpected call " + plugin + "/" + op)
+			}
+		},
+	}
+
+	link, warns, err := UpsertContainerProxyAndCert(t.Context(), st.db, inv, nil, ContainerProxyUpsertRequest{
+		ContainerID:    "ct_app",
+		ContainerPort:  8080,
+		Domain:         "app.example.com",
+		PathPrefix:     "/",
+		UpstreamScheme: "http",
+		CertStrategy:   "auto_acme",
+	}, resolvedProxyTarget{
+		ContainerName: "/app",
+		ContainerPort: 8080,
+		HostBindIP:    "127.0.0.1",
+		HostPort:      32080,
+	})
+	if err != nil {
+		t.Fatalf("UpsertContainerProxyAndCert: %v (warns=%v)", err, warns)
+	}
+	if !bindCalled {
+		t.Fatal("expected tls.certificates/bindings.bind to be called for unbound certificate_id")
+	}
+	if link.CertID != "certbind_web01" {
+		t.Fatalf("expected saved link CertID=certbind_web01, got %+v", link)
+	}
+}

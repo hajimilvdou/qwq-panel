@@ -22,11 +22,11 @@ import (
 )
 
 const (
-	defaultReleaseMirror     = "https://github.com/hajimilvdou/qwq-panel/releases/download"
-	defaultLatestIndexURL    = "https://github.com/hajimilvdou/qwq-panel/releases/latest/download/plugins-index.json"
-	pluginCatalogCacheTTL    = 5 * time.Minute
-	pluginCatalogFetchLimit  = 1 << 20 // 1 MiB max for plugins-index.json
-	pluginCatalogHTTPTimeout = 12 * time.Second
+	defaultReleaseMirror          = "https://github.com/hajimilvdou/qwq-panel/releases/download"
+	pluginCatalogCacheTTL         = 5 * time.Minute
+	pluginCatalogNegativeCacheTTL = 15 * time.Second
+	pluginCatalogFetchLimit       = 1 << 20 // 1 MiB max for plugins-index.json
+	pluginCatalogHTTPTimeout      = 12 * time.Second
 )
 
 var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$`)
@@ -202,6 +202,24 @@ func configuredReleaseMirror() string {
 	return defaultReleaseMirror
 }
 
+func buildCatalogIndexCandidates(mirror, hostVer string) []string {
+	mirror = strings.TrimRight(strings.TrimSpace(mirror), "/")
+	if mirror == "" {
+		return nil
+	}
+	out := make([]string, 0, 3)
+	if releaseTagPattern.MatchString(hostVer) {
+		out = append(out, fmt.Sprintf("%s/%s/plugins-index.json", mirror, hostVer))
+	}
+	if strings.HasSuffix(mirror, "/releases/download") {
+		base := strings.TrimSuffix(mirror, "/releases/download")
+		out = append(out, base+"/releases/latest/download/plugins-index.json")
+	} else {
+		out = append(out, mirror+"/latest/plugins-index.json", mirror+"/plugins-index.json")
+	}
+	return out
+}
+
 func (a *api) getPluginCatalog(w http.ResponseWriter, r *http.Request) {
 	act, err := a.caller(r)
 	if err != nil {
@@ -265,7 +283,11 @@ func (a *api) loadOfficialPluginCatalog(
 	now := a.d.Clock.Now().UTC()
 	if !forceRefresh {
 		a.catalogCache.mu.Lock()
-		if len(a.catalogCache.items) > 0 && now.Sub(a.catalogCache.fetchedAt) < pluginCatalogCacheTTL {
+		ttl := pluginCatalogCacheTTL
+		if !a.catalogCache.online {
+			ttl = pluginCatalogNegativeCacheTTL
+		}
+		if len(a.catalogCache.items) > 0 && now.Sub(a.catalogCache.fetchedAt) < ttl {
 			release = a.catalogCache.release
 			source = a.catalogCache.source
 			online = a.catalogCache.online
@@ -283,13 +305,7 @@ func (a *api) loadOfficialPluginCatalog(
 		hostVer = "v" + hostVer
 	}
 
-	candidates := make([]string, 0, 2)
-	if releaseTagPattern.MatchString(hostVer) {
-		candidates = append(candidates, fmt.Sprintf("%s/%s/plugins-index.json", mirror, hostVer))
-	}
-	if mirror == defaultReleaseMirror {
-		candidates = append(candidates, defaultLatestIndexURL)
-	}
+	candidates := buildCatalogIndexCandidates(mirror, hostVer)
 
 	for _, indexURL := range candidates {
 		idx, resolvedBase, err := a.fetchRemotePluginsIndex(ctx, indexURL)

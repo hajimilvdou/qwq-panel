@@ -57,14 +57,20 @@ type nftDocument struct {
 
 // Ruleset 是已经过闭合白名单校验的规则集。原生命令只能由该类型生成。
 type Ruleset struct {
-	policy string
-	ports  []uint32
-	rules  []ruleObject
+	policy   string
+	ports    []uint32
+	udpPorts []uint32
+	rules    []ruleObject
 }
 
 // Normalize 校验 nft list table 形态，拒绝所有命令、其他表/链及未知表达式。
 // required 来自宿主事实，declared 仅可扩大保留端口集合；两者都不能为空。
 func Normalize(raw []byte, required, declared []uint32) (*Ruleset, error) {
+	return NormalizeWithUDP(raw, required, declared, nil)
+}
+
+// NormalizeWithUDP 在 Normalize 基础上支持同时生成受保护的 UDP 端口集合（qwq:preserve-udp）。
+func NormalizeWithUDP(raw []byte, required, declared, udpPorts []uint32) (*Ruleset, error) {
 	if len(raw) == 0 || len(raw) > MaxRulesetBytes {
 		return nil, errInvalidRuleset
 	}
@@ -72,13 +78,20 @@ func Normalize(raw []byte, required, declared []uint32) (*Ruleset, error) {
 	if err != nil {
 		return nil, err
 	}
+	var cleanUDP []uint32
+	if len(udpPorts) > 0 {
+		cleanUDP, err = preservedPorts(udpPorts, udpPorts)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var document struct {
 		Nftables []json.RawMessage `json:"nftables"`
 	}
 	if err := decodeObject(raw, &document); err != nil || len(document.Nftables) > maxRules+10 {
 		return nil, errInvalidRuleset
 	}
-	r := &Ruleset{ports: ports}
+	r := &Ruleset{ports: ports, udpPorts: cleanUDP}
 	var hasTable, hasChain, hasMeta bool
 	for _, rawObject := range document.Nftables {
 		object, err := singleObject(rawObject)
@@ -198,7 +211,7 @@ func (r *Ruleset) Definition() ([]byte, error) {
 	}
 	zero := 0
 	objects := []nftObject{{Table: &tableObject{Family: "inet", Name: "qwq"}}, {Chain: &chainObject{Family: "inet", Table: "qwq", Name: "input", Type: "filter", Hook: "input", Priority: &zero, Policy: r.policy}}}
-	guards, err := guardRules(r.ports)
+	guards, err := guardRulesWithUDP(r.ports, r.udpPorts)
 	if err != nil {
 		return nil, err
 	}

@@ -11,8 +11,14 @@ export const system = {
   ready: () => http.get<{ status: string }>('/readyz'),
   info: () => http.get<SystemInfo>('/api/v1/system').then((r) => r.data),
   access: () => http.get<PanelAccessSettings>('/api/v1/system/access').then((r) => r.data),
-  updateAccess: (body: PanelAccessUpdateRequest) =>
-    http.put<PanelAccessSettings>('/api/v1/system/access', body).then((r) => r.data),
+  updateAccess: (body: PanelAccessUpdateRequest, mfaCode?: string) =>
+    http
+      .put<PanelAccessSettings>(
+        '/api/v1/system/access',
+        body,
+        mfaCode ? { headers: { 'X-QWQ-MFA-Code': mfaCode } } : undefined,
+      )
+      .then((r) => r.data),
   setupStatus: (opts?: RequestOptions) => http.get<SetupStatus>('/api/v1/setup', opts).then((r) => r.data),
   completeSetup: (body: { setup_token: string; username: string; password: string; display_name?: string }) =>
     http.post<Session>('/api/v1/setup', body).then((r) => r.data),

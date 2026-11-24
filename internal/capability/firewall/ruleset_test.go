@@ -110,3 +110,37 @@ func TestRulesetTransactionOwnsOnlyInput(t *testing.T) {
 		t.Fatal("initial transaction is invalid")
 	}
 }
+
+func TestRulesetPortRangeAndUDPGuards(t *testing.T) {
+	rangeRuleset := `{"nftables":[` +
+		`{"table":{"family":"inet","name":"qwq"}},` +
+		`{"chain":{"family":"inet","table":"qwq","name":"input","type":"filter","hook":"input","prio":0,"policy":"drop"}},` +
+		`{"rule":{"family":"inet","table":"qwq","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":{"range":[20000,30000]}}},{"accept":null}],"comment":"hysteria2-hop"}}` +
+		`]}`
+	r, err := NormalizeWithUDP([]byte(rangeRuleset), []uint32{22, 8443}, []uint32{22, 8443}, []uint32{443})
+	if err != nil {
+		t.Fatalf("NormalizeWithUDP with port range failed: %v", err)
+	}
+	def, err := r.Definition()
+	if err != nil {
+		t.Fatalf("Definition: %v", err)
+	}
+	if !bytes.Contains(def, []byte(`"qwq:preserve-udp"`)) {
+		t.Fatalf("expected qwq:preserve-udp guard in definition: %s", def)
+	}
+	if !bytes.Contains(def, []byte(`{"range":[20000,30000]}`)) {
+		t.Fatalf("expected port range [20000,30000] in definition: %s", def)
+	}
+	// 无效端口段（起 > 止 或 越界）必须被拒绝
+	for _, bad := range []string{`{"range":[30000,20000]}`, `{"range":[0,100]}`, `{"range":[100,65536]}`} {
+		badDoc := strings.Replace(rangeRuleset, `{"range":[20000,30000]}`, bad, 1)
+		if _, err := Normalize([]byte(badDoc), []uint32{22}, []uint32{22}); err == nil {
+			t.Fatalf("expected invalid port range %s to be rejected", bad)
+		}
+	}
+	// ParseFirewallPortOrRange 测试
+	elem, lo, hi, err := ParseFirewallPortOrRange("20000-30000")
+	if err != nil || elem != "20000-30000" || lo != 20000 || hi != 30000 {
+		t.Fatalf("ParseFirewallPortOrRange(20000-30000): elem=%q lo=%d hi=%d err=%v", elem, lo, hi, err)
+	}
+}

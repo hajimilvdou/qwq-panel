@@ -23,6 +23,10 @@
         "2"
       ]
     },
+    "obfs_available": {
+      "type": "boolean",
+      "description": "宿主包内是否具备受控 simple-obfs (obfs-server) 二进制。"
+    },
     "declared": {
       "type": "array",
       "maxItems": 32,

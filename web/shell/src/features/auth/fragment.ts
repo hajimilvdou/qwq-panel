@@ -6,9 +6,29 @@
  * 防止截图、浏览器历史与同步把令牌带出去。
  * ========================================================================== */
 
-export function takeFragmentToken(): string {
-  if (typeof location === 'undefined' || !location.hash) return '';
-  const token = new URLSearchParams(location.hash.slice(1)).get('token')?.trim() ?? '';
-  history.replaceState(history.state, '', location.pathname + location.search);
-  return token;
+export function takeFragmentToken(storageKey = 'qwq.boot_token'): string {
+  if (typeof location === 'undefined') return '';
+  const fromHash = location.hash ? (new URLSearchParams(location.hash.slice(1)).get('token')?.trim() ?? '') : '';
+  if (fromHash) {
+    history.replaceState(history.state, '', location.pathname + location.search);
+    try {
+      sessionStorage.setItem(storageKey, fromHash);
+    } catch {
+      /* ignore storage quota */
+    }
+    return fromHash;
+  }
+  try {
+    return sessionStorage.getItem(storageKey)?.trim() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function clearFragmentToken(storageKey = 'qwq.boot_token'): void {
+  try {
+    sessionStorage.removeItem(storageKey);
+  } catch {
+    /* ignore */
+  }
 }

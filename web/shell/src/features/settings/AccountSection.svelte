@@ -93,22 +93,24 @@
   /* ---------------------------------------------------------------- 两步验证 */
   let totpOpen = $state(false);
   let disableOpen = $state(false);
+  let disableUseRecovery = $state(false);
   let disableCode = $state('');
   let disableBusy = $state(false);
   let disableErr = $state('');
 
   async function disableTotp(code = disableCode) {
-    if (code.length !== 6 || disableBusy) return;
+    const trimmed = code.trim();
+    if ((disableUseRecovery ? trimmed.length < 6 : trimmed.length !== 6) || disableBusy) return;
     disableBusy = true;
     disableErr = '';
     try {
-      session.updateUser(await account.disableTotp(code, createIntent().key));
+      session.updateUser(await account.disableTotp(trimmed, createIntent().key));
       disableOpen = false;
       toasts.success('两步验证已关闭');
     } catch (err) {
       const v = describeError(err);
       disableCode = '';
-      disableErr = v.code === 'VALIDATION_FAILED' || v.code === 'MFA_REQUIRED' ? '验证码不对' : v.message;
+      disableErr = v.code === 'VALIDATION_FAILED' || v.code === 'MFA_REQUIRED' ? '验证码或恢复码不对' : v.message;
     } finally {
       disableBusy = false;
     }
@@ -156,7 +158,7 @@
         bind:value={currentPw}
         error={pwErr?.fields['/current_password']}
       />
-      <PasswordFields label="新密码" bind:password={newPw} bind:valid={pwValid} serverError={pwErr?.fields['/new_password']} disabled={pwBusy} />
+      <PasswordFields label="新密码" username={user.username} bind:password={newPw} bind:valid={pwValid} serverError={pwErr?.fields['/new_password']} disabled={pwBusy} />
       {#if pwErr && !Object.keys(pwErr.fields).length}<Alert>{pwErr.message}</Alert>{/if}
       <div class="actions">
         <Button type="submit" variant="primary" loading={pwBusy} disabled={!pwValid || !currentPw}>更新密码</Button>
@@ -171,7 +173,7 @@
       <Chip tone="ok">已开启</Chip>
       <span class="spacer"></span>
       <Button variant="soft" onclick={() => (totpOpen = true)}>重新绑定</Button>
-      <Button variant="ghost" onclick={() => ((disableOpen = true), (disableCode = ''), (disableErr = ''))}>关闭</Button>
+      <Button variant="ghost" onclick={() => ((disableOpen = true), (disableUseRecovery = false), (disableCode = ''), (disableErr = ''))}>关闭</Button>
     {:else}
       <Chip tone="warn">未开启</Chip>
       <span class="spacer"></span>
@@ -185,14 +187,32 @@
 
 <TotpDialog bind:open={totpOpen} />
 
-<Dialog bind:open={disableOpen} title="关闭两步验证" description="关闭后只靠密码登录，安全性会降低。输入当前验证码确认。" size="sm">
+<Dialog bind:open={disableOpen} title="关闭两步验证" description="关闭后只靠密码登录，安全性会降低。输入当前验证码或恢复码确认。" size="sm">
+  {#if disableUseRecovery}
+    <Input label="恢复码" mono placeholder="xxxx-xxxx" bind:value={disableCode} autofocus disabled={disableBusy} />
+  {:else}
+    <div class="otp">
+      <OtpInput bind:value={disableCode} autofocus disabled={disableBusy} oncomplete={(c) => disableTotp(c)} />
+    </div>
+  {/if}
   <div class="otp">
-    <OtpInput bind:value={disableCode} autofocus disabled={disableBusy} oncomplete={(c) => disableTotp(c)} />
+    <Button
+      type="button"
+      variant="plain"
+      size="sm"
+      onclick={() => {
+        disableUseRecovery = !disableUseRecovery;
+        disableCode = '';
+        disableErr = '';
+      }}
+    >
+      {disableUseRecovery ? '改用 6 位验证码' : '使用恢复码验证'}
+    </Button>
   </div>
   {#if disableErr}<Alert>{disableErr}</Alert>{/if}
   {#snippet footer()}
     <Button variant="plain" onclick={() => (disableOpen = false)}>取消</Button>
-    <Button variant="danger" loading={disableBusy} disabled={disableCode.length !== 6} onclick={() => disableTotp()}>关闭两步验证</Button>
+    <Button variant="danger" loading={disableBusy} disabled={disableUseRecovery ? disableCode.trim().length < 6 : disableCode.length !== 6} onclick={() => disableTotp()}>关闭两步验证</Button>
   {/snippet}
 </Dialog>
 

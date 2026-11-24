@@ -39,11 +39,17 @@ const (
 	LetsEncryptStaging CA = "letsencrypt_staging"
 )
 
-// IssuanceScope 不接受 CA URL；provider 资源与凭据版本由宿主注册表校验。
+// IssuanceScope 不接受 CA URL；DNS-01 模式下 provider 资源与凭据版本由宿主注册表校验，HTTP-01 模式下无需 DNS 提供商。
 type IssuanceScope struct {
-	Spec     Spec      `json:"spec"`
-	Provider dns.Scope `json:"provider"`
-	CA       CA        `json:"ca"`
+	Spec          Spec      `json:"spec"`
+	Provider      dns.Scope `json:"provider"`
+	CA            CA        `json:"ca"`
+	ChallengeType string    `json:"challenge_type,omitempty"`
+}
+
+// IsHTTP01 返回当前签发范围是否使用免 DNS Token 的 HTTP-01（经内置 web.ingress 80 端口验证）模式。
+func (s IssuanceScope) IsHTTP01() bool {
+	return s.ChallengeType == "http-01"
 }
 
 // Consumer 没有文件路径或 secret owner 字段，宿主按这些资源身份确认绑定。

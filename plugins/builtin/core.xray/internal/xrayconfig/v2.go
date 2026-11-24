@@ -173,7 +173,7 @@ func RenderV2(intent *corev2.Intent, materials V2Materials, options V2Options) (
 			enabledTagsByProfile[profile.ID] = inbound.Tag
 			allEnabledTags = append(allEnabledTags, inbound.Tag)
 			for _, u := range profile.Users {
-				if u.TrafficMark != 0 {
+				if !options.SkipSocketMark && u.TrafficMark != 0 {
 					email, eerr := corev1.UserEmail(u.ID)
 					if eerr != nil {
 						return nil, eerr

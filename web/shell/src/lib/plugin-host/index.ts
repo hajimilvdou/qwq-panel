@@ -49,6 +49,7 @@ export interface BridgeOperation {
   effect: string;
   mode?: string;
   summary?: string;
+  timeoutMs?: number;
 }
 
 export interface BridgeInvokeMeta {

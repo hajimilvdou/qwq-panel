@@ -62,11 +62,47 @@ function byStatus(status: number): [string, ErrorAction] {
   return ['请求没有成功', 'retry'];
 }
 
+const FIELD_VIOLATION_ZH: Record<string, string> = {
+  too_short: '口令长度至少需要 12 位',
+  too_long: '口令长度不能超过 256 位',
+  empty: '口令不能为空或全为空格',
+  repeated: '口令不能由同一个重复字符组成',
+  contains_username: '口令中不能包含当前用户名',
+  too_weak: '12~19 位口令需在大写、小写、数字、符号中任选至少 3 类（或满 20 位）',
+  too_common: '该口令属于常见弱口令黑名单，请更换更独特的口令',
+};
+
+export function localizeViolationMessage(code: string | undefined, rawMessage: string): string {
+  const key = code?.toLowerCase();
+  if (key && FIELD_VIOLATION_ZH[key]) return FIELD_VIOLATION_ZH[key]!;
+  const lower = rawMessage.toLowerCase();
+  if (lower.includes('contain the user name')) return FIELD_VIOLATION_ZH.contains_username!;
+  if (lower.includes('too common')) return FIELD_VIOLATION_ZH.too_common!;
+  if (lower.includes('at most 256')) return FIELD_VIOLATION_ZH.too_long!;
+  if (lower.includes('at least 12')) return FIELD_VIOLATION_ZH.too_short!;
+  if (lower.includes('same character')) return FIELD_VIOLATION_ZH.repeated!;
+  if (lower.includes('three character classes')) return FIELD_VIOLATION_ZH.too_weak!;
+  return rawMessage;
+}
+
 export function describeError(err: unknown): ErrorView {
   if (err instanceof ApiError) {
     const [message, action] = MESSAGES[err.code] ?? byStatus(err.status);
     const fields: Record<string, string> = {};
-    if (err.code === 'VALIDATION_FAILED') Object.assign(fields, err.fieldErrors());
+    if (err.code === 'VALIDATION_FAILED') {
+      const violations = err.problem?.violations ?? [];
+      if (violations.length) {
+        for (const v of violations) {
+          if (v.pointer && !fields[v.pointer]) {
+            fields[v.pointer] = localizeViolationMessage(v.code, v.message);
+          }
+        }
+      } else {
+        for (const [k, msg] of Object.entries(err.fieldErrors())) {
+          fields[k] = localizeViolationMessage(undefined, msg);
+        }
+      }
+    }
     let msg = message;
     if (err.code === 'RATE_LIMITED' && err.retryAfter) msg = `操作太频繁，请在 ${err.retryAfter} 秒后再试`;
     return {

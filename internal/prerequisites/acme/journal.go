@@ -46,7 +46,7 @@ func New(options Options) (*Authority, error) {
 	if options.Timeout < time.Minute || options.Timeout > 10*time.Minute || options.CleanupTimeout <= 0 || options.CleanupTimeout > time.Minute {
 		return nil, fault.New("VALIDATION_FAILED", "ACME 时间预算无效")
 	}
-	return &Authority{db: options.DB, secrets: options.Secrets, repository: options.Repository, vault: options.Vault, dns: options.DNS, checker: options.Checker, caa: options.CAA, authorizer: options.Authorizer, dnsContexts: options.DNSContexts, cleanupContexts: options.CleanupContexts, terms: options.Terms, client: options.Client, clock: options.Clock, random: &lockedRandom{reader: options.Random}, timeout: options.Timeout, cleanupTimeout: options.CleanupTimeout}, nil
+	return &Authority{db: options.DB, secrets: options.Secrets, repository: options.Repository, vault: options.Vault, dns: options.DNS, checker: options.Checker, caa: options.CAA, authorizer: options.Authorizer, dnsContexts: options.DNSContexts, cleanupContexts: options.CleanupContexts, terms: options.Terms, http01: options.HTTP01, client: options.Client, clock: options.Clock, random: &lockedRandom{reader: options.Random}, timeout: options.Timeout, cleanupTimeout: options.CleanupTimeout}, nil
 }
 
 type lockedRandom struct {
@@ -65,16 +65,34 @@ func canonicalScope(scope certificates.IssuanceScope) (certificates.IssuanceScop
 	if err != nil {
 		return certificates.IssuanceScope{}, err
 	}
-	if scope.Spec.Purpose != tlsmgr.ServerTLS || dns.ValidateScope(scope.Provider) != nil {
-		return certificates.IssuanceScope{}, fault.New("SCOPE_INVALID", "ACME 必须使用授权 DNS 与服务端 TLS 用途")
+	if scope.Spec.Purpose != tlsmgr.ServerTLS {
+		return certificates.IssuanceScope{}, fault.New("SCOPE_INVALID", "ACME 必须使用服务端 TLS 用途")
 	}
 	if _, err := directory(scope.CA); err != nil {
 		return certificates.IssuanceScope{}, err
 	}
-	for _, san := range canonical {
-		if !names.InZone(strings.TrimPrefix(san, "*."), scope.Provider.ZoneName) {
-			return certificates.IssuanceScope{}, fault.New("ZONE_DENIED", "ACME SAN 超出固定 zone")
+	switch scope.ChallengeType {
+	case "", "dns-01":
+		scope.ChallengeType = ""
+		if dns.ValidateScope(scope.Provider) != nil {
+			return certificates.IssuanceScope{}, fault.New("SCOPE_INVALID", "ACME 必须使用授权 DNS 与服务端 TLS 用途")
 		}
+		for _, san := range canonical {
+			if !names.InZone(strings.TrimPrefix(san, "*."), scope.Provider.ZoneName) {
+				return certificates.IssuanceScope{}, fault.New("ZONE_DENIED", "ACME SAN 超出固定 zone")
+			}
+		}
+	case "http-01":
+		if scope.Provider != (dns.Scope{}) {
+			return certificates.IssuanceScope{}, fault.New("SCOPE_INVALID", "HTTP-01 验证模式不需要 DNS 提供商范围")
+		}
+		for _, san := range canonical {
+			if strings.HasPrefix(san, "*.") {
+				return certificates.IssuanceScope{}, fault.New("WILDCARD_REQUIRES_DNS01", "HTTP-01 验证不支持泛域名证书，请改用 DNS-01 模式或填写精确域名")
+			}
+		}
+	default:
+		return certificates.IssuanceScope{}, fault.New("SCOPE_INVALID", "不支持的 ACME 验证方式")
 	}
 	scope.Spec.SANs = canonical
 	return scope, nil
@@ -86,7 +104,7 @@ func journalKey(caller certificates.Caller, certificateID, attemptID string) str
 }
 
 func equalScope(a, b certificates.IssuanceScope) bool {
-	return a.CA == b.CA && a.Provider == b.Provider && a.Spec.Purpose == b.Spec.Purpose && slices.Equal(a.Spec.SANs, b.Spec.SANs)
+	return a.CA == b.CA && a.ChallengeType == b.ChallengeType && a.Provider == b.Provider && a.Spec.Purpose == b.Spec.Purpose && slices.Equal(a.Spec.SANs, b.Spec.SANs)
 }
 
 func (a *Authority) load(ctx context.Context, caller certificates.Caller, certificateID, attemptID string, scope certificates.IssuanceScope) (journal, string, bool, error) {
@@ -132,7 +150,11 @@ func loadJournal(ctx context.Context, repository store.Repository, source clock.
 		}
 	}
 	for _, item := range state.Challenges {
-		if !allowedURL(scope.CA, item.AuthorizationURI) || !allowedURL(scope.CA, item.URI) || !slices.Contains(scope.Spec.SANs, item.SAN) || item.Token == "" || len(item.Token) > 256 || len(item.Value) != 43 || item.DNSRound > 5 || (item.DNSSubmitted && (!names.ID(item.DNSAttempt) || len(item.DNSRevision) != 64)) || (item.Cleaned && !item.Presented) {
+		badVal := len(item.Value) != 43
+		if scope.IsHTTP01() {
+			badVal = item.Value == "" || len(item.Value) > 512
+		}
+		if !allowedURL(scope.CA, item.AuthorizationURI) || !allowedURL(scope.CA, item.URI) || !slices.Contains(scope.Spec.SANs, item.SAN) || item.Token == "" || len(item.Token) > 256 || badVal || item.DNSRound > 5 || (item.DNSSubmitted && (!names.ID(item.DNSAttempt) || len(item.DNSRevision) != 64)) || (item.Cleaned && !item.Presented) {
 			return journal{}, "", false, fault.New("STATE_INVALID", "ACME challenge 日志无效")
 		}
 	}

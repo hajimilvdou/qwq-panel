@@ -1096,7 +1096,7 @@
         type: 'number',
         cls: 'input-ctrl',
         value: '0',
-        attrs: { min: '0', max: '100000' },
+        attrs: { min: '0', max: '10000' },
         placeholder: '0 = 不限速',
       });
       const authUserInput = el('input', { cls: 'input-ctrl', placeholder: '可选：访问密码保护用户名' });

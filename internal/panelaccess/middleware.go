@@ -156,7 +156,9 @@ func (m *Manager) WrapWithOptions(next http.Handler, opts WrapOptions) http.Hand
 				return
 			}
 			// Browser navigation to /<entryPath>: issue HMAC gate cookie and 302 redirect.
-			secureCookie := snap.TLSMode != "" || isHTTPSRequestTrusted(r, opts.TrustedProxies)
+			// In tls_mode="proxy" over plain HTTP (before TLS reverse proxy is wired),
+			// avoid setting Secure so the browser does not drop _g and loop.
+			secureCookie := r.TLS != nil || (snap.TLSMode != "" && snap.TLSMode != config.TLSProxy) || isHTTPSRequestTrusted(r, opts.TrustedProxies)
 			snap.SetGateCookieForPath(w, rawEntry, secureCookie)
 			target := rest
 			if r.URL.RawQuery != "" {

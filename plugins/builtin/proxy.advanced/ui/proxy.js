@@ -42,6 +42,8 @@
   let cachedWARP = null;
   let cachedWARPPresets = {};
   let cachedNodes = [];
+  let detectedPublicHost = '';
+  let coreObfsAvailable = null;
 
   const userCreateModal = { open: false };
   const userSubModal = { open: false, token: '', baseUrl: '' };
@@ -379,18 +381,35 @@
     }
   }
 
-  function openUserSubModal({ userId, displayName, token, path, subtitle }) {
-    const origin = getPublicOrigin();
-    const cleanPath = String(path || `/p/proxy.advanced/sub/${token}`).replace(/^\/+/, '/');
+  function updateUserSubModalUrls() {
+    const rawOverride = ($('us-host-override')?.value || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    let origin = getPublicOrigin();
+    if (rawOverride) {
+      const proto = location.protocol === 'http:' ? 'http:' : 'https:';
+      const hasPort = /:\d+$/.test(rawOverride) || rawOverride.startsWith('[');
+      const portSuffix = !hasPort && location.port ? `:${location.port}` : '';
+      const hostFmt = rawOverride.includes(':') && !rawOverride.startsWith('[') && !hasPort ? `[${rawOverride}]` : rawOverride;
+      origin = `${proto}//${hostFmt}${portSuffix}`;
+    }
+    const cleanPath = String(userSubModal.path || `/p/proxy.advanced/sub/${userSubModal.token}`).replace(/^\/+/, '/');
     const baseUrl = `${origin}${cleanPath}`;
-    userSubModal.open = true;
-    userSubModal.token = String(token || '');
     userSubModal.baseUrl = baseUrl;
-    $('us-user-label').textContent = `用户 ${displayName || userId} (${userId}) 一次性订阅令牌`;
-    $('us-token-code').textContent = userSubModal.token;
     $('us-url-clash').value = `${baseUrl}?format=clash`;
     $('us-url-singbox').value = `${baseUrl}?format=singbox`;
     $('us-url-base64').value = `${baseUrl}?format=v2ray`;
+  }
+
+  function openUserSubModal({ userId, displayName, token, path, subtitle }) {
+    userSubModal.open = true;
+    userSubModal.token = String(token || '');
+    userSubModal.path = String(path || `/p/proxy.advanced/sub/${token}`);
+    $('us-user-label').textContent = `用户 ${displayName || userId} (${userId}) 一次性订阅令牌`;
+    $('us-token-code').textContent = userSubModal.token;
+    const hostInput = $('us-host-override');
+    if (hostInput) {
+      hostInput.value = detectedPublicHost || '';
+    }
+    updateUserSubModalUrls();
     $('us-meta').textContent = subtitle || '关闭本窗口后明文令牌不再展示';
     $('user-sub-modal').classList.remove('hidden');
   }
@@ -1195,8 +1214,39 @@
     }
   }
 
+  function syncObfsAvailabilityUI() {
+    const sel = $('nb-e-obfs-mode');
+    if (!sel) return;
+    const unavailable = coreObfsAvailable === false;
+    for (const opt of sel.options) {
+      if (opt.value === 'http' || opt.value === 'tls') {
+        opt.disabled = unavailable;
+        if (!opt.dataset.baseLabel) opt.dataset.baseLabel = opt.textContent;
+        opt.textContent = unavailable ? `${opt.dataset.baseLabel}（当前核心未内置 obfs-server）` : opt.dataset.baseLabel;
+      }
+    }
+    if (unavailable && sel.value !== 'none') {
+      sel.value = 'none';
+    }
+  }
+
+  function applyOverviewCapabilities(overview) {
+    if (!overview) return;
+    if (typeof overview.detected_public_host === 'string' && overview.detected_public_host.trim()) {
+      detectedPublicHost = overview.detected_public_host.trim();
+    }
+    if (typeof overview.core_obfs_available === 'boolean') {
+      coreObfsAvailable = overview.core_obfs_available;
+      syncObfsAvailabilityUI();
+    }
+  }
+
   async function refreshNodes() {
-    const res = await invoke('nodes.list', {});
+    const [res, ov] = await Promise.all([
+      invoke('nodes.list', {}),
+      invoke('proxy.overview', { include_traffic_status: false }).catch(() => null),
+    ]);
+    applyOverviewCapabilities(ov);
     cachedNodes = Array.isArray(res.nodes) ? res.nodes : [];
     const managedCount = typeof res.managed_count === 'number'
       ? res.managed_count
@@ -1547,6 +1597,7 @@
   function syncSimplifiedToExpert() {
     $('nb-e-name').value = $('nb-s-name').value;
     $('nb-e-port').value = $('nb-s-port').value;
+    $('nb-e-server').value = $('nb-s-server').value;
     $('nb-e-tags').value = $('nb-s-tags').value;
 
     const secMode = getActiveSecurityOpt().security_mode;
@@ -1580,6 +1631,7 @@
   function syncExpertToSimplified() {
     $('nb-s-name').value = $('nb-e-name').value;
     $('nb-s-port').value = $('nb-e-port').value;
+    $('nb-s-server').value = $('nb-e-server').value;
     $('nb-s-tags').value = $('nb-e-tags').value;
 
     const firstSNI = $('nb-e-server-names').value.split(',')[0]?.trim();
@@ -1790,8 +1842,10 @@
     $('nb-e-listen').value = '0.0.0.0';
     $('nb-e-port').value = '';
     $('nb-s-port').value = '';
-    $('nb-e-server').value = '';
+    $('nb-e-server').value = detectedPublicHost || '';
+    $('nb-s-server').value = detectedPublicHost || '';
     $('nb-e-tags').value = '';
+    syncObfsAvailabilityUI();
     $('nb-s-tags').value = '';
     $('nb-e-enabled').checked = true;
     $('nb-e-sniffing').checked = true;
@@ -2381,6 +2435,7 @@
       invoke('chains.list', {}),
       invoke('brutal.status', {}),
     ]);
+    applyOverviewCapabilities(overview);
     $('overview-value').textContent = `${overview.active_users ?? 0} / ${overview.total_users ?? 0} 活跃`;
     $('overview-sub').textContent = overview.sub || '运行正常';
     if (trafficResp.supported) {
@@ -2876,6 +2931,11 @@
     updateBuilderFieldVisibility();
     schedulePreview();
   });
+  if ($('us-host-override')) {
+    $('us-host-override').addEventListener('input', () => {
+      updateUserSubModalUrls();
+    });
+  }
 
   $('nb-e-flow').addEventListener('change', () => {
     const flow = $('nb-e-flow').value;

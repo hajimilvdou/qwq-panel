@@ -81,6 +81,7 @@ type sessionRuntime struct {
 	turnDone chan struct{}
 
 	delta          map[string]*strings.Builder
+	reasoning      strings.Builder
 	currentMessage string
 	lastAssistant  string
 	pending        *pendingApproval
@@ -298,6 +299,46 @@ func agentStreamLimit(name string, max int64) error {
 		RetryAfterSec: 1, Limit: &problem.Limit{Name: name, Max: max}}
 }
 
+// InFlight returns the in-memory streaming snapshot (buffered assistant text
+// and reasoning deltas not yet persisted to SQLite) when a turn is actively
+// streaming, or nil when idle / between messages.
+func (s *Service) InFlight(ctx context.Context, owner actor.Actor, sessionID string) *InFlightSnapshot {
+	if _, err := s.loadFor(ctx, owner, sessionID); err != nil {
+		return nil
+	}
+	s.mu.Lock()
+	rt := s.sessions[sessionID]
+	s.mu.Unlock()
+	if rt == nil {
+		return nil
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if !rt.running || rt.closed {
+		return nil
+	}
+	var content string
+	if rt.currentMessage != "" {
+		if b := rt.delta[rt.currentMessage]; b != nil {
+			content = b.String()
+		}
+	}
+	reasoning := rt.reasoning.String()
+	if content == "" && reasoning == "" {
+		return nil
+	}
+	msgID := rt.currentMessage
+	if msgID == "" {
+		msgID = "in_flight"
+	}
+	return &InFlightSnapshot{
+		MessageID: msgID,
+		Reasoning: reasoning,
+		Content:   content,
+		HeadSeq:   rt.seq,
+	}
+}
+
 // publishLocked persists what e implies and broadcasts it; the caller holds
 // rt.mu. It is the only writer of session state, so seq order, the database and
 // the SSE stream never disagree.
@@ -305,7 +346,39 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 	if rt.closed {
 		return problem.New(problem.StateConflict, "The agent session is closed.")
 	}
+	// If an external adapter or core emits a tool_call while unclosed assistant
+	// text is buffered in memory, auto-flush it first so last_seq never jumps
+	// ahead of unpersisted deltas and post-tool text gets its own bubble.
+	if e.Type == EventToolCall && rt.currentMessage != "" {
+		if b := rt.delta[rt.currentMessage]; b != nil && b.Len() > 0 {
+			if err := s.publishLocked(ctx, rt, Event{
+				Type:      EventMessageCompleted,
+				MessageID: rt.currentMessage,
+			}); err != nil {
+				return err
+			}
+		}
+	}
 	// ======================== 先收紧总字节预算，再分配可回放的序号 ========================
+	if e.Type == EventReasoningDelta {
+		rd := e.Delta
+		if rd == "" && len(e.Result) > 0 {
+			var p struct {
+				Delta string `json:"delta"`
+			}
+			if json.Unmarshal(e.Result, &p) == nil {
+				rd = p.Delta
+			}
+		}
+		if rd != "" {
+			if rt.currentMessage == "" {
+				rt.currentMessage = s.ids.New(messagePrefix)
+			}
+			if remain := maxAssistantBytes - rt.reasoning.Len(); remain > 0 {
+				rt.reasoning.WriteString(clipText(rd, remain))
+			}
+		}
+	}
 	if e.Type == EventMessageDelta {
 		if e.Delta == "" {
 			return nil
@@ -375,11 +448,19 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 		msg := &Message{
 			SessionID: rt.session.ID, Seq: e.Seq, MessageID: e.MessageID, Role: RoleAssistant, Content: content, CreatedAt: e.At,
 		}
-		if len(e.ToolCalls) > 0 {
+		reasoning := e.ReasoningContent
+		if reasoning == "" {
+			reasoning = rt.reasoning.String()
+		}
+		rt.reasoning.Reset()
+		if len(e.ToolCalls) > 0 || reasoning != "" {
 			for i := range e.ToolCalls {
 				e.ToolCalls[i].Arguments = storableArgs(e.ToolCalls[i].Arguments)
 			}
-			raw, err := json.Marshal(assistantContent{ToolCalls: e.ToolCalls})
+			raw, err := json.Marshal(assistantContent{
+				ReasoningContent: reasoning,
+				ToolCalls:        e.ToolCalls,
+			})
 			if err != nil {
 				return err
 			}
@@ -431,6 +512,7 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 			action: e.Action, args: e.Args, messageID: rt.lastAssistant,
 		}
 	case EventTurnCompleted:
+		rt.reasoning.Reset()
 		st := Status(e.Status)
 		if !st.Valid() {
 			st = StatusFailed
@@ -438,7 +520,25 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 		if err := s.setRuntimeStatusLocked(ctx, rt, st, e.Seq); err != nil {
 			return err
 		}
-	case EventError, EventApprovalDecided:
+	case EventError:
+		// Persist turn errors as a structured system message (filtered out of
+		// model context by historyMessages) so first-turn failures and reloads
+		// always show the real diagnostic card instead of a blank transcript.
+		if rawErr, err := buildPersistedErrorJSON(e.Code, e.Detail); err == nil {
+			errMsg := &Message{
+				SessionID:   rt.session.ID,
+				Seq:         e.Seq,
+				MessageID:   s.ids.New(messagePrefix),
+				Role:        RoleSystem,
+				Content:     clipText(e.Detail, 2000),
+				ContentJSON: rawErr,
+				CreatedAt:   e.At,
+			}
+			if _, err := s.insertMessage(ctx, owner, errMsg, rt.session.Status, s.cfg.RetainMessages); err != nil {
+				return err
+			}
+		}
+	case EventApprovalDecided:
 		// Events only: the transcript and the tool-call row carry the same facts.
 	}
 	rt.broadcastLocked(e, s.cfg.RingSize)

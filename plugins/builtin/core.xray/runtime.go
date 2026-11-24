@@ -65,7 +65,7 @@ func newDriverRuntime(i *instance) (*driverRuntime, error) {
 	process, err := coreproc.New(coreproc.Options{
 		Socket: socket,
 		Command: func(ctx context.Context, config string) (*exec.Cmd, error) {
-			if !driver.trusted {
+			if binary == nil || !driver.trusted {
 				return nil, xraybin.ErrBinary
 			}
 			return binary.Command(ctx, config, false)
@@ -83,7 +83,7 @@ func newDriverRuntime(i *instance) (*driverRuntime, error) {
 	driver.process = process
 	driver.anytls = anytls.NewSupervisor()
 	driver.anytlsAligner = anytls.NewLosslessEpochAligner()
-	driver.controller, err = apply.New(apply.Options{Store: store, Process: process, Binary: binary, Obfs: driver.obfs, AnyTLS: driver.anytls, Socket: socket, DataDir: i.DataDir()})
+	driver.controller, err = apply.New(apply.Options{Store: store, Process: process, Binary: binary, Obfs: driver.obfs, AnyTLS: driver.anytls, Socket: socket, DataDir: i.DataDir(), EnforceSocketMarkProbe: true})
 	if err != nil {
 		return nil, mapApplyError(err)
 	}

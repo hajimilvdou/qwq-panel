@@ -295,6 +295,14 @@
     return out;
   }
 
+  function formatPortElem(elem) {
+    if (typeof elem === 'number') return String(elem);
+    if (elem && Array.isArray(elem.range) && elem.range.length === 2) {
+      return `${elem.range[0]}-${elem.range[1]}`;
+    }
+    return '';
+  }
+
   function parseSingleNftRule(rule) {
     const exprs = Array.isArray(rule.expr) ? rule.expr : [];
     let proto = '';
@@ -317,8 +325,10 @@
           proto = pl.protocol;
           if (typeof ex.match.right === 'number') {
             portVal = String(ex.match.right);
+          } else if (Array.isArray(ex.match.right?.range) && ex.match.right.range.length === 2) {
+            portVal = `${ex.match.right.range[0]}-${ex.match.right.range[1]}`;
           } else if (Array.isArray(ex.match.right?.set)) {
-            portVal = ex.match.right.set.join(', ');
+            portVal = ex.match.right.set.map(formatPortElem).filter(Boolean).join(', ');
           }
         } else if ((pl.protocol === 'ip' || pl.protocol === 'ip6') && pl.field === 'saddr') {
           if (typeof ex.match.right === 'string') {
@@ -339,7 +349,27 @@
     };
   }
 
-  function buildNftRuleFromInput(proto, portNum, saddrInput, action, comment) {
+  function parsePortExprInput(rawPort) {
+    const s = String(rawPort ?? '').trim();
+    if (!s) throw new Error('请输入端口号（如 443）或端口段（如 20000-30000）');
+    if (s.includes('-')) {
+      const parts = s.split('-');
+      if (parts.length !== 2) throw new Error('端口段格式无效（示例：20000-30000）');
+      const lo = Number(parts[0].trim());
+      const hi = Number(parts[1].trim());
+      if (!Number.isInteger(lo) || !Number.isInteger(hi) || lo < 1 || hi > 65535 || lo > hi) {
+        throw new Error('端口段必须在 1-65535 范围内且起始端口不大于结束端口');
+      }
+      return lo === hi ? lo : { range: [lo, hi] };
+    }
+    const portNum = Number(s);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      throw new Error('端口必须是 1 到 65535 之间的整数或起止段（如 20000-30000）');
+    }
+    return portNum;
+  }
+
+  function buildNftRuleFromInput(proto, portInput, saddrInput, action, comment) {
     const expr = [];
     const saddr = saddrInput.trim();
     if (saddr) {
@@ -356,14 +386,12 @@
       }
       expr.push({ match: { op: '==', left, right } });
     }
-    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
-      throw new Error('端口必须是 1 到 65535 之间的整数');
-    }
+    const portRight = parsePortExprInput(portInput);
     expr.push({
       match: {
         op: '==',
         left: { payload: { protocol: proto === 'udp' ? 'udp' : 'tcp', field: 'dport' } },
-        right: portNum,
+        right: portRight,
       },
     });
     expr.push(action === 'drop' ? { drop: null } : { accept: null });
@@ -834,14 +862,29 @@
     renderFirewall();
   });
 
+  function addFirewallPresetRule(proto, portStr, comment) {
+    const exists = state.fwRules.some(
+      (r) => r.proto === proto && r.port === portStr && r.action === 'accept' && r.saddr === '0.0.0.0/0',
+    );
+    if (exists) {
+      showGlobalAlert(`${proto.toUpperCase()} ${portStr} 已在待应用规则列表中`, 'info');
+      return;
+    }
+    const rawRule = buildNftRuleFromInput(proto, portStr, '', 'accept', comment);
+    state.fwRules.push(parseSingleNftRule(rawRule));
+    state.fwDirty = true;
+    renderFirewall();
+    showGlobalAlert('');
+  }
+
   $('fw-add-rule').addEventListener('click', () => {
     try {
       const proto = $('fw-proto').value;
-      const portNum = Number($('fw-port').value);
+      const portExpr = $('fw-port').value;
       const saddr = $('fw-saddr').value;
       const action = $('fw-action').value;
       const comment = $('fw-comment').value;
-      const rawRule = buildNftRuleFromInput(proto, portNum, saddr, action, comment);
+      const rawRule = buildNftRuleFromInput(proto, portExpr, saddr, action, comment);
       state.fwRules.push(parseSingleNftRule(rawRule));
       state.fwDirty = true;
       $('fw-port').value = '';
@@ -854,10 +897,27 @@
     }
   });
 
+  $('fw-preset-80')?.addEventListener('click', () => addFirewallPresetRule('tcp', '80', 'Web HTTP'));
+  $('fw-preset-443')?.addEventListener('click', () => addFirewallPresetRule('tcp', '443', 'Web HTTPS'));
+  $('fw-preset-443-udp')?.addEventListener('click', () => addFirewallPresetRule('udp', '443', 'QUIC / Hysteria2'));
+
   $('fw-apply-btn').addEventListener('click', () => void runAction(async () => {
+    let confirmMsg = `确认应用当前 inet qwq 规则集（默认策略 ${state.fwPolicy}，自定义规则 ${state.fwRules.length} 条）？宿主保留端口（SSH 与面板端口）将自动放行。`;
+    if (state.fwPolicy === 'drop') {
+      const preserved = Array.isArray(state.fw?.preserved_ports) ? state.fw.preserved_ports.map(String) : [];
+      const hasPort = (proto, p) =>
+        (proto === 'tcp' && preserved.includes(p)) ||
+        state.fwRules.some((r) => r.action === 'accept' && r.proto === proto && r.port === p);
+      const missing = [];
+      if (!hasPort('tcp', '80')) missing.push('80/TCP');
+      if (!hasPort('tcp', '443')) missing.push('443/TCP');
+      if (missing.length > 0) {
+        confirmMsg += `\n\n注意：当前默认策略为 drop，且未放行常用业务端口（${missing.join('、')}）或自定义代理节点端口；如宿主机运行了反代站点或 Xray 节点，请先点击上方快捷按钮或手动添加对应 TCP/UDP 端口规则，以免阻断业务访问。`;
+      }
+    }
     const ok = await hostConfirm(
       '应用防火墙规则集',
-      `确认应用当前 inet qwq 规则集（默认策略 ${state.fwPolicy}，自定义规则 ${state.fwRules.length} 条）？宿主保留端口将自动放行。`,
+      confirmMsg,
       { danger: state.fwPolicy === 'drop', confirmLabel: '确认应用' },
     );
     if (!ok) return;

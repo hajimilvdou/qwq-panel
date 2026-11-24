@@ -8,8 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -45,7 +48,7 @@ type enhancedNativeConfig struct {
 	EnablePlanTool       bool                  `json:"enable_plan_tool,omitempty"`
 	ReasoningEffort      string                `json:"reasoning_effort,omitempty"` // low | medium | high
 	ActiveSkills         []string              `json:"active_skills,omitempty"`
-	Stream               *bool                 `json:"stream,omitempty"` // nil keeps non-streaming compatibility for legacy tests; UI sets true
+	Stream               *bool                 `json:"stream,omitempty"` // nil defaults to true; explicit false disables streaming
 	SoftLanding          bool                  `json:"soft_landing,omitempty"`
 	MaxContextTokens     int64                 `json:"max_context_tokens,omitempty"`
 	AutoCompactPct       int                   `json:"auto_compact_pct,omitempty"`
@@ -75,9 +78,13 @@ func decodeEnhancedNativeConfig(raw json.RawMessage) (*enhancedNativeConfig, err
 
 func (c *enhancedNativeConfig) wantStream() bool {
 	if c.Stream == nil {
-		return false
+		return true
 	}
 	return *c.Stream
+}
+
+func (c *enhancedNativeConfig) wantTelemetry() bool {
+	return (c.Stream != nil && *c.Stream) || c.EnablePlanTool || c.PlanMode
 }
 
 // EnhancedNativeCore wraps NativeCore while preserving every security boundary.
@@ -308,7 +315,7 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 	telemetry.Context = EstimateContextBreakdown(sys, toolDefs, messages, compOpts.MaxContextTokens)
 	telemetry.ComputeDerived()
 	telemetry.UpdatedAt = time.Now().UTC()
-	if cfg.wantStream() || cfg.EnablePlanTool || cfg.PlanMode {
+	if cfg.wantTelemetry() {
 		_ = emitExtended(emit, EventTelemetryUpdated, telemetry)
 	}
 
@@ -389,6 +396,28 @@ func (p *streamingOpenAIProvider) consumeStreamedDelta() bool {
 	return true
 }
 
+func (p *streamingOpenAIProvider) RemapToolCallIDs(orig, normalized []ModelToolCall) {
+	if p.thinkingKeeper != nil {
+		p.thinkingKeeper.RemapToolCallIDs(orig, normalized)
+	}
+}
+
+func (p *streamingOpenAIProvider) effectiveTimeout() time.Duration {
+	timeout := p.cfg.timeout()
+	if p.cfg.TimeoutSeconds == 0 && p.core.timeout > 0 {
+		timeout = p.core.timeout
+	}
+	return timeout
+}
+
+func (p *streamingOpenAIProvider) streamIdleTimeout(timeout time.Duration) time.Duration {
+	idle := defaultChunkIdleWait
+	if timeout > 0 && timeout < idle {
+		idle = timeout
+	}
+	return idle
+}
+
 type streamChatRequest struct {
 	Model           string         `json:"model"`
 	Messages        []chatMessage  `json:"messages"`
@@ -437,9 +466,24 @@ func (p *streamingOpenAIProvider) Complete(ctx context.Context, req ProviderRequ
 		body.StreamOptions = map[string]any{"include_usage": true}
 	}
 
-	resp, cancel, err := p.doOpenAIHTTP(ctx, body)
+	primaryBase, fallbackBase := normalizeOpenAICompatBaseURL(p.cfg.BaseURL)
+	resp, stopHeaderTimer, cancel, err := p.doOpenAIHTTP(ctx, primaryBase, body)
 	if err != nil {
 		return ProviderResponse{}, err
+	}
+	// If the endpoint had no version path and returned 404 (e.g. local Ollama
+	// at http://127.0.0.1:11434 or a root-served proxy), retry once against the
+	// alternate path (/v1 vs root) before failing.
+	if resp.StatusCode == http.StatusNotFound && fallbackBase != "" {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<10))
+		_ = resp.Body.Close()
+		stopHeaderTimer()
+		cancel()
+		resp, stopHeaderTimer, cancel, err = p.doOpenAIHTTP(ctx, fallbackBase, body)
+		if err != nil {
+			return ProviderResponse{}, err
+		}
+		primaryBase = fallbackBase
 	}
 	// OpenCode/DSH compatibility: many OpenAI-compatible gateways (Ollama,
 	// vLLM, OneAPI, non-reasoner endpoints) return HTTP 400 when optional
@@ -448,43 +492,50 @@ func (p *streamingOpenAIProvider) Complete(ctx context.Context, req ProviderRequ
 	if resp.StatusCode == http.StatusBadRequest && (body.StreamOptions != nil || body.ReasoningEffort != "") {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<10))
 		_ = resp.Body.Close()
+		stopHeaderTimer()
 		cancel()
 		body.StreamOptions = nil
 		body.ReasoningEffort = ""
-		resp, cancel, err = p.doOpenAIHTTP(ctx, body)
+		resp, stopHeaderTimer, cancel, err = p.doOpenAIHTTP(ctx, primaryBase, body)
 		if err != nil {
 			return ProviderResponse{}, err
 		}
 	}
+	defer stopHeaderTimer()
 	defer cancel()
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return ProviderResponse{}, modelStatusError(resp.StatusCode)
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+		return ProviderResponse{}, formatUpstreamHTTPError(resp.StatusCode, errBody, p.apiKey)
 	}
 
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	if strings.Contains(ct, "text/event-stream") {
-		return p.parseSSE(resp.Body, stepStart, req.Messages)
+		stopHeaderTimer()
+		idle := p.streamIdleTimeout(p.effectiveTimeout())
+		streamReader := newIdleTimeoutReader(ctx, resp.Body, idle, maxSSEWireBytes)
+		return p.parseSSE(streamReader, stepStart, req.Messages)
 	}
 	return p.parseJSON(resp.Body, stepStart, req.Messages)
 }
 
-func (p *streamingOpenAIProvider) doOpenAIHTTP(ctx context.Context, body streamChatRequest) (*http.Response, context.CancelFunc, error) {
+func (p *streamingOpenAIProvider) doOpenAIHTTP(ctx context.Context, baseURL string, body streamChatRequest) (*http.Response, func(), context.CancelFunc, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
-		return nil, nil, problem.Wrap(err)
+		return nil, nil, nil, problem.Wrap(err)
 	}
-	timeout := p.cfg.timeout()
-	if p.core.timeout > 0 && p.core.timeout < timeout {
-		timeout = p.core.timeout
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	timeout := p.effectiveTimeout()
+	reqCtx, cancelCause := context.WithCancelCause(ctx)
+	hdrTimer := time.AfterFunc(timeout, func() { cancelCause(context.DeadlineExceeded) })
+	stopTimer := func() { hdrTimer.Stop() }
+	cancel := func() { cancelCause(nil) }
 
-	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, p.cfg.BaseURL+"/chat/completions", bytes.NewReader(raw))
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(raw))
 	if err != nil {
+		stopTimer()
 		cancel()
-		return nil, nil, problem.New(problem.Unavailable, "The native core's base_url cannot be used.")
+		return nil, nil, nil, problem.New(problem.Unavailable, "The native core's base_url cannot be used.")
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if body.Stream {
@@ -498,16 +549,18 @@ func (p *streamingOpenAIProvider) doOpenAIHTTP(ctx context.Context, body streamC
 
 	resp, err := p.core.client.Do(httpReq)
 	if err != nil {
+		cause := context.Cause(reqCtx)
+		stopTimer()
 		cancel()
 		if errors.Is(err, errEgressDenied) {
-			return nil, nil, problem.New(problem.PermissionDenied, "%s", egressDeniedDetail)
+			return nil, nil, nil, problem.New(problem.PermissionDenied, "%s", egressDeniedDetail)
 		}
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
-			return nil, nil, problem.New(problem.Timeout, "The model did not answer before its deadline.")
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(cause, context.DeadlineExceeded) || errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
+			return nil, nil, nil, problem.New(problem.Timeout, "The model did not answer before its deadline.")
 		}
-		return nil, nil, problem.New(problem.Unavailable, "The model endpoint could not be reached.")
+		return nil, nil, nil, problem.New(problem.Unavailable, "The model endpoint could not be reached.")
 	}
-	return resp, cancel, nil
+	return resp, stopTimer, cancel, nil
 }
 
 // thinkTagSplitter separates leading `<think>...</think>` blocks emitted inline
@@ -630,15 +683,15 @@ func (p *streamingOpenAIProvider) parseJSON(r io.Reader, stepStart time.Time, ms
 		_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": reason})
 	}
 	p.recordUsage(stepStart, time.Since(stepStart), out.Usage, content, msgs)
-	return toProviderResponse(content, msg.ToolCalls), nil
+	return toProviderResponse(content, reason, msg.ToolCalls), nil
 }
 
 func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msgs []ModelMessage) (ProviderResponse, error) {
-	sc := bufio.NewScanner(io.LimitReader(r, 4<<20))
-	sc.Buffer(make([]byte, 0, 64<<10), 512<<10)
+	br := bufio.NewReaderSize(r, 64<<10)
 
 	var (
 		contentBuf   strings.Builder
+		reasonBuf    strings.Builder
 		firstTokenAt time.Time
 		usage        *openAIUsage
 		toolSlots    []*chatToolCall
@@ -655,6 +708,7 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 		if firstTokenAt.IsZero() {
 			firstTokenAt = time.Now()
 		}
+		reasonBuf.WriteString(s)
 		_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": s})
 	}
 	emitContent := func(s string) {
@@ -671,106 +725,119 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 		}
 	}
 
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" || payload == "[DONE]" {
-			continue
-		}
-		var chunk struct {
-			Error *struct {
-				Message string `json:"message"`
-				Type    string `json:"type"`
-			} `json:"error"`
-			Choices []struct {
-				Delta struct {
-					Content          string `json:"content"`
-					ReasoningContent string `json:"reasoning_content"`
-					Reasoning        string `json:"reasoning"`
-					ToolCalls        []struct {
-						Index    *int   `json:"index"`
-						ID       string `json:"id"`
-						Type     string `json:"type"`
-						Function struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
-						} `json:"function"`
-					} `json:"tool_calls"`
-				} `json:"delta"`
-			} `json:"choices"`
-			Usage *openAIUsage `json:"usage"`
-		}
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			continue
-		}
-		if chunk.Error != nil && len(chunk.Choices) == 0 {
-			return ProviderResponse{}, problem.New(problem.Unavailable, "The model stream returned an error.")
-		}
-		if chunk.Usage != nil {
-			usage = chunk.Usage
-		}
-		if len(chunk.Choices) == 0 {
-			continue
-		}
-		d := chunk.Choices[0].Delta
-		reason := d.ReasoningContent
-		if reason == "" {
-			reason = d.Reasoning
-		}
-		if reason != "" {
-			sawReasonKey = true
-			emitReasoning(reason)
-		}
-		if d.Content != "" {
-			if sawReasonKey {
-				emitContent(d.Content)
-			} else {
-				rPart, tPart := thinkSplit.Feed(d.Content)
-				emitReasoning(rPart)
-				emitContent(tPart)
-			}
-		}
-		for _, tc := range d.ToolCalls {
-			var acc *chatToolCall
-			if tc.ID != "" {
-				acc = toolByID[tc.ID]
-			}
-			if acc == nil && tc.Index != nil {
-				if candidate := toolByIndex[*tc.Index]; candidate != nil {
-					// If the server reused index 0 for a brand-new tool call ID
-					// (common in Ollama / Mistral), allocate a fresh slot instead
-					// of corrupting the previous call's name and JSON arguments.
-					if tc.ID == "" || candidate.ID == "" || candidate.ID == tc.ID {
-						acc = candidate
+	var readErr error
+	for {
+		rawLine, err := readSSELineUnlimited(br, 4<<20)
+		if rawLine != "" {
+			line := strings.TrimSpace(rawLine)
+			if strings.HasPrefix(line, "data:") {
+				payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				if payload != "" && payload != "[DONE]" {
+					var chunk struct {
+						Error *struct {
+							Message string `json:"message"`
+							Type    string `json:"type"`
+						} `json:"error"`
+						Choices []struct {
+							Delta struct {
+								Content          string `json:"content"`
+								ReasoningContent string `json:"reasoning_content"`
+								Reasoning        string `json:"reasoning"`
+								ToolCalls        []struct {
+									Index    *int   `json:"index"`
+									ID       string `json:"id"`
+									Type     string `json:"type"`
+									Function struct {
+										Name      string `json:"name"`
+										Arguments string `json:"arguments"`
+									} `json:"function"`
+								} `json:"tool_calls"`
+							} `json:"delta"`
+						} `json:"choices"`
+						Usage *openAIUsage `json:"usage"`
+					}
+					if json.Unmarshal([]byte(payload), &chunk) == nil {
+						if chunk.Error != nil && len(chunk.Choices) == 0 {
+							msg := sanitizeUpstreamErrorDetail(chunk.Error.Message, p.apiKey)
+							if msg != "" {
+								return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型流式返回错误：%s", msg)
+							}
+							return ProviderResponse{}, problem.New(problem.Unavailable, "The model stream returned an error.")
+						}
+						if chunk.Usage != nil {
+							usage = chunk.Usage
+						}
+						if len(chunk.Choices) > 0 {
+							d := chunk.Choices[0].Delta
+							reason := d.ReasoningContent
+							if reason == "" {
+								reason = d.Reasoning
+							}
+							if reason != "" {
+								sawReasonKey = true
+								emitReasoning(reason)
+							}
+							if d.Content != "" {
+								if sawReasonKey {
+									emitContent(d.Content)
+								} else {
+									rPart, tPart := thinkSplit.Feed(d.Content)
+									emitReasoning(rPart)
+									emitContent(tPart)
+								}
+							}
+							for _, tc := range d.ToolCalls {
+								var acc *chatToolCall
+								if tc.ID != "" {
+									acc = toolByID[tc.ID]
+								}
+								if acc == nil && tc.Index != nil {
+									if candidate := toolByIndex[*tc.Index]; candidate != nil {
+										if tc.ID == "" || candidate.ID == "" || candidate.ID == tc.ID {
+											acc = candidate
+										}
+									}
+								}
+								if acc == nil && tc.Index == nil && tc.ID == "" && len(toolSlots) > 0 {
+									acc = toolSlots[len(toolSlots)-1]
+								}
+								if acc == nil {
+									acc = &chatToolCall{Type: "function"}
+									toolSlots = append(toolSlots, acc)
+									if tc.Index != nil {
+										toolByIndex[*tc.Index] = acc
+									}
+								}
+								if tc.ID != "" {
+									acc.ID = tc.ID
+									toolByID[tc.ID] = acc
+								}
+								if tc.Function.Name != "" {
+									acc.Function.Name += tc.Function.Name
+								}
+								if tc.Function.Arguments != "" {
+									acc.Function.Arguments += tc.Function.Arguments
+								}
+							}
+						}
 					}
 				}
 			}
-			if acc == nil && tc.Index == nil && tc.ID == "" && len(toolSlots) > 0 {
-				acc = toolSlots[len(toolSlots)-1]
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				readErr = err
 			}
-			if acc == nil {
-				acc = &chatToolCall{Type: "function"}
-				toolSlots = append(toolSlots, acc)
-				if tc.Index != nil {
-					toolByIndex[*tc.Index] = acc
-				}
-			}
-			if tc.ID != "" {
-				acc.ID = tc.ID
-				toolByID[tc.ID] = acc
-			}
-			if tc.Function.Name != "" {
-				acc.Function.Name += tc.Function.Name
-			}
-			if tc.Function.Arguments != "" {
-				acc.Function.Arguments += tc.Function.Arguments
-			}
+			break
 		}
 	}
-	if err := sc.Err(); err != nil {
+	if readErr != nil {
+		if errors.Is(readErr, errSSEIdleTimeout) {
+			return ProviderResponse{}, problem.New(problem.Timeout, "%s", readErr.Error())
+		}
+		if errors.Is(readErr, errSSEWireLimitExceeded) {
+			return ProviderResponse{}, problem.New(problem.Unavailable, "%s", readErr.Error())
+		}
 		return ProviderResponse{}, problem.New(problem.Unavailable, "The model stream was interrupted before completion.")
 	}
 	if !sawReasonKey {
@@ -788,7 +855,7 @@ func (p *streamingOpenAIProvider) parseSSE(r io.Reader, stepStart time.Time, msg
 		ttft = firstTokenAt.Sub(stepStart)
 	}
 	p.recordUsage(stepStart, ttft, usage, contentBuf.String(), msgs)
-	return toProviderResponse(contentBuf.String(), calls), nil
+	return toProviderResponse(contentBuf.String(), reasonBuf.String(), calls), nil
 }
 
 func (p *streamingOpenAIProvider) recordUsage(stepStart time.Time, ttft time.Duration, u *openAIUsage, text string, msgs []ModelMessage) {
@@ -813,13 +880,13 @@ func (p *streamingOpenAIProvider) recordUsage(stepStart time.Time, ttft time.Dur
 	}
 	p.telemetry.Context = EstimateContextBreakdown(p.sysText, p.toolDefs, msgs, p.maxCtx)
 	p.telemetry.ComputeDerived()
-	if p.cfg.wantStream() || p.cfg.EnablePlanTool || p.cfg.PlanMode {
+	if p.cfg.wantTelemetry() {
 		_ = emitExtended(p.emit, EventTelemetryUpdated, *p.telemetry)
 	}
 }
 
-func toProviderResponse(content string, calls []chatToolCall) ProviderResponse {
-	out := ProviderResponse{Content: content}
+func toProviderResponse(content, reasoning string, calls []chatToolCall) ProviderResponse {
+	out := ProviderResponse{Content: content, ReasoningContent: reasoning}
 	for _, call := range calls {
 		rawArgs := strings.TrimSpace(call.Function.Arguments)
 		var args json.RawMessage
@@ -950,12 +1017,19 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 		payload["tools"] = tools
 	}
 	if budget := anthropicThinkingBudget(p.cfg.Model, p.cfg.ReasoningEffort); budget > 0 && allToolTurnsHaveThinking {
-		if maxTokens <= budget {
-			payload["max_tokens"] = budget + 4096
+		reqMax := maxTokens
+		if reqMax <= budget {
+			reqMax = budget + 4096
 		}
-		payload["thinking"] = map[string]any{
-			"type":          "enabled",
-			"budget_tokens": budget,
+		cappedMax, cappedBudget := CapAnthropicMaxTokens(p.cfg.Model, reqMax, budget)
+		payload["max_tokens"] = cappedMax
+		if cappedBudget > 0 {
+			payload["thinking"] = map[string]any{
+				"type":          "enabled",
+				"budget_tokens": cappedBudget,
+			}
+		} else if p.cfg.Temperature != nil {
+			payload["temperature"] = *p.cfg.Temperature
 		}
 	} else if p.cfg.Temperature != nil {
 		payload["temperature"] = *p.cfg.Temperature
@@ -965,12 +1039,11 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 	if err != nil {
 		return ProviderResponse{}, problem.Wrap(err)
 	}
-	timeout := p.cfg.timeout()
-	if p.core.timeout > 0 && p.core.timeout < timeout {
-		timeout = p.core.timeout
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	timeout := p.effectiveTimeout()
+	reqCtx, cancelCause := context.WithCancelCause(ctx)
+	hdrTimer := time.AfterFunc(timeout, func() { cancelCause(context.DeadlineExceeded) })
+	defer hdrTimer.Stop()
+	defer cancelCause(nil)
 
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, anthropicMessagesURL(p.cfg.BaseURL), bytes.NewReader(raw))
 	if err != nil {
@@ -986,10 +1059,11 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 
 	resp, err := p.core.client.Do(httpReq)
 	if err != nil {
+		cause := context.Cause(reqCtx)
 		if errors.Is(err, errEgressDenied) {
 			return ProviderResponse{}, problem.New(problem.PermissionDenied, "%s", egressDeniedDetail)
 		}
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(cause, context.DeadlineExceeded) || errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
 			return ProviderResponse{}, problem.New(problem.Timeout, "The model did not answer before its deadline.")
 		}
 		return ProviderResponse{}, problem.New(problem.Unavailable, "The model endpoint could not be reached.")
@@ -997,11 +1071,15 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return ProviderResponse{}, modelStatusError(resp.StatusCode)
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+		return ProviderResponse{}, formatUpstreamHTTPError(resp.StatusCode, errBody, p.apiKey)
 	}
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	if strings.Contains(ct, "text/event-stream") {
-		return p.parseAnthropicSSE(resp.Body, stepStart, req.Messages)
+		hdrTimer.Stop()
+		idle := p.streamIdleTimeout(timeout)
+		streamReader := newIdleTimeoutReader(ctx, resp.Body, idle, maxSSEWireBytes)
+		return p.parseAnthropicSSE(streamReader, stepStart, req.Messages)
 	}
 	return p.parseAnthropicJSON(resp.Body, stepStart, req.Messages)
 }
@@ -1065,8 +1143,7 @@ func (p *streamingOpenAIProvider) parseAnthropicJSON(r io.Reader, stepStart time
 }
 
 func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.Time, msgs []ModelMessage) (ProviderResponse, error) {
-	sc := bufio.NewScanner(io.LimitReader(r, 4<<20))
-	sc.Buffer(make([]byte, 0, 64<<10), 512<<10)
+	br := bufio.NewReaderSize(r, 64<<10)
 
 	type blockAcc struct {
 		typ       string
@@ -1087,113 +1164,134 @@ func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.
 		hasUsage     bool
 	)
 
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" || payload == "[DONE]" {
-			continue
-		}
-		var ev struct {
-			Type    string `json:"type"`
-			Index   int    `json:"index"`
-			Message *struct {
-				Usage *struct {
-					InputTokens              int64 `json:"input_tokens"`
-					CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-					CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-				} `json:"usage"`
-			} `json:"message"`
-			ContentBlock *struct {
-				Type string `json:"type"`
-				ID   string `json:"id"`
-				Name string `json:"name"`
-				Data string `json:"data"`
-			} `json:"content_block"`
-			Delta *struct {
-				Type        string `json:"type"`
-				Text        string `json:"text"`
-				Thinking    string `json:"thinking"`
-				Signature   string `json:"signature"`
-				PartialJSON string `json:"partial_json"`
-			} `json:"delta"`
-			Usage *struct {
-				OutputTokens int64 `json:"output_tokens"`
-			} `json:"usage"`
-		}
-		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
-			continue
-		}
-		switch ev.Type {
-		case "error":
-			return ProviderResponse{}, problem.New(problem.Unavailable, "The model stream returned an error.")
-		case "message_start":
-			if ev.Message != nil && ev.Message.Usage != nil {
-				hasUsage = true
-				u := ev.Message.Usage
-				usage.PromptTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
-				usage.PromptTokensDetails.CachedTokens = u.CacheReadInputTokens
-			}
-		case "content_block_start":
-			if ev.ContentBlock != nil {
-				acc := &blockAcc{
-					typ:  ev.ContentBlock.Type,
-					id:   ev.ContentBlock.ID,
-					name: ev.ContentBlock.Name,
-					data: ev.ContentBlock.Data,
-				}
-				if _, exists := blocks[ev.Index]; !exists {
-					blockOrder = append(blockOrder, ev.Index)
-				}
-				blocks[ev.Index] = acc
-			}
-		case "content_block_delta":
-			if ev.Delta == nil {
-				continue
-			}
-			acc := blocks[ev.Index]
-			if acc == nil {
-				acc = &blockAcc{}
-				blocks[ev.Index] = acc
-				blockOrder = append(blockOrder, ev.Index)
-			}
-			switch ev.Delta.Type {
-			case "thinking_delta":
-				if ev.Delta.Thinking != "" {
-					if firstTokenAt.IsZero() {
-						firstTokenAt = time.Now()
+	var readErr error
+	for {
+		rawLine, err := readSSELineUnlimited(br, 4<<20)
+		if rawLine != "" {
+			line := strings.TrimSpace(rawLine)
+			if strings.HasPrefix(line, "data:") {
+				payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				if payload != "" && payload != "[DONE]" {
+					var ev struct {
+						Type  string `json:"type"`
+						Index int    `json:"index"`
+						Error *struct {
+							Message string `json:"message"`
+						} `json:"error"`
+						Message *struct {
+							Usage *struct {
+								InputTokens              int64 `json:"input_tokens"`
+								CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+								CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+							} `json:"usage"`
+						} `json:"message"`
+						ContentBlock *struct {
+							Type string `json:"type"`
+							ID   string `json:"id"`
+							Name string `json:"name"`
+							Data string `json:"data"`
+						} `json:"content_block"`
+						Delta *struct {
+							Type        string `json:"type"`
+							Text        string `json:"text"`
+							Thinking    string `json:"thinking"`
+							Signature   string `json:"signature"`
+							PartialJSON string `json:"partial_json"`
+						} `json:"delta"`
+						Usage *struct {
+							OutputTokens int64 `json:"output_tokens"`
+						} `json:"usage"`
 					}
-					acc.thinking.WriteString(ev.Delta.Thinking)
-					_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": ev.Delta.Thinking})
-				}
-			case "signature_delta":
-				acc.signature.WriteString(ev.Delta.Signature)
-			case "text_delta":
-				if ev.Delta.Text != "" {
-					if firstTokenAt.IsZero() {
-						firstTokenAt = time.Now()
+					if json.Unmarshal([]byte(payload), &ev) == nil {
+						switch ev.Type {
+						case "error":
+							if ev.Error != nil {
+								if msg := sanitizeUpstreamErrorDetail(ev.Error.Message, p.apiKey); msg != "" {
+									return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型流式返回错误：%s", msg)
+								}
+							}
+							return ProviderResponse{}, problem.New(problem.Unavailable, "The model stream returned an error.")
+						case "message_start":
+							if ev.Message != nil && ev.Message.Usage != nil {
+								hasUsage = true
+								u := ev.Message.Usage
+								usage.PromptTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+								usage.PromptTokensDetails.CachedTokens = u.CacheReadInputTokens
+							}
+						case "content_block_start":
+							if ev.ContentBlock != nil {
+								acc := &blockAcc{
+									typ:  ev.ContentBlock.Type,
+									id:   ev.ContentBlock.ID,
+									name: ev.ContentBlock.Name,
+									data: ev.ContentBlock.Data,
+								}
+								if _, exists := blocks[ev.Index]; !exists {
+									blockOrder = append(blockOrder, ev.Index)
+								}
+								blocks[ev.Index] = acc
+							}
+						case "content_block_delta":
+							if ev.Delta == nil {
+								break
+							}
+							acc := blocks[ev.Index]
+							if acc == nil {
+								acc = &blockAcc{}
+								blocks[ev.Index] = acc
+								blockOrder = append(blockOrder, ev.Index)
+							}
+							switch ev.Delta.Type {
+							case "thinking_delta":
+								if ev.Delta.Thinking != "" {
+									if firstTokenAt.IsZero() {
+										firstTokenAt = time.Now()
+									}
+									acc.thinking.WriteString(ev.Delta.Thinking)
+									_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": ev.Delta.Thinking})
+								}
+							case "signature_delta":
+								acc.signature.WriteString(ev.Delta.Signature)
+							case "text_delta":
+								if ev.Delta.Text != "" {
+									if firstTokenAt.IsZero() {
+										firstTokenAt = time.Now()
+									}
+									acc.text.WriteString(ev.Delta.Text)
+									textBuf.WriteString(ev.Delta.Text)
+									if p.emit != nil {
+										p.streamedDelta = true
+										_ = p.emit(Event{Type: EventMessageDelta, Delta: ev.Delta.Text})
+									}
+								}
+							case "input_json_delta":
+								acc.inputJSON.WriteString(ev.Delta.PartialJSON)
+							}
+						case "message_delta":
+							if ev.Usage != nil {
+								hasUsage = true
+								usage.CompletionTokens = ev.Usage.OutputTokens
+								usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+							}
+						}
 					}
-					acc.text.WriteString(ev.Delta.Text)
-					textBuf.WriteString(ev.Delta.Text)
-					if p.emit != nil {
-						p.streamedDelta = true
-						_ = p.emit(Event{Type: EventMessageDelta, Delta: ev.Delta.Text})
-					}
 				}
-			case "input_json_delta":
-				acc.inputJSON.WriteString(ev.Delta.PartialJSON)
 			}
-		case "message_delta":
-			if ev.Usage != nil {
-				hasUsage = true
-				usage.CompletionTokens = ev.Usage.OutputTokens
-				usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				readErr = err
 			}
+			break
 		}
 	}
-	if err := sc.Err(); err != nil {
+	if readErr != nil {
+		if errors.Is(readErr, errSSEIdleTimeout) {
+			return ProviderResponse{}, problem.New(problem.Timeout, "%s", readErr.Error())
+		}
+		if errors.Is(readErr, errSSEWireLimitExceeded) {
+			return ProviderResponse{}, problem.New(problem.Unavailable, "%s", readErr.Error())
+		}
 		return ProviderResponse{}, problem.New(problem.Unavailable, "The model stream was interrupted before completion.")
 	}
 
@@ -1234,4 +1332,209 @@ func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.
 	}
 	p.recordUsage(stepStart, ttft, usagePtr, textBuf.String(), msgs)
 	return ProviderResponse{Content: textBuf.String(), ToolCalls: toolCalls}, nil
+}
+
+// ============================================================================
+// URL Normalization, Idle-Timeout SSE Reader & Redacted Upstream Error Mapping
+// ============================================================================
+
+const (
+	maxSSEWireBytes      = 32 << 20
+	defaultChunkIdleWait = 90 * time.Second
+)
+
+var (
+	errSSEWireLimitExceeded = errors.New("上游模型单次流式响应体积超出 32 MiB 安全上限")
+	errSSEIdleTimeout       = errors.New("等待上游模型流式响应超时")
+	secretRedactionRe       = regexp.MustCompile(`(?i)(bearer\s+\S+|sk-[A-Za-z0-9_\-]{6,}|api[_-]?key[=:]\s*\S+)`)
+)
+
+// normalizeOpenAICompatBaseURL cleans accidental action suffixes
+// (/chat/completions, /responses, /models) and supplies a /v1 candidate when
+// the path is empty. For loopback endpoints (local Ollama or unit test mocks),
+// the raw root is tried first with /v1 as fallback on 404; for remote hosts
+// /v1 is tried first with root as fallback on 404.
+func normalizeOpenAICompatBaseURL(raw string) (primary, fallback string) {
+	s := strings.TrimRight(strings.TrimSpace(raw), "/")
+	for _, suffix := range []string{"/chat/completions", "/responses", "/models"} {
+		if strings.HasSuffix(strings.ToLower(s), suffix) {
+			s = strings.TrimRight(s[:len(s)-len(suffix)], "/")
+		}
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return s, ""
+	}
+	cleanPath := strings.Trim(u.Path, "/")
+	if strings.EqualFold(u.Host, "openrouter.ai") && strings.EqualFold(cleanPath, "api") {
+		u.Path = strings.TrimRight(u.Path, "/") + "/v1"
+		return strings.TrimRight(u.String(), "/"), ""
+	}
+	if cleanPath == "" {
+		u2 := *u
+		u2.Path = "/v1"
+		withV1 := strings.TrimRight(u2.String(), "/")
+		host := strings.ToLower(u.Hostname())
+		if host == "127.0.0.1" || host == "::1" || host == "localhost" {
+			return s, withV1
+		}
+		return withV1, s
+	}
+	return s, ""
+}
+
+// normalizeAnthropicCLIBaseURL strips trailing /messages and /v1 before
+// injecting ANTHROPIC_BASE_URL for Claude Code CLI (which appends /v1/messages).
+func normalizeAnthropicCLIBaseURL(raw string) string {
+	s := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if strings.HasSuffix(strings.ToLower(s), "/messages") {
+		s = strings.TrimRight(s[:len(s)-len("/messages")], "/")
+	}
+	if strings.HasSuffix(strings.ToLower(s), "/v1") {
+		s = strings.TrimRight(s[:len(s)-len("/v1")], "/")
+	}
+	return s
+}
+
+type idleTimeoutReader struct {
+	parent    context.Context
+	raw       io.ReadCloser
+	idleLimit time.Duration
+	maxBytes  int64
+	readTotal int64
+}
+
+func newIdleTimeoutReader(ctx context.Context, body io.ReadCloser, idleLimit time.Duration, maxBytes int64) *idleTimeoutReader {
+	if idleLimit <= 0 {
+		idleLimit = defaultChunkIdleWait
+	}
+	if maxBytes <= 0 {
+		maxBytes = maxSSEWireBytes
+	}
+	return &idleTimeoutReader{
+		parent:    ctx,
+		raw:       body,
+		idleLimit: idleLimit,
+		maxBytes:  maxBytes,
+	}
+}
+
+func (ir *idleTimeoutReader) Read(p []byte) (int, error) {
+	if err := ir.parent.Err(); err != nil {
+		return 0, err
+	}
+	type res struct {
+		n   int
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		n, err := ir.raw.Read(p)
+		ch <- res{n: n, err: err}
+	}()
+	timer := time.NewTimer(ir.idleLimit)
+	defer timer.Stop()
+
+	select {
+	case <-ir.parent.Done():
+		_ = ir.raw.Close()
+		return 0, ir.parent.Err()
+	case <-timer.C:
+		_ = ir.raw.Close()
+		return 0, fmt.Errorf("%w（连续 %s 无数据返回）", errSSEIdleTimeout, ir.idleLimit)
+	case r := <-ch:
+		ir.readTotal += int64(r.n)
+		if ir.readTotal > ir.maxBytes {
+			_ = ir.raw.Close()
+			return r.n, errSSEWireLimitExceeded
+		}
+		return r.n, r.err
+	}
+}
+
+func readSSELineUnlimited(br *bufio.Reader, maxLineBytes int) (string, error) {
+	if maxLineBytes <= 0 {
+		maxLineBytes = 4 << 20
+	}
+	var buf []byte
+	for {
+		frag, isPrefix, err := br.ReadLine()
+		buf = append(buf, frag...)
+		if len(buf) > maxLineBytes {
+			return "", fmt.Errorf("单条 SSE 数据帧超过 %d 字节上限", maxLineBytes)
+		}
+		if !isPrefix || err != nil {
+			return string(buf), err
+		}
+	}
+}
+
+func formatUpstreamHTTPError(statusCode int, respBody []byte, apiKey []byte) error {
+	detail := extractSafeUpstreamErrorMsg(respBody, apiKey)
+	var base string
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		base = fmt.Sprintf("AI 接口鉴权失败 (HTTP %d)：请检查 API Key 是否正确、是否过期或有无该模型权限", statusCode)
+	case http.StatusPaymentRequired:
+		base = "AI 账户余额或配额不足 (HTTP 402)：请检查上游服务商账单额度"
+	case http.StatusNotFound:
+		base = "AI 接口地址或模型不存在 (HTTP 404)：请检查 Base URL 是否漏掉 /v1 以及模型名称是否拼写正确"
+	case http.StatusTooManyRequests:
+		base = "AI 接口请求过于频繁或额度受限 (HTTP 429)：请稍后重试或切换模型/渠道"
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		base = fmt.Sprintf("AI 模型拒绝了请求参数 (HTTP %d)：请检查模型名是否支持工具调用/思考强度设置", statusCode)
+	default:
+		if statusCode >= 500 {
+			base = fmt.Sprintf("上游 AI 服务商内部故障或网关超时 (HTTP %d)", statusCode)
+		} else {
+			base = fmt.Sprintf("AI 接口请求异常 (HTTP %d)", statusCode)
+		}
+	}
+	if detail != "" {
+		return problem.New(problem.Unavailable, "%s —— 上游详情：%s", base, detail)
+	}
+	return problem.New(problem.Unavailable, "%s", base)
+}
+
+func extractSafeUpstreamErrorMsg(raw []byte, apiKey []byte) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return ""
+	}
+	var envelope struct {
+		Error any    `json:"error"`
+		Msg   string `json:"message"`
+	}
+	if json.Unmarshal(raw, &envelope) == nil {
+		switch v := envelope.Error.(type) {
+		case string:
+			trimmed = v
+		case map[string]any:
+			if m, ok := v["message"].(string); ok && strings.TrimSpace(m) != "" {
+				trimmed = m
+			}
+		default:
+			if envelope.Msg != "" {
+				trimmed = envelope.Msg
+			}
+		}
+	}
+	return sanitizeUpstreamErrorDetail(trimmed, apiKey)
+}
+
+func sanitizeUpstreamErrorDetail(trimmed string, apiKey []byte) string {
+	trimmed = strings.TrimSpace(trimmed)
+	if trimmed == "" {
+		return ""
+	}
+	low := strings.ToLower(trimmed)
+	if strings.HasPrefix(low, "<!doctype") || strings.HasPrefix(low, "<html") {
+		return ""
+	}
+	if len(apiKey) > 0 {
+		trimmed = strings.ReplaceAll(trimmed, string(apiKey), "[REDACTED]")
+	}
+	trimmed = secretRedactionRe.ReplaceAllString(trimmed, "[REDACTED]")
+	trimmed = strings.Join(strings.Fields(trimmed), " ")
+	return clipText(trimmed, 240)
 }

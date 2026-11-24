@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -169,8 +170,27 @@ func ClearGateCookie(w http.ResponseWriter, secure bool) {
 	})
 }
 
+// NormalizeListenHost validates and canonicalizes a panel listener bind host.
+// Supports 127.0.0.1, 0.0.0.0, ::1, :: or any specific host unicast IP.
+func NormalizeListenHost(raw string) (string, error) {
+	h := strings.TrimSpace(raw)
+	h = strings.TrimPrefix(h, "[")
+	h = strings.TrimSuffix(h, "]")
+	switch h {
+	case "127.0.0.1", "0.0.0.0", "::1", "::":
+		return h, nil
+	default:
+		ip, err := netip.ParseAddr(h)
+		if err != nil || !ip.IsValid() || ip.IsMulticast() || ip.IsUnspecified() {
+			return "", fmt.Errorf("不支持的监听地址 %q（支持 127.0.0.1、0.0.0.0、::1、:: 或具体网卡单播 IP）", raw)
+		}
+		return ip.String(), nil
+	}
+}
+
 // UpdateInput carries the desired live access configuration from PUT /api/v1/system/access.
 type UpdateInput struct {
+	ListenHost              *string
 	Port                    *int
 	EntryPath               *string
 	GenerateRandomEntryPath bool
@@ -313,6 +333,7 @@ func ReadEffectiveFromDB(ctx context.Context, db *storage.DB, bootstrap config.H
 		return
 	}
 	var (
+		dbHost      string
 		port        int
 		ep          string
 		dom         string
@@ -320,11 +341,14 @@ func ReadEffectiveFromDB(ctx context.Context, db *storage.DB, bootstrap config.H
 	)
 	qerr := db.View(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx,
-			`SELECT listen_port, entry_path, panel_domain, auto_disable_on_domain FROM panel_access_settings WHERE id = 1`,
-		).Scan(&port, &ep, &dom, &autoDisable)
+			`SELECT listen_host, listen_port, entry_path, panel_domain, auto_disable_on_domain FROM panel_access_settings WHERE id = 1`,
+		).Scan(&dbHost, &port, &ep, &dom, &autoDisable)
 	})
 	if qerr != nil {
 		return
+	}
+	if h := strings.TrimSpace(dbHost); h != "" {
+		host = h
 	}
 	if port <= 0 {
 		port = bootPort
@@ -382,6 +406,13 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 	}
 
 	next := cur
+	if in.ListenHost != nil {
+		nh, err := NormalizeListenHost(*in.ListenHost)
+		if err != nil {
+			return cur, false, problem.New(problem.ValidationFailed, "listen_host: %s", err.Error())
+		}
+		next.ListenHost = nh
+	}
 	if in.Port != nil {
 		if *in.Port < 1 || *in.Port > 65535 {
 			return cur, false, problem.New(problem.ValidationFailed, "port must be between 1 and 65535")
@@ -435,20 +466,20 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 		next.AutoDisableOnDomain = *in.AutoDisableOnDomain
 	}
 
-	portChanged := next.Port != cur.Port
+	addrChanged := next.Port != cur.Port || next.ListenHost != cur.ListenHost
 	var stagedBind BindHandle
-	if portChanged {
+	if addrChanged {
 		if m.prepareBind != nil {
 			h, err := m.prepareBind(next.ListenAddr())
 			if err != nil {
 				return cur, false, problem.New(problem.StateConflict,
-					"Could not bind new port %d: %v", next.Port, err)
+					"Could not bind new listen address %s: %v", next.ListenAddr(), err)
 			}
 			stagedBind = h
 		} else if m.rebind != nil {
 			if err := m.rebind(next.ListenAddr()); err != nil {
 				return cur, false, problem.New(problem.StateConflict,
-					"Could not bind new port %d: %v", next.Port, err)
+					"Could not bind new listen address %s: %v", next.ListenAddr(), err)
 			}
 		}
 	}
@@ -464,17 +495,17 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 			}
 			_, uerr := tx.ExecContext(ctx, `
 				UPDATE panel_access_settings
-				SET listen_port = ?, entry_path = ?, disguise = ?, disguise_html = ?,
+				SET listen_host = ?, listen_port = ?, entry_path = ?, disguise = ?, disguise_html = ?,
 				    panel_domain = ?, auto_disable_on_domain = ?, revision = ?, updated_at = ?
 				WHERE id = 1`,
-				next.Port, next.EntryPath, next.Disguise, next.DisguiseHTML,
+				next.ListenHost, next.Port, next.EntryPath, next.Disguise, next.DisguiseHTML,
 				next.PanelDomain, autoInt, next.Revision, storage.FormatTime(next.UpdatedAt),
 			)
 			if uerr != nil {
 				return uerr
 			}
 			if in.AuditTx != nil {
-				return in.AuditTx(ctx, tx, next, portChanged)
+				return in.AuditTx(ctx, tx, next, addrChanged)
 			}
 			return nil
 		})
@@ -493,10 +524,10 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 	if m.onAllow != nil {
 		m.onAllow(next.PanelDomain)
 	}
-	if portChanged && m.onPortChange != nil {
+	if addrChanged && m.onPortChange != nil {
 		m.onPortChange(next.Port)
 	}
-	return next, portChanged, nil
+	return next, addrChanged, nil
 }
 
 // WriteCapabilityPanelPort atomically writes {"port": <n>} to targetPath so
@@ -550,6 +581,7 @@ func loadOrSeed(ctx context.Context, db *storage.DB, seed Snapshot) (Snapshot, e
 	var found bool
 	err := db.View(ctx, func(tx *sql.Tx) error {
 		var (
+			dbHost      string
 			port        int
 			ep          string
 			disguise    string
@@ -561,10 +593,10 @@ func loadOrSeed(ctx context.Context, db *storage.DB, seed Snapshot) (Snapshot, e
 			updatedAt   string
 		)
 		rerr := tx.QueryRowContext(ctx, `
-			SELECT listen_port, entry_path, disguise, disguise_html, panel_domain,
+			SELECT listen_host, listen_port, entry_path, disguise, disguise_html, panel_domain,
 			       auto_disable_on_domain, gate_secret, revision, updated_at
 			FROM panel_access_settings WHERE id = 1`,
-		).Scan(&port, &ep, &disguise, &html, &dom, &autoDisable, &secret, &rev, &updatedAt)
+		).Scan(&dbHost, &port, &ep, &disguise, &html, &dom, &autoDisable, &secret, &rev, &updatedAt)
 		if errors.Is(rerr, sql.ErrNoRows) {
 			return nil
 		}
@@ -573,6 +605,9 @@ func loadOrSeed(ctx context.Context, db *storage.DB, seed Snapshot) (Snapshot, e
 		}
 		found = true
 		out = seed
+		if h := strings.TrimSpace(dbHost); h != "" {
+			out.ListenHost = h
+		}
 		if port > 0 {
 			out.Port = port
 		}
@@ -610,15 +645,16 @@ func loadOrSeed(ctx context.Context, db *storage.DB, seed Snapshot) (Snapshot, e
 			}
 			if _, ierr := tx.ExecContext(ctx, `
 				INSERT OR IGNORE INTO panel_access_settings
-				(id, listen_port, entry_path, disguise, disguise_html, panel_domain,
+				(id, listen_host, listen_port, entry_path, disguise, disguise_html, panel_domain,
 				 auto_disable_on_domain, gate_secret, revision, updated_at)
-				VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				seed.Port, seed.EntryPath, seed.Disguise, seed.DisguiseHTML, seed.PanelDomain,
+				VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				seed.ListenHost, seed.Port, seed.EntryPath, seed.Disguise, seed.DisguiseHTML, seed.PanelDomain,
 				autoInt, seed.GateSecret, seed.Revision, storage.FormatTime(seed.UpdatedAt),
 			); ierr != nil {
 				return ierr
 			}
 			var (
+				dbHost      string
 				port        int
 				ep          string
 				disguise    string
@@ -630,13 +666,16 @@ func loadOrSeed(ctx context.Context, db *storage.DB, seed Snapshot) (Snapshot, e
 				updatedAt   string
 			)
 			if serr := tx.QueryRowContext(ctx, `
-				SELECT listen_port, entry_path, disguise, disguise_html, panel_domain,
+				SELECT listen_host, listen_port, entry_path, disguise, disguise_html, panel_domain,
 				       auto_disable_on_domain, gate_secret, revision, updated_at
 				FROM panel_access_settings WHERE id = 1`,
-			).Scan(&port, &ep, &disguise, &html, &dom, &autoDisable, &secret, &rev, &updatedAt); serr != nil {
+			).Scan(&dbHost, &port, &ep, &disguise, &html, &dom, &autoDisable, &secret, &rev, &updatedAt); serr != nil {
 				return serr
 			}
 			persisted = seed
+			if h := strings.TrimSpace(dbHost); h != "" {
+				persisted.ListenHost = h
+			}
 			if port > 0 {
 				persisted.Port = port
 			}

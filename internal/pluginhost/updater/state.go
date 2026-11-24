@@ -27,6 +27,19 @@ func (u *Updater) Enabled(ctx context.Context, pluginID string) (bool, error) {
 	return enabled == 1, nil
 }
 
+// UnitRunning reports whether the underlying updater runtime currently holds a
+// live instance for pluginID. Runtimes that do not expose live-instance lookup
+// return false.
+func (u *Updater) UnitRunning(pluginID string) bool {
+	if u == nil || u.rt == nil {
+		return false
+	}
+	if r, ok := u.rt.(interface{ IsRunning(string) bool }); ok {
+		return r.IsRunning(pluginID)
+	}
+	return false
+}
+
 // SetEnabled persists the flag and makes the runtime agree with it (GAPS gap 7):
 // disabling stops every instance of the plugin, enabling restores the active
 // version. The flag survives a host restart because EnsureActive refuses to

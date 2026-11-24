@@ -58,10 +58,11 @@ const (
 // ToolCallID equals the call's CallID: that pairing is the invariant the model
 // protocol requires, and SanitizeHistory enforces it.
 type ModelMessage struct {
-	Role       string
-	Content    string
-	ToolCalls  []ModelToolCall
-	ToolCallID string
+	Role             string
+	Content          string
+	ReasoningContent string
+	ToolCalls        []ModelToolCall
+	ToolCallID       string
 }
 
 // ModelToolCall is one tool call proposed by the model, already mapped to the
@@ -92,8 +93,16 @@ type ProviderRequest struct {
 
 // ProviderResponse is one completion: text, tool calls, or both.
 type ProviderResponse struct {
-	Content   string
-	ToolCalls []ModelToolCall
+	Content          string
+	ReasoningContent string
+	ToolCalls        []ModelToolCall
+}
+
+// toolCallIDRemapper is optionally implemented by providers (such as Anthropic
+// extended thinking) that track provider-specific metadata keyed by tool call ID
+// and need to follow RunLoop's host-minted IDs after normalizeCalls.
+type toolCallIDRemapper interface {
+	RemapToolCallIDs(orig, normalized []ModelToolCall)
 }
 
 // Provider adapts one model protocol to the loop. Complete performs exactly one
@@ -203,14 +212,15 @@ const (
 
 // LoopEvent is one event of a running turn.
 type LoopEvent struct {
-	Type    LoopEventType
-	Step    int
-	Delta   string
-	Content string
-	Calls   []ModelToolCall
-	Call    *ModelToolCall
-	Tool    *ToolDef
-	Outcome *ToolOutcome
+	Type             LoopEventType
+	Step             int
+	Delta            string
+	Content          string
+	ReasoningContent string
+	Calls            []ModelToolCall
+	Call             *ModelToolCall
+	Tool             *ToolDef
+	Outcome          *ToolOutcome
 	// Approval is set on LoopEventApproval.
 	Approval *ApprovalRequest
 	// Err is set on LoopEventError.
@@ -327,9 +337,13 @@ func RunLoop(ctx context.Context, provider Provider, tools ToolRegistry, gate Ga
 			return result, loopProviderError(ctx, emit, err)
 		}
 		result.Steps = step
+		origCalls := response.ToolCalls
 		calls, err := normalizeCalls(response.ToolCalls, opts.NextCallID)
 		if err != nil {
 			return result, err
+		}
+		if remapper, ok := provider.(toolCallIDRemapper); ok && len(origCalls) > 0 {
+			remapper.RemapToolCallIDs(origCalls, calls)
 		}
 		if response.Content != "" {
 			if err := publish(LoopEvent{Type: LoopEventDelta, Step: step, Delta: response.Content}); err != nil {
@@ -337,12 +351,12 @@ func RunLoop(ctx context.Context, provider Provider, tools ToolRegistry, gate Ga
 			}
 		}
 		if err := publish(LoopEvent{
-			Type: LoopEventAssistant, Step: step, Content: response.Content, Calls: calls,
+			Type: LoopEventAssistant, Step: step, Content: response.Content, ReasoningContent: response.ReasoningContent, Calls: calls,
 		}); err != nil {
 			return result, err
 		}
 		messages = append(messages, ModelMessage{
-			Role: LoopRoleAssistant, Content: response.Content, ToolCalls: boundedCalls(calls),
+			Role: LoopRoleAssistant, Content: response.Content, ReasoningContent: response.ReasoningContent, ToolCalls: boundedCalls(calls),
 		})
 		if len(calls) == 0 {
 			result.Status = LoopCompleted
@@ -639,7 +653,7 @@ func SanitizeHistory(in []ModelMessage) []ModelMessage {
 				continue
 			}
 			out = append(out, ModelMessage{
-				Role: LoopRoleAssistant, Content: msg.Content, ToolCalls: msg.ToolCalls,
+				Role: LoopRoleAssistant, Content: msg.Content, ReasoningContent: msg.ReasoningContent, ToolCalls: msg.ToolCalls,
 			})
 			for _, call := range msg.ToolCalls {
 				result := results[call.CallID]

@@ -112,6 +112,7 @@ type Options struct {
 	Socket                 string
 	DataDir                string
 	PermitTestCertificates bool
+	EnforceSocketMarkProbe bool
 	Now                    func() time.Time
 	Roots                  *x509.CertPool
 	TLSLoader              secretmap.TLSLoader

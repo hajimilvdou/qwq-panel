@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"time"
 	"unicode/utf8"
 
 	"github.com/qwq-panel/qwq/internal/actor"
@@ -322,4 +323,72 @@ func mapConsumerRuntimeError(err error, fallbackDetail string) error {
 		return fault.New("BACKEND_REQUIRED", fallbackDetail)
 	}
 	return fault.New("CONSUMER_RUNTIME_ERROR", fallbackDetail)
+}
+
+// IngressHTTP01Presenter 通过内置 web.ingress 的 ingress.acme.{present,cleanup} 操作完成免 DNS Token 的 HTTP-01 验证。
+type IngressHTTP01Presenter struct {
+	Controller *Controller
+}
+
+func (p *IngressHTTP01Presenter) Present(ctx context.Context, token, keyAuth string, ttl time.Duration) error {
+	payload, err := json.Marshal(map[string]any{
+		"token":       token,
+		"key_auth":    keyAuth,
+		"ttl_seconds": max(30, int(ttl.Seconds())),
+	})
+	if err != nil {
+		return fault.New("INTERNAL", "编码 ACME HTTP-01 验证请求失败")
+	}
+	return p.invoke(ctx, "ingress.acme.present", payload)
+}
+
+func (p *IngressHTTP01Presenter) CleanUp(ctx context.Context, token string) error {
+	payload, err := json.Marshal(map[string]any{"token": token})
+	if err != nil {
+		return nil
+	}
+	return p.invoke(ctx, "ingress.acme.cleanup", payload)
+}
+
+func (p *IngressHTTP01Presenter) invoke(ctx context.Context, operation string, payload []byte) error {
+	if p == nil || p.Controller == nil {
+		return fault.New("HTTP01_UNAVAILABLE", "控制器尚未装配，无法调用 web.ingress HTTP-01 通道")
+	}
+	rt := p.Controller.PluginRuntime()
+	if rt == nil {
+		return fault.New("HTTP01_UNAVAILABLE", "插件运行时尚未装配，请先安装并启用 web.ingress 插件")
+	}
+	client, err := rt.attach(ctx, "web.ingress")
+	if err != nil {
+		return fault.New("HTTP01_UNAVAILABLE", "未检测到运行中的 web.ingress 插件，请先在应用商店安装并启用 web.ingress（确保 80 端口可达）")
+	}
+	nodeID := rt.opts.NodeID
+	if p.Controller.ops != nil {
+		nodeID = p.Controller.ops.NodeID()
+	}
+	resp, err := client.Invoke(ctx, &platformv1.InvokeRequest{
+		Context: requestContext(
+			nodeID,
+			DefaultInstanceID,
+			"",
+			"",
+			"",
+			"",
+			actor.Actor{Kind: actor.System, ID: "host:acme-http01"},
+		),
+		Operation:   operation,
+		ApiVersion:  "v1",
+		PayloadJson: payload,
+	})
+	if err != nil {
+		return fault.New("HTTP01_UNAVAILABLE", "调用 web.ingress HTTP-01 验证接口失败: "+err.Error())
+	}
+	if e := resp.GetError(); e != nil && e.GetCode() != "" {
+		msg := e.GetMessage()
+		if msg == "" {
+			msg = e.GetCode()
+		}
+		return fault.New("HTTP01_UNAVAILABLE", msg)
+	}
+	return nil
 }

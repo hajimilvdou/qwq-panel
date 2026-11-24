@@ -58,7 +58,7 @@
     "schemas/plans.upsert.request.json": "sha256:fb448ec813273eeb7a12316d485ddf8589c4b5244e4dd58f690053bf451e5a9b",
     "schemas/plans.upsert.response.json": "sha256:e82cfc9a05526968f6c85389b241f4e1a744ee6af7726005fa49aceaae220ce2",
     "schemas/proxy.overview.request.json": "sha256:d085279016004f0be2a6964cfd4eb04af6e69017a27cd2e1e0ee6e207f133c77",
-    "schemas/proxy.overview.response.json": "sha256:b5df7d2f85b7b9a87887355ec35c849f5b017e8289a53eb692582378dc1a38f6",
+    "schemas/proxy.overview.response.json": "sha256:1dedd7aefc9afaa8bc56d8bdd4d5accab6dd25f732d3864c5d169eae116b3b89",
     "schemas/traffic.status.request.json": "sha256:963ef466f9f272ae4f37054f08e9880636dfe9cd52cf1bab3e76c97add70cb09",
     "schemas/traffic.status.response.json": "sha256:1a3e94df736e6b7f5dedebc3216f97d868656b06f9b8e40c24e1018c8a811d8a",
     "schemas/tuning.apply.request.json": "sha256:a4728d471d2787a6ade055b32928fc3e6d0f56a3a0a030b1d89e28284cd517fa",
@@ -95,9 +95,9 @@
     "schemas/warp.register.response.json": "sha256:ec31d645d6e618aaf280202fcef84c2807a6eb089a0cf01f2fd4ad4f990281fe",
     "schemas/warp.status.request.json": "sha256:9fecaf0be57870533738379f6bd1dab1d8303d91d77ad4e88731cdc2cb7e7665",
     "schemas/warp.status.response.json": "sha256:ca1da9258a97ab1f47ea5f48657025b16fc3582cf49699b713b36115aa78857b",
-    "ui/index.html": "sha256:e9092898cf6b66547fd21a62b3f96cb0aa9d52484a41d7cc6c4482ab6460575a",
+    "ui/index.html": "sha256:9d588c89c734c202d384e3325ef465fc8a280ad61e451653cf4dad3f53e78e6d",
     "ui/proxy.css": "sha256:86927c2142f3976264c407ffb9a735e5e3046a32ff140bc2feee409c76d91fca",
-    "ui/proxy.js": "sha256:df4c412fdefef66a853cc2159297833dc0213be99f27acc510c1ce200987a0ec"
+    "ui/proxy.js": "sha256:0b0b89cb4142ed82817b7ecf9ceb69b5bce5921a8a1edb4a727d3d25658c2812"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -109,7 +109,14 @@
     "update_strategy": "restart",
     "overlap_safe": false
   },
-  "dependencies": [],
+  "dependencies": [
+    {
+      "kind": "plugin",
+      "id": "core.xray",
+      "constraint": ">=0.1.0 <1.0.0",
+      "required": true
+    }
+  ],
   "state": {
     "schema_version": "1",
     "minimum_rollback_version": "0.1.0",
@@ -160,6 +167,11 @@
       "name": "plugin.invoke",
       "scope": "core.xray/core.status",
       "reason": "查询 core.xray 当前运行状态"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "core.xray/core.capabilities",
+      "reason": "查询 core.xray 支持能力与 simple-obfs 二进制可用性"
     },
     {
       "name": "plugin.invoke",
@@ -226,6 +238,10 @@
         {
           "name": "system.traffic.shape",
           "scope": "self"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "core.xray/core.capabilities"
         }
       ],
       "request_schema": "schemas/proxy.overview.request.json",

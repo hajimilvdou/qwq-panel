@@ -40,6 +40,8 @@
     "period_down_bytes": { "type": "integer", "minimum": 0, "description": "当前计费周期所有用户累计下行字节数。" },
     "used_traffic_marks": { "type": "integer", "minimum": 0, "maximum": 256, "description": "已分配的 HTB traffic_mark 槽位数。" },
     "shaping_supported": { "type": "boolean", "description": "内核 HTB 带宽限速是否可用。" },
-    "shaping_degraded_reason": { "type": "string", "description": "内核限速不可用或降级时的原因说明。" }
+    "shaping_degraded_reason": { "type": "string", "description": "内核限速不可用或降级时的原因说明。" },
+    "detected_public_host": { "type": "string", "description": "已配置或自动探测到的本机公网连接地址（IP 或域名）。" },
+    "core_obfs_available": { "type": "boolean", "description": "core.xray 是否具备可用的 simple-obfs (obfs-server) 二进制。" }
   }
 }

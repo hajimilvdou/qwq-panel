@@ -496,7 +496,7 @@ func (c *OpenCodeCore) runCLIJSON(ctx context.Context, cfg OpenCodeConfig, turn 
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
-	if eff, _, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort); !IsReasoningEffortDisabled(eff) {
+	if eff, matched, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort); (strings.TrimSpace(cfg.ReasoningEffort) != "" || matched) && !IsReasoningEffortDisabled(eff) {
 		extraEnv = append(extraEnv, "OPENCODE_REASONING_EFFORT="+eff)
 	}
 	args = AppendPosixPromptArg(args, latestUserMessage(turn.Messages))

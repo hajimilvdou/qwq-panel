@@ -908,3 +908,52 @@ func TestWebIngressApplyConfigFailurePreservesOldListener(t *testing.T) {
 		_ = r.Body.Close()
 	}
 }
+
+func TestNormalizeIngressListenAddrsAndACMEHTTP01Challenge(t *testing.T) {
+	h, s := NormalizeIngressListenAddrs("", "")
+	if h != ":80" || s != ":443" {
+		t.Fatalf("empty config should default to :80/:443, got http=%q https=%q", h, s)
+	}
+	h, s = NormalizeIngressListenAddrs("off", "disabled")
+	if h != "" || s != "" {
+		t.Fatalf("off/disabled should turn off listeners, got http=%q https=%q", h, s)
+	}
+
+	srv := startIngressTestServer(t, New(), []byte(`{"preferred_engine":"builtin-go","listen_addr":"127.0.0.1:0","https_listen_addr":"off"}`))
+	ov := invokeIngress(t, srv, "ingress.overview", map[string]any{})
+	if ov["running"] != true {
+		t.Fatalf("expected running=true, got %+v", ov)
+	}
+	boundAddr := ov["bound_addr"].(string)
+
+	// 即使站点配置了强制 HTTPS 或不存在站点，ACME HTTP-01 challenge 也必须直接返回 200 text/plain
+	presentRes := invokeIngress(t, srv, "ingress.acme.present", map[string]any{
+		"token":       "tok_abc123",
+		"key_auth":    "tok_abc123.thumbprint999",
+		"ttl_seconds": 120,
+	})
+	if presentRes["ok"] != true {
+		t.Fatalf("expected present ok, got %+v", presentRes)
+	}
+
+	resp, err := http.Get("http://" + boundAddr + "/.well-known/acme-challenge/tok_abc123")
+	if err != nil {
+		t.Fatalf("GET acme challenge failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "tok_abc123.thumbprint999" {
+		t.Fatalf("unexpected acme challenge response: status=%d body=%q", resp.StatusCode, string(body))
+	}
+
+	// CleanUp 后必须回退 404
+	invokeIngress(t, srv, "ingress.acme.cleanup", map[string]any{"token": "tok_abc123"})
+	resp2, err := http.Get("http://" + boundAddr + "/.well-known/acme-challenge/tok_abc123")
+	if err != nil {
+		t.Fatalf("GET after cleanup failed: %v", err)
+	}
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 after cleanup, got %d", resp2.StatusCode)
+	}
+}

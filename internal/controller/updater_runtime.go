@@ -1841,6 +1841,16 @@ func (rt *UpdaterRuntime) liveFor(pluginID string) *pluginHandle {
 	return nil
 }
 
+// IsRunning reports whether UpdaterRuntime currently holds a live handle for
+// pluginID (for example, right after an official-store Install before the
+// supervisor's first RPC connection).
+func (rt *UpdaterRuntime) IsRunning(pluginID string) bool {
+	if rt == nil {
+		return false
+	}
+	return rt.liveFor(pluginID) != nil
+}
+
 // handle returns the typed handle, nil for a nil updater.Handle.
 func (rt *UpdaterRuntime) handle(h updater.Handle) (*pluginHandle, error) {
 	if h == nil {

@@ -54,7 +54,7 @@
     "schemas/docker.overview.response.json": "sha256:5f3bba501e2aca08696e3d33a5623da1716475ae4951d014860ff013cc86a23b",
     "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
-    "ui/container-drawer.js": "sha256:dd6286274f9420d5cb9a2ddc527c85fea0d8d232a97f255517254a52d84bb9f6",
+    "ui/container-drawer.js": "sha256:a3bc8eb418ac8c99f7427002d4588c3aaf99f216a30ab319998ba7894afac6b5",
     "ui/index.html": "sha256:139abf88b275b437698fe33a9207329dbfb68416d168c700204dba12aaae25d2",
     "ui/plugin.css": "sha256:3c5a3d2d967679d13eff83743585f9fda20c0fa10e0700526da75221e84ffbd1",
     "ui/plugin.js": "sha256:61107a6a532cd1bba308ab85afca7aba001bd295a7f1336b785021c027564ff8"
@@ -488,6 +488,10 @@
         },
         {
           "name": "plugin.invoke",
+          "scope": "web.ingress/ingress.overview"
+        },
+        {
+          "name": "plugin.invoke",
           "scope": "web.ingress/ingress.site.upsert"
         },
         {
@@ -529,6 +533,10 @@
           "scope": "self"
         },
         {
+          "name": "secret.reveal",
+          "scope": "operation"
+        },
+        {
           "name": "plugin.invoke",
           "scope": "web.ingress/ingress.overview"
         },
@@ -547,6 +555,10 @@
         {
           "name": "plugin.invoke",
           "scope": "tls.certificates/certificates.issue"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "tls.certificates/bindings.bind"
         },
         {
           "name": "plugin.invoke",
@@ -609,6 +621,11 @@
       "reason": "持久化受管 Compose 编排栈定义、容器与 web.ingress 关联映射与版本元数据"
     },
     {
+      "name": "secret.reveal",
+      "scope": "operation",
+      "reason": "在容器反代保存操作中解封管理员输入的 BasicAuth 保护密码字段并透传至 web.ingress"
+    },
+    {
       "name": "plugin.invoke",
       "scope": "web.ingress/ingress.overview",
       "reason": "探测 web.ingress 反向代理组件安装与运行状态"
@@ -637,6 +654,11 @@
       "name": "plugin.invoke",
       "scope": "tls.certificates/certificates.issue",
       "reason": "为容器绑定的域名通过受控 ACME 流程自动签发 HTTPS 证书"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "tls.certificates/bindings.bind",
+      "reason": "将复用或新签发的证书绑定并物化投递至 web.ingress 消费者隔离目录以启用真实 HTTPS 握手"
     },
     {
       "name": "plugin.invoke",

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "token",
+    "key_auth"
+  ],
+  "properties": {
+    "token": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "key_auth": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "ttl_seconds": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 1800
+    }
+  }
+}

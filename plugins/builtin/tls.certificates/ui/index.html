@@ -159,11 +159,21 @@
       <article class="card">
         <div class="card-head">
           <div>
-            <h2>ACME DNS-01 申请向导</h2>
-            <p class="muted">联动 <code>domain.dns</code> 已授权服务商与托管域名区域执行 DNS-01 验证，支持 Let's Encrypt 生产 / 测试环境。</p>
+            <h2>ACME 自动证书申请向导</h2>
+            <p class="muted">支持免 DNS Token 的 HTTP-01（通过内置 web.ingress 80 端口验证）与联动 <code>domain.dns</code> 的 DNS-01（支持泛域名）。</p>
           </div>
         </div>
         <form id="acme-form" class="form-grid">
+          <div class="field field-full">
+            <label for="acme-challenge-type">验证方式</label>
+            <select id="acme-challenge-type" name="challenge_type">
+              <option value="http-01">HTTP-01（免 DNS Token，通过内置 web.ingress 80 端口验证，不支持泛域名）</option>
+              <option value="dns-01">DNS-01（联动 domain.dns 服务商 API，支持泛域名 *.example.com）</option>
+            </select>
+          </div>
+          <div id="acme-http01-hint" class="field field-full">
+            <p class="muted">无需配置 Cloudflare/阿里云 API Token：只需将域名 A/AAAA 记录解析到本机公网 IP，且已安装启用 web.ingress 监听 80 端口即可签发。</p>
+          </div>
           <div class="field">
             <label for="acme-cert-id">证书资源 ID</label>
             <input id="acme-cert-id" name="certificate_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 cert-panel-main">
@@ -176,16 +186,16 @@
             </select>
           </div>
           <div class="field field-full">
-            <label for="acme-sans">SAN 域名列表（逗号或换行分隔，支持通配符）</label>
-            <textarea id="acme-sans" name="sans" required placeholder="panel.example.com&#10;*.example.com"></textarea>
+            <label for="acme-sans">SAN 域名列表（逗号或换行分隔；泛域名仅限 DNS-01）</label>
+            <textarea id="acme-sans" name="sans" required placeholder="panel.example.com"></textarea>
           </div>
-          <div class="field">
+          <div class="field" id="acme-provider-field" hidden>
             <label for="acme-provider-id">DNS 服务商 ID（domain.dns）</label>
-            <input id="acme-provider-id" name="provider_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 cf-prod">
+            <input id="acme-provider-id" name="provider_id" type="text" pattern="[A-Za-z0-9._-]+" placeholder="例如 cf-prod">
           </div>
-          <div class="field">
+          <div class="field" id="acme-zone-field" hidden>
             <label for="acme-zone-id">托管域名区域 Zone ID</label>
-            <input id="acme-zone-id" name="zone_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 zone-example-com">
+            <input id="acme-zone-id" name="zone_id" type="text" pattern="[A-Za-z0-9._-]+" placeholder="例如 zone-example-com">
           </div>
           <div class="field">
             <label for="acme-ca">受控 ACME CA 环境</label>

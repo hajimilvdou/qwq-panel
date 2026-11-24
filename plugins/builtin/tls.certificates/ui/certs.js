@@ -699,10 +699,22 @@
     }
   }
 
+  function syncAcmeChallengeMode() {
+    const mode = $('acme-challenge-type')?.value || 'http-01';
+    const isHTTP01 = mode === 'http-01';
+    if ($('acme-http01-hint')) $('acme-http01-hint').hidden = !isHTTP01;
+    if ($('acme-provider-field')) $('acme-provider-field').hidden = isHTTP01;
+    if ($('acme-zone-field')) $('acme-zone-field').hidden = isHTTP01;
+    if ($('acme-provider-id')) $('acme-provider-id').required = !isHTTP01;
+    if ($('acme-zone-id')) $('acme-zone-id').required = !isHTTP01;
+    notifyResize();
+  }
+
   async function submitAcmeForm(event) {
     event.preventDefault();
     clearBanner();
     const certId = $('acme-cert-id').value.trim();
+    const challengeType = $('acme-challenge-type')?.value || 'http-01';
     const sans = parseList($('acme-sans').value);
     const providerId = $('acme-provider-id').value.trim();
     const zoneId = $('acme-zone-id').value.trim();
@@ -713,22 +725,34 @@
       showBanner('请至少填写一个 SAN 域名', 'warn');
       return;
     }
+    if (challengeType === 'http-01' && sans.some((s) => s.startsWith('*.'))) {
+      showBanner('HTTP-01 验证不支持泛域名（*.example.com），请切换为 DNS-01 或填写精确域名', 'warn');
+      return;
+    }
+    if (challengeType === 'dns-01' && (!providerId || !zoneId)) {
+      showBanner('DNS-01 模式必须填写 DNS 服务商 ID 与 Zone ID', 'warn');
+      return;
+    }
     if (!acceptTerms) {
       showBanner('必须勾选同意受控 ACME CA 服务条款后才可签发', 'warn');
       return;
     }
     $('acme-submit').disabled = true;
-    setStatus(`正在提交 ACME DNS-01 签发任务 (${certId})...`);
+    setStatus(`正在提交 ACME ${challengeType.toUpperCase()} 签发任务 (${certId})...`);
     try {
-      const res = await invoke('certificates.issue', {
+      const payload = {
         certificate_id: certId,
         attempt_id: makeAttemptId('acme'),
+        challenge_type: challengeType,
         spec: { sans, purpose },
-        provider_id: providerId,
-        zone_id: zoneId,
         ca,
         accept_terms: true,
-      }, 300000);
+      };
+      if (challengeType === 'dns-01') {
+        payload.provider_id = providerId;
+        payload.zone_id = zoneId;
+      }
+      const res = await invoke('certificates.issue', payload, 300000);
       showBanner(`ACME 签发任务已提交：${res.task_id || certId}（状态：${res.state || 'submitted'}）`, 'ok');
       await refreshAll();
       switchTab('list');
@@ -963,6 +987,8 @@
       renderDetailCard(null);
     });
 
+    $('acme-challenge-type')?.addEventListener('change', syncAcmeChallengeMode);
+    syncAcmeChallengeMode();
     $('acme-form').addEventListener('submit', (e) => { void submitAcmeForm(e); });
     $('import-form').addEventListener('submit', (e) => { void submitImportForm(e); });
     $('test-cert-form').addEventListener('submit', (e) => { void submitTestCertForm(e); });

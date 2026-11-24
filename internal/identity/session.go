@@ -161,16 +161,26 @@ func (s *Service) sessionByToken(ctx context.Context, token string) (Session, er
 // missing, revoked, idle-expired or absolute-expired session is
 // UNAUTHENTICATED. The last-seen write is throttled to one per TouchInterval.
 func (s *Service) AuthenticateSession(ctx context.Context, token string) (actor.Actor, Session, error) {
+	a, sess, err := s.PeekSession(ctx, token)
+	if err != nil {
+		return actor.Actor{}, Session{}, err
+	}
+	s.touchSession(ctx, sess, s.now())
+	return a, sess, nil
+}
+
+// PeekSession verifies a session cookie without advancing last_seen_at or
+// idle_expires_at. Used for background widget polls and periodic SSE liveness
+// checks so passive polling cannot defeat the idle timeout.
+func (s *Service) PeekSession(ctx context.Context, token string) (actor.Actor, Session, error) {
 	sess, err := s.sessionByToken(ctx, token)
 	if err != nil {
 		return actor.Actor{}, Session{}, err
 	}
-	now := s.now()
-	a, err := s.humanSessionActor(sess, now)
+	a, err := s.humanSessionActor(sess, s.now())
 	if err != nil {
 		return actor.Actor{}, Session{}, unauthenticated()
 	}
-	s.touchSession(ctx, sess, now)
 	return a, sess, nil
 }
 

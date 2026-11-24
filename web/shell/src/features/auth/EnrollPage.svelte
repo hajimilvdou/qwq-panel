@@ -13,9 +13,10 @@
   import { session } from '$lib/session.svelte';
   import AuthLayout from './AuthLayout.svelte';
   import PasswordFields from './PasswordFields.svelte';
-  import { takeFragmentToken } from './fragment';
+  import { clearFragmentToken, takeFragmentToken } from './fragment';
 
-  const fromLink = takeFragmentToken();
+  const ENROLL_TOKEN_KEY = 'qwq.enroll_token';
+  const fromLink = takeFragmentToken(ENROLL_TOKEN_KEY);
   let token = $state(fromLink);
   let password = $state('');
   let valid = $state(false);
@@ -32,12 +33,15 @@
     err = null;
     try {
       const s = await account.redeemEnrollment(token.trim(), password, intent.key);
+      clearFragmentToken(ENROLL_TOKEN_KEY);
       session.adopt(s);
       navigate('/', { replace: true });
     } catch (e2) {
       err = describeError(e2);
-      if (err.code === 'UNAUTHENTICATED') dead = true;
-      else if (err.code === 'VALIDATION_FAILED') intent = createIntent();
+      if (err.code === 'UNAUTHENTICATED') {
+        clearFragmentToken(ENROLL_TOKEN_KEY);
+        dead = true;
+      } else if (err.code === 'VALIDATION_FAILED') intent = createIntent();
     } finally {
       busy = false;
     }

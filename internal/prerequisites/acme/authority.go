@@ -111,8 +111,10 @@ func (a *Authority) run(ctx context.Context, caller certificates.Caller, certifi
 		}
 		client.KID = xacme.KeyID(account.URI)
 	}
-	if err := a.caa.CheckCAA(ctx, scope.Provider, scope.Spec.SANs, state.AccountURI); err != nil {
-		return issued, err
+	if !scope.IsHTTP01() {
+		if err := a.caa.CheckCAA(ctx, scope.Provider, scope.Spec.SANs, state.AccountURI); err != nil {
+			return issued, err
+		}
 	}
 	if err := report(progress, "issuing", 25); err != nil {
 		return issued, err

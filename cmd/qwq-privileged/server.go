@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -622,7 +623,29 @@ func (s *helperServer) publish(ctx context.Context, req sandbox.HelperRequest) s
 		return helperFailure(problem.Internal,
 			fmt.Sprintf("The package of plugin %s version %s could not be published.", id, version))
 	}
+	relabelSELinuxPluginBin(ctx, filepath.Join(versionDir, "bin"), s.logger)
 	return sandbox.HelperResponse{OK: true, Publish: &res}
+}
+
+// relabelSELinuxPluginBin best-effort sets bin_t on published plugin binaries
+// when SELinux is enabled (e.g. Rocky/AlmaLinux 9 Enforcing) so systemd does
+// not fail unit startup with 203/EXEC.
+func relabelSELinuxPluginBin(ctx context.Context, binDir string, logger *slog.Logger) {
+	if _, err := os.Stat("/sys/fs/selinux/enforce"); err != nil {
+		return
+	}
+	if _, err := os.Stat(binDir); err != nil {
+		return
+	}
+	chcon, err := exec.LookPath("chcon")
+	if err != nil {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if out, rerr := exec.CommandContext(cctx, chcon, "-R", "-t", "bin_t", binDir).CombinedOutput(); rerr != nil && logger != nil {
+		logger.Warn("selinux chcon bin_t on plugin bin failed", "dir", binDir, "err", rerr, "output", strings.TrimSpace(string(out)))
+	}
 }
 
 // checkPublishRequest pins both paths to their configured roots and returns the

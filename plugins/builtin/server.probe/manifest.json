@@ -184,6 +184,14 @@
         {
           "name": "state.kv.read",
           "scope": "self"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "domain.dns/providers.status"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "tls.certificates/certificates.summary"
         }
       ],
       "request_schema": "schemas/empty.request.json",
@@ -310,6 +318,14 @@
         {
           "name": "network.listen",
           "scope": "custom-domain"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "domain.dns/providers.status"
+        },
+        {
+          "name": "plugin.invoke",
+          "scope": "tls.certificates/certificates.summary"
         }
       ],
       "request_schema": "schemas/probe.domain.bind.request.json",
@@ -516,6 +532,16 @@
       "name": "state.kv.write",
       "scope": "self",
       "reason": "保存脱敏微件摘要与独立域名路由元数据"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "domain.dns/providers.status",
+      "reason": "动态探测面板 domain.dns 插件是否已安装就绪以推荐域名绑定轨道"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "tls.certificates/certificates.summary",
+      "reason": "动态探测面板 tls.certificates 插件是否已安装就绪以推荐证书绑定轨道"
     }
   ],
   "dependencies": [

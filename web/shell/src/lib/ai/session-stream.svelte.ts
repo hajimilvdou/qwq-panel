@@ -20,7 +20,15 @@ import { openStream, type SseFrame, type SseHandle, type SseState } from '$api/s
 import type { AgentSession, AgentSessionEvent, PermissionMode } from '$api/types';
 import type { AgentSessionUpdatedPayload } from '$api/additions';
 import { events } from '../events.svelte';
-import { addLocalUser, fromMessages, reduce, settleLocalUser, type TranscriptState } from './transcript';
+import {
+  addLocalUser,
+  fromMessages,
+  mergeSnapshotPreservingLiveStream,
+  reduce,
+  settleLocalUser,
+  type InFlightSnapshot,
+  type TranscriptState,
+} from './transcript';
 import { readMarks } from './agent-sessions.svelte';
 
 /** 快照返回的最近消息条数上限：满额时提示"仅显示最近的消息" */
@@ -119,12 +127,10 @@ export class SessionStream {
     try {
       const d = await this.api.get(this.id);
       if (this.#stopped || ctrl.signal.aborted) return;
-      const { messages, approvals: _a, ...s } = d;
+      const { messages, approvals: _a, in_flight, ...s } = d as typeof d & { in_flight?: InFlightSnapshot | null };
       this.session = s;
       const fresh = fromMessages(messages, s.status, s.last_seq);
-      /* 保留尚未落库的本地气泡（resync 期间发送中 / 发送失败待重试） */
-      const local = this.transcript.items.filter((x) => x.kind === 'user' && x.state);
-      this.transcript = { ...fresh, items: [...fresh.items, ...local] };
+      this.transcript = mergeSnapshotPreservingLiveStream(this.transcript, fresh, in_flight);
       this.truncated = messages.length >= SNAPSHOT_LIMIT;
       this.phase = 'ready';
       this.#markRead();
@@ -184,7 +190,9 @@ export class SessionStream {
       this.#pending.delete(localId);
       this.transcript = settleLocalUser(this.transcript, localId, { id: r.message.message_id });
       this.session = r.session;
-      if (this.transcript.status !== 'waiting_approval') this.transcript = { ...this.transcript, status: 'running' };
+      if (this.transcript.status !== 'waiting_approval' && this.transcript.seq <= r.message.seq) {
+        this.transcript = { ...this.transcript, status: 'running' };
+      }
     } catch (err) {
       this.transcript = settleLocalUser(this.transcript, localId, 'failed');
       throw err;

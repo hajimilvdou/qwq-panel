@@ -598,7 +598,7 @@ func parseWireGuardURI(line string) (proxyNodeRecord, error) {
 // ======================== 节点 -> ShareURI / Clash Meta / sing-box 渲染 ========================
 
 func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userRecord) (subNode, bool) {
-	server := strings.Trim(strings.TrimSpace(firstNonEmpty(rec.Server, defaultHost)), "[]")
+	server := strings.Trim(strings.TrimSpace(detectPrimaryPublicHost(defaultHost, rec.Server)), "[]")
 	if server == "" {
 		server = "YOUR_SERVER_IP"
 	}

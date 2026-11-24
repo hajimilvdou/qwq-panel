@@ -21,13 +21,16 @@
     "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "attestations/sbom.spdx.json": "sha256:aa94fcbc643101bdeab31233077031406c2c828732a143fccacd71af8a5ce5c9",
     "schemas/checks.response.json": "sha256:ddafab2ab01b1da2df7e66256923fd59c988ed77c39b619f188131dc05fda94a",
-    "schemas/config.schema.json": "sha256:510d65d2dc9d794c6d529a1795435071787b0c6510d08e638a50ee224e96235a",
+    "schemas/config.schema.json": "sha256:56aa81670f47e0e7d75abacb8bfe35c8cf4f66f4a37e95bca28f31131d0ba1a1",
     "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
+    "schemas/ingress.acme.cleanup.request.json": "sha256:47b69cdc0efe5ab279c4e08b90b424ba911e169070a3234b1448bed837dbbbd6",
+    "schemas/ingress.acme.present.request.json": "sha256:2a4a3a99acce41f511675e39a1e33b13e276fba94a1b45e2d8fa0bb05c2fabac",
+    "schemas/ingress.acme.response.json": "sha256:574db0bc6998aeb5159a5c02115981602780300bc433c3f96e03cf149dda1278",
     "schemas/ingress.ai.digest.response.json": "sha256:be84e8a37b1d3a95d24b9e7082be1f9107029708308c13dbc8c36d534aee3ed3",
     "schemas/ingress.apply.response.json": "sha256:11bee6ba0691dfe9fdacfa04374436781f748926bae62c05f5e18596fb5bf4b8",
     "schemas/ingress.delete.response.json": "sha256:d6b9084de92a9a5640506e09e8395dbfafcee62232d781e1856b112b65f17d75",
     "schemas/ingress.id.request.json": "sha256:94b6382be7e0bb471952ea5e274d039c44640acecec4fcfd8dd7c05421e476f8",
-    "schemas/ingress.overview.response.json": "sha256:de6c7737021f3f3c5acd13479c69db7b71f5174b4fb6507735e03942975eabee",
+    "schemas/ingress.overview.response.json": "sha256:1f0988a2afe75e7e6d42d6e39704383eb6e41f6ad58f9dc6ac3379a67a579638",
     "schemas/ingress.preview.response.json": "sha256:f247034a24b87f9962104530bc2df26cf3926cbb0a6011e97ffec6d90548c5bb",
     "schemas/ingress.probe.response.json": "sha256:bc95a60b106021a3c6b2fc147a5673e4fadeeb7d6d09260a7ad5064b16428d61",
     "schemas/ingress.rollback.request.json": "sha256:80dcf9217bac3de74eab49ca5123de9a6e4d61c27f4a0534db72db9df651e751",
@@ -39,9 +42,9 @@
     "schemas/ingress.tls.reload.request.json": "sha256:c061616ede3019520ea5d52ab2e12d54322edf4de860749d00c729b1f5128750",
     "schemas/ingress.tls.reload.response.json": "sha256:eceedced80fbbcb25df8fa534bc2f7117a0eeeea8ef2a8e1ba9600bd44c09171",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
-    "ui/index.html": "sha256:4f6116dedbb452b6eb46caf80b823afa50d697a7a5868ae5376afac5551619f8",
-    "ui/plugin.css": "sha256:6bb45daa9effa8be17b391586c9eb4b8f2a7f6aeb81907ad0d3a7203a197114e",
-    "ui/plugin.js": "sha256:7d742f1a9279f59b23a797a87c249afad4b94e2b6258520383bab2a1dbc38ab2"
+    "ui/index.html": "sha256:8121e3e3485d1acff66f594eefc36994befcceb09f24485a07c926ddb0232932",
+    "ui/plugin.css": "sha256:2f1453c2df04af45382a6f106f7e9ff5d56b820e0a8a72b806243a98bf8499d4",
+    "ui/plugin.js": "sha256:5e2772711ea0a43945c4bbb903bc9001df0033a6d29e20c4e75be8ad7a1ee811"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -312,6 +315,46 @@
       ],
       "request_schema": "schemas/ingress.tls.inspect.request.json",
       "response_schema": "schemas/ingress.tls.inspect.response.json"
+    },
+    {
+      "name": "ingress.acme.present",
+      "api_version": "v1",
+      "permission": "web.ingress:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "approval": "auto",
+      "summary": "向内置反代 HTTP 入口临时注入 ACME HTTP-01 验证令牌",
+      "capabilities": [
+        {
+          "name": "network.listen",
+          "scope": "ingress"
+        }
+      ],
+      "request_schema": "schemas/ingress.acme.present.request.json",
+      "response_schema": "schemas/ingress.acme.response.json"
+    },
+    {
+      "name": "ingress.acme.cleanup",
+      "api_version": "v1",
+      "permission": "web.ingress:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "approval": "auto",
+      "summary": "清理内置反代 HTTP 入口中已完成的 ACME HTTP-01 验证令牌",
+      "capabilities": [
+        {
+          "name": "network.listen",
+          "scope": "ingress"
+        }
+      ],
+      "request_schema": "schemas/ingress.acme.cleanup.request.json",
+      "response_schema": "schemas/ingress.acme.response.json"
     }
   ],
   "capabilities": [

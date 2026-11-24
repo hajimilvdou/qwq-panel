@@ -3,11 +3,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -30,14 +34,45 @@ func runRecover(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *username == "" || !*passwordStdin {
-		fmt.Fprintln(stderr, "qwq recover: --username and --password-stdin are required")
-		return 2
-	}
-	password, err := readPassword(stdin)
-	if err != nil {
-		fmt.Fprintf(stderr, "qwq recover: %v\n", err)
-		return 2
+	interactive := isTerminalReader(stdin)
+	var (
+		targetUser = strings.TrimSpace(*username)
+		password   string
+		err        error
+	)
+	if interactive && (targetUser == "" || !*passwordStdin) {
+		reader := bufio.NewReader(stdin)
+		if targetUser == "" {
+			fmt.Fprint(stdout, "请输入要恢复的管理员用户名 [默认 admin]: ")
+			line, rerr := reader.ReadString('\n')
+			if rerr != nil && len(line) == 0 {
+				fmt.Fprintf(stderr, "qwq recover: 未读取到用户名输入\n")
+				return 2
+			}
+			targetUser = strings.TrimSpace(line)
+			if targetUser == "" {
+				targetUser = "admin"
+			}
+		}
+		if *passwordStdin {
+			password, err = readPassword(reader)
+		} else {
+			password, err = readInteractivePassword(reader, stdout)
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "qwq recover: %v\n", err)
+			return 2
+		}
+	} else {
+		if targetUser == "" || !*passwordStdin {
+			fmt.Fprintln(stderr, "qwq recover: --username and --password-stdin are required")
+			return 2
+		}
+		password, err = readPassword(stdin)
+		if err != nil {
+			fmt.Fprintf(stderr, "qwq recover: %v\n", err)
+			return 2
+		}
 	}
 
 	cfg, err := config.Load(*configPath)
@@ -64,7 +99,7 @@ func runRecover(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	user, err := id.ResetAdmin(ctx, identity.ResetAdminInput{
-		Username: *username,
+		Username: targetUser,
 		Password: password,
 		Reason:   *reason,
 	})
@@ -79,6 +114,56 @@ func runRecover(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "administrator %s reset; second factor disabled; sessions revoked; %d delegation(s) revoked\n", user.Username, revoked)
 	return 0
+}
+
+func isTerminalReader(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+}
+
+func readInteractivePassword(br *bufio.Reader, out io.Writer) (string, error) {
+	restoreEcho := disableTerminalEcho()
+	defer restoreEcho()
+	fmt.Fprint(out, "请输入新密码（至少 12 位，不回显）: ")
+	p1, err := br.ReadString('\n')
+	fmt.Fprintln(out)
+	if err != nil && len(p1) == 0 {
+		return "", fmt.Errorf("read password: %w", err)
+	}
+	p1 = strings.TrimRight(p1, "\r\n")
+	if p1 == "" {
+		return "", fmt.Errorf("empty password")
+	}
+	fmt.Fprint(out, "请再次输入新密码确认: ")
+	p2, err := br.ReadString('\n')
+	fmt.Fprintln(out)
+	if err != nil && len(p2) == 0 {
+		return "", fmt.Errorf("read password confirmation: %w", err)
+	}
+	if p1 != strings.TrimRight(p2, "\r\n") {
+		return "", fmt.Errorf("两次输入的密码不一致")
+	}
+	return p1, nil
+}
+
+func disableTerminalEcho() func() {
+	if runtime.GOOS == "windows" {
+		return func() {}
+	}
+	cmd := exec.Command("stty", "-echo")
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		return func() {}
+	}
+	return func() {
+		restore := exec.Command("stty", "echo")
+		restore.Stdin = os.Stdin
+		_ = restore.Run()
+	}
 }
 
 // readPassword reads one line without echoing. The command expects the caller

@@ -16,12 +16,14 @@
     "listen_addr": {
       "type": "string",
       "maxLength": 64,
-      "default": ""
+      "default": ":80",
+      "description": "内置 Go 反代 HTTP 监听地址（默认 :80；填 off 关闭）"
     },
     "https_listen_addr": {
       "type": "string",
       "maxLength": 64,
-      "default": ""
+      "default": ":443",
+      "description": "内置 Go 反代 HTTPS SNI 监听地址（默认 :443；填 off 关闭）"
     },
     "trusted_proxies": {
       "type": "array",
@@ -35,7 +37,8 @@
     "export_config_path": {
       "type": "string",
       "maxLength": 255,
-      "default": ""
+      "default": "",
+      "description": "可选：额外导出配置到当前插件数据目录内的绝对路径（外部 Nginx/Caddy 请在预览页一键复制）"
     }
   }
 }

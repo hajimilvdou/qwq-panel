@@ -128,6 +128,19 @@
       const sites = data.sites || [];
       const snaps = data.snapshots || [];
       document.getElementById('st-engine').textContent = data.backend?.active_engine || 'builtin-go';
+      const listenParts = [];
+      if (data.bound_addr) listenParts.push(`HTTP ${data.bound_addr}`);
+      if (data.https_bound_addr) listenParts.push(`HTTPS ${data.https_bound_addr}`);
+      document.getElementById('st-listen').textContent = listenParts.length ? listenParts.join(' · ') : '未监听（端口冲突或已关闭）';
+      const alertEl = document.getElementById('listen-alert');
+      const errs = [data.http_listen_error, data.https_listen_error].filter(Boolean);
+      if (errs.length) {
+        alertEl.textContent = `监听端口冲突提示：${errs.join('；')}。如宿主机已有 Nginx/Caddy/Xray 占用该端口，请停止冲突服务或在「应用中心 → web.ingress → 配置」修改 listen_addr / https_listen_addr（填 off 可关闭对应端口）。`;
+        alertEl.hidden = false;
+      } else {
+        alertEl.textContent = '';
+        alertEl.hidden = true;
+      }
       document.getElementById('st-sites').textContent = String(sites.length);
       document.getElementById('st-active').textContent = String(data.active_routes || 0);
       document.getElementById('st-snaps').textContent = String(snaps.length);

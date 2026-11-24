@@ -188,4 +188,10 @@
   :global(:root[data-motion='reduced']) .reach {
     animation: qwq-fade-in var(--dur-1) linear;
   }
+  @media (max-width: 860px) {
+    .dock {
+      right: 16px;
+      bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 16px);
+    }
+  }
 </style>

@@ -4,8 +4,8 @@
   版本、运行角色、TLS 状态与指纹、面板入口安全设置（端口、密道、伪装页、反代域名自动免密道）。
 -->
 <script lang="ts">
-  import { Alert, Button, Card, Chip, CopyButton, ErrorState, Input, Select, Skeleton, Switch } from '$ui';
-  import type { DisguiseMode, PanelAccessSettings } from '$api/additions';
+  import { Alert, Button, Card, Chip, CopyButton, Dialog, ErrorState, Input, OtpInput, Select, Skeleton, Switch } from '$ui';
+  import type { DisguiseMode, PanelAccessSettings, PanelAccessUpdateRequest } from '$api/additions';
   import { system } from '$api/endpoints';
   import { describeError } from '$lib/errors';
   import { dateTime, relativeTime } from '$lib/format';
@@ -34,7 +34,13 @@
     { value: 'blank_404', label: '空白 404（零响应体、无面板指纹头）' },
     { value: 'custom_html', label: '自定义静态伪装页 HTML' },
   ];
+  const BASE_LISTEN_OPTIONS: readonly { value: string; label: string }[] = [
+    { value: '127.0.0.1', label: '127.0.0.1（仅本机 SSH 隧道 / 本机反向代理）' },
+    { value: '0.0.0.0', label: '0.0.0.0（开放 IPv4 公网直连与订阅访问）' },
+    { value: '::', label: '::（开放 IPv4 + IPv6 双栈公网直连）' },
+  ];
 
+  let listenHost = $state('127.0.0.1');
   let portText = $state('');
   let entryPath = $state('');
   let disguise = $state<DisguiseMode>('drop');
@@ -46,10 +52,32 @@
   let saveError = $state('');
   let reboundUrl = $state('');
 
+  /* 两步验证弹窗状态（修改面板监听入口触发 MFA_REQUIRED 时弹出） */
+  let mfaOpen = $state(false);
+  let mfaUseRecovery = $state(false);
+  let mfaCode = $state('');
+  let mfaErr = $state('');
+  let pendingBody = $state<PanelAccessUpdateRequest | null>(null);
+
+  const listenOptions = $derived.by(() => {
+    if (BASE_LISTEN_OPTIONS.some((o) => o.value === listenHost) || !listenHost) return BASE_LISTEN_OPTIONS;
+    return [...BASE_LISTEN_OPTIONS, { value: listenHost, label: `${listenHost}（自定义网卡地址）` }];
+  });
+
+  /** 检测服务器时钟与本地浏览器偏差（>30s 时提示同步 NTP，防 TOTP 与 Reality 失灵） */
+  const clockDriftSec = $derived.by(() => {
+    const st = info.data?.server_time;
+    if (!st) return 0;
+    const ms = Date.parse(st);
+    if (!Number.isFinite(ms)) return 0;
+    return Math.round(Math.abs(ms - Date.now()) / 1000);
+  });
+
   $effect(() => {
     const a = access.data;
     if (!a || syncedRevision === a.revision) return;
     syncedRevision = a.revision;
+    listenHost = a.listen_host || '127.0.0.1';
     portText = String(a.port);
     entryPath = a.entry_path;
     disguise = a.disguise;
@@ -65,6 +93,31 @@
         access.data?.bypass_reason === 'public_origin'),
   );
 
+  function buildReboundPanelUrl(opts: {
+    panelDomain: string;
+    autoDisableOnDomain: boolean;
+    listenHost: string;
+    port: number;
+    effectiveEntryPath: string;
+  }): string {
+    const dom = opts.panelDomain.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    const curProto = typeof location !== 'undefined' ? location.protocol : 'https:';
+    const curHost = typeof location !== 'undefined' ? location.hostname : '';
+    const curPort = typeof location !== 'undefined' ? location.port : '';
+    if (dom && curHost === dom && curPort === '') {
+      return opts.effectiveEntryPath && !opts.autoDisableOnDomain
+        ? `https://${dom}/${opts.effectiveEntryPath}`
+        : `https://${dom}/`;
+    }
+    let rawHost = dom || curHost || opts.listenHost || '127.0.0.1';
+    if (rawHost === '0.0.0.0' || rawHost === '::') {
+      rawHost = curHost || '127.0.0.1';
+    }
+    const bracketedHost = rawHost.includes(':') && !rawHost.startsWith('[') ? `[${rawHost}]` : rawHost;
+    const base = `${curProto}//${bracketedHost}:${opts.port}`;
+    return opts.effectiveEntryPath ? `${base}/${opts.effectiveEntryPath}` : `${base}/`;
+  }
+
   const previewUrl = $derived.by(() => {
     const dom = panelDomain.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
     const cleanPath = entryPath.trim().replace(/^\/+|\/+$/g, '');
@@ -72,10 +125,18 @@
       return `https://${dom}/`;
     }
     const proto = access.data?.tls_mode === 'proxy' ? 'http:' : (typeof location !== 'undefined' ? location.protocol : 'https:');
-    const host = dom || (typeof location !== 'undefined' ? location.hostname : access.data?.listen_host || '127.0.0.1');
+    const rawHost = dom || (typeof location !== 'undefined' ? location.hostname : listenHost || '127.0.0.1');
+    const host = rawHost.includes(':') && !rawHost.startsWith('[') ? `[${rawHost}]` : rawHost;
     const port = portText.trim() || String(access.data?.port ?? 8443);
     const origin = `${proto}//${host}:${port}`;
     return cleanPath && !willAutoBypass ? `${origin}/${cleanPath}` : `${origin}/`;
+  });
+
+  const rescueUrl = $derived.by(() => {
+    const cleanPath = entryPath.trim().replace(/^\/+|\/+$/g, '');
+    const proto = access.data?.tls_mode === 'proxy' ? 'http:' : 'https:';
+    const port = portText.trim() || String(access.data?.port ?? 8443);
+    return cleanPath ? `${proto}//<服务器IP>:${port}/${cleanPath}` : `${proto}//<服务器IP>:${port}/`;
   });
 
   function randomHighPort() {
@@ -91,6 +152,48 @@
     entryPath = Array.from(buf, (b) => chars[b % chars.length]).join('');
   }
 
+  async function submitAccess(body: PanelAccessUpdateRequest, code?: string) {
+    saving = true;
+    saveError = '';
+    mfaErr = '';
+    try {
+      const updated = await system.updateAccess(body, code);
+      mfaOpen = false;
+      mfaCode = '';
+      pendingBody = null;
+      syncedRevision = null;
+      await Promise.all([access.refresh(), info.refresh()]);
+      toasts.success(updated.port_changed ? `面板监听地址已热切换至 ${updated.listen}` : '面板入口与伪装设置已生效');
+      if (updated.port_changed) {
+        reboundUrl = buildReboundPanelUrl({
+          panelDomain: updated.panel_domain,
+          autoDisableOnDomain: updated.auto_disable_on_domain,
+          listenHost: updated.listen_host,
+          port: updated.port,
+          effectiveEntryPath: updated.effective_entry_path,
+        });
+      }
+    } catch (err) {
+      const v = describeError(err);
+      if (v.code === 'MFA_REQUIRED') {
+        pendingBody = body;
+        if (!mfaOpen) {
+          mfaOpen = true;
+          mfaUseRecovery = false;
+          mfaCode = '';
+          mfaErr = '';
+        } else {
+          mfaErr = v.message || '两步验证码不正确或已过期，请重试';
+        }
+      } else {
+        mfaOpen = false;
+        saveError = v.message;
+      }
+    } finally {
+      saving = false;
+    }
+  }
+
   async function saveAccess(e: SubmitEvent) {
     e.preventDefault();
     if (!access.data || saving) return;
@@ -101,32 +204,23 @@
       saveError = '监听端口必须是 1 ~ 65535 之间的整数';
       return;
     }
-    saving = true;
-    try {
-      const updated = await system.updateAccess({
-        port: parsedPort,
-        entry_path: entryPath.trim().replace(/^\/+|\/+$/g, ''),
-        disguise,
-        disguise_html: disguiseHtml,
-        panel_domain: panelDomain.trim(),
-        auto_disable_on_domain: autoDisableOnDomain,
-        expected_revision: access.data.revision,
-      });
-      syncedRevision = null;
-      await Promise.all([access.refresh(), info.refresh()]);
-      toasts.success(updated.port_changed ? `端口已热切换至 ${updated.port}` : '面板入口与伪装设置已生效');
-      if (updated.port_changed) {
-        const host = updated.panel_domain || (typeof location !== 'undefined' ? location.hostname : updated.listen_host);
-        const proto = typeof location !== 'undefined' ? location.protocol : 'https:';
-        reboundUrl = updated.effective_entry_path
-          ? `${proto}//${host}:${updated.port}/${updated.effective_entry_path}`
-          : `${proto}//${host}:${updated.port}/`;
-      }
-    } catch (err) {
-      saveError = describeError(err).message;
-    } finally {
-      saving = false;
-    }
+    const body: PanelAccessUpdateRequest = {
+      listen_host: listenHost,
+      port: parsedPort,
+      entry_path: entryPath.trim().replace(/^\/+|\/+$/g, ''),
+      disguise,
+      disguise_html: disguiseHtml,
+      panel_domain: panelDomain.trim(),
+      auto_disable_on_domain: autoDisableOnDomain,
+      expected_revision: access.data.revision,
+    };
+    await submitAccess(body);
+  }
+
+  function submitMfa(code?: string) {
+    const val = (code ?? mfaCode).trim();
+    if (!pendingBody || !val || saving) return;
+    void submitAccess(pendingBody, val);
   }
 </script>
 
@@ -146,11 +240,28 @@
       <dd>{ROLE[s.role] ?? s.role}</dd>
       <dt>启动于</dt>
       <dd title={dateTime(s.started_at)}>{relativeTime(s.started_at)}</dd>
+      {#if s.server_time}
+        <dt>服务器时间</dt>
+        <dd class="mono">
+          {dateTime(s.server_time)}
+          {#if clockDriftSec > 30}
+            <Chip size="sm" tone="warn">偏差约 {clockDriftSec} 秒</Chip>
+          {/if}
+        </dd>
+      {/if}
       <dt>应用</dt>
       <dd><Chip size="sm" tone={s.plugins_enabled ? 'ok' : 'neutral'}>{s.plugins_enabled ? '已启用' : '未启用'}</Chip></dd>
       {#if s.listen}<dt>监听地址</dt><dd class="mono">{s.listen}</dd>{/if}
       {#if s.data_dir}<dt>数据目录</dt><dd class="mono">{s.data_dir}</dd>{/if}
     </dl>
+    {#if clockDriftSec > 30}
+      <div class="drift-warn">
+        <Alert tone="warn" title="检测到服务器时钟与当前设备偏差约 {clockDriftSec} 秒">
+          系统时钟偏差超过 30 秒会导致两步验证（TOTP）、VLESS-Reality 与 ACME 证书签发异常。建议执行
+          <code class="mono">sudo timedatectl set-ntp true</code> 同步时间。
+        </Alert>
+      </div>
+    {/if}
   </Card>
 
   {#if isAdmin}
@@ -191,6 +302,15 @@
           {#if saveError}
             <Alert tone="bad">{saveError}</Alert>
           {/if}
+
+          <Select
+            label="监听范围"
+            bind:value={listenHost}
+            options={listenOptions}
+            hint={listenHost === '127.0.0.1' || listenHost === '::1'
+              ? '仅允许本机 SSH 隧道或本机反向代理接入；如需外部直接访问面板、拉取代理订阅或接收探针上报，请切为 0.0.0.0 或 ::'
+              : '已开放公网监听：强烈建议保留安全密道或绑定 HTTPS 反代域名，防火墙将自动同步放行面板端口'}
+          />
 
           <div class="inline-field">
             <Input
@@ -259,6 +379,13 @@
               <code class="mono">{previewUrl}</code>
               <CopyButton text={previewUrl} label="复制入口地址" />
             </div>
+            {#if panelDomain.trim()}
+              <span class="preview-label">裸 IP 应急救援地址（域名解析异常时仍可通过密道直连）</span>
+              <div class="url-row">
+                <code class="mono">{rescueUrl}</code>
+                <CopyButton text={rescueUrl} label="复制救援地址" />
+              </div>
+            {/if}
           </div>
 
           <div class="foot">
@@ -281,9 +408,69 @@
       {/if}
     </dl>
   </Card>
+  <Dialog
+    bind:open={mfaOpen}
+    title="两步验证确认"
+    description="修改面板监听地址、端口、安全密道或反代域名属于敏感操作，请输入当前 6 位动态验证码或恢复码。"
+    size="sm"
+  >
+    {#if mfaUseRecovery}
+      <Input
+        label="恢复码"
+        mono
+        placeholder="xxxx-xxxx"
+        bind:value={mfaCode}
+        autofocus
+        disabled={saving}
+      />
+    {:else}
+      <div class="otp">
+        <OtpInput bind:value={mfaCode} autofocus disabled={saving} oncomplete={(c) => submitMfa(c)} />
+      </div>
+    {/if}
+    <div class="mfa-toggle">
+      <Button
+        type="button"
+        variant="plain"
+        size="sm"
+        onclick={() => {
+          mfaUseRecovery = !mfaUseRecovery;
+          mfaCode = '';
+          mfaErr = '';
+        }}
+      >
+        {mfaUseRecovery ? '改用 6 位动态验证码' : '改用恢复码验证'}
+      </Button>
+    </div>
+    {#if mfaErr}<Alert tone="bad">{mfaErr}</Alert>{/if}
+    {#snippet footer()}
+      <Button variant="plain" onclick={() => (mfaOpen = false)}>取消</Button>
+      <Button
+        variant="primary"
+        loading={saving}
+        disabled={mfaUseRecovery ? mfaCode.trim().length < 6 : mfaCode.length !== 6}
+        onclick={() => submitMfa()}
+      >
+        验证并保存
+      </Button>
+    {/snippet}
+  </Dialog>
 {/if}
 
 <style>
+  .drift-warn {
+    margin-top: var(--s-4);
+  }
+  .otp {
+    display: flex;
+    justify-content: center;
+    margin-bottom: var(--s-3);
+  }
+  .mfa-toggle {
+    display: flex;
+    justify-content: center;
+    margin-bottom: var(--s-2);
+  }
   .kv {
     display: grid;
     grid-template-columns: 112px minmax(0, 1fr);

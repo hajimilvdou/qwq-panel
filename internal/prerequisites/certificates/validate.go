@@ -36,14 +36,29 @@ func canonicalScope(scope IssuanceScope) (IssuanceScope, error) {
 	if spec.Purpose != tlsmgr.ServerTLS || (scope.CA != LetsEncrypt && scope.CA != LetsEncryptStaging) {
 		return IssuanceScope{}, fault.New("CERTIFICATE_PURPOSE_INVALID", "ACME 只支持受控公开或 staging CA 的服务端证书")
 	}
-	zone, err := names.DNS(scope.Provider.ZoneName, false)
-	if err != nil || zone != scope.Provider.ZoneName || !names.ID(scope.Provider.ProviderID) || !names.ID(scope.Provider.ZoneID) || !names.ID(scope.Provider.Revision) || (scope.Provider.Kind != dns.Cloudflare && scope.Provider.Kind != dns.Aliyun) {
-		return IssuanceScope{}, fault.New("SCOPE_INVALID", "证书 DNS 提供商范围无效")
-	}
-	for _, san := range spec.SANs {
-		if !names.InZone(strings.TrimPrefix(san, "*."), zone) {
-			return IssuanceScope{}, fault.New("ZONE_DENIED", "证书 SAN 超出授权 zone")
+	switch scope.ChallengeType {
+	case "", "dns-01":
+		scope.ChallengeType = ""
+		zone, err := names.DNS(scope.Provider.ZoneName, false)
+		if err != nil || zone != scope.Provider.ZoneName || !names.ID(scope.Provider.ProviderID) || !names.ID(scope.Provider.ZoneID) || !names.ID(scope.Provider.Revision) || (scope.Provider.Kind != dns.Cloudflare && scope.Provider.Kind != dns.Aliyun) {
+			return IssuanceScope{}, fault.New("SCOPE_INVALID", "证书 DNS 提供商范围无效")
 		}
+		for _, san := range spec.SANs {
+			if !names.InZone(strings.TrimPrefix(san, "*."), zone) {
+				return IssuanceScope{}, fault.New("ZONE_DENIED", "证书 SAN 超出授权 zone")
+			}
+		}
+	case "http-01":
+		if scope.Provider != (dns.Scope{}) {
+			return IssuanceScope{}, fault.New("SCOPE_INVALID", "HTTP-01 模式不需要配置 DNS 提供商范围")
+		}
+		for _, san := range spec.SANs {
+			if strings.HasPrefix(san, "*.") {
+				return IssuanceScope{}, fault.New("WILDCARD_REQUIRES_DNS01", "HTTP-01 验证不支持泛域名证书，请改用 DNS-01 模式或填写精确域名")
+			}
+		}
+	default:
+		return IssuanceScope{}, fault.New("SCOPE_INVALID", "不支持的 ACME 验证模式")
 	}
 	scope.Spec = spec
 	return scope, nil

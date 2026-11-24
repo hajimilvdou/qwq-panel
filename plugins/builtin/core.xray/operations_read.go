@@ -143,6 +143,7 @@ type capabilitiesResult struct {
 	DriverVersion string                  `json:"driver_version"`
 	CoreVersion   string                  `json:"core_version"`
 	SchemaVersion string                  `json:"schema_version"`
+	ObfsAvailable bool                    `json:"obfs_available"`
 	Declared      []string                `json:"declared"`
 	Verified      []string                `json:"verified"`
 	Unavailable   []capabilityUnavailable `json:"unavailable"`
@@ -164,6 +165,7 @@ func (i *instance) capabilities(ctx context.Context, request pluginsdk.Request) 
 		DriverVersion: version,
 		CoreVersion:   snapshot.coreVersion,
 		SchemaVersion: "2",
+		ObfsAvailable: i.driver != nil && i.driver.obfs != nil,
 		Declared: []string{
 			"vless_reality_vision_raw",
 			"vless_ws_grpc_xhttp",

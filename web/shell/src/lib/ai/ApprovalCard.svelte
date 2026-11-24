@@ -17,6 +17,7 @@
   import { describeError } from '../errors';
   import { session } from '../session.svelte';
   import { approvals } from './approvals.svelte';
+  import { dock } from './dock.svelte';
   import { decideApproval, isExpired, requesterOf, RISK_META, validityText, whyAsk } from './decide';
 
   interface Props {
@@ -198,7 +199,7 @@
       {#if needsTotpSetup}
         <p class="mfa-hint">
           <Icon name="lock" size={16} /> 这是破坏性操作，批准需要两步验证。
-          <a href="/settings/account">先去开启两步验证</a>
+          <a href="/settings/account" onclick={() => dock.close()}>先去开启两步验证</a>
         </p>
       {:else}
         <div class="mfa">

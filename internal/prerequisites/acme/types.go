@@ -40,6 +40,12 @@ type CleanupContexts interface {
 	ForChallenge(context.Context, certificates.Caller, string, string, certificates.IssuanceScope, dns.OwnedChallenge) (context.Context, context.CancelFunc, error)
 }
 
+// HTTP01Presenter 负责向本机内置反向代理（web.ingress :80）注入或清理 /.well-known/acme-challenge/<token> 临时响应。
+type HTTP01Presenter interface {
+	Present(ctx context.Context, token, keyAuth string, ttl time.Duration) error
+	CleanUp(ctx context.Context, token string) error
+}
+
 type Options struct {
 	DB              *storage.DB
 	Secrets         *secrets.Store
@@ -52,6 +58,7 @@ type Options struct {
 	DNSContexts     DNSContexts
 	CleanupContexts CleanupContexts
 	Terms           TermsAcceptance
+	HTTP01          HTTP01Presenter
 	Client          *http.Client
 	Clock           clock.Clock
 	Random          io.Reader
@@ -71,6 +78,7 @@ type Authority struct {
 	dnsContexts             DNSContexts
 	cleanupContexts         CleanupContexts
 	terms                   TermsAcceptance
+	http01                  HTTP01Presenter
 	client                  *http.Client
 	clock                   clock.Clock
 	random                  io.Reader

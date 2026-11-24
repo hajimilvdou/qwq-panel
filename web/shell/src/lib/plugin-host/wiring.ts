@@ -7,6 +7,7 @@
  *   bridgeDeps(plugin, hooks)  BridgeDeps（invoke 走 endpoints，审批交悬浮窗，复制走宿主剪贴板）
  * ========================================================================== */
 import { ApiError, newIdempotencyKey, NetworkError, TERMINAL, type OpResult } from '$api/client';
+import { copyTextWithFallback } from '$ui/clipboard';
 import { operations as opsApi, plugins as pluginsApi } from '$api/endpoints';
 import { isPluginActiveReady } from '$api/endpoints-plugins';
 import type { Plugin } from '$api/types';
@@ -190,7 +191,13 @@ const ENSURE_PLUGIN_LABELS: Record<string, string> = {
   'web.ingress': '反向代理网关 (web.ingress)',
   'tls.certificates': '自动 HTTPS 证书管理 (tls.certificates)',
   'domain.dns': 'DNS 托管与自动验证 (domain.dns)',
+  'core.xray': 'Xray 核心驱动 (core.xray)',
 };
+
+function computeBridgeJobWaitMs(declaredTimeoutMs?: number): number {
+  const base = declaredTimeoutMs && declaredTimeoutMs > 0 ? declaredTimeoutMs + 15_000 : 90_000;
+  return Math.min(Math.max(base, 90_000), 600_000);
+}
 
 export interface EnsurePluginsHandlerDeps {
   listPlugins: () => Promise<{ items: Plugin[] }>;
@@ -411,7 +418,13 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
 
   return {
     pluginId: plugin.plugin_id,
-    operations: (plugin.operations ?? []).map((o) => ({ id: o.id, effect: o.effect, mode: o.mode, summary: o.summary })),
+    operations: (plugin.operations ?? []).map((o) => ({
+      id: o.id,
+      effect: o.effect,
+      mode: o.mode,
+      summary: o.summary,
+      timeoutMs: o.timeout_ms,
+    })),
     routes: plugin.ui?.routes ?? [],
     invoke: async (op, payload, key, meta) => {
       const name = op.id.slice(plugin.plugin_id.length + 1);
@@ -424,9 +437,20 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
       if (r.status === 'AWAITING_APPROVAL') {
         dock.open({ approvalId: r.approvalId });
       } else if (r.operationId && !TERMINAL.has(r.status)) {
-        /* mode="job" 返回 HTTP 202 PENDING/RUNNING 时透明等待终态，直接返回真实业务 result */
-        r = await waitForOperation(r, 90_000, meta?.signal);
-        if (r.status === 'AWAITING_APPROVAL') dock.open({ approvalId: r.approvalId });
+        /* mode="job" 返回 HTTP 202 PENDING/RUNNING 时按声明超时透明等待终态，超时明确报错 */
+        const waitMs = computeBridgeJobWaitMs(op.timeoutMs);
+        r = await waitForOperation(r, waitMs, meta?.signal);
+        if (r.status === 'AWAITING_APPROVAL') {
+          dock.open({ approvalId: r.approvalId });
+        } else if (!TERMINAL.has(r.status) && !meta?.signal?.aborted) {
+          return {
+            status: r.status,
+            operation_id: r.operationId,
+            approval_id: r.approvalId,
+            result: r.result,
+            error: `TIMEOUT: 后台任务耗时超过 ${Math.round(waitMs / 1000)} 秒仍未结束，可在「动态」中继续查看进度`,
+          };
+        }
       }
       const errDetail = r.error
         ? SAFE_DETAIL_CODES.has(r.error.code)
@@ -451,8 +475,9 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
     },
     newKey: newIdempotencyKey,
     onCopy: async ({ text, label }) => {
-      await navigator.clipboard.writeText(text);
-      toasts.success(label || '已复制到剪贴板');
+      const ok = await copyTextWithFallback(text);
+      if (ok) toasts.success(label || '已复制到剪贴板');
+      else toasts.error('当前浏览器限制自动复制，请手动选中文本复制');
     },
     onEnsurePlugins: defaultEnsurePlugins,
     ...hooks,

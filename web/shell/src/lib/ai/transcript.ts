@@ -92,6 +92,13 @@ export const TOOL_DONE = new Set<AgentToolStatus>(['succeeded', 'failed', 'rejec
 
 /* ------------------------------------------------------------------ 快照 */
 
+export interface InFlightSnapshot {
+  message_id: string;
+  reasoning?: string;
+  content: string;
+  head_seq: number;
+}
+
 export function fromMessages(messages: readonly AgentSessionMessage[], status: AgentSessionStatus, seq: number): TranscriptState {
   const items: TranscriptItem[] = [];
   for (const m of [...messages].sort((a, b) => a.seq - b.seq)) {
@@ -99,21 +106,105 @@ export function fromMessages(messages: readonly AgentSessionMessage[], status: A
     else if (m.role === 'assistant') {
       if (m.content) items.push({ kind: 'assistant', id: m.message_id, text: m.content, at: m.created_at, streaming: false });
     } else if (m.role === 'tool') {
-      const j = (m.content_json ?? {}) as { action?: string; status?: string };
+      const j = (m.content_json ?? {}) as {
+        call_id?: string;
+        action?: string;
+        status?: string;
+        error?: { code?: string; detail?: string };
+      };
       const st = TOOL_STATUS.has(j.status as AgentToolStatus) ? (j.status as AgentToolStatus) : 'succeeded';
+      const rawText = (m.content ?? '').trim();
+      const hideRawText =
+        rawText === '' ||
+        rawText.startsWith('{') ||
+        rawText.startsWith('[') ||
+        rawText.startsWith('(result omitted:');
       items.push({
         kind: 'tool',
-        id: m.message_id,
+        id: j.call_id || m.message_id,
         action: j.action ?? '',
         status: st,
-        text: m.content,
+        text: hideRawText ? undefined : m.content,
+        error: j.error?.detail ?? j.error?.code,
         operationId: m.operation_id,
         approvalId: m.approval_id,
       });
+    } else if (m.role === 'system') {
+      /* 仅展示持久化报错卡片（content_json.kind === 'error'），其余系统提示不展示 */
+      const j = (m.content_json ?? {}) as { kind?: string; code?: string; detail?: string };
+      if (j.kind === 'error') {
+        items.push({
+          kind: 'error',
+          id: m.message_id,
+          code: j.code || 'INTERNAL',
+          detail: j.detail || m.content || '',
+        });
+      }
     }
-    /* system 消息是给模型的提示，不展示 */
   }
   return { items, seq: Math.max(seq, messages.at(-1)?.seq ?? 0), status };
+}
+
+/** 合并快照与实时流状态，防止 reload / resync 用滞后的 SQLite 快照清零正在流式输出的气泡 */
+export function mergeSnapshotPreservingLiveStream(
+  prev: TranscriptState,
+  fresh: TranscriptState,
+  inFlight?: InFlightSnapshot | null,
+): TranscriptState {
+  const localPendingUsers = prev.items.filter((x) => x.kind === 'user' && x.state);
+  const nowIso = new Date().toISOString();
+
+  if (inFlight && inFlight.message_id) {
+    const extras: TranscriptItem[] = [];
+    if (inFlight.reasoning) {
+      extras.push({
+        kind: 'reasoning',
+        id: `think-${inFlight.message_id}`,
+        text: inFlight.reasoning,
+        at: nowIso,
+        streaming: true,
+      });
+    }
+    if (inFlight.content) {
+      extras.push({
+        kind: 'assistant',
+        id: inFlight.message_id,
+        text: inFlight.content,
+        at: nowIso,
+        streaming: true,
+      });
+    }
+    return {
+      ...fresh,
+      plan: prev.plan,
+      telemetry: prev.telemetry,
+      seq: Math.max(fresh.seq, inFlight.head_seq, prev.seq),
+      items: [...fresh.items, ...extras, ...localPendingUsers],
+    };
+  }
+
+  if (prev.seq > fresh.seq) {
+    const activeStreamItems = prev.items.filter(
+      (x) => (x.kind === 'assistant' || x.kind === 'reasoning') && x.streaming,
+    );
+    if (activeStreamItems.length > 0) {
+      return {
+        ...fresh,
+        plan: prev.plan,
+        telemetry: prev.telemetry,
+        seq: prev.seq,
+        status: prev.status === 'running' ? 'running' : fresh.status,
+        items: [...fresh.items, ...activeStreamItems, ...localPendingUsers],
+      };
+    }
+  }
+
+  return {
+    ...fresh,
+    plan: prev.plan,
+    telemetry: prev.telemetry,
+    items: [...fresh.items, ...localPendingUsers],
+  };
 }
 
 /* ------------------------------------------------------------------ 增量 */
@@ -161,6 +252,10 @@ export function reduce(s: TranscriptState, e: AgentSessionEvent, now = Date.now(
     }
     case 'tool_call':
       closeReasoning();
+      /* 工具调用开始时闭合前一段仍在流式输出的助手气泡，避免工具后正文倒灌到工具前气泡 */
+      if (next.items.some((x) => x.kind === 'assistant' && x.streaming)) {
+        next.items = next.items.map((x) => (x.kind === 'assistant' && x.streaming ? { ...x, streaming: false } : x));
+      }
       patchTool(
         (t) => t.id === e.call_id,
         { status: 'running', risk: e.risk },

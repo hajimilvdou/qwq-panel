@@ -330,6 +330,7 @@ func wirePrerequisites(
 		DNSContexts:     hostauth.CertificateDNSContexts{Authority: authority},
 		CleanupContexts: hostauth.CertificateCleanupContexts{Authority: authority, DNS: dnsMgr},
 		Terms:           hostauth.CertificateTerms{Authority: authority},
+		HTTP01:          &controller.IngressHTTP01Presenter{Controller: c},
 		Client:          egressHTTP,
 		Clock:           c.Clock(),
 	})

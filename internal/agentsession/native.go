@@ -219,11 +219,12 @@ func systemText(cfg *nativeConfig) string {
 
 // Chat protocol types of the OpenAI-compatible endpoint.
 type chatMessage struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"content,omitempty"`
-	Name       string         `json:"name,omitempty"`
-	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Role             string         `json:"role"`
+	Content          string         `json:"content,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	Name             string         `json:"name,omitempty"`
+	ToolCalls        []chatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string         `json:"tool_call_id,omitempty"`
 }
 
 type chatToolCall struct {
@@ -345,7 +346,7 @@ func (p *openAIProvider) Complete(ctx context.Context, req ProviderRequest) (Pro
 	if err != nil {
 		return ProviderResponse{}, err
 	}
-	out := ProviderResponse{Content: msg.Content}
+	out := ProviderResponse{Content: msg.Content, ReasoningContent: msg.ReasoningContent}
 	for _, call := range msg.ToolCalls {
 		var args json.RawMessage
 		if call.Function.Arguments != "" {
@@ -366,7 +367,7 @@ func (c *NativeCore) complete(ctx context.Context, cfg *nativeConfig, apiKey []b
 		return chatMessage{}, problem.Wrap(err)
 	}
 	timeout := cfg.timeout()
-	if c.timeout > 0 && c.timeout < timeout {
+	if cfg.TimeoutSeconds == 0 && c.timeout > 0 {
 		timeout = c.timeout
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -608,7 +609,7 @@ func nativeEmit(emit Emit, names toolNames) LoopEmit {
 			}
 			return emit(Event{Type: EventMessageDelta, Delta: e.Delta})
 		case LoopEventAssistant:
-			out := Event{Type: EventMessageCompleted}
+			out := Event{Type: EventMessageCompleted, ReasoningContent: e.ReasoningContent}
 			if len(e.Calls) > 0 {
 				calls := make([]MessageToolCall, 0, len(e.Calls))
 				for _, call := range e.Calls {
@@ -833,7 +834,17 @@ func historyMessages(history []Message, names toolNames) []ModelMessage {
 	out := make([]ModelMessage, 0, len(history))
 	for _, msg := range history {
 		switch msg.Role {
-		case RoleUser, RoleSystem:
+		case RoleSystem:
+			if _, isErr := isPersistedErrorMessage(msg.Role, msg.ContentJSON); isErr {
+				continue
+			}
+			if msg.Content != "" {
+				out = append(out, ModelMessage{Role: msg.Role, Content: msg.Content})
+			}
+		case RoleUser:
+			if isSlashControlMessage(msg.Role, msg.Content) {
+				continue
+			}
 			if msg.Content != "" {
 				out = append(out, ModelMessage{Role: msg.Role, Content: msg.Content})
 			}
@@ -842,7 +853,7 @@ func historyMessages(history []Message, names toolNames) []ModelMessage {
 			if len(msg.ContentJSON) > 0 {
 				_ = json.Unmarshal(msg.ContentJSON, &ac)
 			}
-			m := ModelMessage{Role: RoleAssistant, Content: msg.Content}
+			m := ModelMessage{Role: RoleAssistant, Content: msg.Content, ReasoningContent: ac.ReasoningContent}
 			for _, call := range ac.ToolCalls {
 				m.ToolCalls = append(m.ToolCalls, ModelToolCall{
 					CallID: call.CallID, Name: names.name(call.Action), Arguments: call.Arguments,
@@ -857,10 +868,53 @@ func historyMessages(history []Message, names toolNames) []ModelMessage {
 			if tc.CallID == "" {
 				continue
 			}
-			out = append(out, ModelMessage{Role: RoleTool, ToolCallID: tc.CallID, Content: msg.Content})
+			out = append(out, ModelMessage{
+				Role:       RoleTool,
+				ToolCallID: tc.CallID,
+				Content:    resolveToolHistoryContent(msg.Content, tc.Result, MaxLoopToolBytes),
+			})
 		}
 	}
 	return out
+}
+
+// resolveToolHistoryContent recovers real tool JSON from content_json when
+// msg.Content was replaced by the >4096-byte placeholder in stream.go, so the
+// model sees full structured results (bounded to maxBytes on a UTF-8 boundary).
+func resolveToolHistoryContent(msgContent string, tcResult json.RawMessage, maxBytes int) string {
+	if maxBytes <= 0 {
+		maxBytes = MaxLoopToolBytes
+	}
+	raw := strings.TrimSpace(string(tcResult))
+	if len(raw) > 0 && raw != "null" {
+		if len(raw) > maxBytes {
+			return clipText(raw, maxBytes) + "\n...(truncated)"
+		}
+		return raw
+	}
+	if len(msgContent) > maxBytes {
+		return clipText(msgContent, maxBytes) + "\n...(truncated)"
+	}
+	return msgContent
+}
+
+// isSlashControlMessage excludes local panel slash commands from model context
+// so consecutive unanswered user rows do not trip strict model validators.
+func isSlashControlMessage(role, content string) bool {
+	if role != RoleUser {
+		return false
+	}
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "/") {
+		return false
+	}
+	cmd := strings.Fields(trimmed)[0]
+	switch strings.ToLower(cmd) {
+	case "/help", "/status", "/clear", "/compact", "/model", "/effort", "/mode":
+		return true
+	default:
+		return false
+	}
 }
 
 // buildChatMessages rebuilds the model context from the stored transcript. A
@@ -878,7 +932,12 @@ func buildChatMessages(history []Message, cfg *nativeConfig, names toolNames) []
 func toChatMessages(in []ModelMessage) []chatMessage {
 	out := make([]chatMessage, 0, len(in))
 	for _, msg := range in {
-		wire := chatMessage{Role: msg.Role, Content: msg.Content, ToolCallID: msg.ToolCallID}
+		wire := chatMessage{
+			Role:             msg.Role,
+			Content:          msg.Content,
+			ReasoningContent: msg.ReasoningContent,
+			ToolCallID:       msg.ToolCallID,
+		}
 		for _, call := range msg.ToolCalls {
 			tc := chatToolCall{ID: call.CallID, Type: "function"}
 			tc.Function.Name = call.Name

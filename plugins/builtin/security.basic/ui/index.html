@@ -118,8 +118,8 @@
               <option value="udp">UDP</option>
             </select>
           </label>
-          <label>目标端口 (1-65535)
-            <input id="fw-port" type="number" min="1" max="65535" placeholder="例如 443" />
+          <label>目标端口或端口段 (1-65535)
+            <input id="fw-port" type="text" placeholder="例如 443 或 20000-30000" autocomplete="off" />
           </label>
           <label>来源 IP / CIDR（留空表示全部）
             <input id="fw-saddr" type="text" placeholder="例如 203.0.113.0/24 或 留空" autocomplete="off" />
@@ -136,6 +136,9 @@
         </div>
         <div class="actions">
           <button id="fw-add-rule" class="btn ghost" type="button">+ 添加到待应用列表</button>
+          <button id="fw-preset-80" class="btn ghost sm" type="button">+ 放行 Web 80/TCP</button>
+          <button id="fw-preset-443" class="btn ghost sm" type="button">+ 放行 HTTPS 443/TCP</button>
+          <button id="fw-preset-443-udp" class="btn ghost sm" type="button">+ 放行 QUIC 443/UDP</button>
           <span id="fw-dirty-hint" class="muted" hidden>有未提交的本地规则修改，请点击上方「应用规则集」生效。</span>
         </div>
 

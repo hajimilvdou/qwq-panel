@@ -35,6 +35,7 @@ type panelAccessDTO struct {
 }
 
 type panelAccessUpdateRequest struct {
+	ListenHost              *string `json:"listen_host,omitempty"`
 	Port                    *int    `json:"port,omitempty"`
 	EntryPath               *string `json:"entry_path,omitempty"`
 	GenerateRandomEntryPath bool    `json:"generate_random_entry_path,omitempty"`
@@ -108,6 +109,7 @@ func (a *api) putSystemAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap, portChanged, err := a.d.Access.Update(r.Context(), panelaccess.UpdateInput{
+		ListenHost:              req.ListenHost,
 		Port:                    req.Port,
 		EntryPath:               req.EntryPath,
 		GenerateRandomEntryPath: req.GenerateRandomEntryPath,
@@ -118,6 +120,7 @@ func (a *api) putSystemAccess(w http.ResponseWriter, r *http.Request) {
 		ExpectedRevision:        req.ExpectedRevision,
 		AuditTx: func(ctx context.Context, tx *storage.Tx, next panelaccess.Snapshot, changed bool) error {
 			details, _ := json.Marshal(map[string]any{
+				"listen_host":       next.ListenHost,
 				"port":              next.Port,
 				"port_changed":      changed,
 				"entry_gate_active": next.EntryGateActive(),
@@ -144,11 +147,12 @@ func (a *api) putSystemAccess(w http.ResponseWriter, r *http.Request) {
 	// Keep the administrator's current browser tab authorized immediately when
 	// a secret entry path is configured or rotated (including bare-IP rescue).
 	if rawEntry := config.NormalizeEntryPath(snap.EntryPath); rawEntry != "" {
-		secure := snap.TLSMode != "" || r.TLS != nil
+		secure := r.TLS != nil || (snap.TLSMode != "" && snap.TLSMode != config.TLSProxy)
 		snap.SetGateCookieForPath(w, rawEntry, secure)
 	}
 	a.d.Logger.InfoContext(r.Context(), "panel access settings updated",
 		"actor", act.ID,
+		"listen_host", snap.ListenHost,
 		"port", snap.Port,
 		"port_changed", portChanged,
 		"entry_gate_active", snap.EntryGateActive(),

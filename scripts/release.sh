@@ -88,13 +88,15 @@ GOARCH=amd64 go-licenses save ./cmd/qwq ./cmd/qwq-privileged ./cmd/qwq-capabilit
   --ignore github.com/qwq-panel/qwq --save_path "$W/THIRD_PARTY_LICENSES"
 export QWQ_THIRD_PARTY_DIR=$W/THIRD_PARTY_LICENSES
 
-# 下载并按锁定 SHA-256 校验官方 Xray-core v26.11.9 二进制（用于 core.xray 独立插件包）。
-# 结果缓存在 .cache/core-xray/v26.11.9，保证 release.yml 两次构建比对字节级一致且无需重复下载。
-ensure_pinned_xray_binary() {
-  local arch=$1 dest=$2
-  local cache_dir="${QWQ_XRAY_CACHE_DIR:-$ROOT/.cache/core-xray/v26.11.9}"
-  mkdir -p "$cache_dir"
-  local cached="$cache_dir/xray-linux-$arch"
+# 下载并按锁定 SHA-256 校验官方 Xray-core v26.11.9 二进制与 geoip.dat/geosite.dat 资产（用于 core.xray 独立插件包）。
+# 结果缓存在 .cache/core-xray/v26.11.9/<arch>/，保证 release.yml 两次构建比对字节级一致且无需重复下载。
+ensure_pinned_xray_assets() {
+  local arch=$1 dest_bin_dir=$2
+  local cache_dir="${QWQ_XRAY_CACHE_DIR:-$ROOT/.cache/core-xray/v26.11.9}/$arch"
+  mkdir -p "$cache_dir" "$dest_bin_dir"
+  local cached_bin="$cache_dir/xray"
+  local cached_geoip="$cache_dir/geoip.dat"
+  local cached_geosite="$cache_dir/geosite.dat"
   local zip_url zip_sha bin_sha
   case "$arch" in
     amd64)
@@ -112,11 +114,13 @@ ensure_pinned_xray_binary() {
       return 1
       ;;
   esac
-  python3 - "$cached" "$zip_url" "$zip_sha" "$bin_sha" <<'PY'
+  python3 - "$cached_bin" "$cached_geoip" "$cached_geosite" "$zip_url" "$zip_sha" "$bin_sha" <<'PY'
 import hashlib, io, os, pathlib, sys, time, urllib.request, zipfile
 
-cached = pathlib.Path(sys.argv[1])
-zip_url, want_zip_sha, want_bin_sha = sys.argv[2:5]
+cached_bin = pathlib.Path(sys.argv[1])
+cached_geoip = pathlib.Path(sys.argv[2])
+cached_geosite = pathlib.Path(sys.argv[3])
+zip_url, want_zip_sha, want_bin_sha = sys.argv[4:7]
 
 def sha256_file(p: pathlib.Path) -> str:
     h = hashlib.sha256()
@@ -125,7 +129,14 @@ def sha256_file(p: pathlib.Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-if cached.is_file() and sha256_file(cached) == want_bin_sha:
+if (
+    cached_bin.is_file()
+    and sha256_file(cached_bin) == want_bin_sha
+    and cached_geoip.is_file()
+    and cached_geoip.stat().st_size > 0
+    and cached_geosite.is_file()
+    and cached_geosite.stat().st_size > 0
+):
     sys.exit(0)
 
 last_err = None
@@ -148,18 +159,28 @@ if got_zip != want_zip_sha:
 
 with zipfile.ZipFile(io.BytesIO(data)) as zf:
     xray_bytes = zf.read("xray")
+    geoip_bytes = zf.read("geoip.dat")
+    geosite_bytes = zf.read("geosite.dat")
 
 got_bin = hashlib.sha256(xray_bytes).hexdigest()
 if got_bin != want_bin_sha:
     raise SystemExit(f"Xray 二进制摘要不匹配: got={got_bin} want={want_bin_sha}")
 
-tmp = cached.with_suffix(".tmp")
-tmp.write_bytes(xray_bytes)
-os.chmod(tmp, 0o755)
-tmp.replace(cached)
+for target, payload, mode in (
+    (cached_bin, xray_bytes, 0o755),
+    (cached_geoip, geoip_bytes, 0o644),
+    (cached_geosite, geosite_bytes, 0o644),
+):
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_bytes(payload)
+    os.chmod(tmp, mode)
+    tmp.replace(target)
 PY
-  cp "$cached" "$dest"
-  chmod 0755 "$dest"
+  cp "$cached_bin" "$dest_bin_dir/xray"
+  cp "$cached_geoip" "$dest_bin_dir/geoip.dat"
+  cp "$cached_geosite" "$dest_bin_dir/geosite.dat"
+  chmod 0755 "$dest_bin_dir/xray"
+  chmod 0644 "$dest_bin_dir/geoip.dat" "$dest_bin_dir/geosite.dat"
 }
 
 # 打包单个官方插件：pack_official_plugin <src_dir> <arch> <out_qwqpkg>
@@ -173,7 +194,7 @@ pack_official_plugin() {
   GOARCH=$arch go build -trimpath -ldflags "$plugin_ldf" -o "$stage/bin/plugin" "./$src_dir"
   chmod 0755 "$stage/bin/plugin"
   if [[ "$src_dir" == "plugins/builtin/core.xray" ]]; then
-    ensure_pinned_xray_binary "$arch" "$stage/bin/xray"
+    ensure_pinned_xray_assets "$arch" "$stage/bin"
   fi
   for sub in schemas ui attestations LICENSES; do
     if [[ -d "$src_dir/$sub" ]]; then
@@ -192,17 +213,26 @@ PY
   "$W/qwqctl" pack -src "$stage" -out "$out_pkg" -key "$PLUGIN_PRIV" >/dev/null
   "$W/qwqctl" verify -trust "$PLUGIN_PUB" "$out_pkg" >/dev/null
   if [[ "$src_dir" == "plugins/builtin/core.xray" ]]; then
-    tar -xOzf "$out_pkg" manifest.json | python3 - "$arch" <<'PY'
-import json, sys
-arch = sys.argv[1]
+    python3 - "$out_pkg" "$arch" <<'PY'
+import json, sys, tarfile
+pkg_path, arch = sys.argv[1:3]
 want = {
     "amd64": "sha256:e87bce586acdb9136aa5b1f1d9c8db9f1ea1d145b6d86368c7f6f662f9f6a66d",
     "arm64": "sha256:c2d1e66a130556d32089adcf38202fcb6f9027e41fb456cc2cda9a5fabdc093a",
 }[arch]
-m = json.load(sys.stdin)
-got = m.get("files", {}).get("bin/xray")
+with tarfile.open(pkg_path, "r:gz") as tf:
+    member = tf.extractfile("manifest.json")
+    if member is None:
+        raise SystemExit(f"core.xray({arch}) 打包校验失败: 缺少 manifest.json")
+    m = json.load(member)
+files = m.get("files", {})
+got = files.get("bin/xray")
 if got != want:
     raise SystemExit(f"core.xray({arch}) 打包校验失败: bin/xray={got!r}, want={want!r}")
+for asset in ("bin/geoip.dat", "bin/geosite.dat"):
+    digest = files.get(asset, "")
+    if not isinstance(digest, str) or not digest.startswith("sha256:") or len(digest) < 71:
+        raise SystemExit(f"core.xray({arch}) 缺少必要路由资产: {asset}={digest!r}")
 PY
   fi
 }

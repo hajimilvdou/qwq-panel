@@ -57,29 +57,26 @@ func validateExportPath(raw, dataDir string) error {
 	if !filepath.IsAbs(clean) {
 		return pluginsdk.Errorf("INVALID_ARGUMENT", "export_config_path 必须为绝对路径")
 	}
-	allowed := []string{"/etc/caddy/", "/etc/nginx/", "/var/lib/qwq/"}
 	if dataDir != "" {
-		allowed = append(allowed, filepath.Clean(dataDir)+string(filepath.Separator))
-	}
-	for _, prefix := range allowed {
+		prefix := filepath.Clean(dataDir) + string(filepath.Separator)
 		if strings.HasPrefix(clean, prefix) {
 			return nil
 		}
 	}
-	return pluginsdk.Errorf("INVALID_ARGUMENT", "export_config_path 仅允许写入 /etc/caddy、/etc/nginx、/var/lib/qwq 或插件数据目录")
+	return pluginsdk.Errorf("INVALID_ARGUMENT", "受沙箱 ProtectSystem=strict 隔离保护，export_config_path 仅允许写入当前插件数据目录（外部 Nginx/Caddy 请在配置预览页一键复制）")
 }
 
 func parseConfig(raw []byte, dataDir string) (pluginConfig, []netip.Prefix, error) {
 	cfg := pluginConfig{PreferredEngine: "builtin-go"}
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return cfg, nil, nil
-	}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return cfg, nil, pluginsdk.Errorf("INVALID_ARGUMENT", "解析 web.ingress 配置失败: %s", err.Error())
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return cfg, nil, pluginsdk.Errorf("INVALID_ARGUMENT", "解析 web.ingress 配置失败: %s", err.Error())
+		}
 	}
 	if cfg.PreferredEngine == "" {
 		cfg.PreferredEngine = "builtin-go"
 	}
+	cfg.ListenAddr, cfg.HTTPSListenAddr = NormalizeIngressListenAddrs(cfg.ListenAddr, cfg.HTTPSListenAddr)
 	if err := validateExportPath(cfg.ExportConfigPath, dataDir); err != nil {
 		return cfg, nil, err
 	}
@@ -128,39 +125,36 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 		now:          nowFn,
 	}
 	if addr := strings.TrimSpace(cfg.ListenAddr); addr != "" {
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			_ = st.Close()
-			return nil, pluginsdk.Errorf("FAILED_PRECONDITION", "内置反代监听 %s 失败: %s", addr, err.Error())
+		ln, lerr := net.Listen("tcp", addr)
+		if lerr != nil {
+			inst.httpListenErr = fmt.Sprintf("HTTP 监听 %s 失败: %s", addr, lerr.Error())
+		} else {
+			srv := &http.Server{
+				Handler:           proxy,
+				ReadHeaderTimeout: 10 * time.Second,
+				IdleTimeout:       60 * time.Second,
+			}
+			inst.server = srv
+			inst.boundAddr = ln.Addr().String()
+			go func() { _ = srv.Serve(ln) }()
 		}
-		srv := &http.Server{
-			Handler:           proxy,
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       60 * time.Second,
-		}
-		inst.server = srv
-		inst.boundAddr = ln.Addr().String()
-		go func() { _ = srv.Serve(ln) }()
 	}
 	if httpsAddr := strings.TrimSpace(cfg.HTTPSListenAddr); httpsAddr != "" {
-		rawLn, err := net.Listen("tcp", httpsAddr)
-		if err != nil {
-			if inst.server != nil {
-				_ = inst.server.Close()
+		rawLn, lerr := net.Listen("tcp", httpsAddr)
+		if lerr != nil {
+			inst.httpsListenErr = fmt.Sprintf("HTTPS 监听 %s 失败: %s", httpsAddr, lerr.Error())
+		} else {
+			tlsLn := tls.NewListener(rawLn, sni.TLSConfig())
+			httpsSrv := &http.Server{
+				Handler:           proxy,
+				ReadHeaderTimeout: 10 * time.Second,
+				IdleTimeout:       60 * time.Second,
 			}
-			_ = st.Close()
-			return nil, pluginsdk.Errorf("FAILED_PRECONDITION", "内置反代 HTTPS 监听 %s 失败: %s", httpsAddr, err.Error())
+			inst.httpsServer = httpsSrv
+			inst.httpsBoundAddr = rawLn.Addr().String()
+			sni.SetHTTPSListenerActive(true)
+			go func() { _ = httpsSrv.Serve(tlsLn) }()
 		}
-		tlsLn := tls.NewListener(rawLn, sni.TLSConfig())
-		httpsSrv := &http.Server{
-			Handler:           proxy,
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       60 * time.Second,
-		}
-		inst.httpsServer = httpsSrv
-		inst.httpsBoundAddr = rawLn.Addr().String()
-		sni.SetHTTPSListenerActive(true)
-		go func() { _ = httpsSrv.Serve(tlsLn) }()
 	}
 	for _, op := range []string{
 		"ingress.stat.sites",
@@ -175,6 +169,8 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 		"ingress.upstream.probe",
 		"ingress.tls.reload",
 		"ingress.tls.inspect",
+		"ingress.acme.present",
+		"ingress.acme.cleanup",
 	} {
 		opName := op
 		inst.HandleInvoke(opName, func(c context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
@@ -245,8 +241,10 @@ type instance struct {
 	sni            *SNICertStore
 	server         *http.Server
 	boundAddr      string
+	httpListenErr  string
 	httpsServer    *http.Server
 	httpsBoundAddr string
+	httpsListenErr string
 	now            func() time.Time
 }
 
@@ -266,6 +264,12 @@ func (i *instance) currentHTTPSBoundAddr() string {
 	i.cfgMu.RLock()
 	defer i.cfgMu.RUnlock()
 	return i.httpsBoundAddr
+}
+
+func (i *instance) currentListenErrors() (httpErr, httpsErr string) {
+	i.cfgMu.RLock()
+	defer i.cfgMu.RUnlock()
+	return i.httpListenErr, i.httpsListenErr
 }
 
 func (i *instance) Deactivate(ctx context.Context) error {
@@ -317,8 +321,11 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 	var ln, httpsLn net.Listener
 	var newBound, newHTTPSBound string
 
+	needHTTPChange := newAddr != oldAddr || (newAddr != "" && i.server == nil)
+	needHTTPSChange := newHTTPSAddr != oldHTTPSAddr || (newHTTPSAddr != "" && i.httpsServer == nil)
+
 	// 两阶段切换：先完成所有需要变更的监听绑定，任一失败即关闭已打开的新监听且不改动旧字段。
-	if newAddr != oldAddr && newAddr != "" {
+	if needHTTPChange && newAddr != "" {
 		ln, err = net.Listen("tcp", newAddr)
 		if err != nil {
 			i.cfgMu.Unlock()
@@ -331,7 +338,7 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 		}
 		newBound = ln.Addr().String()
 	}
-	if newHTTPSAddr != oldHTTPSAddr && newHTTPSAddr != "" {
+	if needHTTPSChange && newHTTPSAddr != "" {
 		rawLn, lerr := net.Listen("tcp", newHTTPSAddr)
 		if lerr != nil {
 			if ln != nil {
@@ -349,15 +356,17 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 		newHTTPSBound = rawLn.Addr().String()
 	}
 
-	if newAddr != oldAddr {
+	if needHTTPChange {
 		oldSrv = i.server
 		i.server = newSrv
 		i.boundAddr = newBound
+		i.httpListenErr = ""
 	}
-	if newHTTPSAddr != oldHTTPSAddr {
+	if needHTTPSChange {
 		oldHTTPSSrv = i.httpsServer
 		i.httpsServer = newHTTPSSrv
 		i.httpsBoundAddr = newHTTPSBound
+		i.httpsListenErr = ""
 		if i.sni != nil {
 			i.sni.SetHTTPSListenerActive(newHTTPSSrv != nil)
 		}
@@ -416,6 +425,10 @@ func (i *instance) Invoke(ctx context.Context, req pluginsdk.Request) (pluginsdk
 		return i.handleTLSReload(ctx, req.Payload)
 	case "ingress.tls.inspect":
 		return i.handleTLSInspect(ctx, req.Payload)
+	case "ingress.acme.present":
+		return i.handleACMEPresent(ctx, req.Payload)
+	case "ingress.acme.cleanup":
+		return i.handleACMECleanup(ctx, req.Payload)
 	default:
 		return pluginsdk.Response{}, pluginsdk.Errorf("NOT_FOUND", "未知操作: %s", req.Operation)
 	}
@@ -496,13 +509,22 @@ func (i *instance) handleOverview(ctx context.Context) (pluginsdk.Response, erro
 	if err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
 	}
+	cfg := i.currentConfig()
+	boundAddr := i.currentBoundAddr()
+	httpsBoundAddr := i.currentHTTPSBoundAddr()
+	httpErr, httpsErr := i.currentListenErrors()
 	return jsonResp(map[string]any{
-		"backend":          detectBackends(i.currentConfig().PreferredEngine),
-		"bound_addr":       i.currentBoundAddr(),
-		"https_bound_addr": i.currentHTTPSBoundAddr(),
-		"active_routes":    i.proxy.ActiveCount(),
-		"sites":            sites,
-		"snapshots":        snaps,
+		"backend":                      detectBackends(cfg.PreferredEngine),
+		"running":                      boundAddr != "" || httpsBoundAddr != "",
+		"bound_addr":                   boundAddr,
+		"https_bound_addr":             httpsBoundAddr,
+		"configured_listen_addr":       cfg.ListenAddr,
+		"configured_https_listen_addr": cfg.HTTPSListenAddr,
+		"http_listen_error":            httpErr,
+		"https_listen_error":           httpsErr,
+		"active_routes":                i.proxy.ActiveCount(),
+		"sites":                        sites,
+		"snapshots":                    snaps,
 	})
 }
 
@@ -757,6 +779,49 @@ func (i *instance) handleTLSInspect(_ context.Context, payload []byte) (pluginsd
 	}
 	obs := i.sni.InspectBinding(req.BindingRef, i.currentHTTPSBoundAddr())
 	return jsonResp(obs)
+}
+
+func (i *instance) handleACMEPresent(_ context.Context, payload []byte) (pluginsdk.Response, error) {
+	var req struct {
+		Token      string `json:"token"`
+		KeyAuth    string `json:"key_auth"`
+		TTLSeconds int    `json:"ttl_seconds"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "ACME HTTP-01 请求格式无效: %s", err.Error())
+	}
+	boundAddr := i.currentBoundAddr()
+	if boundAddr == "" {
+		httpErr, _ := i.currentListenErrors()
+		detail := "请先在 web.ingress 插件配置中启用 HTTP 80 端口监听（或释放被占用的 80 端口）"
+		if httpErr != "" {
+			detail = httpErr
+		}
+		return pluginsdk.Response{}, pluginsdk.Errorf("FAILED_PRECONDITION", "内置反代 HTTP 监听未就绪，无法执行 HTTP-01 验证：%s", detail)
+	}
+	ttl := time.Duration(req.TTLSeconds) * time.Second
+	if err := i.proxy.ACMEStore().Present(req.Token, req.KeyAuth, ttl); err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
+	}
+	return jsonResp(map[string]any{
+		"ok":         true,
+		"token":      strings.TrimSpace(req.Token),
+		"bound_addr": boundAddr,
+	})
+}
+
+func (i *instance) handleACMECleanup(_ context.Context, payload []byte) (pluginsdk.Response, error) {
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil || strings.TrimSpace(req.Token) == "" {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "缺少待清理的 token")
+	}
+	i.proxy.ACMEStore().CleanUp(req.Token)
+	return jsonResp(map[string]any{
+		"ok":    true,
+		"token": strings.TrimSpace(req.Token),
+	})
 }
 
 func (i *instance) handleUpstreamProbe(ctx context.Context, payload []byte) (pluginsdk.Response, error) {

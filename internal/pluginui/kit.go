@@ -3,12 +3,11 @@
 package pluginui
 
 import (
-	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"net/http"
-	"path"
 	"strings"
-	"time"
 )
 
 //go:embed kit/v1/kit.js kit/v1/kit-base.css
@@ -34,11 +33,28 @@ func serveSharedKit(w http.ResponseWriter, req *http.Request) bool {
 		http.NotFound(w, req)
 		return true
 	}
+	sum := sha256.Sum256(data)
+	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
+
 	header := w.Header()
 	header.Set("Content-Type", contentType(name))
+	header.Set("ETag", etag)
 	header.Set("X-Content-Type-Options", "nosniff")
-	header.Set("Cache-Control", "public, max-age=31536000, immutable")
+	header.Set("Cache-Control", "public, max-age=0, must-revalidate")
 	header.Set("Content-Security-Policy", csp(nil))
-	http.ServeContent(w, req, path.Base(name), time.Time{}, bytes.NewReader(data))
+
+	if match := req.Header.Get("If-None-Match"); match != "" {
+		for _, part := range strings.Split(match, ",") {
+			tag := strings.TrimSpace(part)
+			if tag == etag || tag == "W/"+etag || tag == "*" {
+				w.WriteHeader(http.StatusNotModified)
+				return true
+			}
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+	if req.Method != http.MethodHead {
+		_, _ = w.Write(data)
+	}
 	return true
 }

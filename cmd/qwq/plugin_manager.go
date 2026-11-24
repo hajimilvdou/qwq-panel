@@ -55,6 +55,8 @@ type pluginUpdater interface {
 	AllVersions() ([]updater.Version, error)
 	Remove(ctx context.Context, req updater.RemoveRequest) error
 	Dependents(pluginID string) ([]string, error)
+	Enabled(ctx context.Context, pluginID string) (bool, error)
+	UnitRunning(pluginID string) bool
 	SetEnabled(ctx context.Context, pluginID string, enabled bool) error
 	EnsureActive(ctx context.Context, pluginID string) error
 	Logs(ctx context.Context, pluginID, cursor, stream string, limit int) (sandbox.LogResult, error)
@@ -64,10 +66,10 @@ type pluginUpdater interface {
 // value is Controller.UpdatePlugin; the adapter tests replace it.
 type pluginUpdateFunc func(context.Context, updater.UpdateRequest) (*updater.UpdateResult, error)
 
-// builtinPublisher is the publisher id of the host's own release keys
-// (ADR-0005). A plugin signed by that publisher is built in: shipped with the
-// host rather than installed from the marketplace.
-const builtinPublisherID = "qwq-builtin"
+// mandatoryBuiltinPluginID is the sole mandatory base plugin bundled with the
+// host that cannot be uninstalled from the Web UI. All 10 optional official
+// plugins installed via the Official Store remain uninstallable.
+const mandatoryBuiltinPluginID = "security.basic"
 
 // installDiskReserve is the free space the plugins filesystem must keep
 // beyond a package's unpacked size before an install is accepted. It matches
@@ -93,6 +95,9 @@ type pluginManager struct {
 	control pluginControl
 	// memory reads the cgroup use of one instance; nil without a runtime.
 	memory func(pluginID string) (uint64, error)
+	// syncPublicRoutes refreshes /p/{plugin_id}/... public routes after plugin
+	// lifecycle or enablement changes.
+	syncPublicRoutes func()
 	// 配置写入前的真实主体/绑定守卫，由 Controller 构造。
 	validateConfig func(context.Context, api.ApplyPluginConfigRequest) error
 }
@@ -135,6 +140,7 @@ func newPluginManager(c *controller.Controller, pluginsRoot string, logger *slog
 			m.instances = sup.Instances
 			m.control = sup
 		}
+		m.syncPublicRoutes = rt.SyncPublicRoutes
 	}
 	m.memory = up.MemoryCurrent
 	// The updater recovered its sagas before the adapter is built, so the
@@ -228,7 +234,12 @@ func (m *pluginManager) buildPlugin(pluginID string, versions []updater.Version)
 	if cfg, ok := m.updater.ActiveConfig(pluginID); ok {
 		p.ConfigRevision = cfg.Revision
 	}
-	p.Runtime = m.runtimeState(pluginID)
+	enabled := true
+	if en, err := m.updater.Enabled(context.Background(), pluginID); err == nil {
+		enabled = en
+	}
+	p.Enabled = &enabled
+	p.Runtime = m.runtimeState(pluginID, enabled, p.Startup)
 	return p
 }
 
@@ -240,7 +251,8 @@ func (m *pluginManager) fillMetadata(p *api.Plugin, manifest *manifest.Manifest)
 	p.Homepage = manifest.Homepage
 	p.License = manifest.License
 	p.HasConfig = manifest.Config.Schema != ""
-	p.Builtin = manifest.Publisher.ID == builtinPublisherID
+	p.Builtin = p.PluginID == mandatoryBuiltinPluginID
+	p.Startup = manifest.Lifecycle.Startup
 	for _, c := range manifest.Capabilities {
 		p.Capabilities = append(p.Capabilities, api.PluginCapability{
 			Name: c.Name, Scope: c.Scope, Reason: c.Reason,
@@ -275,13 +287,15 @@ func (m *pluginManager) fillMetadata(p *api.Plugin, manifest *manifest.Manifest)
 	}
 }
 
-// runtimeState maps the in-memory supervisor snapshot onto the plugin runtime
-// schema (GAPS gap 3: the list answers from memory, never from systemd). A
-// plugin with no live instance reports stopped; a host without a runtime
-// reports nothing.
-func (m *pluginManager) runtimeState(pluginID string) *api.PluginRuntime {
+// runtimeState unifies the supervisor snapshot, updater runtime handles,
+// enablement flag, and on-demand startup semantics so newly installed or
+// socket-activated plugins are never falsely reported as stopped.
+func (m *pluginManager) runtimeState(pluginID string, enabled bool, startup string) *api.PluginRuntime {
 	if m.instances == nil {
 		return nil
+	}
+	if !enabled {
+		return &api.PluginRuntime{State: "stopped"}
 	}
 	active, hasActive := m.updater.Active(pluginID)
 	for _, st := range m.instances() {
@@ -306,14 +320,19 @@ func (m *pluginManager) runtimeState(pluginID string) *api.PluginRuntime {
 		m.fillMemory(out, pluginID, active, hasActive)
 		return out
 	}
-	// No live instance: the version lifecycle tells whether the host is still
-	// bringing it up or has put it aside (GAPS gap 7).
 	if hasActive {
 		switch active.Status {
 		case updater.VersionStaged, updater.VersionStarting, updater.VersionCandidate:
 			return &api.PluginRuntime{State: "starting"}
 		case updater.VersionQuarantined, updater.VersionRejected:
 			return &api.PluginRuntime{State: "quarantined", Detail: active.RejectedReason}
+		case updater.VersionActive:
+			out := &api.PluginRuntime{State: "running"}
+			if !m.updater.UnitRunning(pluginID) && startup == "on_demand" {
+				out.State = "standby"
+			}
+			m.fillMemory(out, pluginID, active, hasActive)
+			return out
 		}
 	}
 	return &api.PluginRuntime{State: "stopped"}
@@ -359,7 +378,13 @@ func (m *pluginManager) Logs(ctx context.Context, pluginID, cursor, stream strin
 
 // SetEnabled persists the enablement flag and reconciles the runtime with it.
 func (m *pluginManager) SetEnabled(ctx context.Context, pluginID string, enabled bool) error {
-	return m.updater.SetEnabled(ctx, pluginID, enabled)
+	if err := m.updater.SetEnabled(ctx, pluginID, enabled); err != nil {
+		return err
+	}
+	if m.syncPublicRoutes != nil {
+		m.syncPublicRoutes()
+	}
+	return nil
 }
 
 // Dependents lists the plugins that still require pluginID.
@@ -430,6 +455,9 @@ func (m *pluginManager) syncCatalog(ctx context.Context) {
 				m.catalog.RemovePlugin(e.PluginID)
 			}
 		}
+	}
+	if m.syncPublicRoutes != nil {
+		m.syncPublicRoutes()
 	}
 }
 

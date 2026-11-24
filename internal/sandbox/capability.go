@@ -85,7 +85,7 @@ func (c *CapabilityClient) Call(ctx context.Context, request CapabilityRequest) 
 // CapabilityVerbAllowed 对 helper 的全部动作实行精确白名单。
 func CapabilityVerbAllowed(op string) bool {
 	switch op {
-	case "ping", "firewall.get", "firewall.apply", "firewall.reset", "firewall.detect", "firewall.restore",
+	case "ping", "firewall.get", "firewall.apply", "firewall.reset", "firewall.detect", "firewall.restore", "firewall.sync-panel-port",
 		"sshd.get-effective", "sshd.get-dropin", "sshd.write-dropin", "sshd.remove-dropin", "sshd.recover-dropin", "sshd.validate", "sshd.reload-socket", "sshd.verify-port",
 		"account.list-keys", "account.import-key", "account.remove-key", "account.generate-key", "account.set-password",
 		"ban.scan", "ban.apply", "ban.remove", "ban.list",

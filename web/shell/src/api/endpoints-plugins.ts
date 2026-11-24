@@ -25,13 +25,13 @@ import type {
 const enc = encodeURIComponent;
 type Mutating = Operation | OperationOutcome;
 
-/** 判断插件是否已处于可用运行态（running 或无 runtime 报告时的 ACTIVE） */
+/** 判断插件是否已处于可用运行态（含 running / standby 按需待命 / starting，已禁用则 false） */
 export function isPluginActiveReady(plugin: Plugin | undefined): boolean {
   if (!plugin) return false;
+  if (plugin.enabled === false) return false;
+  if (plugin.active_status && plugin.active_status !== 'ACTIVE') return false;
   const runtimeState = plugin.runtime?.state;
-  if (runtimeState === 'running') return true;
-  if (runtimeState && runtimeState !== 'unknown') return false;
-  return plugin.active_status === 'ACTIVE';
+  return runtimeState === undefined || runtimeState === 'running' || runtimeState === 'standby' || runtimeState === 'starting';
 }
 
 export const plugins = {
@@ -50,6 +50,8 @@ export const plugins = {
     http.post<PluginPackageUpload>('/api/v1/plugin-packages/fetch', body, { signal }).then((r) => r.data),
   inspect: (uploadId: string) =>
     http.get<PluginPackageInspection>(`/api/v1/plugin-packages/${enc(uploadId)}`).then((r) => r.data),
+  discardUpload: (uploadId: string) =>
+    http.del<void>(`/api/v1/plugin-packages/${enc(uploadId)}`).then(() => undefined),
   trustKeys: () => http.get<PluginTrustKeyList>('/api/v1/plugin-trust-keys').then((r) => r.data),
   addTrustKey: (body: PluginTrustKeyCreateRequest, mfa?: string) =>
     http
@@ -107,7 +109,7 @@ export const plugins = {
   invoke: (
     p: { pluginId: string; operation: string; placement: 'node' | 'controller'; nodeId?: string; instanceId?: string },
     payload: Record<string, unknown>,
-    opts: { key?: string; planId?: string; subject?: string; expectedRevision?: string; signal?: AbortSignal } = {},
+    opts: { key?: string; planId?: string; subject?: string; expectedRevision?: string; signal?: AbortSignal; headers?: Record<string, string> } = {},
   ): Promise<OpResult> => {
     const path =
       p.placement === 'controller'
@@ -117,6 +119,6 @@ export const plugins = {
     if (opts.planId) body.plan_id = opts.planId;
     if (opts.subject) body.subject = opts.subject;
     if (opts.expectedRevision) body.expected_revision = opts.expectedRevision;
-    return http.post<Mutating>(path, body, { idempotency: opts.key, signal: opts.signal }).then(toOpResult);
+    return http.post<Mutating>(path, body, { idempotency: opts.key, signal: opts.signal, headers: opts.headers }).then(toOpResult);
   },
 };

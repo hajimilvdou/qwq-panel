@@ -452,8 +452,8 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 				devPrompt += customSkills
 			}
 		}
-		eff, _, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort)
-		if IsReasoningEffortDisabled(eff) {
+		eff, matched, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort)
+		if (strings.TrimSpace(cfg.ReasoningEffort) == "" && !matched) || IsReasoningEffortDisabled(eff) {
 			eff = ""
 		}
 		startParams := map[string]any{
@@ -528,7 +528,7 @@ func (c *CodexCore) runExecJSONL(ctx context.Context, cfg CodexConfig, turn Turn
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
-	if eff, _, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort); !IsReasoningEffortDisabled(eff) {
+	if eff, matched, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort); (strings.TrimSpace(cfg.ReasoningEffort) != "" || matched) && !IsReasoningEffortDisabled(eff) {
 		args = append(args, "-c", FormatCodexEffortConfigOverride(eff))
 	}
 	args = AppendPosixPromptArg(args, latestUserMessage(turn.Messages))

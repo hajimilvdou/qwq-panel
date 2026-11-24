@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,7 +79,13 @@ previously issued, unused link. Exit status: 0 issued, 1 error, 2 usage,
 		return 1
 	}
 	if initialized {
-		fmt.Fprintln(stderr, "qwq setup-token: 已初始化；忘记密码请用 `sudo qwq recover`")
+		fmt.Fprintln(stderr, "qwq setup-token: 已初始化；忘记密码请用 `sudo qwq recover`，查看或重置面板入口请用 `sudo qwq access show`")
+		host, portStr, perr := net.SplitHostPort(listenAddr)
+		if perr == nil {
+			if p, aerr := strconv.Atoi(portStr); aerr == nil && p > 0 {
+				fmt.Fprint(stderr, formatAccessHelp(host, p, effectiveEntryPath, panelDomain, cfg.HTTP.TLS.Mode))
+			}
+		}
 		return exitInitialized
 	}
 	token, _, err := local.Identity.NewSetupToken(ctx)

@@ -13,14 +13,15 @@
     password?: string;
     valid?: boolean;
     label?: string;
+    username?: string;
     serverError?: string;
     disabled?: boolean;
   }
-  let { password = $bindable(''), valid = $bindable(false), label = '密码', serverError, disabled = false }: Props = $props();
+  let { password = $bindable(''), valid = $bindable(false), label = '密码', username = '', serverError, disabled = false }: Props = $props();
 
   let confirm = $state('');
   let touched = $state(false);
-  const check = $derived(checkPassword(password));
+  const check = $derived(checkPassword(password, username));
   const mismatch = $derived(touched && confirm.length > 0 && confirm !== password);
 
   $effect(() => {

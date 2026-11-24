@@ -404,7 +404,7 @@ func NewProbeStore() *ProbeStore {
 			StatusBannerLevel:       "ok",
 			StatusBannerText:        "所有监控节点与拨测链路运行正常",
 			BindingTrack:            "auto",
-			BuiltinListenAddr:       "127.0.0.1:19080",
+			BuiltinListenAddr:       "127.0.0.1:8443",
 			TrustedProxies:          []string{"127.0.0.1/32", "::1/128"},
 			ActiveThemeID:           BuiltinThemeClassic,
 			Appearance:              DefaultAppearanceConfig(),

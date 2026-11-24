@@ -6,6 +6,7 @@
  * 否则按 plugin_id 哈希取分类色（稳定、不随顺序变化）。
  * ========================================================================== */
 import { plugins as pluginsApi } from '$api/endpoints';
+import { isPluginActiveReady } from '$api/endpoints-plugins';
 import type { Plugin } from '$api/types';
 import { hashIndex } from '$lib/format';
 import type { ResourceOptions } from '$lib/resource.svelte';
@@ -61,7 +62,7 @@ export function pluginLook(p: Plugin): { color: CategoryColor; icon: IconName } 
 export function pluginNav(list: readonly Plugin[]): NavItem[] {
   const out: NavItem[] = [];
   for (const p of list) {
-    if (p.runtime && p.runtime.state !== 'running' && p.runtime.state !== 'starting') continue;
+    if (!isPluginActiveReady(p)) continue;
     const { color, icon } = pluginLook(p);
     for (const r of p.ui?.routes ?? []) {
       if (!r.nav) continue;

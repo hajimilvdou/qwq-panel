@@ -30,7 +30,7 @@ const (
 	maxFetchURLLength  = 2048
 	maxFetchRedirects  = 5
 	fetchDownloadLimit = gateway.MaxPackageBytes // 64 MiB
-	fetchTimeout       = 60 * time.Second
+	fetchTimeout       = 5 * time.Minute
 )
 
 var sha256HexPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)

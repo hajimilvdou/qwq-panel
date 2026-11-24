@@ -117,6 +117,8 @@ type pluginDTO struct {
 	Homepage     string                `json:"homepage,omitempty"`
 	License      string                `json:"license,omitempty"`
 	Builtin      bool                  `json:"builtin,omitempty"`
+	Enabled      bool                  `json:"enabled"`
+	Startup      string                `json:"startup,omitempty"`
 	HasConfig    bool                  `json:"has_config"`
 	Capabilities []pluginCapabilityDTO `json:"capabilities,omitempty"`
 	Operations   []pluginActionDTO     `json:"operations,omitempty"`
@@ -259,6 +261,10 @@ func newPluginDTO(p Plugin, actions []pluginActionDTO) pluginDTO {
 	for _, v := range p.Versions {
 		versions = append(versions, newPluginVersionDTO(v))
 	}
+	enabled := true
+	if p.Enabled != nil {
+		enabled = *p.Enabled
+	}
 	d := pluginDTO{
 		PluginID:       p.PluginID,
 		Name:           p.Name,
@@ -276,6 +282,8 @@ func newPluginDTO(p Plugin, actions []pluginActionDTO) pluginDTO {
 		Homepage:       p.Homepage,
 		License:        p.License,
 		Builtin:        p.Builtin,
+		Enabled:        enabled,
+		Startup:        p.Startup,
 		HasConfig:      p.HasConfig,
 		Operations:     actions,
 	}
@@ -444,6 +452,31 @@ func (a *api) uploadPluginPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.writeResource(w, r, http.StatusCreated, newPluginPackageUploadDTO(upload), nil)
+}
+
+// deletePluginPackage discards a staged package upload owned by the caller so
+// failed preflights or aborted installs do not exhaust the per-account quota.
+func (a *api) deletePluginPackage(w http.ResponseWriter, r *http.Request) {
+	act, err := a.caller(r)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	if err := a.authorize(r.Context(), act, "host.plugins:install", ""); err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	if a.d.Plugins == nil || a.d.PluginUploads == nil {
+		a.fail(w, r, pluginUnavailable())
+		return
+	}
+	uploadID := r.PathValue("upload_id")
+	if !a.d.PluginUploads.RemoveForPrincipal(uploadID, principalScope(act)) {
+		a.fail(w, r, problem.New(problem.NotFound, "The staged plugin package was not found."))
+		return
+	}
+	a.inspections.drop(uploadID)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // listPlugins returns one page of the plugins the updater recorded.
@@ -976,6 +1009,10 @@ func (a *api) uninstallPlugin(w http.ResponseWriter, r *http.Request) {
 	pluginID := r.PathValue("plugin_id")
 	if err := a.authorize(r.Context(), act, "host.plugins:uninstall", pluginID); err != nil {
 		a.fail(w, r, err)
+		return
+	}
+	if strings.TrimSpace(pluginID) == "security.basic" {
+		a.fail(w, r, problem.New(problem.StateConflict, "基础安全防护插件为系统必装底座，不支持卸载。"))
 		return
 	}
 	if a.d.Plugins == nil {

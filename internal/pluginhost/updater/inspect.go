@@ -110,8 +110,12 @@ func (u *Updater) Inspect(ctx context.Context, pkgPath string) (*Inspection, err
 		// production unit is per plugin): memory.ok is false exactly when an
 		// install would be refused for memory.
 		plan, perr := u.planMemory(ctx, m.ID, m, StrategyRestart, insp.Installed != nil)
+		required, ok := addBytes(plan.NewMax, plan.Reserve)
+		if !ok {
+			required = plan.NewMax
+		}
 		insp.Memory = InspectionMemory{
-			RequiredBytes:  plan.NewMax,
+			RequiredBytes:  required,
 			AvailableBytes: plan.Available,
 			OK:             perr == nil,
 		}

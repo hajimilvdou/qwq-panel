@@ -44,12 +44,15 @@ class DockSession {
 
   async send(text: string): Promise<void> {
     if (!this.id) {
-      const s = await agent.create({ title: text.replace(/\s+/g, ' ').slice(0, 40), permission_mode: 'safe' });
+      const s = await agent.create({
+        title: text.replace(/\s+/g, ' ').slice(0, 40),
+        permission_mode: 'safe',
+        config: { stream: true, enable_plan_tool: true },
+      });
       resources.invalidate('agent-sessions');
       this.switchTo(s.session_id);
-      /* 新会话：直接发，流随后从 seq 0 回放，不会漏帧 */
+      /* 新会话：直接发，switchTo 已建立会话流从 seq 0 完整回放并推流，禁止 reload 清空流式气泡 */
       await agent.send(s.session_id, text, newIdempotencyKey());
-      void this.stream?.reload();
       return;
     }
     await this.stream?.send(text);

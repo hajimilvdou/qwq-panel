@@ -19,8 +19,9 @@ import (
 )
 
 // New 不创建文件或进程；所有资源从已验证的窄依赖供给。
+// Binary 允许为空（降级态启动），在 Execute / Activate 阶段再返回明确的 CORE_BINARY_MISMATCH。
 func New(options Options) (*Engine, error) {
-	if options.Store == nil || options.Process == nil || options.Binary == nil || !xrayconfig.ValidSocket(options.Socket) {
+	if options.Store == nil || options.Process == nil || !xrayconfig.ValidSocket(options.Socket) {
 		return nil, failure("DATA_DIR_UNAVAILABLE", nil)
 	}
 	if options.Render == nil {
@@ -208,6 +209,7 @@ func (e *Engine) Execute(parent context.Context, request Request) (result Result
 			Now:                    e.now(),
 			PermitTestCertificates: e.options.PermitTestCertificates,
 			ObfsTargets:            xrayconfig.AllocateObfsTargets(desired.v2),
+			SkipSocketMark:         e.options.EnforceSocketMarkProbe && !probeSocketMarkPermitted(),
 		}
 		if e.options.OutboundPolicy != nil {
 			v2Opts.OutboundPolicy = e.options.OutboundPolicy()
@@ -243,6 +245,9 @@ func (e *Engine) Execute(parent context.Context, request Request) (result Result
 	clear(native)
 	if err = e.step(ctx, request, NativeTest); err != nil {
 		return result, err
+	}
+	if e.options.Binary == nil {
+		return result, failure("CORE_BINARY_MISMATCH", nil)
 	}
 	if err = e.options.Binary.Preflight(ctx, tx.work.Path); err != nil {
 		return result, failure("CORE_CONFIG_INVALID", contextCause(ctx))

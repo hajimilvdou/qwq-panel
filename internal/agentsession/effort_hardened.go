@@ -271,6 +271,49 @@ func (k *AnthropicThinkingKeeper) RecordAssistantTurn(blocks []AnthropicResponse
 	}
 }
 
+// RemapToolCallIDs aliases recorded thinking blocks from the provider's raw
+// tool_use ID (e.g. toolu_...) to RunLoop's host-minted CallID (call_...) so
+// subsequent multi-step Anthropic tool turns always preserve signed thinking.
+func (k *AnthropicThinkingKeeper) RemapToolCallIDs(orig, normalized []ModelToolCall) {
+	if k == nil || len(orig) == 0 || len(normalized) == 0 {
+		return
+	}
+	oldID := orig[0].CallID
+	newID := normalized[0].CallID
+	if oldID == "" || newID == "" || oldID == newID {
+		return
+	}
+	if saved, ok := k.byFirstToolCallID[oldID]; ok && len(saved) > 0 {
+		k.byFirstToolCallID[newID] = saved
+	}
+}
+
+// CapAnthropicMaxTokens clamps max_tokens and thinking.budget_tokens to the
+// model's published output limit so selecting "max" effort never triggers HTTP 400.
+func CapAnthropicMaxTokens(model string, requestedMaxTokens int, thinkingBudget int) (cappedMax int, cappedBudget int) {
+	norm := strings.ToLower(strings.TrimSpace(model))
+	hardCap := 64000
+	switch {
+	case strings.Contains(norm, "claude-3-5-"), strings.Contains(norm, "claude-3-haiku"), strings.Contains(norm, "claude-3-opus"):
+		hardCap = 8192
+	case strings.Contains(norm, "claude-opus-4-2025"), strings.Contains(norm, "claude-opus-4-0"), strings.Contains(norm, "claude-opus-4-1"):
+		hardCap = 32000
+	}
+	cappedMax = requestedMaxTokens
+	if cappedMax > hardCap {
+		cappedMax = hardCap
+	}
+	cappedBudget = thinkingBudget
+	if cappedBudget > 0 && cappedBudget >= cappedMax-1024 {
+		if cappedMax > 2048 {
+			cappedBudget = cappedMax - 2048
+		} else {
+			cappedBudget = 0
+		}
+	}
+	return cappedMax, cappedBudget
+}
+
 // BuildAssistantMessageBlocks 为包含 ToolCalls 的历史 assistant 消息组装符合 Anthropic 规范的 content 数组。
 // 返回 hasThinking 供上层判断是否所有历史 tool_use 轮均具备完整 thinking 签名；
 // 若遇到恢复自旧会话且无缓存签名的历史消息，上层可自动降级本轮省略 thinking 参数以避免 400。

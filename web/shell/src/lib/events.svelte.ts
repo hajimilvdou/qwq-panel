@@ -130,6 +130,10 @@ export class EventBus {
       }
       case 'heartbeat':
         return;
+      case 'session.expired':
+        this.stop();
+        this.deps.onUnauthenticated?.();
+        return;
       case 'resync': {
         const d = parse<StreamResync>(f.data);
         if (d) {

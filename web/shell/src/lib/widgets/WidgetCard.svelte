@@ -77,7 +77,7 @@
         const r = await pluginsApi.invoke(
           { pluginId: plugin.plugin_id, operation: widget.operation, placement: plugin.placement },
           {},
-          { signal: ctrl.signal },
+          { signal: ctrl.signal, headers: { 'X-QWQ-Background-Poll': '1' } },
         );
         if (r.status !== 'SUCCEEDED') {
           failure = { message: r.error?.title ?? '应用没有给出数据', fromPlugin: r.error?.detail, requestId: r.error?.request_id };

@@ -14,10 +14,12 @@
   import { session } from '$lib/session.svelte';
   import AuthLayout from './AuthLayout.svelte';
   import PasswordFields from './PasswordFields.svelte';
-  import { takeFragmentToken } from './fragment';
+  import { clearFragmentToken, takeFragmentToken } from './fragment';
 
-  const fromLink = takeFragmentToken();
+  const SETUP_TOKEN_KEY = 'qwq.setup_token';
+  const fromLink = takeFragmentToken(SETUP_TOKEN_KEY);
   let token = $state(fromLink);
+  let showTokenInput = $state(!fromLink);
   let username = $state('admin');
   let displayName = $state('');
   let password = $state('');
@@ -26,6 +28,7 @@
   let err = $state<ErrorView | null>(null);
 
   const fingerprint = $derived(session.setup?.tls_fingerprint);
+  const currentPort = $derived(typeof location !== 'undefined' && location.port ? location.port : '8443');
   const canSubmit = $derived(!!token.trim() && !!username.trim() && valid && !busy);
 
   async function submit(e: SubmitEvent) {
@@ -40,12 +43,17 @@
         password,
         display_name: displayName.trim() || undefined,
       });
+      clearFragmentToken(SETUP_TOKEN_KEY);
       session.setup = { ...session.setup, initialized: true };
       session.adopt(s);
       navigate('/settings/account?welcome=1', { replace: true });
     } catch (e2) {
       err = describeError(e2);
-      if (err.code === 'UNAUTHENTICATED') err = { ...err, message: '初始化令牌不对或已过期，请重新打开安装链接' };
+      if (err.code === 'UNAUTHENTICATED') {
+        clearFragmentToken(SETUP_TOKEN_KEY);
+        showTokenInput = true;
+        err = { ...err, message: '初始化令牌不对或已过期，请重新打开安装链接或在下方手动粘贴新令牌' };
+      }
     } finally {
       busy = false;
     }
@@ -54,11 +62,11 @@
 
 <AuthLayout title="你好，初次见面" subtitle="设置管理员账号，面板就准备好了">
   <form class="stack" onsubmit={submit} novalidate>
-    {#if !fromLink}
+    {#if showTokenInput}
       <div class="tip">
         <p><strong>打开安装时打印的链接</strong>，令牌会自动填好。</p>
         <p class="faint">
-          面板默认只监听本机，可以用 SSH 隧道访问：<code class="mono">ssh -L 8443:127.0.0.1:8443 你的服务器</code>
+          面板默认只监听本机，可以用 SSH 隧道访问：<code class="mono">ssh -L {currentPort}:127.0.0.1:{currentPort} 你的服务器</code>
         </p>
       </div>
       <Input label="初始化令牌" mono required autocomplete="off" bind:value={token} error={err?.fields['/setup_token']} />
@@ -76,7 +84,7 @@
 
     <Input label="用户名" autocomplete="username" required bind:value={username} error={err?.fields['/username']} />
     <Input label="显示名" hint="可选，主页会这样称呼你" autocomplete="nickname" bind:value={displayName} />
-    <PasswordFields bind:password bind:valid serverError={err?.fields['/password']} disabled={busy} />
+    <PasswordFields bind:password bind:valid {username} serverError={err?.fields['/password']} disabled={busy} />
 
     {#if err && !Object.keys(err.fields).length}<Alert>{err.message}</Alert>{/if}
     <Button type="submit" variant="primary" size="lg" wide loading={busy} disabled={!canSubmit}>完成初始化</Button>

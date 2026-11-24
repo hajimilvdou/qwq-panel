@@ -436,11 +436,21 @@ func indexExistingSecretSlots(rawUsers any) map[string]map[string]bool {
 	return out
 }
 
+// shouldAttachUserTrafficMark only sends traffic_mark to core.xray when the
+// user actually has bandwidth rate limits configured; unlimited users never
+// trigger sockopt.mark / SO_MARK EPERM in non-root DynamicUser sandboxes.
+func shouldAttachUserTrafficMark(mark, upLimitKbps, downLimitKbps uint32) bool {
+	if upLimitKbps == 0 && downLimitKbps == 0 {
+		return false
+	}
+	return mark >= trafficMarkMin && mark <= trafficMarkMax
+}
+
 func buildProfileUsers(protocol string, activeUsers []userRecord, existing map[string]map[string]bool) []any {
 	out := make([]any, 0, len(activeUsers))
 	for _, u := range activeUsers {
 		entry := map[string]any{"id": u.ID}
-		if u.TrafficMark >= trafficMarkMin && u.TrafficMark <= trafficMarkMax {
+		if shouldAttachUserTrafficMark(u.TrafficMark, u.UpLimitKbps, u.DownLimitKbps) {
 			entry["traffic_mark"] = u.TrafficMark
 		}
 		slots := existing[u.ID]

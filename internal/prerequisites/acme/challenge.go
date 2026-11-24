@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/qwq-panel/qwq/internal/prerequisites/certificates"
 	"github.com/qwq-panel/qwq/internal/prerequisites/dns"
@@ -52,7 +53,13 @@ func (a *Authority) authorizations(ctx context.Context, caller certificates.Call
 			continue
 		}
 		if authorization.Status != xacme.StatusPending {
-			return &fault.Error{Code: "CA_REJECTED", Detail: "原 DNS 授权已拒绝或失效", Uncertain: true}
+			return &fault.Error{Code: "CA_REJECTED", Detail: "原域名授权已拒绝或失效", Uncertain: true}
+		}
+		if state.Scope.IsHTTP01() {
+			if err := a.authorizeHTTP01(ctx, caller, state, revision, client, guard, authorization, uri, san, authIndex, len(order.AuthzURLs), progress); err != nil {
+				return err
+			}
+			continue
 		}
 		var selected *xacme.Challenge
 		for _, candidate := range authorization.Challenges {
@@ -134,6 +141,92 @@ func (a *Authority) authorizations(ctx context.Context, caller certificates.Call
 	return nil
 }
 
+func (a *Authority) authorizeHTTP01(
+	ctx context.Context,
+	caller certificates.Caller,
+	state *journal,
+	revision *string,
+	client *xacme.Client,
+	guard *guardedTransport,
+	authorization *xacme.Authorization,
+	uri, san string,
+	authIndex, totalAuths int,
+	progress certificates.Progress,
+) error {
+	if a.http01 == nil {
+		return fault.New("HTTP01_UNAVAILABLE", "内置反代 HTTP-01 验证通道未就绪，请先安装并启用 web.ingress 且确保 80 端口可达")
+	}
+	var selected *xacme.Challenge
+	for _, candidate := range authorization.Challenges {
+		if candidate != nil && candidate.Type == "http-01" {
+			if selected != nil {
+				return fault.New("CA_UNAVAILABLE", "CA 返回多个不确定 HTTP-01 challenge")
+			}
+			selected = candidate
+		}
+	}
+	if selected == nil || !allowedURL(state.Scope.CA, selected.URI) || selected.Token == "" || len(selected.Token) > 256 || strings.ContainsAny(selected.Token, "\x00\r\n") {
+		return fault.New("CA_UNAVAILABLE", "CA 缺少受控 HTTP-01 challenge")
+	}
+	index := slices.IndexFunc(state.Challenges, func(item challenge) bool { return item.AuthorizationURI == uri })
+	if index < 0 {
+		value, err := client.HTTP01ChallengeResponse(selected.Token)
+		if err != nil || value == "" || len(value) > 512 {
+			return fault.New("CA_UNAVAILABLE", "CA challenge 无法生成 HTTP-01 响应值")
+		}
+		state.Challenges = append(state.Challenges, challenge{AuthorizationURI: uri, SAN: san, URI: selected.URI, Token: selected.Token, Value: value})
+		index = len(state.Challenges) - 1
+		*revision, err = a.save(ctx, caller, *state, *revision)
+		if err != nil {
+			return err
+		}
+	}
+	item := &state.Challenges[index]
+	if item.SAN != san || item.URI != selected.URI || item.Token != selected.Token {
+		return fault.New("STATE_INVALID", "原 CA HTTP-01 challenge 的范围或 token 改变")
+	}
+	if err := a.http01.Present(ctx, item.Token, item.Value, 10*time.Minute); err != nil {
+		return err
+	}
+	item.Presented = true
+	var err error
+	*revision, err = a.saveDetached(ctx, caller, *state, *revision)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = a.http01.CleanUp(cleanCtx, item.Token)
+	}()
+
+	if err := report(progress, "verifying", uint32(30+(authIndex+1)*40/max(1, totalAuths))); err != nil {
+		return err
+	}
+	if !item.Accepted {
+		item.Accepted = true
+		*revision, err = a.save(ctx, caller, *state, *revision)
+		if err != nil {
+			return err
+		}
+		if _, err := client.Accept(ctx, &xacme.Challenge{Type: "http-01", URI: item.URI, Token: item.Token}); err != nil {
+			return postOrderFailure(guard.failure(err, true))
+		}
+	}
+	verified, err := client.WaitAuthorization(ctx, item.AuthorizationURI)
+	if err != nil {
+		return guard.failure(err, false)
+	}
+	verifiedSAN, err := authorizationSAN(state.Scope, verified)
+	if err != nil || verifiedSAN != item.SAN || verified.Status != xacme.StatusValid {
+		return fault.New("CA_REJECTED", "HTTP-01 域名验证未通过，请确认域名 A/AAAA 记录指向本机公网 IP 且 80 端口可从公网访问")
+	}
+	item.Validated = true
+	item.Cleaned = true
+	*revision, err = a.saveDetached(ctx, caller, *state, *revision)
+	return err
+}
+
 func (a *Authority) ensureDNS(ctx context.Context, caller certificates.Caller, state *journal, revision *string, index int) error {
 	item := &state.Challenges[index]
 	dnsCaller := dns.Caller{OwnerID: caller.OwnerID, OperationID: caller.OperationID}
@@ -208,6 +301,25 @@ func (a *Authority) Cancel(ctx context.Context, caller certificates.Caller, cert
 	var failures []error
 	for index := range state.Challenges {
 		item := &state.Challenges[index]
+		if scope.IsHTTP01() {
+			if !item.Presented || item.Cleaned {
+				continue
+			}
+			if a.http01 != nil {
+				if cleanErr := a.http01.CleanUp(cleanupCtx, item.Token); cleanErr != nil {
+					failures = append(failures, cleanErr)
+					continue
+				}
+			}
+			item.Cleaned = true
+			next, err := a.saveDetached(cleanupCtx, caller, state, revision)
+			if err != nil {
+				failures = append(failures, err)
+				break
+			}
+			revision = next
+			continue
+		}
 		if !item.DNSSubmitted || item.Cleaned {
 			continue
 		}

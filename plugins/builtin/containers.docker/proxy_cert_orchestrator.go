@@ -155,16 +155,15 @@ func probeProxyIntegrationStatusWithInvoker(ctx context.Context, inv pluginInvok
 	if raw, err := inv.Invoke(probeCtx, "web.ingress", "ingress.overview", "v1", []byte(`{}`)); err == nil {
 		res.IngressInstalled = true
 		var ov struct {
+			Running        *bool  `json:"running"`
 			BoundAddr      string `json:"bound_addr"`
 			HTTPSBoundAddr string `json:"https_bound_addr"`
-			Backend        struct {
-				BuiltinReady bool `json:"builtin_ready"`
-			} `json:"backend"`
 		}
 		_ = json.Unmarshal(raw, &ov)
-		res.IngressRunning = ov.BoundAddr != "" || ov.HTTPSBoundAddr != "" || ov.Backend.BuiltinReady
-		if !res.IngressRunning {
-			res.IngressRunning = true
+		if ov.Running != nil {
+			res.IngressRunning = *ov.Running
+		} else {
+			res.IngressRunning = ov.BoundAddr != "" || ov.HTTPSBoundAddr != ""
 		}
 	} else if !isPluginMissingErr(err) {
 		res.IngressInstalled = true
@@ -377,11 +376,86 @@ func EnsureCertForContainerDomain(
 			return "managed", certReqID, nil, nil
 		}
 		return "managed", "", []string{
-			"未匹配到现成证书且未指定 DNS 托管域，已启用 web.ingress 托管 TLS 模式；如需 ACME DNS-01 自动签发请在 TLS 证书页完成签发绑定。",
+			"未匹配到现成证书且未指定 DNS 托管域，已启用 web.ingress 托管 TLS 模式；如需自动签发请在「TLS 证书」页使用 HTTP-01（免 DNS Token）或 DNS-01 签发并绑定。",
 		}, nil
 	default:
 		return "", "", nil, fmt.Errorf("不支持的 cert_strategy %q", certStrategy)
 	}
+}
+
+// BindCertificateToWebIngress 在拿到尚未物化绑定到 web.ingress 的 certificate_id 后，
+// 调用 tls.certificates/bindings.bind 将证书投递至 web.ingress 隔离目录并返回稳定的 binding_ref。
+func BindCertificateToWebIngress(ctx context.Context, inv pluginInvoker, certificateID, siteProfileID string, generation int) (string, error) {
+	certificateID = strings.TrimSpace(certificateID)
+	siteProfileID = strings.TrimSpace(siteProfileID)
+	if inv == nil || certificateID == "" {
+		return "", errors.New("绑定证书至 web.ingress 参数不完整")
+	}
+	if strings.HasPrefix(certificateID, "certbind_") {
+		return certificateID, nil
+	}
+	if generation <= 0 {
+		generation = 1
+	}
+	bindingRef := siteProfileID
+	if !strings.HasPrefix(bindingRef, "certbind_") {
+		slug := certSlugCleanRe.ReplaceAllString(strings.ToLower(siteProfileID), "-")
+		slug = strings.Trim(slug, "-.")
+		if slug == "" {
+			slug = certificateID
+		}
+		if len(slug) > 48 {
+			slug = slug[:48]
+		}
+		bindingRef = "certbind_" + slug
+	}
+	reqBytes, err := json.Marshal(map[string]any{
+		"certificate_id": certificateID,
+		"binding_ref":    bindingRef,
+		"attempt_id":     newDockerID("bind"),
+		"generation":     generation,
+	})
+	if err != nil {
+		return "", err
+	}
+	raw, err := inv.Invoke(ctx, "tls.certificates", "bindings.bind", "v1", reqBytes)
+	if err != nil {
+		return "", fmt.Errorf("将证书 %s 投递绑定至反向代理网关失败: %w", certificateID, err)
+	}
+	var resp struct {
+		BindingRef string `json:"binding_ref"`
+		Binding    *struct {
+			BindingRef string `json:"binding_ref"`
+			ID         string `json:"id"`
+		} `json:"binding"`
+		Certificate *struct {
+			Bindings []struct {
+				BindingRef string `json:"binding_ref"`
+				PluginID   string `json:"plugin_id"`
+			} `json:"bindings"`
+		} `json:"certificate"`
+	}
+	if json.Unmarshal(raw, &resp) == nil {
+		if ref := strings.TrimSpace(resp.BindingRef); ref != "" {
+			return ref, nil
+		}
+		if resp.Binding != nil {
+			if ref := strings.TrimSpace(resp.Binding.BindingRef); ref != "" {
+				return ref, nil
+			}
+			if ref := strings.TrimSpace(resp.Binding.ID); ref != "" {
+				return ref, nil
+			}
+		}
+		if resp.Certificate != nil {
+			for _, b := range resp.Certificate.Bindings {
+				if b.PluginID == "web.ingress" && strings.TrimSpace(b.BindingRef) != "" {
+					return strings.TrimSpace(b.BindingRef), nil
+				}
+			}
+		}
+	}
+	return bindingRef, nil
 }
 
 // ContainerProxyUpsertRequest 是 docker.container.proxy.upsert 的结构化入参（严格对齐 container-drawer.js）。
@@ -594,6 +668,19 @@ func UpsertContainerProxyAndCert(
 	)
 	if err != nil {
 		return ContainerIngressLink{}, warnings, err
+	}
+	if tlsMode != "off" && certID != "" && !strings.HasPrefix(certID, "certbind_") {
+		siteProfileID := "docker-" + normalizeContainerName(target.ContainerName)
+		boundRef, berr := BindCertificateToWebIngress(ctx, inv, certID, siteProfileID, 1)
+		if berr != nil {
+			warnings = append(warnings, "证书已就绪，但自动绑定至 web.ingress 失败（"+berr.Error()+"），请在「TLS 证书 → 消费者部署绑定」完成绑定后即可生效。")
+			certID = ""
+		} else {
+			certID = boundRef
+		}
+	}
+	if !readiness.IngressRunning {
+		warnings = append(warnings, "检测到 web.ingress 当前未成功监听 80/443 端口（可能存在端口冲突或未启用），请前往「反向代理」页检查监听状态。")
 	}
 
 	dialHost := strings.TrimSpace(target.HostBindIP)
