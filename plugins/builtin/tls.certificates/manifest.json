@@ -22,6 +22,8 @@
     "attestations/sbom.spdx.json": "sha256:23bd322258f9d4497f7815665bec31d11d505649b76ab70bdaded1e1fb48b804",
     "schemas/bindings.bind.request.json": "sha256:24f2ebe1b4de85bb8c9c5f294523377c711b4d05a2ec9cbd0d80ff6af3cec52c",
     "schemas/bindings.mutate.request.json": "sha256:a326684c86cc54c6f853ef66ab4b25b25c4795e492db438e1ad65d5c0db95d50",
+    "schemas/bindings.reserve.request.json": "sha256:d8de799d62347a4dee9baaec4eb40754619c2185302dcd2140016eb615b7c7a2",
+    "schemas/bindings.reserve.response.json": "sha256:1350c81b0f7938d4f00bc698d66038789bd5165db71c7ffb306e8159947496b4",
     "schemas/certificates.get.request.json": "sha256:a9e6c6672aacc2ee8ee59c9424bd198acf6ce71c8a7234c2685e63a7fc826924",
     "schemas/certificates.import.request.json": "sha256:10099346dfbf82f108297c6b87c66e80d92f4d13f302c7e95ba66f669575128a",
     "schemas/certificates.issue.request.json": "sha256:e5607482e1831aa99fbb9edd1c44253a12c85dd45b9d3ba8a595859ef3ac35a3",
@@ -36,12 +38,12 @@
     "schemas/empty.request.json": "sha256:51bace26fd009dfac9ff182f3bd8ef61235951f3e91ccb7c3e40d91c2488a648",
     "schemas/generations.remove.request.json": "sha256:6f5abad584f956241f96b3293e5936abb8cf4ca42e7f797f792fbf69d2991d1a",
     "schemas/renew_existing.request.json": "sha256:382b407c16cf65b1bcf50412afa3af1c73678b1ae874fa4e1f95114c61a0416d",
-    "schemas/renewal.configure.request.json": "sha256:4816c9d35f55f24bb8d01b53bf100debe82b919b63790f3838fee35392a15db9",
+    "schemas/renewal.configure.request.json": "sha256:cc380cb05b894389f56a22ec1e0ea3b1853170674ef1b164a973869ba2c53a21",
     "schemas/renewal.target.request.json": "sha256:98617422a6140266126f3172aac462a55f35c00fb4228f04f4fc82ee9101fc3d",
     "schemas/renewal.view.response.json": "sha256:b7a5e6a68129bdfc3fd5013576682fa27140cbb274a7a6045af017ad4444d0e7",
-    "ui/certs.js": "sha256:ca92b3be31697ddd68ce216622ebd85ace8207b9d07e67a64a4ffec0361ab7e2",
-    "ui/index.html": "sha256:3f42358e19d8bc214518b78f33cd9cef46b8c46cb893b113593fe060cd837645",
-    "ui/plugin.css": "sha256:f8293f926aee2f53350cf62571d521fd96dc293f4a71707aa6f9a552c152f236"
+    "ui/certs.js": "sha256:bb94fb35668d245c80d3a9f5b88312bc2c63564361861e47bf9847305b5e7d65",
+    "ui/index.html": "sha256:cc6822344868002011bdcfacc82731b4d9886c804e727b755bdb51524a7fc6e1",
+    "ui/plugin.css": "sha256:9859f7542699cb5e34edb642f96524671b0a01ea042c66dd9a2f15745c078d5c"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -191,6 +193,28 @@
       ],
       "request_schema": "schemas/certificates.test.request.json",
       "response_schema": "schemas/certificates.task.response.json"
+    },
+    {
+      "name": "bindings.reserve",
+      "api_version": "v1",
+      "permission": "tls.certificates:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "high",
+      "approval": "confirm",
+      "approval_summary": "为受控消费者预留稳定 TLS 证书绑定引用",
+      "approval_description": "宿主将核验目标消费者插件配置与权限后，在绑定账本中分配稳定的 certbind_* 预留引用。",
+      "idempotent": true,
+      "timeout_ms": 30000,
+      "summary": "为受控消费者预留稳定证书绑定引用 ID",
+      "capabilities": [
+        {
+          "name": "system.certificates.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/bindings.reserve.request.json",
+      "response_schema": "schemas/bindings.reserve.response.json"
     },
     {
       "name": "bindings.bind",

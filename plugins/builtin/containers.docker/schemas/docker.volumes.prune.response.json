@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "deleted_count",
+    "space_reclaimed_mb"
+  ],
+  "properties": {
+    "deleted_count": {
+      "type": "integer"
+    },
+    "space_reclaimed_mb": {
+      "type": "number"
+    }
+  }
+}

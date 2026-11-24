@@ -171,6 +171,10 @@ textarea {
   color: var(--text);
   font-size: 13px;
 }
+select option {
+  background-color: var(--surface);
+  color: var(--text);
+}
 .ch-picker-block {
   margin-top: 14px;
 }
@@ -278,6 +282,14 @@ textarea {
 .sup-msg {
   color: var(--text-2);
   font-size: 12px;
+}
+.orphan-tip {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 11px;
+  line-height: 1.4;
 }
 .ts-cell {
   white-space: nowrap;

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -205,52 +206,86 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	syncCapabilityPanelPort := func(port int) {
-		if port <= 0 || port > 65535 {
-			return
+	syncCapabilityPanelAccess := func(snap panelaccess.Snapshot) {
+		if snap.Port > 0 && snap.Port <= 65535 {
+			capClient := sandbox.NewCapabilityClient(sandbox.DefaultCapabilitySocket)
+			callCtx, cancel := context.WithTimeout(life, 5*time.Second)
+			payload, _ := json.Marshal(struct {
+				Port       int    `json:"port"`
+				ListenHost string `json:"listen_host,omitempty"`
+			}{
+				Port:       snap.Port,
+				ListenHost: snap.ListenHost,
+			})
+			resp, cerr := capClient.Call(callCtx, sandbox.CapabilityRequest{
+				Op:         "firewall.sync-panel-port",
+				ID:         "controller",
+				ParamsJSON: payload,
+			})
+			cancel()
+			if cerr != nil || !resp.OK {
+				if werr := panelaccess.WriteCapabilityPanelPortWithHost(panelaccess.DefaultCapabilityPanelPortFile, snap.Port, snap.ListenHost); werr != nil {
+					logger.Warn("capability panel-port sync failed (both RPC and file fallback)",
+						"port", snap.Port, "listen_host", snap.ListenHost, "rpc_err", cerr, "rpc_code", resp.Code, "file_err", werr)
+				}
+			}
 		}
-		capClient := sandbox.NewCapabilityClient(sandbox.DefaultCapabilitySocket)
-		callCtx, cancel := context.WithTimeout(life, 5*time.Second)
-		defer cancel()
-		resp, cerr := capClient.Call(callCtx, sandbox.CapabilityRequest{
-			Op:         "firewall.sync-panel-port",
-			ID:         "controller",
-			ParamsJSON: []byte(fmt.Sprintf(`{"port":%d}`, port)),
-		})
-		if cerr == nil && resp.OK {
-			return
-		}
-		if werr := panelaccess.WriteCapabilityPanelPort(panelaccess.DefaultCapabilityPanelPortFile, port); werr != nil {
-			logger.Warn("capability panel-port sync failed (both RPC and file fallback)",
-				"port", port, "rpc_err", cerr, "rpc_code", resp.Code, "file_err", werr)
+		if c.TLS() != nil && snap.Port > 0 {
+			if serr := c.TLS().SetListen(snap.ListenAddr()); serr != nil {
+				logger.Warn("failed to refresh self-signed TLS SANs for updated listen address",
+					"listen", snap.ListenAddr(), "error", serr)
+			}
 		}
 	}
 
 	// Load or seed live panel access settings (port, secret entry path, disguise,
 	// reverse-proxy domain) from SQLite so UI changes persist across restarts.
 	accessMgr, err := panelaccess.NewManager(life, panelaccess.Options{
-		DB:           c.DB(),
-		Clock:        c.Clock(),
-		Bootstrap:    cfg.HTTP,
-		OnAllowHost:  c.Gateway().SetDynamicPanelHost,
-		OnPortChange: syncCapabilityPanelPort,
+		DB:             c.DB(),
+		Clock:          c.Clock(),
+		Bootstrap:      cfg.HTTP,
+		OnAllowHost:    c.Gateway().SetDynamicPanelHost,
+		OnAccessChange: syncCapabilityPanelAccess,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "qwq serve-controller: init panel access settings: %v\n", err)
 		return 1
 	}
+	c.SetListenAddrFn(func() string {
+		return accessMgr.Snapshot().ListenAddr()
+	})
 	if rt != nil {
+		originPorts, _ := firewall.PublicOriginPorts(cfg.HTTP.PublicOrigins)
 		rt.SetManagementPortsFunc(func() []uint32 {
+			var ports []uint32
 			if p := accessMgr.Snapshot().Port; p > 0 && p <= 65535 {
-				return []uint32{uint32(p)}
+				ports = append(ports, uint32(p))
 			}
-			return nil
+			ports = append(ports, originPorts...)
+			return ports
+		})
+		rt.SetFirewallManagementPortsFunc(func() []uint32 {
+			snap := accessMgr.Snapshot()
+			var hint *firewall.AuthoritativePanelPortHint
+			if snap.Port > 0 && snap.Port <= 65535 {
+				hint = &firewall.AuthoritativePanelPortHint{
+					Port:       uint16(snap.Port),
+					ListenHost: snap.ListenHost,
+				}
+			}
+			panelPorts := firewall.ComputePreservedPanelPorts(hint, cfg.HTTP.Listen)
+			ports := make([]uint32, 0, len(panelPorts)+len(originPorts))
+			for _, p := range panelPorts {
+				ports = append(ports, uint32(p))
+			}
+			ports = append(ports, originPorts...)
+			return ports
 		})
 	}
 
 	// Routes are registered before the listener exists: a duplicate or invalid
 	// route must fail startup, not the first request that hits it.
-	routes, err := registerPublicRoutesWithAccess(c, pluginAPI, uploads, trustStore, accessMgr, logger)
+	routes, err := registerPublicRoutesWithAccess(c, pluginAPI, uploads, trustStore, accessMgr, *configPath, *privSocket, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "qwq serve-controller: %v\n", err)
 		return 1
@@ -352,6 +387,43 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		logger.Info("panel secret entry gate auto-disabled for domain/proxy mode", "reason", reason)
 	}
 
+	hupCh := make(chan os.Signal, 1)
+	signal.Notify(hupCh, syscall.SIGHUP)
+	hupDone := make(chan struct{})
+	hupStop := make(chan struct{})
+	go func() {
+		defer close(hupDone)
+		for {
+			select {
+			case <-hupStop:
+				return
+			case <-life.Done():
+				return
+			case <-hupCh:
+				reloaded, changed, rerr := accessMgr.Reload(life)
+				if rerr != nil {
+					logger.Warn("failed to reload panel access settings on SIGHUP", "error", rerr)
+					continue
+				}
+				logger.Info("panel access settings reloaded on SIGHUP",
+					"listen", reloaded.ListenAddr(),
+					"addr_changed", changed,
+					"entry_gate_active", reloaded.EntryGateActive(),
+					"panel_domain", reloaded.PanelDomain)
+			}
+		}
+	}()
+	stopHup := func() {
+		signal.Stop(hupCh)
+		select {
+		case <-hupStop:
+		default:
+			close(hupStop)
+		}
+		<-hupDone
+	}
+	defer stopHup()
+
 	select {
 	case err := <-liveLn.errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -363,6 +435,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	}
 
 	logger.Info("shutting down")
+	stopHup()
 	liveLn.Close()
 	sctx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 	defer cancel()
@@ -636,10 +709,10 @@ func newPrivilegedHelper(socket string, euid int, logger *slog.Logger) (*sandbox
 // controller's gateway and returns the number of routes. It must run before the
 // listener starts. plugins and uploads are nil on a host without an updater.
 func registerPublicRoutes(c *controller.Controller, plugins api.PluginManager, uploads *api.PluginUploads, logger *slog.Logger) (int, error) {
-	return registerPublicRoutesWithAccess(c, plugins, uploads, nil, nil, logger)
+	return registerPublicRoutesWithAccess(c, plugins, uploads, nil, nil, "", "", logger)
 }
 
-func registerPublicRoutesWithAccess(c *controller.Controller, plugins api.PluginManager, uploads *api.PluginUploads, trustStore *trust.CompositeTrustStore, accessMgr *panelaccess.Manager, logger *slog.Logger) (int, error) {
+func registerPublicRoutesWithAccess(c *controller.Controller, plugins api.PluginManager, uploads *api.PluginUploads, trustStore *trust.CompositeTrustStore, accessMgr *panelaccess.Manager, configPath, privSocket string, logger *slog.Logger) (int, error) {
 	if c == nil || c.Gateway() == nil {
 		return 0, errors.New("the controller has no gateway")
 	}
@@ -651,24 +724,27 @@ func registerPublicRoutesWithAccess(c *controller.Controller, plugins api.Plugin
 		return 0, fmt.Errorf("build the agent session backend: %w", err)
 	}
 	if err := api.Register(c.Gateway(), api.Deps{
-		Config:         c.Config(),
-		DB:             c.DB(),
-		Clock:          c.Clock(),
-		IDs:            c.IDs(),
-		Logger:         logger,
-		Identity:       c.Identity(),
-		Authz:          c.Authorizer(),
-		Ops:            c.Operations(),
-		Catalog:        c.Catalog(),
-		Secrets:        c.Secrets(),
-		PrivateExports: c.PrivateExports(),
-		TLS:            c.TLS(),
-		NodeID:         "local",
-		AgentSessions:  agentSessions,
-		Plugins:        plugins,
-		PluginUploads:  uploads,
-		PluginTrust:    trustStore,
-		Access:         accessMgr,
+		Config:              c.Config(),
+		DB:                  c.DB(),
+		Clock:               c.Clock(),
+		IDs:                 c.IDs(),
+		Logger:              logger,
+		Identity:            c.Identity(),
+		Authz:               c.Authorizer(),
+		Ops:                 c.Operations(),
+		Catalog:             c.Catalog(),
+		Secrets:             c.Secrets(),
+		PrivateExports:      c.PrivateExports(),
+		TLS:                 c.TLS(),
+		NodeID:              "local",
+		AgentSessions:       agentSessions,
+		Plugins:             plugins,
+		PluginUploads:       uploads,
+		PluginTrust:         trustStore,
+		Access:              accessMgr,
+		ConfigPath:          configPath,
+		PrivilegedSocket:    privSocket,
+		OnPluginCatalogFunc: c.SetPluginCatalogFn,
 	}); err != nil {
 		return 0, fmt.Errorf("register the public API: %w", err)
 	}

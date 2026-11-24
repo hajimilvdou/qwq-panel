@@ -1319,6 +1319,142 @@ func (x *CancelTaskResponse) GetError() *v1.ErrorDetail {
 }
 
 // ======================== 稳定绑定、部署和引用保护 ========================
+type ReserveBindingRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Context          *v1.HostCallContext    `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	CertificateId    string                 `protobuf:"bytes,2,opt,name=certificate_id,json=certificateId,proto3" json:"certificate_id,omitempty"`
+	ExpectedRevision string                 `protobuf:"bytes,3,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ReserveBindingRequest) Reset() {
+	*x = ReserveBindingRequest{}
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReserveBindingRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReserveBindingRequest) ProtoMessage() {}
+
+func (x *ReserveBindingRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReserveBindingRequest.ProtoReflect.Descriptor instead.
+func (*ReserveBindingRequest) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ReserveBindingRequest) GetContext() *v1.HostCallContext {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *ReserveBindingRequest) GetCertificateId() string {
+	if x != nil {
+		return x.CertificateId
+	}
+	return ""
+}
+
+func (x *ReserveBindingRequest) GetExpectedRevision() string {
+	if x != nil {
+		return x.ExpectedRevision
+	}
+	return ""
+}
+
+type ReserveBindingResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BindingRef    string                 `protobuf:"bytes,1,opt,name=binding_ref,json=bindingRef,proto3" json:"binding_ref,omitempty"`
+	CertificateId string                 `protobuf:"bytes,2,opt,name=certificate_id,json=certificateId,proto3" json:"certificate_id,omitempty"`
+	Revision      string                 `protobuf:"bytes,3,opt,name=revision,proto3" json:"revision,omitempty"`
+	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	Error         *v1.ErrorDetail        `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReserveBindingResponse) Reset() {
+	*x = ReserveBindingResponse{}
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReserveBindingResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReserveBindingResponse) ProtoMessage() {}
+
+func (x *ReserveBindingResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReserveBindingResponse.ProtoReflect.Descriptor instead.
+func (*ReserveBindingResponse) Descriptor() ([]byte, []int) {
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ReserveBindingResponse) GetBindingRef() string {
+	if x != nil {
+		return x.BindingRef
+	}
+	return ""
+}
+
+func (x *ReserveBindingResponse) GetCertificateId() string {
+	if x != nil {
+		return x.CertificateId
+	}
+	return ""
+}
+
+func (x *ReserveBindingResponse) GetRevision() string {
+	if x != nil {
+		return x.Revision
+	}
+	return ""
+}
+
+func (x *ReserveBindingResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ReserveBindingResponse) GetError() *v1.ErrorDetail {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
 type BindCertificateRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Context          *v1.HostCallContext    `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
@@ -1330,7 +1466,7 @@ type BindCertificateRequest struct {
 
 func (x *BindCertificateRequest) Reset() {
 	*x = BindCertificateRequest{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[19]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1342,7 +1478,7 @@ func (x *BindCertificateRequest) String() string {
 func (*BindCertificateRequest) ProtoMessage() {}
 
 func (x *BindCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[19]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1355,7 +1491,7 @@ func (x *BindCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BindCertificateRequest.ProtoReflect.Descriptor instead.
 func (*BindCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{19}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *BindCertificateRequest) GetContext() *v1.HostCallContext {
@@ -1389,7 +1525,7 @@ type BindCertificateResponse struct {
 
 func (x *BindCertificateResponse) Reset() {
 	*x = BindCertificateResponse{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[20]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1401,7 +1537,7 @@ func (x *BindCertificateResponse) String() string {
 func (*BindCertificateResponse) ProtoMessage() {}
 
 func (x *BindCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[20]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1414,7 +1550,7 @@ func (x *BindCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BindCertificateResponse.ProtoReflect.Descriptor instead.
 func (*BindCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{20}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *BindCertificateResponse) GetCertificate() *CertificateView {
@@ -1443,7 +1579,7 @@ type UnbindCertificateRequest struct {
 
 func (x *UnbindCertificateRequest) Reset() {
 	*x = UnbindCertificateRequest{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[21]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1455,7 +1591,7 @@ func (x *UnbindCertificateRequest) String() string {
 func (*UnbindCertificateRequest) ProtoMessage() {}
 
 func (x *UnbindCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[21]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1468,7 +1604,7 @@ func (x *UnbindCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnbindCertificateRequest.ProtoReflect.Descriptor instead.
 func (*UnbindCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{21}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *UnbindCertificateRequest) GetContext() *v1.HostCallContext {
@@ -1509,7 +1645,7 @@ type UnbindCertificateResponse struct {
 
 func (x *UnbindCertificateResponse) Reset() {
 	*x = UnbindCertificateResponse{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[22]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1521,7 +1657,7 @@ func (x *UnbindCertificateResponse) String() string {
 func (*UnbindCertificateResponse) ProtoMessage() {}
 
 func (x *UnbindCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[22]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1534,7 +1670,7 @@ func (x *UnbindCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnbindCertificateResponse.ProtoReflect.Descriptor instead.
 func (*UnbindCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{22}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *UnbindCertificateResponse) GetCertificate() *CertificateView {
@@ -1563,7 +1699,7 @@ type DeployBindingRequest struct {
 
 func (x *DeployBindingRequest) Reset() {
 	*x = DeployBindingRequest{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[23]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1575,7 +1711,7 @@ func (x *DeployBindingRequest) String() string {
 func (*DeployBindingRequest) ProtoMessage() {}
 
 func (x *DeployBindingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[23]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1588,7 +1724,7 @@ func (x *DeployBindingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployBindingRequest.ProtoReflect.Descriptor instead.
 func (*DeployBindingRequest) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{23}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *DeployBindingRequest) GetContext() *v1.HostCallContext {
@@ -1629,7 +1765,7 @@ type DeployBindingResponse struct {
 
 func (x *DeployBindingResponse) Reset() {
 	*x = DeployBindingResponse{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[24]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1641,7 +1777,7 @@ func (x *DeployBindingResponse) String() string {
 func (*DeployBindingResponse) ProtoMessage() {}
 
 func (x *DeployBindingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[24]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1654,7 +1790,7 @@ func (x *DeployBindingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployBindingResponse.ProtoReflect.Descriptor instead.
 func (*DeployBindingResponse) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{24}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *DeployBindingResponse) GetCertificate() *CertificateView {
@@ -1683,7 +1819,7 @@ type RollbackBindingRequest struct {
 
 func (x *RollbackBindingRequest) Reset() {
 	*x = RollbackBindingRequest{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[25]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1695,7 +1831,7 @@ func (x *RollbackBindingRequest) String() string {
 func (*RollbackBindingRequest) ProtoMessage() {}
 
 func (x *RollbackBindingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[25]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1708,7 +1844,7 @@ func (x *RollbackBindingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackBindingRequest.ProtoReflect.Descriptor instead.
 func (*RollbackBindingRequest) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{25}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *RollbackBindingRequest) GetContext() *v1.HostCallContext {
@@ -1749,7 +1885,7 @@ type RollbackBindingResponse struct {
 
 func (x *RollbackBindingResponse) Reset() {
 	*x = RollbackBindingResponse{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[26]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1761,7 +1897,7 @@ func (x *RollbackBindingResponse) String() string {
 func (*RollbackBindingResponse) ProtoMessage() {}
 
 func (x *RollbackBindingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[26]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1774,7 +1910,7 @@ func (x *RollbackBindingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackBindingResponse.ProtoReflect.Descriptor instead.
 func (*RollbackBindingResponse) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{26}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *RollbackBindingResponse) GetCertificate() *CertificateView {
@@ -1802,7 +1938,7 @@ type RemoveGenerationRequest struct {
 
 func (x *RemoveGenerationRequest) Reset() {
 	*x = RemoveGenerationRequest{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[27]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1814,7 +1950,7 @@ func (x *RemoveGenerationRequest) String() string {
 func (*RemoveGenerationRequest) ProtoMessage() {}
 
 func (x *RemoveGenerationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[27]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1827,7 +1963,7 @@ func (x *RemoveGenerationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveGenerationRequest.ProtoReflect.Descriptor instead.
 func (*RemoveGenerationRequest) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{27}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *RemoveGenerationRequest) GetContext() *v1.HostCallContext {
@@ -1861,7 +1997,7 @@ type RemoveGenerationResponse struct {
 
 func (x *RemoveGenerationResponse) Reset() {
 	*x = RemoveGenerationResponse{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[28]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1873,7 +2009,7 @@ func (x *RemoveGenerationResponse) String() string {
 func (*RemoveGenerationResponse) ProtoMessage() {}
 
 func (x *RemoveGenerationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[28]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1886,7 +2022,7 @@ func (x *RemoveGenerationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveGenerationResponse.ProtoReflect.Descriptor instead.
 func (*RemoveGenerationResponse) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{28}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *RemoveGenerationResponse) GetCertificate() *CertificateView {
@@ -1914,7 +2050,7 @@ type RemoveCertificateRequest struct {
 
 func (x *RemoveCertificateRequest) Reset() {
 	*x = RemoveCertificateRequest{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[29]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1926,7 +2062,7 @@ func (x *RemoveCertificateRequest) String() string {
 func (*RemoveCertificateRequest) ProtoMessage() {}
 
 func (x *RemoveCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[29]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1939,7 +2075,7 @@ func (x *RemoveCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveCertificateRequest.ProtoReflect.Descriptor instead.
 func (*RemoveCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{29}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *RemoveCertificateRequest) GetContext() *v1.HostCallContext {
@@ -1972,7 +2108,7 @@ type RemoveCertificateResponse struct {
 
 func (x *RemoveCertificateResponse) Reset() {
 	*x = RemoveCertificateResponse{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[30]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1984,7 +2120,7 @@ func (x *RemoveCertificateResponse) String() string {
 func (*RemoveCertificateResponse) ProtoMessage() {}
 
 func (x *RemoveCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[30]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1997,7 +2133,7 @@ func (x *RemoveCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveCertificateResponse.ProtoReflect.Descriptor instead.
 func (*RemoveCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{30}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *RemoveCertificateResponse) GetError() *v1.ErrorDetail {
@@ -2019,7 +2155,7 @@ type ConfigureRenewalRequest struct {
 
 func (x *ConfigureRenewalRequest) Reset() {
 	*x = ConfigureRenewalRequest{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[31]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2031,7 +2167,7 @@ func (x *ConfigureRenewalRequest) String() string {
 func (*ConfigureRenewalRequest) ProtoMessage() {}
 
 func (x *ConfigureRenewalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[31]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2044,7 +2180,7 @@ func (x *ConfigureRenewalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureRenewalRequest.ProtoReflect.Descriptor instead.
 func (*ConfigureRenewalRequest) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{31}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ConfigureRenewalRequest) GetContext() *v1.HostCallContext {
@@ -2078,7 +2214,7 @@ type ConfigureRenewalResponse struct {
 
 func (x *ConfigureRenewalResponse) Reset() {
 	*x = ConfigureRenewalResponse{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[32]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2090,7 +2226,7 @@ func (x *ConfigureRenewalResponse) String() string {
 func (*ConfigureRenewalResponse) ProtoMessage() {}
 
 func (x *ConfigureRenewalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[32]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2103,7 +2239,7 @@ func (x *ConfigureRenewalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureRenewalResponse.ProtoReflect.Descriptor instead.
 func (*ConfigureRenewalResponse) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{32}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ConfigureRenewalResponse) GetRenewal() *RenewalView {
@@ -2131,7 +2267,7 @@ type RevokeRenewalRequest struct {
 
 func (x *RevokeRenewalRequest) Reset() {
 	*x = RevokeRenewalRequest{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[33]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2143,7 +2279,7 @@ func (x *RevokeRenewalRequest) String() string {
 func (*RevokeRenewalRequest) ProtoMessage() {}
 
 func (x *RevokeRenewalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[33]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2156,7 +2292,7 @@ func (x *RevokeRenewalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeRenewalRequest.ProtoReflect.Descriptor instead.
 func (*RevokeRenewalRequest) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{33}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *RevokeRenewalRequest) GetContext() *v1.HostCallContext {
@@ -2190,7 +2326,7 @@ type RevokeRenewalResponse struct {
 
 func (x *RevokeRenewalResponse) Reset() {
 	*x = RevokeRenewalResponse{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[34]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2202,7 +2338,7 @@ func (x *RevokeRenewalResponse) String() string {
 func (*RevokeRenewalResponse) ProtoMessage() {}
 
 func (x *RevokeRenewalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[34]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2215,7 +2351,7 @@ func (x *RevokeRenewalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeRenewalResponse.ProtoReflect.Descriptor instead.
 func (*RevokeRenewalResponse) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{34}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *RevokeRenewalResponse) GetRenewal() *RenewalView {
@@ -2242,7 +2378,7 @@ type GetRenewalRequest struct {
 
 func (x *GetRenewalRequest) Reset() {
 	*x = GetRenewalRequest{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[35]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2254,7 +2390,7 @@ func (x *GetRenewalRequest) String() string {
 func (*GetRenewalRequest) ProtoMessage() {}
 
 func (x *GetRenewalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[35]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2267,7 +2403,7 @@ func (x *GetRenewalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRenewalRequest.ProtoReflect.Descriptor instead.
 func (*GetRenewalRequest) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{35}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *GetRenewalRequest) GetContext() *v1.HostCallContext {
@@ -2294,7 +2430,7 @@ type GetRenewalResponse struct {
 
 func (x *GetRenewalResponse) Reset() {
 	*x = GetRenewalResponse{}
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[36]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2306,7 +2442,7 @@ func (x *GetRenewalResponse) String() string {
 func (*GetRenewalResponse) ProtoMessage() {}
 
 func (x *GetRenewalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[36]
+	mi := &file_qwq_capability_certificates_v1_certificates_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2319,7 +2455,7 @@ func (x *GetRenewalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRenewalResponse.ProtoReflect.Descriptor instead.
 func (*GetRenewalResponse) Descriptor() ([]byte, []int) {
-	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{36}
+	return file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *GetRenewalResponse) GetRenewal() *RenewalView {
@@ -2449,7 +2585,18 @@ const file_qwq_capability_certificates_v1_certificates_proto_rawDesc = "" +
 	"\atask_id\x18\x02 \x01(\tR\x06taskId\"\x86\x01\n" +
 	"\x12CancelTaskResponse\x12<\n" +
 	"\x04task\x18\x01 \x01(\v2(.qwq.capability.certificates.v1.TaskViewR\x04task\x122\n" +
-	"\x05error\x18\x02 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error\"\xa8\x01\n" +
+	"\x05error\x18\x02 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error\"\xa7\x01\n" +
+	"\x15ReserveBindingRequest\x12:\n" +
+	"\acontext\x18\x01 \x01(\v2 .qwq.platform.v1.HostCallContextR\acontext\x12%\n" +
+	"\x0ecertificate_id\x18\x02 \x01(\tR\rcertificateId\x12+\n" +
+	"\x11expected_revision\x18\x03 \x01(\tR\x10expectedRevision\"\xc8\x01\n" +
+	"\x16ReserveBindingResponse\x12\x1f\n" +
+	"\vbinding_ref\x18\x01 \x01(\tR\n" +
+	"bindingRef\x12%\n" +
+	"\x0ecertificate_id\x18\x02 \x01(\tR\rcertificateId\x12\x1a\n" +
+	"\brevision\x18\x03 \x01(\tR\brevision\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x122\n" +
+	"\x05error\x18\x05 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error\"\xa8\x01\n" +
 	"\x16BindCertificateRequest\x12:\n" +
 	"\acontext\x18\x01 \x01(\v2 .qwq.platform.v1.HostCallContextR\acontext\x12%\n" +
 	"\x0ecertificate_id\x18\x02 \x01(\tR\rcertificateId\x12+\n" +
@@ -2516,7 +2663,7 @@ const file_qwq_capability_certificates_v1_certificates_proto_rawDesc = "" +
 	"\x0ecertificate_id\x18\x02 \x01(\tR\rcertificateId\"\x8f\x01\n" +
 	"\x12GetRenewalResponse\x12E\n" +
 	"\arenewal\x18\x01 \x01(\v2+.qwq.capability.certificates.v1.RenewalViewR\arenewal\x122\n" +
-	"\x05error\x18\x02 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error2\xaa\x10\n" +
+	"\x05error\x18\x02 \x01(\v2\x1c.qwq.platform.v1.ErrorDetailR\x05error2\xab\x11\n" +
 	"\x13CertificatesService\x12\x85\x01\n" +
 	"\x10ListCertificates\x127.qwq.capability.certificates.v1.ListCertificatesRequest\x1a8.qwq.capability.certificates.v1.ListCertificatesResponse\x12\x7f\n" +
 	"\x0eGetCertificate\x125.qwq.capability.certificates.v1.GetCertificateRequest\x1a6.qwq.capability.certificates.v1.GetCertificateResponse\x12v\n" +
@@ -2525,7 +2672,8 @@ const file_qwq_capability_certificates_v1_certificates_proto_rawDesc = "" +
 	"\x15SubmitTestCertificate\x12<.qwq.capability.certificates.v1.SubmitTestCertificateRequest\x1a=.qwq.capability.certificates.v1.SubmitTestCertificateResponse\x12j\n" +
 	"\aGetTask\x12..qwq.capability.certificates.v1.GetTaskRequest\x1a/.qwq.capability.certificates.v1.GetTaskResponse\x12s\n" +
 	"\n" +
-	"CancelTask\x121.qwq.capability.certificates.v1.CancelTaskRequest\x1a2.qwq.capability.certificates.v1.CancelTaskResponse\x12\x82\x01\n" +
+	"CancelTask\x121.qwq.capability.certificates.v1.CancelTaskRequest\x1a2.qwq.capability.certificates.v1.CancelTaskResponse\x12\x7f\n" +
+	"\x0eReserveBinding\x125.qwq.capability.certificates.v1.ReserveBindingRequest\x1a6.qwq.capability.certificates.v1.ReserveBindingResponse\x12\x82\x01\n" +
 	"\x0fBindCertificate\x126.qwq.capability.certificates.v1.BindCertificateRequest\x1a7.qwq.capability.certificates.v1.BindCertificateResponse\x12\x88\x01\n" +
 	"\x11UnbindCertificate\x128.qwq.capability.certificates.v1.UnbindCertificateRequest\x1a9.qwq.capability.certificates.v1.UnbindCertificateResponse\x12|\n" +
 	"\rDeployBinding\x124.qwq.capability.certificates.v1.DeployBindingRequest\x1a5.qwq.capability.certificates.v1.DeployBindingResponse\x12\x82\x01\n" +
@@ -2550,7 +2698,7 @@ func file_qwq_capability_certificates_v1_certificates_proto_rawDescGZIP() []byte
 	return file_qwq_capability_certificates_v1_certificates_proto_rawDescData
 }
 
-var file_qwq_capability_certificates_v1_certificates_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
+var file_qwq_capability_certificates_v1_certificates_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_qwq_capability_certificates_v1_certificates_proto_goTypes = []any{
 	(*GenerationView)(nil),                // 0: qwq.capability.certificates.v1.GenerationView
 	(*BindingView)(nil),                   // 1: qwq.capability.certificates.v1.BindingView
@@ -2571,114 +2719,120 @@ var file_qwq_capability_certificates_v1_certificates_proto_goTypes = []any{
 	(*GetTaskResponse)(nil),               // 16: qwq.capability.certificates.v1.GetTaskResponse
 	(*CancelTaskRequest)(nil),             // 17: qwq.capability.certificates.v1.CancelTaskRequest
 	(*CancelTaskResponse)(nil),            // 18: qwq.capability.certificates.v1.CancelTaskResponse
-	(*BindCertificateRequest)(nil),        // 19: qwq.capability.certificates.v1.BindCertificateRequest
-	(*BindCertificateResponse)(nil),       // 20: qwq.capability.certificates.v1.BindCertificateResponse
-	(*UnbindCertificateRequest)(nil),      // 21: qwq.capability.certificates.v1.UnbindCertificateRequest
-	(*UnbindCertificateResponse)(nil),     // 22: qwq.capability.certificates.v1.UnbindCertificateResponse
-	(*DeployBindingRequest)(nil),          // 23: qwq.capability.certificates.v1.DeployBindingRequest
-	(*DeployBindingResponse)(nil),         // 24: qwq.capability.certificates.v1.DeployBindingResponse
-	(*RollbackBindingRequest)(nil),        // 25: qwq.capability.certificates.v1.RollbackBindingRequest
-	(*RollbackBindingResponse)(nil),       // 26: qwq.capability.certificates.v1.RollbackBindingResponse
-	(*RemoveGenerationRequest)(nil),       // 27: qwq.capability.certificates.v1.RemoveGenerationRequest
-	(*RemoveGenerationResponse)(nil),      // 28: qwq.capability.certificates.v1.RemoveGenerationResponse
-	(*RemoveCertificateRequest)(nil),      // 29: qwq.capability.certificates.v1.RemoveCertificateRequest
-	(*RemoveCertificateResponse)(nil),     // 30: qwq.capability.certificates.v1.RemoveCertificateResponse
-	(*ConfigureRenewalRequest)(nil),       // 31: qwq.capability.certificates.v1.ConfigureRenewalRequest
-	(*ConfigureRenewalResponse)(nil),      // 32: qwq.capability.certificates.v1.ConfigureRenewalResponse
-	(*RevokeRenewalRequest)(nil),          // 33: qwq.capability.certificates.v1.RevokeRenewalRequest
-	(*RevokeRenewalResponse)(nil),         // 34: qwq.capability.certificates.v1.RevokeRenewalResponse
-	(*GetRenewalRequest)(nil),             // 35: qwq.capability.certificates.v1.GetRenewalRequest
-	(*GetRenewalResponse)(nil),            // 36: qwq.capability.certificates.v1.GetRenewalResponse
-	(*v1.HostCallContext)(nil),            // 37: qwq.platform.v1.HostCallContext
-	(*v1.ErrorDetail)(nil),                // 38: qwq.platform.v1.ErrorDetail
+	(*ReserveBindingRequest)(nil),         // 19: qwq.capability.certificates.v1.ReserveBindingRequest
+	(*ReserveBindingResponse)(nil),        // 20: qwq.capability.certificates.v1.ReserveBindingResponse
+	(*BindCertificateRequest)(nil),        // 21: qwq.capability.certificates.v1.BindCertificateRequest
+	(*BindCertificateResponse)(nil),       // 22: qwq.capability.certificates.v1.BindCertificateResponse
+	(*UnbindCertificateRequest)(nil),      // 23: qwq.capability.certificates.v1.UnbindCertificateRequest
+	(*UnbindCertificateResponse)(nil),     // 24: qwq.capability.certificates.v1.UnbindCertificateResponse
+	(*DeployBindingRequest)(nil),          // 25: qwq.capability.certificates.v1.DeployBindingRequest
+	(*DeployBindingResponse)(nil),         // 26: qwq.capability.certificates.v1.DeployBindingResponse
+	(*RollbackBindingRequest)(nil),        // 27: qwq.capability.certificates.v1.RollbackBindingRequest
+	(*RollbackBindingResponse)(nil),       // 28: qwq.capability.certificates.v1.RollbackBindingResponse
+	(*RemoveGenerationRequest)(nil),       // 29: qwq.capability.certificates.v1.RemoveGenerationRequest
+	(*RemoveGenerationResponse)(nil),      // 30: qwq.capability.certificates.v1.RemoveGenerationResponse
+	(*RemoveCertificateRequest)(nil),      // 31: qwq.capability.certificates.v1.RemoveCertificateRequest
+	(*RemoveCertificateResponse)(nil),     // 32: qwq.capability.certificates.v1.RemoveCertificateResponse
+	(*ConfigureRenewalRequest)(nil),       // 33: qwq.capability.certificates.v1.ConfigureRenewalRequest
+	(*ConfigureRenewalResponse)(nil),      // 34: qwq.capability.certificates.v1.ConfigureRenewalResponse
+	(*RevokeRenewalRequest)(nil),          // 35: qwq.capability.certificates.v1.RevokeRenewalRequest
+	(*RevokeRenewalResponse)(nil),         // 36: qwq.capability.certificates.v1.RevokeRenewalResponse
+	(*GetRenewalRequest)(nil),             // 37: qwq.capability.certificates.v1.GetRenewalRequest
+	(*GetRenewalResponse)(nil),            // 38: qwq.capability.certificates.v1.GetRenewalResponse
+	(*v1.HostCallContext)(nil),            // 39: qwq.platform.v1.HostCallContext
+	(*v1.ErrorDetail)(nil),                // 40: qwq.platform.v1.ErrorDetail
 }
 var file_qwq_capability_certificates_v1_certificates_proto_depIdxs = []int32{
 	0,  // 0: qwq.capability.certificates.v1.CertificateView.generations:type_name -> qwq.capability.certificates.v1.GenerationView
 	1,  // 1: qwq.capability.certificates.v1.CertificateView.bindings:type_name -> qwq.capability.certificates.v1.BindingView
-	37, // 2: qwq.capability.certificates.v1.ListCertificatesRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	39, // 2: qwq.capability.certificates.v1.ListCertificatesRequest.context:type_name -> qwq.platform.v1.HostCallContext
 	2,  // 3: qwq.capability.certificates.v1.ListCertificatesResponse.certificates:type_name -> qwq.capability.certificates.v1.CertificateView
-	38, // 4: qwq.capability.certificates.v1.ListCertificatesResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 5: qwq.capability.certificates.v1.GetCertificateRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	40, // 4: qwq.capability.certificates.v1.ListCertificatesResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 5: qwq.capability.certificates.v1.GetCertificateRequest.context:type_name -> qwq.platform.v1.HostCallContext
 	2,  // 6: qwq.capability.certificates.v1.GetCertificateResponse.certificate:type_name -> qwq.capability.certificates.v1.CertificateView
-	38, // 7: qwq.capability.certificates.v1.GetCertificateResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 8: qwq.capability.certificates.v1.SubmitIssueRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	40, // 7: qwq.capability.certificates.v1.GetCertificateResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 8: qwq.capability.certificates.v1.SubmitIssueRequest.context:type_name -> qwq.platform.v1.HostCallContext
 	3,  // 9: qwq.capability.certificates.v1.SubmitIssueResponse.task:type_name -> qwq.capability.certificates.v1.TaskView
-	38, // 10: qwq.capability.certificates.v1.SubmitIssueResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 11: qwq.capability.certificates.v1.SubmitImportRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	40, // 10: qwq.capability.certificates.v1.SubmitIssueResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 11: qwq.capability.certificates.v1.SubmitImportRequest.context:type_name -> qwq.platform.v1.HostCallContext
 	3,  // 12: qwq.capability.certificates.v1.SubmitImportResponse.task:type_name -> qwq.capability.certificates.v1.TaskView
-	38, // 13: qwq.capability.certificates.v1.SubmitImportResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 14: qwq.capability.certificates.v1.SubmitTestCertificateRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	40, // 13: qwq.capability.certificates.v1.SubmitImportResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 14: qwq.capability.certificates.v1.SubmitTestCertificateRequest.context:type_name -> qwq.platform.v1.HostCallContext
 	3,  // 15: qwq.capability.certificates.v1.SubmitTestCertificateResponse.task:type_name -> qwq.capability.certificates.v1.TaskView
-	38, // 16: qwq.capability.certificates.v1.SubmitTestCertificateResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 17: qwq.capability.certificates.v1.GetTaskRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	40, // 16: qwq.capability.certificates.v1.SubmitTestCertificateResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 17: qwq.capability.certificates.v1.GetTaskRequest.context:type_name -> qwq.platform.v1.HostCallContext
 	3,  // 18: qwq.capability.certificates.v1.GetTaskResponse.task:type_name -> qwq.capability.certificates.v1.TaskView
-	38, // 19: qwq.capability.certificates.v1.GetTaskResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 20: qwq.capability.certificates.v1.CancelTaskRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	40, // 19: qwq.capability.certificates.v1.GetTaskResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 20: qwq.capability.certificates.v1.CancelTaskRequest.context:type_name -> qwq.platform.v1.HostCallContext
 	3,  // 21: qwq.capability.certificates.v1.CancelTaskResponse.task:type_name -> qwq.capability.certificates.v1.TaskView
-	38, // 22: qwq.capability.certificates.v1.CancelTaskResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 23: qwq.capability.certificates.v1.BindCertificateRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	2,  // 24: qwq.capability.certificates.v1.BindCertificateResponse.certificate:type_name -> qwq.capability.certificates.v1.CertificateView
-	38, // 25: qwq.capability.certificates.v1.BindCertificateResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 26: qwq.capability.certificates.v1.UnbindCertificateRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	2,  // 27: qwq.capability.certificates.v1.UnbindCertificateResponse.certificate:type_name -> qwq.capability.certificates.v1.CertificateView
-	38, // 28: qwq.capability.certificates.v1.UnbindCertificateResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 29: qwq.capability.certificates.v1.DeployBindingRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	2,  // 30: qwq.capability.certificates.v1.DeployBindingResponse.certificate:type_name -> qwq.capability.certificates.v1.CertificateView
-	38, // 31: qwq.capability.certificates.v1.DeployBindingResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 32: qwq.capability.certificates.v1.RollbackBindingRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	2,  // 33: qwq.capability.certificates.v1.RollbackBindingResponse.certificate:type_name -> qwq.capability.certificates.v1.CertificateView
-	38, // 34: qwq.capability.certificates.v1.RollbackBindingResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 35: qwq.capability.certificates.v1.RemoveGenerationRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	2,  // 36: qwq.capability.certificates.v1.RemoveGenerationResponse.certificate:type_name -> qwq.capability.certificates.v1.CertificateView
-	38, // 37: qwq.capability.certificates.v1.RemoveGenerationResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 38: qwq.capability.certificates.v1.RemoveCertificateRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	38, // 39: qwq.capability.certificates.v1.RemoveCertificateResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 40: qwq.capability.certificates.v1.ConfigureRenewalRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	4,  // 41: qwq.capability.certificates.v1.ConfigureRenewalResponse.renewal:type_name -> qwq.capability.certificates.v1.RenewalView
-	38, // 42: qwq.capability.certificates.v1.ConfigureRenewalResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 43: qwq.capability.certificates.v1.RevokeRenewalRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	4,  // 44: qwq.capability.certificates.v1.RevokeRenewalResponse.renewal:type_name -> qwq.capability.certificates.v1.RenewalView
-	38, // 45: qwq.capability.certificates.v1.RevokeRenewalResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	37, // 46: qwq.capability.certificates.v1.GetRenewalRequest.context:type_name -> qwq.platform.v1.HostCallContext
-	4,  // 47: qwq.capability.certificates.v1.GetRenewalResponse.renewal:type_name -> qwq.capability.certificates.v1.RenewalView
-	38, // 48: qwq.capability.certificates.v1.GetRenewalResponse.error:type_name -> qwq.platform.v1.ErrorDetail
-	5,  // 49: qwq.capability.certificates.v1.CertificatesService.ListCertificates:input_type -> qwq.capability.certificates.v1.ListCertificatesRequest
-	7,  // 50: qwq.capability.certificates.v1.CertificatesService.GetCertificate:input_type -> qwq.capability.certificates.v1.GetCertificateRequest
-	9,  // 51: qwq.capability.certificates.v1.CertificatesService.SubmitIssue:input_type -> qwq.capability.certificates.v1.SubmitIssueRequest
-	11, // 52: qwq.capability.certificates.v1.CertificatesService.SubmitImport:input_type -> qwq.capability.certificates.v1.SubmitImportRequest
-	13, // 53: qwq.capability.certificates.v1.CertificatesService.SubmitTestCertificate:input_type -> qwq.capability.certificates.v1.SubmitTestCertificateRequest
-	15, // 54: qwq.capability.certificates.v1.CertificatesService.GetTask:input_type -> qwq.capability.certificates.v1.GetTaskRequest
-	17, // 55: qwq.capability.certificates.v1.CertificatesService.CancelTask:input_type -> qwq.capability.certificates.v1.CancelTaskRequest
-	19, // 56: qwq.capability.certificates.v1.CertificatesService.BindCertificate:input_type -> qwq.capability.certificates.v1.BindCertificateRequest
-	21, // 57: qwq.capability.certificates.v1.CertificatesService.UnbindCertificate:input_type -> qwq.capability.certificates.v1.UnbindCertificateRequest
-	23, // 58: qwq.capability.certificates.v1.CertificatesService.DeployBinding:input_type -> qwq.capability.certificates.v1.DeployBindingRequest
-	25, // 59: qwq.capability.certificates.v1.CertificatesService.RollbackBinding:input_type -> qwq.capability.certificates.v1.RollbackBindingRequest
-	27, // 60: qwq.capability.certificates.v1.CertificatesService.RemoveGeneration:input_type -> qwq.capability.certificates.v1.RemoveGenerationRequest
-	29, // 61: qwq.capability.certificates.v1.CertificatesService.RemoveCertificate:input_type -> qwq.capability.certificates.v1.RemoveCertificateRequest
-	31, // 62: qwq.capability.certificates.v1.CertificatesService.ConfigureRenewal:input_type -> qwq.capability.certificates.v1.ConfigureRenewalRequest
-	33, // 63: qwq.capability.certificates.v1.CertificatesService.RevokeRenewal:input_type -> qwq.capability.certificates.v1.RevokeRenewalRequest
-	35, // 64: qwq.capability.certificates.v1.CertificatesService.GetRenewal:input_type -> qwq.capability.certificates.v1.GetRenewalRequest
-	6,  // 65: qwq.capability.certificates.v1.CertificatesService.ListCertificates:output_type -> qwq.capability.certificates.v1.ListCertificatesResponse
-	8,  // 66: qwq.capability.certificates.v1.CertificatesService.GetCertificate:output_type -> qwq.capability.certificates.v1.GetCertificateResponse
-	10, // 67: qwq.capability.certificates.v1.CertificatesService.SubmitIssue:output_type -> qwq.capability.certificates.v1.SubmitIssueResponse
-	12, // 68: qwq.capability.certificates.v1.CertificatesService.SubmitImport:output_type -> qwq.capability.certificates.v1.SubmitImportResponse
-	14, // 69: qwq.capability.certificates.v1.CertificatesService.SubmitTestCertificate:output_type -> qwq.capability.certificates.v1.SubmitTestCertificateResponse
-	16, // 70: qwq.capability.certificates.v1.CertificatesService.GetTask:output_type -> qwq.capability.certificates.v1.GetTaskResponse
-	18, // 71: qwq.capability.certificates.v1.CertificatesService.CancelTask:output_type -> qwq.capability.certificates.v1.CancelTaskResponse
-	20, // 72: qwq.capability.certificates.v1.CertificatesService.BindCertificate:output_type -> qwq.capability.certificates.v1.BindCertificateResponse
-	22, // 73: qwq.capability.certificates.v1.CertificatesService.UnbindCertificate:output_type -> qwq.capability.certificates.v1.UnbindCertificateResponse
-	24, // 74: qwq.capability.certificates.v1.CertificatesService.DeployBinding:output_type -> qwq.capability.certificates.v1.DeployBindingResponse
-	26, // 75: qwq.capability.certificates.v1.CertificatesService.RollbackBinding:output_type -> qwq.capability.certificates.v1.RollbackBindingResponse
-	28, // 76: qwq.capability.certificates.v1.CertificatesService.RemoveGeneration:output_type -> qwq.capability.certificates.v1.RemoveGenerationResponse
-	30, // 77: qwq.capability.certificates.v1.CertificatesService.RemoveCertificate:output_type -> qwq.capability.certificates.v1.RemoveCertificateResponse
-	32, // 78: qwq.capability.certificates.v1.CertificatesService.ConfigureRenewal:output_type -> qwq.capability.certificates.v1.ConfigureRenewalResponse
-	34, // 79: qwq.capability.certificates.v1.CertificatesService.RevokeRenewal:output_type -> qwq.capability.certificates.v1.RevokeRenewalResponse
-	36, // 80: qwq.capability.certificates.v1.CertificatesService.GetRenewal:output_type -> qwq.capability.certificates.v1.GetRenewalResponse
-	65, // [65:81] is the sub-list for method output_type
-	49, // [49:65] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	40, // 22: qwq.capability.certificates.v1.CancelTaskResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 23: qwq.capability.certificates.v1.ReserveBindingRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	40, // 24: qwq.capability.certificates.v1.ReserveBindingResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 25: qwq.capability.certificates.v1.BindCertificateRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	2,  // 26: qwq.capability.certificates.v1.BindCertificateResponse.certificate:type_name -> qwq.capability.certificates.v1.CertificateView
+	40, // 27: qwq.capability.certificates.v1.BindCertificateResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 28: qwq.capability.certificates.v1.UnbindCertificateRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	2,  // 29: qwq.capability.certificates.v1.UnbindCertificateResponse.certificate:type_name -> qwq.capability.certificates.v1.CertificateView
+	40, // 30: qwq.capability.certificates.v1.UnbindCertificateResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 31: qwq.capability.certificates.v1.DeployBindingRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	2,  // 32: qwq.capability.certificates.v1.DeployBindingResponse.certificate:type_name -> qwq.capability.certificates.v1.CertificateView
+	40, // 33: qwq.capability.certificates.v1.DeployBindingResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 34: qwq.capability.certificates.v1.RollbackBindingRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	2,  // 35: qwq.capability.certificates.v1.RollbackBindingResponse.certificate:type_name -> qwq.capability.certificates.v1.CertificateView
+	40, // 36: qwq.capability.certificates.v1.RollbackBindingResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 37: qwq.capability.certificates.v1.RemoveGenerationRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	2,  // 38: qwq.capability.certificates.v1.RemoveGenerationResponse.certificate:type_name -> qwq.capability.certificates.v1.CertificateView
+	40, // 39: qwq.capability.certificates.v1.RemoveGenerationResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 40: qwq.capability.certificates.v1.RemoveCertificateRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	40, // 41: qwq.capability.certificates.v1.RemoveCertificateResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 42: qwq.capability.certificates.v1.ConfigureRenewalRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	4,  // 43: qwq.capability.certificates.v1.ConfigureRenewalResponse.renewal:type_name -> qwq.capability.certificates.v1.RenewalView
+	40, // 44: qwq.capability.certificates.v1.ConfigureRenewalResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 45: qwq.capability.certificates.v1.RevokeRenewalRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	4,  // 46: qwq.capability.certificates.v1.RevokeRenewalResponse.renewal:type_name -> qwq.capability.certificates.v1.RenewalView
+	40, // 47: qwq.capability.certificates.v1.RevokeRenewalResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	39, // 48: qwq.capability.certificates.v1.GetRenewalRequest.context:type_name -> qwq.platform.v1.HostCallContext
+	4,  // 49: qwq.capability.certificates.v1.GetRenewalResponse.renewal:type_name -> qwq.capability.certificates.v1.RenewalView
+	40, // 50: qwq.capability.certificates.v1.GetRenewalResponse.error:type_name -> qwq.platform.v1.ErrorDetail
+	5,  // 51: qwq.capability.certificates.v1.CertificatesService.ListCertificates:input_type -> qwq.capability.certificates.v1.ListCertificatesRequest
+	7,  // 52: qwq.capability.certificates.v1.CertificatesService.GetCertificate:input_type -> qwq.capability.certificates.v1.GetCertificateRequest
+	9,  // 53: qwq.capability.certificates.v1.CertificatesService.SubmitIssue:input_type -> qwq.capability.certificates.v1.SubmitIssueRequest
+	11, // 54: qwq.capability.certificates.v1.CertificatesService.SubmitImport:input_type -> qwq.capability.certificates.v1.SubmitImportRequest
+	13, // 55: qwq.capability.certificates.v1.CertificatesService.SubmitTestCertificate:input_type -> qwq.capability.certificates.v1.SubmitTestCertificateRequest
+	15, // 56: qwq.capability.certificates.v1.CertificatesService.GetTask:input_type -> qwq.capability.certificates.v1.GetTaskRequest
+	17, // 57: qwq.capability.certificates.v1.CertificatesService.CancelTask:input_type -> qwq.capability.certificates.v1.CancelTaskRequest
+	19, // 58: qwq.capability.certificates.v1.CertificatesService.ReserveBinding:input_type -> qwq.capability.certificates.v1.ReserveBindingRequest
+	21, // 59: qwq.capability.certificates.v1.CertificatesService.BindCertificate:input_type -> qwq.capability.certificates.v1.BindCertificateRequest
+	23, // 60: qwq.capability.certificates.v1.CertificatesService.UnbindCertificate:input_type -> qwq.capability.certificates.v1.UnbindCertificateRequest
+	25, // 61: qwq.capability.certificates.v1.CertificatesService.DeployBinding:input_type -> qwq.capability.certificates.v1.DeployBindingRequest
+	27, // 62: qwq.capability.certificates.v1.CertificatesService.RollbackBinding:input_type -> qwq.capability.certificates.v1.RollbackBindingRequest
+	29, // 63: qwq.capability.certificates.v1.CertificatesService.RemoveGeneration:input_type -> qwq.capability.certificates.v1.RemoveGenerationRequest
+	31, // 64: qwq.capability.certificates.v1.CertificatesService.RemoveCertificate:input_type -> qwq.capability.certificates.v1.RemoveCertificateRequest
+	33, // 65: qwq.capability.certificates.v1.CertificatesService.ConfigureRenewal:input_type -> qwq.capability.certificates.v1.ConfigureRenewalRequest
+	35, // 66: qwq.capability.certificates.v1.CertificatesService.RevokeRenewal:input_type -> qwq.capability.certificates.v1.RevokeRenewalRequest
+	37, // 67: qwq.capability.certificates.v1.CertificatesService.GetRenewal:input_type -> qwq.capability.certificates.v1.GetRenewalRequest
+	6,  // 68: qwq.capability.certificates.v1.CertificatesService.ListCertificates:output_type -> qwq.capability.certificates.v1.ListCertificatesResponse
+	8,  // 69: qwq.capability.certificates.v1.CertificatesService.GetCertificate:output_type -> qwq.capability.certificates.v1.GetCertificateResponse
+	10, // 70: qwq.capability.certificates.v1.CertificatesService.SubmitIssue:output_type -> qwq.capability.certificates.v1.SubmitIssueResponse
+	12, // 71: qwq.capability.certificates.v1.CertificatesService.SubmitImport:output_type -> qwq.capability.certificates.v1.SubmitImportResponse
+	14, // 72: qwq.capability.certificates.v1.CertificatesService.SubmitTestCertificate:output_type -> qwq.capability.certificates.v1.SubmitTestCertificateResponse
+	16, // 73: qwq.capability.certificates.v1.CertificatesService.GetTask:output_type -> qwq.capability.certificates.v1.GetTaskResponse
+	18, // 74: qwq.capability.certificates.v1.CertificatesService.CancelTask:output_type -> qwq.capability.certificates.v1.CancelTaskResponse
+	20, // 75: qwq.capability.certificates.v1.CertificatesService.ReserveBinding:output_type -> qwq.capability.certificates.v1.ReserveBindingResponse
+	22, // 76: qwq.capability.certificates.v1.CertificatesService.BindCertificate:output_type -> qwq.capability.certificates.v1.BindCertificateResponse
+	24, // 77: qwq.capability.certificates.v1.CertificatesService.UnbindCertificate:output_type -> qwq.capability.certificates.v1.UnbindCertificateResponse
+	26, // 78: qwq.capability.certificates.v1.CertificatesService.DeployBinding:output_type -> qwq.capability.certificates.v1.DeployBindingResponse
+	28, // 79: qwq.capability.certificates.v1.CertificatesService.RollbackBinding:output_type -> qwq.capability.certificates.v1.RollbackBindingResponse
+	30, // 80: qwq.capability.certificates.v1.CertificatesService.RemoveGeneration:output_type -> qwq.capability.certificates.v1.RemoveGenerationResponse
+	32, // 81: qwq.capability.certificates.v1.CertificatesService.RemoveCertificate:output_type -> qwq.capability.certificates.v1.RemoveCertificateResponse
+	34, // 82: qwq.capability.certificates.v1.CertificatesService.ConfigureRenewal:output_type -> qwq.capability.certificates.v1.ConfigureRenewalResponse
+	36, // 83: qwq.capability.certificates.v1.CertificatesService.RevokeRenewal:output_type -> qwq.capability.certificates.v1.RevokeRenewalResponse
+	38, // 84: qwq.capability.certificates.v1.CertificatesService.GetRenewal:output_type -> qwq.capability.certificates.v1.GetRenewalResponse
+	68, // [68:85] is the sub-list for method output_type
+	51, // [51:68] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_qwq_capability_certificates_v1_certificates_proto_init() }
@@ -2692,7 +2846,7 @@ func file_qwq_capability_certificates_v1_certificates_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_qwq_capability_certificates_v1_certificates_proto_rawDesc), len(file_qwq_capability_certificates_v1_certificates_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   37,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

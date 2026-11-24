@@ -362,6 +362,13 @@
           </div>
         </div>
         <form id="renewal-form" class="form-grid">
+          <div class="field field-full">
+            <label for="renew-challenge-type">自动续期验证方式</label>
+            <select id="renew-challenge-type" name="challenge_type">
+              <option value="http-01">HTTP-01（免 DNS Token，通过内置 web.ingress 80 端口 60 天自动续期）</option>
+              <option value="dns-01">DNS-01（联动 domain.dns 服务商 API，支持泛域名自动续期）</option>
+            </select>
+          </div>
           <div class="field">
             <label for="renew-policy-id">续期策略 ID</label>
             <input id="renew-policy-id" name="policy_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 pol-panel-main">
@@ -370,13 +377,13 @@
             <label for="renew-cert-id">关联证书 ID</label>
             <select id="renew-cert-id" name="certificate_id" required></select>
           </div>
-          <div class="field">
+          <div class="field" id="renew-provider-field" hidden>
             <label for="renew-provider-id">DNS 服务商 ID</label>
-            <input id="renew-provider-id" name="provider_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 cf-prod">
+            <input id="renew-provider-id" name="provider_id" type="text" pattern="[A-Za-z0-9._-]+" placeholder="例如 cf-prod">
           </div>
-          <div class="field">
+          <div class="field" id="renew-zone-field" hidden>
             <label for="renew-zone-id">托管域名区域 Zone ID</label>
-            <input id="renew-zone-id" name="zone_id" type="text" required pattern="[A-Za-z0-9._-]+" placeholder="例如 zone-example-com">
+            <input id="renew-zone-id" name="zone_id" type="text" pattern="[A-Za-z0-9._-]+" placeholder="例如 zone-example-com">
           </div>
           <div class="field">
             <label for="renew-ca">受控 ACME CA</label>

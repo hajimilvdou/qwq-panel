@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	pluginconfigv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/pluginconfig/v1"
@@ -410,6 +411,50 @@ func warpTraceURL() string {
 	return defaultWARPTraceURL
 }
 
+// SelectOptimalWARPEndpoint 根据本机是否具备 IPv4 出站路由，智能选择 IPv4 或 IPv6 Cloudflare WARP Endpoint。
+func SelectOptimalWARPEndpoint(hostEndpoint, v4Endpoint, v6Endpoint string, hasIPv4Outbound bool) string {
+	normalizePort := func(ep string, isV6 bool) string {
+		ep = strings.TrimSpace(ep)
+		if ep == "" {
+			return ""
+		}
+		h, p, err := net.SplitHostPort(ep)
+		if err != nil {
+			h = strings.Trim(ep, "[]")
+			p = "2408"
+		}
+		if p == "" || p == "0" {
+			p = "2408"
+		}
+		if isV6 || strings.Contains(h, ":") {
+			return "[" + strings.Trim(h, "[]") + "]:" + p
+		}
+		return net.JoinHostPort(h, p)
+	}
+	if !hasIPv4Outbound {
+		if v6 := normalizePort(v6Endpoint, true); v6 != "" {
+			return v6
+		}
+		return "[2606:4700:d0::a29f:c001]:2408"
+	}
+	if v4 := normalizePort(v4Endpoint, false); v4 != "" {
+		return v4
+	}
+	if h := normalizePort(hostEndpoint, false); h != "" {
+		return h
+	}
+	return "162.159.192.1:2408"
+}
+
+func detectIPv4Outbound() bool {
+	c, err := net.DialTimeout("udp4", "1.1.1.1:53", 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
+
 type cfRegResponse struct {
 	ID      string `json:"id"`
 	Token   string `json:"token"`
@@ -494,25 +539,14 @@ func registerCloudflareWARP(ctx context.Context, client *http.Client, licenseKey
 		addrV6 = ensureWARPCIDR(parsed.Config.Interface.Addresses.V6, "/128")
 	}
 	peerPub := defaultWARPPeerPubKey
-	endpoint := defaultWARPEndpoint
+	hasV4 := detectIPv4Outbound()
+	endpoint := SelectOptimalWARPEndpoint(defaultWARPEndpoint, "", "", hasV4)
 	if len(parsed.Config.Peers) > 0 {
 		if pk := strings.TrimSpace(parsed.Config.Peers[0].PublicKey); pk != "" {
 			peerPub = pk
 		}
-		ep := strings.TrimSpace(parsed.Config.Peers[0].Endpoint.Host)
-		if ep == "" {
-			ep = strings.TrimSpace(parsed.Config.Peers[0].Endpoint.V4)
-		}
-		if ep != "" {
-			if h, p, serr := net.SplitHostPort(ep); serr == nil {
-				if p == "" || p == "0" {
-					ep = net.JoinHostPort(h, "2408")
-				}
-			} else {
-				ep = net.JoinHostPort(strings.Trim(ep, "[]"), "2408")
-			}
-			endpoint = ep
-		}
+		epObj := parsed.Config.Peers[0].Endpoint
+		endpoint = SelectOptimalWARPEndpoint(epObj.Host, epObj.V4, epObj.V6, hasV4)
 	}
 	clientID := strings.TrimSpace(parsed.Config.ClientID)
 	reserved := decodeWARPClientIDReserved(clientID)
@@ -648,6 +682,15 @@ func ensureWARPCIDR(addr, suffix string) string {
 	return addr + suffix
 }
 
+var warpBlockedEndpointPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("0000::/8"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+}
+
 func normalizeWARPEndpoint(raw string) (string, error) {
 	ep := strings.TrimSpace(raw)
 	if ep == "" {
@@ -664,10 +707,19 @@ func normalizeWARPEndpoint(raw string) (string, error) {
 	if err != nil || port < 1 || port > 65535 {
 		return "", pluginsdk.Errorf("INVALID_ARGUMENT", "WARP Endpoint 端口必须在 1..65535 之间")
 	}
-	if ip, perr := netip.ParseAddr(host); perr == nil {
+	cleanHost := strings.Trim(host, "[]")
+	if strings.EqualFold(cleanHost, "localhost") {
+		return "", pluginsdk.Errorf("INVALID_ARGUMENT", "WARP Endpoint 不能指向回环或内网地址")
+	}
+	if ip, perr := netip.ParseAddr(cleanHost); perr == nil {
 		ip = ip.Unmap()
-		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-			return "", pluginsdk.Errorf("INVALID_ARGUMENT", "WARP Endpoint 不能指向回环或链路本地地址")
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+			return "", pluginsdk.Errorf("INVALID_ARGUMENT", "WARP Endpoint 不能指向回环、内网或链路本地地址")
+		}
+		for _, pfx := range warpBlockedEndpointPrefixes {
+			if pfx.Contains(ip) {
+				return "", pluginsdk.Errorf("INVALID_ARGUMENT", "WARP Endpoint 不能指向保留/CGNAT 内网地址")
+			}
 		}
 	}
 	return ep, nil
@@ -952,6 +1004,26 @@ func (i *instance) handleWARPStatus(ctx context.Context, _ pluginsdk.Request) (p
 	})
 }
 
+func (i *instance) rejectAnyTLSBoundProfiles(ctx context.Context, boundIDs []string) error {
+	if len(boundIDs) == 0 || i == nil || i.store == nil {
+		return nil
+	}
+	nodes, err := i.store.ListNodes(ctx, "", "", "", "", false)
+	if err != nil {
+		return nil
+	}
+	byID := make(map[string]proxyNodeRecord, len(nodes))
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
+	for _, id := range boundIDs {
+		if n, ok := byID[id]; ok && strings.EqualFold(n.Protocol, "anytls") {
+			return pluginsdk.Errorf("INVALID_ARGUMENT", "WARP 仅支持绑定 Xray 托管入站端口，暂不支持绑定独立 AnyTLS 节点 (%s)", id)
+		}
+	}
+	return nil
+}
+
 func (i *instance) handleWARPRegister(ctx context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
 	var in warpRegisterRequest
 	if err := decodeOptionalJSON(req.Payload, &in); err != nil {
@@ -963,6 +1035,9 @@ func (i *instance) handleWARPRegister(ctx context.Context, req pluginsdk.Request
 	}
 	bound, err := normalizeBoundProfiles(in.BoundProfileIDs)
 	if err != nil {
+		return pluginsdk.Response{}, err
+	}
+	if err := i.rejectAnyTLSBoundProfiles(ctx, bound); err != nil {
 		return pluginsdk.Response{}, err
 	}
 	domains, err := normalizeWARPDomains(in.Domains)
@@ -1138,6 +1213,11 @@ func (i *instance) handleWARPConfigure(ctx context.Context, req pluginsdk.Reques
 		}
 		next.BoundProfileIDs = b
 	}
+	if len(next.BoundProfileIDs) > 0 {
+		if err := i.rejectAnyTLSBoundProfiles(ctx, next.BoundProfileIDs); err != nil {
+			return pluginsdk.Response{}, err
+		}
+	}
 	if in.Domains != nil {
 		d, dErr := normalizeWARPDomains(*in.Domains)
 		if dErr != nil {
@@ -1184,46 +1264,63 @@ func (i *instance) handleWARPProbe(ctx context.Context, _ pluginsdk.Request) (pl
 		candidates = append([]string{cur.Endpoint}, candidates...)
 	}
 
-	results := make([]endpointProbe, 0, len(candidates))
-	bestEndpoint := ""
-	bestLatency := int64(1<<62 - 1)
-	for _, ep := range candidates {
+	results := make([]endpointProbe, len(candidates))
+	valid := make([]bool, len(candidates))
+	var wg sync.WaitGroup
+	for idx, ep := range candidates {
 		host, _, err := net.SplitHostPort(ep)
 		if err != nil {
 			continue
 		}
-		// 对 Cloudflare Anycast 节点执行真实公网 TLS 443 握手测 RTT（消除虚假本地 UDP dial 回退并防 SSRF）。
-		start := time.Now()
-		d := NewPublicProbeDialer(2500 * time.Millisecond)
-		rawConn, derr := d.DialContext(ctx, "tcp", net.JoinHostPort(host, "443"))
-		if derr != nil {
-			lat := time.Since(start).Milliseconds()
-			results = append(results, endpointProbe{Endpoint: ep, Reachable: false, LatencyMS: lat, Error: derr.Error()})
+		valid[idx] = true
+		wg.Add(1)
+		go func(k int, endpoint, host string) {
+			defer wg.Done()
+			// 对 Cloudflare Anycast 节点执行真实公网 TLS 443 握手测 RTT（消除虚假本地 UDP dial 回退并防 SSRF）。
+			start := time.Now()
+			d := NewPublicProbeDialer(2500 * time.Millisecond)
+			rawConn, derr := d.DialContext(ctx, "tcp", net.JoinHostPort(host, "443"))
+			if derr != nil {
+				lat := time.Since(start).Milliseconds()
+				results[k] = endpointProbe{Endpoint: endpoint, Reachable: false, LatencyMS: lat, Error: derr.Error()}
+				return
+			}
+			sni := host
+			if _, parseErr := netip.ParseAddr(host); parseErr == nil {
+				sni = "engage.cloudflareclient.com"
+			}
+			tlsConn := tls.Client(rawConn, &tls.Config{
+				ServerName:         sni,
+				InsecureSkipVerify: true,
+				MinVersion:         tls.VersionTLS12,
+			})
+			_ = tlsConn.SetDeadline(time.Now().Add(2500 * time.Millisecond))
+			herr := tlsConn.HandshakeContext(ctx)
+			lat := max(time.Since(start).Milliseconds(), 1)
+			_ = tlsConn.Close()
+			if herr != nil {
+				results[k] = endpointProbe{Endpoint: endpoint, Reachable: false, LatencyMS: lat, Error: herr.Error()}
+				return
+			}
+			results[k] = endpointProbe{Endpoint: endpoint, Reachable: true, LatencyMS: lat}
+		}(idx, ep, host)
+	}
+	wg.Wait()
+
+	filteredResults := make([]endpointProbe, 0, len(candidates))
+	bestEndpoint := ""
+	bestLatency := int64(1<<62 - 1)
+	for idx, r := range results {
+		if !valid[idx] {
 			continue
 		}
-		sni := host
-		if _, parseErr := netip.ParseAddr(host); parseErr == nil {
-			sni = "engage.cloudflareclient.com"
-		}
-		tlsConn := tls.Client(rawConn, &tls.Config{
-			ServerName:         sni,
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS12,
-		})
-		_ = tlsConn.SetDeadline(time.Now().Add(2500 * time.Millisecond))
-		herr := tlsConn.HandshakeContext(ctx)
-		lat := max(time.Since(start).Milliseconds(), 1)
-		_ = tlsConn.Close()
-		if herr != nil {
-			results = append(results, endpointProbe{Endpoint: ep, Reachable: false, LatencyMS: lat, Error: herr.Error()})
-			continue
-		}
-		results = append(results, endpointProbe{Endpoint: ep, Reachable: true, LatencyMS: lat})
-		if lat < bestLatency {
-			bestLatency = lat
-			bestEndpoint = ep
+		filteredResults = append(filteredResults, r)
+		if r.Reachable && r.LatencyMS < bestLatency {
+			bestLatency = r.LatencyMS
+			bestEndpoint = r.Endpoint
 		}
 	}
+	results = filteredResults
 
 	traceInfo := map[string]string{}
 	traceClient := &http.Client{Timeout: 4 * time.Second}

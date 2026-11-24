@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ai.relay.pricings.list.response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pricings"],
+  "properties": {
+    "pricings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "model_name",
+          "billing_mode",
+          "input_micros_per_1k",
+          "output_micros_per_1k",
+          "cache_read_ratio",
+          "cache_write_ratio",
+          "per_call_micros",
+          "updated_at"
+        ],
+        "properties": {
+          "model_name": { "type": "string" },
+          "billing_mode": { "type": "string", "enum": ["token", "per_call"] },
+          "input_micros_per_1k": { "type": "integer", "minimum": 0 },
+          "output_micros_per_1k": { "type": "integer", "minimum": 0 },
+          "cache_read_ratio": { "type": "number", "minimum": 0 },
+          "cache_write_ratio": { "type": "number", "minimum": 0 },
+          "per_call_micros": { "type": "integer", "minimum": 0 },
+          "updated_at": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

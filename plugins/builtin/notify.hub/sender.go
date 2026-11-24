@@ -62,6 +62,9 @@ func newSafeHTTPClient(allowPrivate bool, timeout time.Duration) *http.Client {
 			if err != nil {
 				return nil, err
 			}
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("egress host %s resolved to no addresses", host)
+			}
 			for _, ip := range ips {
 				ip = ip.Unmap()
 				if isAlwaysBlockedMetadataIP(ip) {
@@ -91,7 +94,17 @@ func newSafeHTTPClient(allowPrivate bool, timeout time.Duration) *http.Client {
 }
 
 var (
-	notifyCGNATPrefix       = netip.MustParsePrefix("100.64.0.0/10")
+	notifyDisallowedSpecialPrefixes = []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/8"),      // RFC 1122 "this network"
+		netip.MustParsePrefix("100.64.0.0/10"),  // CGNAT & Alibaba Cloud metadata
+		netip.MustParsePrefix("198.18.0.0/15"),  // RFC 2544 benchmark
+		netip.MustParsePrefix("0000::/8"),       // IPv6 reserved
+		netip.MustParsePrefix("64:ff9b::/96"),   // NAT64 well-known
+		netip.MustParsePrefix("64:ff9b:1::/48"), // NAT64 local
+		netip.MustParsePrefix("100::/64"),       // RFC 6666 discard-only
+		netip.MustParsePrefix("2001::/32"),      // Teredo
+		netip.MustParsePrefix("2002::/16"),      // 6to4
+	}
 	alwaysBlockedMetadataV4 = []netip.Prefix{
 		netip.MustParsePrefix("169.254.0.0/16"),     // AWS/GCP/Azure/DigitalOcean IMDS & IPv4 link-local
 		netip.MustParsePrefix("100.100.100.200/32"), // Alibaba Cloud metadata
@@ -133,9 +146,15 @@ func isDisallowedIP(ip netip.Addr) bool {
 		return true
 	}
 	u := ip.Unmap()
-	return isAlwaysBlockedMetadataIP(u) || u.IsLoopback() || u.IsPrivate() ||
-		u.IsMulticast() || u.IsUnspecified() ||
-		notifyCGNATPrefix.Contains(u)
+	if isAlwaysBlockedMetadataIP(u) || u.IsLoopback() || u.IsPrivate() || u.IsMulticast() || u.IsUnspecified() {
+		return true
+	}
+	for _, p := range notifyDisallowedSpecialPrefixes {
+		if p.Contains(u) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateChannelConfig(kind string, cfg ChannelConfig) error {

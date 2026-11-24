@@ -22,8 +22,8 @@ export const routes: readonly RouteDef[] = [
     perm: 'host.operations:read',
     load: () => import('../features/activity/DetailPage.svelte'),
   },
-  { pattern: '/agent', title: 'AI 助手', load: () => import('../features/agent/Page.svelte') },
-  { pattern: '/agent/:sessionId', title: 'AI 助手', load: () => import('../features/agent/Page.svelte') },
+  { pattern: '/agent', title: 'AI 助手', perm: 'host.agent_sessions:write', load: () => import('../features/agent/Page.svelte') },
+  { pattern: '/agent/:sessionId', title: 'AI 助手', perm: 'host.agent_sessions:write', load: () => import('../features/agent/Page.svelte') },
   { pattern: '/apps', title: '应用中心', perm: 'host.plugins:read', load: () => import('../features/apps/Page.svelte') },
   {
     pattern: '/apps/install',

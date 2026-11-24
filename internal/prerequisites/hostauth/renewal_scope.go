@@ -9,14 +9,19 @@ import (
 	"github.com/qwq-panel/qwq/internal/actor"
 	"github.com/qwq-panel/qwq/internal/authz"
 	"github.com/qwq-panel/qwq/internal/prerequisites/certificates"
+	"github.com/qwq-panel/qwq/internal/prerequisites/dns"
 	"github.com/qwq-panel/qwq/internal/prerequisites/fault"
 )
 
 // ======================== 精确证书、DNS、当前消费者与实际账号的逐次复核 ========================
 
-func (a *Authority) readRenewalScope(ctx context.Context, certificateID, providerID, zoneID string, ca certificates.CA, refs []string) (renewalDependencies, error) {
+func (a *Authority) readRenewalScope(ctx context.Context, certificateID, providerID, zoneID, challengeType string, ca certificates.CA, refs []string) (renewalDependencies, error) {
 	if len(refs) == 0 || len(refs) > 8 {
 		return renewalDependencies{}, fault.New("POLICY_SCOPE_DENIED", "续期必须指定有界的已确认消费绑定")
+	}
+	isHTTP01 := challengeType == "http-01"
+	if !isHTTP01 && challengeType != "" && challengeType != "dns-01" {
+		return renewalDependencies{}, fault.New("VALIDATION_FAILED", "不支持的 ACME 续期验证方式")
 	}
 	certificate, certificateRevision, found, err := a.loadCertificate(ctx, certificateID)
 	if err != nil {
@@ -25,32 +30,50 @@ func (a *Authority) readRenewalScope(ctx context.Context, certificateID, provide
 	if !found {
 		return renewalDependencies{}, fault.New("POLICY_SCOPE_DENIED", "续期需要既有证书的私有SAN登记")
 	}
-	providerScope, providerRevision, zoneRevision, err := a.resolveScope(ctx, providerID, zoneID)
-	if err != nil {
-		return renewalDependencies{}, err
+
+	var (
+		providerScope    dns.Scope
+		providerRevision string
+		zoneRevision     string
+		provider         providerRegistration
+		zone             zoneRegistration
+	)
+	if isHTTP01 {
+		if providerID != "" || zoneID != "" {
+			return renewalDependencies{}, fault.New("VALIDATION_FAILED", "HTTP-01 自动续期无需提供 DNS provider_id 或 zone_id")
+		}
+	} else {
+		var rerr error
+		providerScope, providerRevision, zoneRevision, rerr = a.resolveScope(ctx, providerID, zoneID)
+		if rerr != nil {
+			return renewalDependencies{}, rerr
+		}
+		var actualProvider string
+		provider, actualProvider, found, err = a.loadProvider(ctx, providerID)
+		if err != nil {
+			return renewalDependencies{}, err
+		}
+		if !found || actualProvider != providerRevision {
+			return renewalDependencies{}, fault.New("CREDENTIAL_REVOKED", "续期提供商授权发生变化")
+		}
+		var actualZone string
+		zone, actualZone, found, err = a.loadZone(ctx, providerID, zoneID)
+		if err != nil {
+			return renewalDependencies{}, err
+		}
+		if !found || actualZone != zoneRevision {
+			return renewalDependencies{}, fault.New("ZONE_DENIED", "续期zone授权发生变化")
+		}
+		if err := a.authorizeRenewalDNS(ctx, provider, zone); err != nil {
+			return renewalDependencies{}, err
+		}
+		credentials, err := a.providerCredentials(ctx, provider)
+		credentials.Clear()
+		if err != nil {
+			return renewalDependencies{}, err
+		}
 	}
-	provider, actualProvider, found, err := a.loadProvider(ctx, providerID)
-	if err != nil {
-		return renewalDependencies{}, err
-	}
-	if !found || actualProvider != providerRevision {
-		return renewalDependencies{}, fault.New("CREDENTIAL_REVOKED", "续期提供商授权发生变化")
-	}
-	zone, actualZone, found, err := a.loadZone(ctx, providerID, zoneID)
-	if err != nil {
-		return renewalDependencies{}, err
-	}
-	if !found || actualZone != zoneRevision {
-		return renewalDependencies{}, fault.New("ZONE_DENIED", "续期zone授权发生变化")
-	}
-	if err := a.authorizeRenewalDNS(ctx, provider, zone); err != nil {
-		return renewalDependencies{}, err
-	}
-	credentials, err := a.providerCredentials(ctx, provider)
-	credentials.Clear()
-	if err != nil {
-		return renewalDependencies{}, err
-	}
+
 	state, _, err := a.loadBindingLedger(ctx)
 	if err != nil {
 		return renewalDependencies{}, err
@@ -66,8 +89,14 @@ func (a *Authority) readRenewalScope(ctx context.Context, certificateID, provide
 	}
 	dependencies := renewalDependencies{CertificateRevision: certificateRevision, ProviderRevision: providerRevision,
 		ZoneRevision: zoneRevision, Bindings: make([]renewalBinding, 0, len(refs))}
+	issuance := certificates.IssuanceScope{Spec: cloneCertificateSpec(certificate.Spec), CA: ca}
+	if isHTTP01 {
+		issuance.ChallengeType = "http-01"
+	} else {
+		issuance.Provider = providerScope
+	}
 	scope := certificates.RenewalScope{OwnerID: a.ownerID, CertificateID: certificateID,
-		Issuance:  certificates.IssuanceScope{Spec: cloneCertificateSpec(certificate.Spec), Provider: providerScope, CA: ca},
+		Issuance:  issuance,
 		Consumers: make([]certificates.Consumer, 0, len(refs))}
 	ordered := slices.Clone(refs)
 	slices.Sort(ordered)
@@ -87,7 +116,7 @@ func (a *Authority) readRenewalScope(ctx context.Context, certificateID, provide
 		if err != nil {
 			return renewalDependencies{}, err
 		}
-		if facts.BindingRef != entry.ID || facts.PluginVersion != entry.PluginVersion {
+		if !bindingFactsMatch(entry, facts) {
 			return renewalDependencies{}, fault.New("BINDING_REVOKED", "续期消费者的真实绑定或安装版本变化")
 		}
 		revision, err := bindingPolicyRevision(entry)
@@ -101,12 +130,14 @@ func (a *Authority) readRenewalScope(ctx context.Context, certificateID, provide
 	if err != nil {
 		return renewalDependencies{}, err
 	}
-	actual, latestProvider, latestZone, err := a.resolveScope(ctx, providerID, zoneID)
-	if err != nil {
-		return renewalDependencies{}, err
-	}
-	if actual != providerScope || latestProvider != providerRevision || latestZone != zoneRevision {
-		return renewalDependencies{}, fault.New("CREDENTIAL_REVOKED", "续期范围读取期间DNS授权变化")
+	if !isHTTP01 {
+		actual, latestProvider, latestZone, err := a.resolveScope(ctx, providerID, zoneID)
+		if err != nil {
+			return renewalDependencies{}, err
+		}
+		if actual != providerScope || latestProvider != providerRevision || latestZone != zoneRevision {
+			return renewalDependencies{}, fault.New("CREDENTIAL_REVOKED", "续期范围读取期间DNS授权变化")
+		}
 	}
 	latest, _, err := a.loadBindingLedger(ctx)
 	if err != nil {
@@ -129,8 +160,10 @@ func (a *Authority) readRenewalScope(ctx context.Context, certificateID, provide
 			return renewalDependencies{}, err
 		}
 	}
-	if err := a.authorizeRenewalDNS(ctx, provider, zone); err != nil {
-		return renewalDependencies{}, err
+	if !isHTTP01 {
+		if err := a.authorizeRenewalDNS(ctx, provider, zone); err != nil {
+			return renewalDependencies{}, err
+		}
 	}
 	return dependencies, nil
 }
@@ -160,7 +193,7 @@ func (a *Authority) checkRenewalRegistration(ctx context.Context, entry renewalR
 	}
 	wanted := entry.Dependencies
 	scope := wanted.Scope
-	actual, err := a.readRenewalScope(ctx, scope.CertificateID, scope.Issuance.Provider.ProviderID, scope.Issuance.Provider.ZoneID, scope.Issuance.CA, refs)
+	actual, err := a.readRenewalScope(ctx, scope.CertificateID, scope.Issuance.Provider.ProviderID, scope.Issuance.Provider.ZoneID, scope.Issuance.ChallengeType, scope.Issuance.CA, refs)
 	if err != nil {
 		return err
 	}

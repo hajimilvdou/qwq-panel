@@ -5,7 +5,31 @@
   const root = document.documentElement;
   const pick = (v, list, fb) => (list.includes(v) ? v : fb);
   const hash = new URLSearchParams(location.hash.slice(1));
-  root.dataset.theme = pick(hash.get('theme'), ['light', 'dark'], 'light');
+  const initialTheme = pick(hash.get('theme'), ['light', 'dark'], 'light');
+  root.dataset.theme = initialTheme;
+  root.style.colorScheme = initialTheme;
+  root.dataset.density = pick(hash.get('density'), ['comfortable', 'compact'], 'comfortable');
+
+  function applyHostVisualSettings(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.theme === 'light' || msg.theme === 'dark') {
+      root.dataset.theme = msg.theme;
+      root.style.colorScheme = msg.theme;
+    }
+    if (msg.density === 'comfortable' || msg.density === 'compact') {
+      root.dataset.density = msg.density;
+    }
+    if (msg.tokens && typeof msg.tokens === 'object') {
+      for (const [k, v] of Object.entries(msg.tokens)) {
+        if (k.startsWith('--') && typeof v === 'string' && !/[;{}<>]/.test(v)) {
+          root.style.setProperty(k, v.trim());
+        }
+      }
+      if (msg.tokens['--accent-strong']) root.style.setProperty('--cocoa', msg.tokens['--accent-strong'].trim());
+      else if (msg.tokens['--accent']) root.style.setProperty('--cocoa', msg.tokens['--accent'].trim());
+      if (msg.tokens['--on-accent']) root.style.setProperty('--on-cocoa', msg.tokens['--on-accent'].trim());
+    }
+  }
 
   const $ = (id) => document.getElementById(id);
   const statusEl = $('bridge-status');
@@ -240,6 +264,12 @@
       latestRules = rls;
 
       const chNameById = new Map(chs.map((c) => [c.id, c.name]));
+      const boundChannelIDs = new Set();
+      for (const r of rls) {
+        if (r && r.enabled && Array.isArray(r.channel_ids)) {
+          for (const cid of r.channel_ids) boundChannelIDs.add(cid);
+        }
+      }
 
       $('st-channels').textContent = String(chs.filter((c) => c.enabled).length);
       $('st-rules').textContent = String(rls.length);
@@ -271,9 +301,20 @@
         const strong = document.createElement('strong');
         strong.textContent = c.name;
         topLine.append(strong, badge(c.enabled ? '已启用' : '已停用', c.enabled ? 'ok' : 'muted'));
+        if (c.enabled && !boundChannelIDs.has(c.id)) {
+          const orphanBadge = badge('未绑定规则', 'warn');
+          orphanBadge.title = '真实系统告警不会发送至此渠道，请前往「路由与降噪规则」绑定';
+          topLine.appendChild(orphanBadge);
+        }
         const idCode = document.createElement('code');
         idCode.textContent = c.id;
         nameStack.append(topLine, idCode);
+        if (c.enabled && !boundChannelIDs.has(c.id)) {
+          const orphanTip = document.createElement('div');
+          orphanTip.className = 'orphan-tip';
+          orphanTip.textContent = '⚠ 未绑定启用的路由规则：真实系统告警不会发送至此渠道';
+          nameStack.appendChild(orphanTip);
+        }
         nameTd.appendChild(nameStack);
         tr.appendChild(nameTd);
 
@@ -549,10 +590,15 @@
 
     const payload = { name, kind, enabled, config };
     if (id) payload.id = id;
-    await invoke('notify.channel.upsert', payload);
+    const res = await invoke('notify.channel.upsert', payload);
     resetChannelForm();
     await refresh();
-  }, '渠道已加密保存'));
+    if (res && res.auto_created_rule) {
+      setStatus(`渠道已加密保存，并已自动创建默认全局告警规则「${res.auto_created_rule.name || '默认全局告警'}」（接收 warn 及以上系统告警）`);
+    } else {
+      setStatus('渠道已加密保存');
+    }
+  }));
 
   $('btn-save-rl').addEventListener('click', () => void runAction(async () => {
     const id = $('rl-id').value.trim();
@@ -628,8 +674,8 @@
       else req.reject(new Error(extractErrorMessage(data.problem || data.error, '复制失败')));
       return;
     }
-    if (data.t === 'ui.settings' && (data.theme === 'light' || data.theme === 'dark')) {
-      root.dataset.theme = data.theme;
+    if (data.t === 'ui.settings') {
+      applyHostVisualSettings(data);
     }
   }
 

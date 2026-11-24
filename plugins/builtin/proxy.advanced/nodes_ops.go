@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -346,11 +347,19 @@ func normalizeNodeDraft(in nodeUpsertRequest, existing *proxyNodeRecord, usedPor
 		if cfg.Method != corev2.MethodAES128 && cfg.Method != corev2.MethodAES256 && cfg.Method != corev2.MethodChaCha20 {
 			return proxyNodeRecord{}, invalidField("/config/method", "INVALID_VALUE", "SS2022 仅支持 2022-blake3-aes-128-gcm、2022-blake3-aes-256-gcm 或 2022-blake3-chacha20-poly1305")
 		}
+		wantKeyBytes := 16
+		if cfg.Method == corev2.MethodAES256 || cfg.Method == corev2.MethodChaCha20 {
+			wantKeyBytes = 32
+		}
 		if cfg.ServerKey == "" {
 			cfg.ServerKey = generateNodeSS2022Key(cfg.Method)
+		} else if rawKey, derr := base64.StdEncoding.DecodeString(strings.TrimSpace(cfg.ServerKey)); derr != nil || len(rawKey) != wantKeyBytes {
+			return proxyNodeRecord{}, invalidField("/config/server_key", "INVALID_VALUE", fmt.Sprintf("SS2022 (%s) server_key 必须为 %d 字节 Base64 密钥", cfg.Method, wantKeyBytes))
 		}
 		if cfg.UserKey == "" {
 			cfg.UserKey = generateNodeSS2022Key(cfg.Method)
+		} else if rawKey, derr := base64.StdEncoding.DecodeString(strings.TrimSpace(cfg.UserKey)); derr != nil || len(rawKey) != wantKeyBytes {
+			return proxyNodeRecord{}, invalidField("/config/user_key", "INVALID_VALUE", fmt.Sprintf("SS2022 (%s) user_key 必须为 %d 字节 Base64 密钥", cfg.Method, wantKeyBytes))
 		}
 		if cfg.ObfsMode == "" {
 			cfg.ObfsMode = corev2.ObfsNone

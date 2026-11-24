@@ -29,6 +29,7 @@
   import { page } from '$lib/page.svelte';
   import { navigate } from '$lib/router.svelte';
   import { resources } from '$lib/resource.svelte';
+  import { session } from '$lib/session.svelte';
   import { toasts } from '$lib/toast.svelte';
   import Composer from '../ai/Composer.svelte';
   import Transcript from '../ai/Transcript.svelte';
@@ -67,6 +68,8 @@
   let cfgPlan = $state(false);
   let cfgProviders = $state<AiProvider[]>([]);
 
+  const isAdmin = $derived(session.role === 'admin');
+  const canWriteAgent = $derived(session.can('host.agent_sessions:write'));
   const s = $derived(stream.session);
   const st = $derived(statusMeta(stream.transcript.status));
   const running = $derived(stream.transcript.status === 'running');
@@ -104,6 +107,7 @@
   });
 
   async function openConfigDialog() {
+    if (!canWriteAgent) return;
     cfgModel = activeModelName;
     cfgEffort = activeEffort;
     cfgMaxCtx = String(activeMaxCtx || 0);
@@ -120,6 +124,7 @@
   }
 
   async function saveConfigDialog() {
+    if (!canWriteAgent) return;
     cfgSaving = true;
     try {
       const ctxNum = Number(cfgMaxCtx) || 0;
@@ -139,7 +144,7 @@
   }
 
   const slashQuery = $derived(text.startsWith('/') ? text.slice(1).trim().toLowerCase() : '');
-  const showSlash = $derived(cmdOpen || text.startsWith('/'));
+  const showSlash = $derived(canWriteAgent && (cmdOpen || text.startsWith('/')));
   const filteredCmds = $derived(
     SLASH_COMMANDS.filter((c) => !slashQuery || c.cmd.toLowerCase().includes(slashQuery) || c.label.includes(slashQuery)),
   );
@@ -148,6 +153,7 @@
   );
 
   function pickSlash(cmd: string, instant?: boolean) {
+    if (!canWriteAgent) return;
     cmdOpen = false;
     if (instant && stream.phase === 'ready' && !stream.busy) {
       text = '';
@@ -158,6 +164,7 @@
   }
 
   function pickSkill(prompt: string) {
+    if (!canWriteAgent) return;
     cmdOpen = false;
     text = prompt;
   }
@@ -172,6 +179,7 @@
 
   let savingOrCancelled = false;
   function startEdit() {
+    if (!canWriteAgent) return;
     savingOrCancelled = false;
     titleDraft = s?.title ?? '';
     editing = true;
@@ -181,7 +189,7 @@
     editing = false;
   }
   async function saveTitle() {
-    if (savingOrCancelled) return;
+    if (savingOrCancelled || !canWriteAgent) return;
     savingOrCancelled = true;
     editing = false;
     const t = titleDraft.trim();
@@ -195,12 +203,13 @@
   }
 
   function pickMode(m: PermissionMode) {
-    if (m === s?.permission_mode) return;
+    if (!canWriteAgent || m === s?.permission_mode) return;
     if (m === 'full') confirmFull = true;
     else void changeMode(stream, m);
   }
 
   async function send(t: string) {
+    if (!canWriteAgent) return;
     try {
       await stream.send(t);
     } catch (err) {
@@ -209,6 +218,7 @@
   }
 
   async function remove() {
+    if (!canWriteAgent) return;
     deleteError = undefined;
     try {
       await stream.remove();
@@ -223,8 +233,8 @@
 
   const modeItems = $derived(
     MODES.map((m) => ({
-      label: (m === s?.permission_mode ? '✓ ' : '') + MODE_META[m].label,
-      disabled: m === 'custom',
+      label: (m === s?.permission_mode ? '✓ ' : '') + MODE_META[m].label + (m === 'full' && !isAdmin ? '（仅管理员）' : ''),
+      disabled: m === 'custom' || (m === 'full' && !isAdmin) || !canWriteAgent,
       tone: MODE_META[m].danger ? ('danger' as const) : undefined,
       onselect: () => pickMode(m),
     })),
@@ -267,10 +277,12 @@
               }
             }}
           />
-        {:else}
+        {:else if canWriteAgent}
           <button type="button" class="title" onclick={startEdit} title="点击改名">
             <span>{s.title || '新的对话'}</span><Icon name="edit" size={14} />
           </button>
+        {:else}
+          <span class="title-static">{s.title || '新的对话'}</span>
         {/if}
         {#if s}
           <Chip size="sm" tone={st.tone}>{st.label}</Chip>
@@ -280,24 +292,31 @@
 
       {#if s}
         <div class="acts">
-          {#if onopenworkspace}
+          {#if onopenworkspace && canWriteAgent}
             <Button size="sm" variant="ghost" icon="apps" onclick={() => onopenworkspace('prompts')} title="管理 MCP、技能与提示词">
               资源
             </Button>
           {/if}
-          <Menu label="权限模式" items={modeItems}>
-            {#snippet trigger(props)}
-              <button type="button" class="mode" class:danger={s.permission_mode === 'full'} {...props}>
-                <Icon name="shield" size={15} />
-                {MODE_META[s.permission_mode]?.short ?? s.permission_mode}
-              </button>
-            {/snippet}
-          </Menu>
-          {#if running}
-            <Button size="sm" variant="soft" icon="pause" onclick={() => pauseSession(stream)}>暂停</Button>
+          {#if canWriteAgent}
+            <Menu label="权限模式" items={modeItems}>
+              {#snippet trigger(props)}
+                <button type="button" class="mode" class:danger={s.permission_mode === 'full'} {...props}>
+                  <Icon name="shield" size={15} />
+                  {MODE_META[s.permission_mode]?.short ?? s.permission_mode}
+                </button>
+              {/snippet}
+            </Menu>
+            {#if running}
+              <Button size="sm" variant="soft" icon="pause" onclick={() => pauseSession(stream)}>暂停</Button>
+            {/if}
+            <Button size="sm" variant="ghost" icon="hand" onclick={() => takeOver(stream)} title="停下 AI 并切为只读">接管</Button>
+            <IconButton icon="trash" label="删除对话" variant="plain" onclick={() => (confirmDelete = true)} />
+          {:else}
+            <span class="mode readonly" class:danger={s.permission_mode === 'full'}>
+              <Icon name="shield" size={15} />
+              {MODE_META[s.permission_mode]?.short ?? s.permission_mode}
+            </span>
           {/if}
-          <Button size="sm" variant="ghost" icon="hand" onclick={() => takeOver(stream)} title="停下 AI 并切为只读">接管</Button>
-          <IconButton icon="trash" label="删除对话" variant="plain" onclick={() => (confirmDelete = true)} />
         </div>
       {/if}
     </header>
@@ -386,40 +405,51 @@
       <Composer
         bind:value={text}
         busy={stream.busy}
-        disabled={stream.phase !== 'ready'}
-        placeholder={stream.transcript.status === 'waiting_approval' ? '先处理上面的确认，再继续对话' : '输入运维需求或问题，输入 / 调用快捷指令与技能…'}
+        disabled={stream.phase !== 'ready' || !canWriteAgent}
+        placeholder={!canWriteAgent
+          ? '当前角色仅可查看，无法发送消息或修改会话'
+          : stream.transcript.status === 'waiting_approval'
+            ? '先处理上面的确认，再继续对话'
+            : '输入运维需求或问题，输入 / 调用快捷指令与技能…'}
         onsend={async (t) => {
           cmdOpen = false;
           await send(t);
         }}
-        onstop={running ? () => pauseSession(stream) : undefined}
+        onstop={canWriteAgent && running ? () => pauseSession(stream) : undefined}
       >
         {#snippet tools()}
-          <button type="button" class="c-pill" class:active={showSlash} onclick={() => (cmdOpen = !cmdOpen)}>
-            / 快捷指令
-          </button>
-          {#if s}
-            <button
-              type="button"
-              class="c-pill"
-              class:active={activePlan || Boolean(activeEffort)}
-              onclick={openConfigDialog}
-              title="调整当前会话的模型、思考挡位、上下文大小与计划模式"
-            >
-              <Icon name="settings" size={13} />
-              <span>
-                {activeModelName || '默认模型'}{activeEffort ? ` · ${activeEffort}` : ''}{activePlan ? ' · Plan' : ''}
-              </span>
+          {#if canWriteAgent}
+            <button type="button" class="c-pill" class:active={showSlash} onclick={() => (cmdOpen = !cmdOpen)}>
+              / 快捷指令
             </button>
-            <Menu label="权限模式" items={modeItems} align="start">
-              {#snippet trigger(props)}
-                <button type="button" class="c-pill" class:danger={s.permission_mode === 'full'} {...props}>
-                  <Icon name="shield" size={13} />
-                  <span>{MODE_META[s.permission_mode]?.label ?? s.permission_mode}</span>
-                  <Icon name="chevron-down" size={12} />
-                </button>
-              {/snippet}
-            </Menu>
+            {#if s}
+              <button
+                type="button"
+                class="c-pill"
+                class:active={activePlan || Boolean(activeEffort)}
+                onclick={openConfigDialog}
+                title="调整当前会话的模型、思考挡位、上下文大小与计划模式"
+              >
+                <Icon name="settings" size={13} />
+                <span>
+                  {activeModelName || '默认模型'}{activeEffort ? ` · ${activeEffort}` : ''}{activePlan ? ' · Plan' : ''}
+                </span>
+              </button>
+              <Menu label="权限模式" items={modeItems} align="start">
+                {#snippet trigger(props)}
+                  <button type="button" class="c-pill" class:danger={s.permission_mode === 'full'} {...props}>
+                    <Icon name="shield" size={13} />
+                    <span>{MODE_META[s.permission_mode]?.label ?? s.permission_mode}</span>
+                    <Icon name="chevron-down" size={12} />
+                  </button>
+                {/snippet}
+              </Menu>
+            {/if}
+          {:else if s}
+            <span class="c-pill">
+              <Icon name="shield" size={13} />
+              <span>只读查看</span>
+            </span>
           {/if}
         {/snippet}
       </Composer>
@@ -572,6 +602,18 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .title-static {
+    min-width: 0;
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-semibold);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mode.readonly {
+    cursor: default;
   }
   .title :global(svg) {
     flex: none;

@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/capability/local"
@@ -267,19 +269,31 @@ func mergePorts(a, b []uint32) []uint32 {
 
 func (s *Service) syncPanelPort(ctx context.Context, params []byte) sandbox.CapabilityResponse {
 	var req struct {
-		Port uint32 `json:"port"`
+		Port       uint32 `json:"port"`
+		ListenHost string `json:"listen_host,omitempty"`
 	}
 	if decodeObject(params, &req) != nil || req.Port == 0 || req.Port > 65535 {
 		return failure("VALIDATION_FAILED", "面板端口参数无效")
 	}
+	listenHost := strings.TrimSpace(req.ListenHost)
+	if listenHost != "" && !strings.EqualFold(listenHost, "localhost") {
+		trimmed := strings.Trim(listenHost, "[]")
+		ip, perr := netip.ParseAddr(trimmed)
+		if perr != nil || ip.IsMulticast() {
+			return failure("VALIDATION_FAILED", "面板监听主机地址无效")
+		}
+	}
+	loopbackOnly := listenHost != "" && IsLoopbackOnlyHost(listenHost)
 	unlock, err := s.State.Lock(ctx)
 	if err != nil {
 		return failure("UNAVAILABLE", "防火墙资源锁不可用")
 	}
 	defer unlock()
-	rawPort, err := json.Marshal(struct {
-		Port uint32 `json:"port"`
-	}{Port: req.Port})
+	rawPort, err := json.Marshal(AuthoritativePanelPortHint{
+		Port:       uint16(req.Port),
+		ListenHost: listenHost,
+		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
+	})
 	if err != nil {
 		return failure("INTERNAL", "编码面板端口配置失败")
 	}
@@ -288,7 +302,8 @@ func (s *Service) syncPanelPort(ctx context.Context, params []byte) sandbox.Capa
 		portState = local.FileState{Directory: "/var/lib/qwq-capability", Name: "panel-port.json", Mode: 0644}
 	}
 	var prevPanelPort uint32
-	if prevRaw, _, rerr := portState.Read(); rerr == nil && len(prevRaw) > 0 {
+	prevRaw, prevExists, rerr := portState.Read()
+	if rerr == nil && prevExists && len(prevRaw) > 0 {
 		var prev struct {
 			Port uint32 `json:"port"`
 		}
@@ -296,11 +311,23 @@ func (s *Service) syncPanelPort(ctx context.Context, params []byte) sandbox.Capa
 			prevPanelPort = prev.Port
 		}
 	}
+	var prevRequired []uint32
+	if prevPanelPort == 0 && s.Guard != nil {
+		prevRequired, _ = s.Guard.PreservedPorts(ctx)
+	}
+	rollbackPortState := func() {
+		if prevExists {
+			_ = portState.Commit(prevRaw)
+		} else {
+			_ = portState.Commit(nil)
+		}
+	}
 	if err := portState.Commit(rawPort); err != nil {
 		return failure("UNAVAILABLE", "写入面板端口状态失败")
 	}
 	current, err := s.readSnapshot(ctx)
 	if err != nil {
+		rollbackPortState()
 		return failure("UNAVAILABLE", "读取当前防火墙规则快照失败")
 	}
 	if !current.chainExists {
@@ -308,6 +335,7 @@ func (s *Service) syncPanelPort(ctx context.Context, params []byte) sandbox.Capa
 	}
 	managers, err := s.Guard.Managers(ctx)
 	if err != nil {
+		rollbackPortState()
 		return failure("UNAVAILABLE", "检测系统既有防火墙管理器失败")
 	}
 	for _, manager := range managers {
@@ -317,18 +345,36 @@ func (s *Service) syncPanelPort(ctx context.Context, params []byte) sandbox.Capa
 	}
 	required, err := s.Guard.PreservedPorts(ctx)
 	if err != nil {
+		rollbackPortState()
 		return failure("UNAVAILABLE", "识别保留管理端口失败")
 	}
-	required = mergePorts(required, []uint32{req.Port})
+	if !loopbackOnly {
+		required = mergePorts(required, []uint32{req.Port})
+	}
 	_, oldPorts, err := snapshotDefinition(current.definition, true)
 	if err != nil {
+		rollbackPortState()
 		return failure("UNAVAILABLE", "解析当前防火墙保留端口失败")
 	}
-	// Retire only the superseded panel port (never drop SSH or other user ports).
-	if prevPanelPort != 0 && prevPanelPort != req.Port {
+	// Retire the superseded panel port (or close the panel port entirely when
+	// tightened back to loopback), without touching SSH or user rules.
+	retireSet := make(map[uint32]bool)
+	if prevPanelPort != 0 && (prevPanelPort != req.Port || loopbackOnly) {
+		retireSet[prevPanelPort] = true
+	} else if prevPanelPort == 0 && len(prevRequired) > 0 {
+		for _, p := range prevRequired {
+			if !slices.Contains(required, p) {
+				retireSet[p] = true
+			}
+		}
+	}
+	if loopbackOnly {
+		retireSet[req.Port] = true
+	}
+	if len(retireSet) > 0 {
 		filtered := make([]uint32, 0, len(oldPorts))
 		for _, p := range oldPorts {
-			if p != prevPanelPort {
+			if !retireSet[p] || slices.Contains(required, p) {
 				filtered = append(filtered, p)
 			}
 		}
@@ -337,10 +383,12 @@ func (s *Service) syncPanelPort(ctx context.Context, params []byte) sandbox.Capa
 	declared := mergePorts(required, oldPorts)
 	desired, err := Normalize(current.definition, required, declared)
 	if err != nil {
+		rollbackPortState()
 		return failure("UNAVAILABLE", "重建防火墙面板保留端口规则失败")
 	}
 	desiredDef, err := desired.Definition()
 	if err != nil {
+		rollbackPortState()
 		return failure("INTERNAL", "编码防火墙目标规则失败")
 	}
 	if bytes.Equal(desiredDef, current.definition) {
@@ -348,6 +396,7 @@ func (s *Service) syncPanelPort(ctx context.Context, params []byte) sandbox.Capa
 	}
 	resp := s.apply(ctx, current, desired, required)
 	if !resp.OK {
+		rollbackPortState()
 		return resp
 	}
 	return sandbox.CapabilityResponse{OK: true}

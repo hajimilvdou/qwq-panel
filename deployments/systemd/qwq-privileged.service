@@ -38,9 +38,10 @@ TimeoutStopSec=10s
 # Hard ceiling on one activation: a request that somehow blocks (for example
 # on a FIFO planted in the staging tree) must not keep the helper, and with it
 # every later request, hanging (PRIV-02).
-RuntimeMaxSec=120
-# The helper is a small Go program that copies a unit file and a token.
-MemoryMax=32M
+RuntimeMaxSec=180
+# The helper copies unit files, tokens, and snapshots DynamicUser plugin DBs
+# during host backup, so give it enough headroom while keeping tight bounds.
+MemoryMax=96M
 TasksMax=16
 # Keep the Go runtime's thread count well below TasksMax on large hosts.
 Environment=GOMAXPROCS=2

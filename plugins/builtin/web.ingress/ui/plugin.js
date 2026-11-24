@@ -4,7 +4,25 @@
   const root = document.documentElement;
   const pick = (v, list, fb) => (list.includes(v) ? v : fb);
   const hash = new URLSearchParams(location.hash.slice(1));
-  root.dataset.theme = pick(hash.get('theme'), ['light', 'dark'], 'light');
+  const applyVisualSettings = (s) => {
+    if (!s) return;
+    const theme = pick(s.theme, ['light', 'dark'], root.dataset.theme || 'light');
+    root.dataset.theme = theme;
+    root.style.colorScheme = theme;
+    if (s.density) root.dataset.density = pick(s.density, ['comfortable', 'compact'], 'comfortable');
+    if (s.tokens && typeof s.tokens === 'object') {
+      for (const [k, v] of Object.entries(s.tokens)) {
+        if (k.startsWith('--') && typeof v === 'string') {
+          root.style.setProperty(k, v);
+          if (k === '--accent') root.style.setProperty('--cocoa', v);
+        }
+      }
+    }
+  };
+  applyVisualSettings({
+    theme: hash.get('theme') || 'light',
+    density: hash.get('density') || 'comfortable',
+  });
 
   const statusEl = document.getElementById('bridge-status');
   let port = null;
@@ -201,6 +219,45 @@
         st.appendChild(tr);
       }
 
+      const sniList = data.sni_passthroughs || [];
+      const sniTbody = document.getElementById('sni-tbody');
+      if (sniTbody) {
+        sniTbody.replaceChildren();
+        if (!sniList.length) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 5;
+          td.textContent = '暂无四层 SNI 透传规则（如需与 Xray Reality / Trojan 共用 443 端口，请添加透传规则）';
+          tr.appendChild(td);
+          sniTbody.appendChild(tr);
+        }
+        for (const r of sniList) {
+          const tr = document.createElement('tr');
+          for (const txt of [r.sni_pattern, r.upstream_addr, r.enabled ? '已启用' : '已停用', r.notes || '—']) {
+            const td = document.createElement('td');
+            td.textContent = txt;
+            tr.appendChild(td);
+          }
+          const act = document.createElement('td');
+          const dBtn = document.createElement('button');
+          dBtn.className = 'btn danger btn-sm';
+          dBtn.type = 'button';
+          dBtn.textContent = '删除';
+          dBtn.addEventListener('click', () => {
+            void runAction(async () => {
+              const ok = await hostConfirm('删除 SNI 透传规则', `确认删除四层透传规则「${r.sni_pattern} -> ${r.upstream_addr}」？`, { danger: true, confirmLabel: '确认删除' });
+              if (!ok) return;
+              await invoke('ingress.sni_passthrough.delete', { id: r.id });
+              await refresh();
+              setStatus(`已删除四层 SNI 透传规则 ${r.sni_pattern}`);
+            });
+          });
+          act.appendChild(dBtn);
+          tr.appendChild(act);
+          sniTbody.appendChild(tr);
+        }
+      }
+
       const snt = document.getElementById('snaps-tbody');
       snt.replaceChildren();
       for (const sn of snaps) {
@@ -260,6 +317,24 @@
     await refresh();
   }, '站点已保存并同步热重载生效'));
 
+  document.getElementById('btn-save-sni')?.addEventListener('click', () => void runAction(async () => {
+    const sniPattern = document.getElementById('sni-pattern').value.trim();
+    const upstreamAddr = document.getElementById('sni-upstream').value.trim();
+    const notes = document.getElementById('sni-notes').value.trim();
+    const enabled = document.getElementById('sni-enabled').checked;
+    if (!sniPattern || !upstreamAddr) throw new Error('请填写 SNI 匹配域名和本机上游地址');
+    await invoke('ingress.sni_passthrough.upsert', {
+      sni_pattern: sniPattern,
+      upstream_addr: upstreamAddr,
+      notes,
+      enabled,
+    });
+    document.getElementById('sni-pattern').value = '';
+    document.getElementById('sni-upstream').value = '';
+    document.getElementById('sni-notes').value = '';
+    await refresh();
+  }, '四层 SNI 透传规则已保存并热生效'));
+
   const doApply = () => void runAction(async () => {
     const res = await invoke('ingress.apply', {});
     await refresh();
@@ -315,8 +390,8 @@
       else req.reject(new Error(extractErrorMessage(data.problem || data.error, '复制失败')));
       return;
     }
-    if (data.t === 'ui.settings' && (data.theme === 'light' || data.theme === 'dark')) {
-      root.dataset.theme = data.theme;
+    if (data.t === 'ui.settings') {
+      applyVisualSettings(data);
     }
   }
 

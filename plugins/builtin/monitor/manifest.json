@@ -25,12 +25,14 @@
     "schemas/history.request.json": "sha256:e49f982b3886681fa98e791dff2a04b58a1c8d7f0c041118daba73fcfc921b90",
     "schemas/history.response.json": "sha256:b7c8ffb08b65f211bced4cfa43701ceb30375e8e85e5599e96ecafb23db64c13",
     "schemas/series.response.json": "sha256:2dedeb6cd2638ddd70ad26d4aa5ea00e4227ccf23222c9d85d491468399372ed",
-    "schemas/snapshot.response.json": "sha256:0fff6cb853241f6693fd00df63435975bc2fcc5b34951c2db7992805134c1850",
+    "schemas/snapshot.response.json": "sha256:4646bade9960e0747f832c61ca2430843abf6b4eec3703216f765c3eac918dde",
     "schemas/stat.response.json": "sha256:605e5bdfd16b5b8977ac464f513acbfbb513469c367afab246f093fd8833af45",
+    "schemas/thresholds.response.json": "sha256:c1c3bd78c8e785652d184660931977bad3794727680d0900a17668a4195aa357",
+    "schemas/thresholds.set.request.json": "sha256:497ac7665c1dc4e844a84d03469144bc1f6173fee3957488c3c1b3605fb6cec6",
     "ui/LICENSE.tokens.txt": "sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-    "ui/index.html": "sha256:724c3fb118d83eb38f400c1a9be0efb28add1e34281ae972c9eff10037aef5f4",
-    "ui/monitor.css": "sha256:aa6a350b2f05b364d23e1864731083192754e716605d86e1b34d8667e9cdd951",
-    "ui/monitor.js": "sha256:ef683ef1e28b5dda31deb111f59a26220374b10b788dad7892019e79060ce098",
+    "ui/index.html": "sha256:7426b2573b53d5cac4e376cf11430c41ff9b5c1d05e330176550fb2311961878",
+    "ui/monitor.css": "sha256:39e6fe7039f568135f518d9ca804f7c73293b183bfb169777064cdc952f683b6",
+    "ui/monitor.js": "sha256:d6696396492711ff98b6fbc7a423b65ac68ab62d32bfb7da97283192cfee9c7b",
     "ui/tokens.css": "sha256:757918310e30a806d3ab03efc6026cc46ee44c3d7978b429a9ceba1c1d684124"
   },
   "provenance": {
@@ -175,6 +177,25 @@
       ],
       "request_schema": "schemas/history.request.json",
       "response_schema": "schemas/history.response.json"
+    },
+    {
+      "name": "monitor.thresholds.set",
+      "api_version": "v1",
+      "permission": "monitor.basic:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "更新 CPU / 内存 / 磁盘的警告与严重告警阈值",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/thresholds.set.request.json",
+      "response_schema": "schemas/thresholds.response.json"
     }
   ],
   "capabilities": [

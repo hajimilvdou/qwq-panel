@@ -338,9 +338,9 @@ th {
 }
 .drawer-panel {
   position: fixed;
-  top: 0;
+  top: var(--qwq-vp-top, 0px);
   right: 0;
-  bottom: 0;
+  height: var(--qwq-vp-h, 100vh);
   width: min(860px, 95vw);
   max-width: 100%;
   background: var(--bg);
@@ -350,6 +350,10 @@ th {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+select option {
+  background-color: var(--surface);
+  color: var(--text);
 }
 .drawer-backdrop[hidden],
 .drawer-panel[hidden] {
@@ -605,6 +609,72 @@ th {
   margin-top: 10px;
   max-height: 460px;
   min-height: 220px;
+}
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.install-guide-card {
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--line));
+  background: color-mix(in srgb, var(--amber-soft) 45%, var(--surface));
+}
+.inline-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.flex-1 {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 12, 10, 0.5);
+  z-index: 110;
+}
+.modal-dialog {
+  position: fixed;
+  top: calc(var(--qwq-vp-top, 24px) + 16px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(780px, calc(100vw - 24px));
+  max-height: min(calc(var(--qwq-vp-h, 88vh) - 32px), 860px);
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.modal-backdrop[hidden],
+.modal-dialog[hidden] {
+  display: none;
+}
+.quick-run-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.qr-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.qr-row input,
+.qr-row select {
+  min-width: 0;
+}
+.qr-row .qr-grow {
+  flex: 1 1 130px;
+}
+.qr-row .qr-port {
+  width: 96px;
 }
 @media (max-width: 720px) {
   .drawer-panel {

@@ -140,6 +140,22 @@ input, select, textarea {
   color: var(--text);
   font-size: 13px;
 }
+select option {
+  background: var(--surface);
+  color: var(--text);
+}
+.warn-box {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  font-size: 12.5px;
+  margin-bottom: 10px;
+}
+[data-density="compact"] body { padding: 12px; }
+[data-density="compact"] .card { padding: 13px; margin-bottom: 10px; }
+[data-density="compact"] .node-card, [data-density="compact"] .theme-item { padding: 10px; }
 input[type="checkbox"], input[type="range"] { width: auto; }
 input[type="range"] { width: 100%; padding: 0; border: 0; background: transparent; }
 input[type="color"] { width: 48px; height: 32px; padding: 2px; }

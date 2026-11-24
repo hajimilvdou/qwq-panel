@@ -108,10 +108,12 @@
         <input id="tok-ips" placeholder="IP/CIDR 白名单 (留空不限)" />
         <button type="button" class="btn" id="btn-create-tok">创建新 sk-qwq- 令牌</button>
       </div>
-      <table>
-        <thead><tr><th>备注</th><th>掩码 Key</th><th>已用 / 上限</th><th>限制条件</th><th>操作</th></tr></thead>
-        <tbody id="tokens-tbody"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>备注</th><th>掩码 Key</th><th>已用 / 上限</th><th>限制条件</th><th>操作</th></tr></thead>
+          <tbody id="tokens-tbody"></tbody>
+        </table>
+      </div>
       <div id="snippet-box" hidden class="mt-14">
         <div class="muted mb-6">复制以下配置粘贴至 Claude Code / Codex / Cherry Studio：</div>
         <pre id="snippet-code"></pre>
@@ -121,18 +123,22 @@
     <div class="two-col-grid">
       <section class="card">
         <h3 class="sub-title">可用模型与统计倍率表（支持缓存 1 折）</h3>
-        <table>
-          <thead><tr><th>模型标识</th><th>输入/1M</th><th>输出/1M</th><th>缓存读</th></tr></thead>
-          <tbody id="models-tbody"></tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>模型标识</th><th>输入/1M</th><th>输出/1M</th><th>缓存读</th></tr></thead>
+            <tbody id="models-tbody"></tbody>
+          </table>
+        </div>
       </section>
 
       <section class="card">
         <h3 class="sub-title">最近调用统计明细</h3>
-        <table>
-          <thead><tr><th>时间</th><th>模型 / 协议</th><th>In(Cache)/Out</th><th>折算消耗</th><th>TTFT</th></tr></thead>
-          <tbody id="logs-tbody"></tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>时间</th><th>模型 / 协议</th><th>In(Cache)/Out</th><th>折算消耗</th><th>TTFT</th></tr></thead>
+            <tbody id="logs-tbody"></tbody>
+          </table>
+        </div>
       </section>
     </div>
   </div>

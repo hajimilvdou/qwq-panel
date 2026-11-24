@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net"
 	"os"
@@ -18,7 +19,7 @@ import (
 
 const (
 	capabilityRequestTimeout = 30 * time.Second
-	composeRequestTimeout    = 95 * time.Second
+	composeRequestTimeout    = 10*time.Minute + 15*time.Second
 )
 
 // dockerDispatchRunner 将 docker.api.read / docker.api.write / docker.compose 路由到受控 Docker 能力服务，
@@ -124,7 +125,16 @@ func (s *capabilityServer) serveConn(ctx context.Context, connection net.Conn) {
 		_ = sandbox.WriteHelperJSON(connection, sandbox.CapabilityResponse{Code: "VALIDATION_FAILED", Error: "能力请求格式无效"})
 		return
 	}
-	if request.Op == "docker.compose" || request.Op == "docker.recreate_ports" {
+	isLongDockerOp := request.Op == "docker.compose" || request.Op == "docker.recreate_ports"
+	if !isLongDockerOp && request.Op == "docker.api.write" && len(request.ParamsJSON) > 0 {
+		var probe struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(request.ParamsJSON, &probe) == nil && probe.Path == "/images/create" {
+			isLongDockerOp = true
+		}
+	}
+	if isLongDockerOp {
 		cancel()
 		requestCtx, cancel = context.WithTimeout(ctx, composeRequestTimeout)
 		defer cancel()

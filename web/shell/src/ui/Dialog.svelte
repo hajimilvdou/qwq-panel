@@ -13,6 +13,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import IconButton from './IconButton.svelte';
+  import { registerModalDialog, unregisterModalDialog } from './toplayer';
 
   interface Props {
     open?: boolean;
@@ -42,21 +43,33 @@
   let dlg: HTMLDialogElement;
 
   $effect(() => {
-    if (open && !dlg.open) {
-      dlg.showModal();
+    const el = dlg;
+    if (!el) return;
+    if (open && !el.open) {
+      el.showModal();
+      registerModalDialog(el);
       requestAnimationFrame(() => {
-        if (!dlg?.open) return;
-        const target = dlg.querySelector<HTMLElement>(
+        if (!el?.open) return;
+        const target = el.querySelector<HTMLElement>(
           '.body [autofocus]:not([disabled]), .body input:not([disabled]):not([type="hidden"])',
         );
         target?.focus();
       });
-    } else if (!open && dlg.open) {
-      dlg.close();
+    } else if (!open && el.open) {
+      unregisterModalDialog(el);
+      el.close();
     }
   });
 
+  $effect(() => {
+    const el = dlg;
+    return () => {
+      if (el) unregisterModalDialog(el);
+    };
+  });
+
   function handleClose() {
+    unregisterModalDialog(dlg);
     open = false;
     onclose?.();
   }

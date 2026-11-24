@@ -40,7 +40,7 @@ func canonicalScope(scope IssuanceScope) (IssuanceScope, error) {
 	case "", "dns-01":
 		scope.ChallengeType = ""
 		zone, err := names.DNS(scope.Provider.ZoneName, false)
-		if err != nil || zone != scope.Provider.ZoneName || !names.ID(scope.Provider.ProviderID) || !names.ID(scope.Provider.ZoneID) || !names.ID(scope.Provider.Revision) || (scope.Provider.Kind != dns.Cloudflare && scope.Provider.Kind != dns.Aliyun) {
+		if err != nil || zone != scope.Provider.ZoneName || !names.ID(scope.Provider.ProviderID) || !names.ID(scope.Provider.ZoneID) || !names.ID(scope.Provider.Revision) || (scope.Provider.Kind != dns.Cloudflare && scope.Provider.Kind != dns.Aliyun && scope.Provider.Kind != dns.DNSPod) {
 			return IssuanceScope{}, fault.New("SCOPE_INVALID", "证书 DNS 提供商范围无效")
 		}
 		for _, san := range spec.SANs {
@@ -121,6 +121,11 @@ func fingerprint(value any) (string, error) {
 func key(ownerID, certificateID string) string {
 	sum := sha256.Sum256([]byte(ownerID + "\x00" + certificateID))
 	return "certificates/resource/" + hex.EncodeToString(sum[:])
+}
+
+// ResourceKey 返回证书状态在加密前置仓库中的规范存储键，供宿主跨插件调用读取最新资源版本。
+func ResourceKey(ownerID, certificateID string) string {
+	return key(ownerID, certificateID)
 }
 
 func consumerKey(consumer Consumer) string {

@@ -32,6 +32,9 @@
     "enabled": {
       "type": "boolean"
     },
+    "auto_rule": {
+      "type": "boolean"
+    },
     "config": {
       "type": "object",
       "additionalProperties": false,

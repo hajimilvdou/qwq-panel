@@ -84,6 +84,13 @@ type Deps struct {
 	// Access manages the live panel listening port, secret entry path, disguise,
 	// and reverse-proxy domain auto-disable policy.
 	Access *panelaccess.Manager
+	// ConfigPath is the path to qwq.json used by backup/support-bundle endpoints.
+	ConfigPath string
+	// PrivilegedSocket is the path to qwq-privileged's Unix socket used by backup staging.
+	PrivilegedSocket string
+	// OnPluginCatalogFunc optionally receives the live official plugin catalog
+	// provider function so host AI read tools share the HTTP catalog cache.
+	OnPluginCatalogFunc func(func(ctx context.Context, refresh bool) (any, error))
 }
 
 // withDefaults validates the required services and fills the optional ones.
@@ -125,8 +132,36 @@ func (d *Deps) withDefaults() error {
 		// The default service keeps the routes usable (a native session can
 		// chat) without a runner or a catalog: tool calls answer UNAVAILABLE
 		// until the host wires them.
+		idSvc := d.Identity
+		azSvc := d.Authz
 		svc, err := agentsession.New(agentsession.Options{
 			DB: d.DB, Clock: d.Clock, IDs: d.IDs, Logger: d.Logger, Secrets: d.Secrets,
+			RoleResolver: func(rctx context.Context, owner actor.Actor) (string, error) {
+				switch owner.Kind {
+				case actor.System:
+					return string(authz.RoleAdmin), nil
+				case actor.Human:
+					role, disabled, rerr := idSvc.PrincipalRole(rctx, owner.ID)
+					if rerr != nil {
+						return "", problem.From(rerr)
+					}
+					if disabled {
+						return "", problem.New(problem.PermissionDenied, "The user account is disabled.")
+					}
+					return role, nil
+				case actor.Service:
+					sa, rerr := azSvc.ServiceAccount(rctx, owner.ID)
+					if rerr != nil {
+						return "", problem.From(rerr)
+					}
+					if sa.Disabled {
+						return "", problem.New(problem.PermissionDenied, "The service account is disabled.")
+					}
+					return string(sa.Role), nil
+				default:
+					return "", problem.New(problem.PermissionDenied, "Unsupported session owner.")
+				}
+			},
 		})
 		if err != nil {
 			return err
@@ -173,6 +208,7 @@ type api struct {
 	trustedProxies []netip.Prefix
 	totpRebindMu   sync.Mutex
 	totpRebinds    map[string]time.Time
+	backupMu       sync.Mutex
 }
 
 // Register adds every route of the public API to g and registers the host
@@ -192,6 +228,9 @@ func Register(g *gateway.Gateway, d Deps) error {
 		trustedProxies: panelaccess.ParseTrustedProxies(d.Config.HTTP.TrustedProxies),
 		totpRebinds:    make(map[string]time.Time)}
 	a.registerHostActions()
+	if d.OnPluginCatalogFunc != nil {
+		d.OnPluginCatalogFunc(a.pluginCatalogSnapshot)
+	}
 	for _, rt := range a.routes() {
 		if err := g.Handle(rt); err != nil {
 			return fmt.Errorf("api: %w", err)
@@ -289,10 +328,14 @@ func (a *api) routes() []gateway.Route {
 		{Method: http.MethodGet, Pattern: "/api/v1/actions/{action_id}", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.getAction)},
 		// audit log (GAP-7)
 		{Method: http.MethodGet, Pattern: "/api/v1/audit", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.listAudit)},
-		// system overview (GAP-7) & live panel access / stealth disguise
+		// system overview (GAP-7), live panel access / stealth disguise & backup/support-bundle
 		{Method: http.MethodGet, Pattern: "/api/v1/system", Access: sessionOrService, Handler: http.HandlerFunc(a.getSystem)},
 		{Method: http.MethodGet, Pattern: "/api/v1/system/access", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.getSystemAccess)},
 		{Method: http.MethodPut, Pattern: "/api/v1/system/access", Access: gateway.AccessSession, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.putSystemAccess)},
+		{Method: http.MethodGet, Pattern: "/api/v1/system/backups", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.listSystemBackups)},
+		{Method: http.MethodPost, Pattern: "/api/v1/system/backups", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.createSystemBackup)},
+		{Method: http.MethodGet, Pattern: "/api/v1/system/backups/{filename}", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.downloadSystemBackup)},
+		{Method: http.MethodPost, Pattern: "/api/v1/system/support-bundle", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.createSystemSupportBundle)},
 		// dual-stack network policy and MIT China routing rules (Track 05, ADR-0027)
 		{Method: http.MethodGet, Pattern: "/api/v1/network/facts", Access: sessionOrService, Handler: http.HandlerFunc(a.getNetworkFacts)},
 		{Method: http.MethodGet, Pattern: "/api/v1/network/policy", Access: sessionOrService, Handler: http.HandlerFunc(a.getNetworkPolicy)},
@@ -323,7 +366,7 @@ func (a *api) routes() []gateway.Route {
 		{Method: http.MethodGet, Pattern: "/api/v1/agent-workspace/file", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.getAgentWorkspaceFile)},
 		{Method: http.MethodPut, Pattern: "/api/v1/agent-workspace/file", Access: gateway.AccessSession, Body: gateway.BodyPluginJSON, Handler: http.HandlerFunc(a.putAgentWorkspaceFile)},
 		{Method: http.MethodDelete, Pattern: "/api/v1/agent-workspace/file", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.deleteAgentWorkspaceFile)},
-		{Method: http.MethodGet, Pattern: "/api/v1/agent-registry", Access: sessionOrService, Handler: http.HandlerFunc(a.searchAgentRegistry)},
+		{Method: http.MethodGet, Pattern: "/api/v1/agent-registry", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.searchAgentRegistry)},
 		{Method: http.MethodPost, Pattern: "/api/v1/agent-registry/install", Access: gateway.AccessSession, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.installAgentRegistryItem)},
 		{Method: http.MethodGet, Pattern: "/api/v1/ai/providers", Access: sessionOrService, Handler: http.HandlerFunc(a.listAIProviders)},
 		{Method: http.MethodPost, Pattern: "/api/v1/ai/providers", Access: gateway.AccessSession, Body: gateway.BodyJSON, RequireIdempotency: true, Handler: http.HandlerFunc(a.createAIProvider)},
@@ -371,8 +414,11 @@ func (a *api) authorize(ctx context.Context, act actor.Actor, permission, nodeID
 }
 
 // requireAdmin reports whether the caller has the administrator role. It backs
-// the `owner=all` filter of the delegation list.
+// the `owner=all` filter of the delegation list and admin-only workspace routes.
 func (a *api) requireAdmin(ctx context.Context, act actor.Actor) error {
+	if act.Kind != actor.Human {
+		return problem.New(problem.PermissionDenied, "The administrator role is required for this request.")
+	}
 	role, disabled, err := a.d.Identity.PrincipalRole(ctx, act.ID)
 	if err != nil {
 		return problem.From(err)

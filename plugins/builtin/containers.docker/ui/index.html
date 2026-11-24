@@ -17,26 +17,43 @@
       <div class="tabs" id="nav-tabs">
         <button data-tab="containers" class="active" type="button">容器与资源限额</button>
         <button data-tab="compose" type="button">Compose 编排栈</button>
-        <button data-tab="images" type="button">镜像清理与日志</button>
+        <button data-tab="images" type="button">镜像、存储卷与日志</button>
       </div>
     </div>
+
+    <section id="docker-install-guide" class="card install-guide-card" hidden>
+      <div class="banner-row">
+        <div>
+          <h3>未检测到运行中的 Docker 守护进程</h3>
+          <p class="muted-hint" id="docker-install-reason">当前宿主机尚未安装 Docker 或 dockerd 服务未启动，可在宿主机 SSH 中运行以下官方脚本一键安装并启动：</p>
+        </div>
+        <div class="actions">
+          <button class="btn btn-sm" id="btn-copy-install-cmd" type="button">复制安装命令</button>
+          <button class="btn ghost btn-sm" id="btn-retry-daemon" type="button">重新检测</button>
+        </div>
+      </div>
+      <pre id="docker-install-cmd">curl -fsSL https://get.docker.com | sh && systemctl enable --now docker</pre>
+    </section>
 
     <section class="stats">
       <div class="stat"><div class="k">Docker 守护进程</div><div class="v" id="st-daemon">-</div></div>
       <div class="stat"><div class="k">运行中 / 总容器</div><div class="v" id="st-ct">-</div></div>
-      <div class="stat"><div class="k">本地镜像数</div><div class="v" id="st-img">-</div></div>
+      <div class="stat"><div class="k">本地镜像 / 存储卷</div><div class="v" id="st-img">-</div></div>
       <div class="stat"><div class="k">受管 Compose 栈</div><div class="v" id="st-st">-</div></div>
     </section>
 
     <section data-pane="containers" class="card">
       <h3>容器列表（支持启停、重启、详情查看、动态资源限额、日志排查与删除）</h3>
       <div class="actions">
+        <button class="btn" id="btn-open-quick-run" type="button">+ 快速新建容器</button>
         <button class="btn ghost" id="btn-refresh" type="button">刷新容器列表</button>
       </div>
-      <table>
-        <thead><tr><th>名称 / ID</th><th>镜像</th><th>状态</th><th>端口映射</th><th>操作</th></tr></thead>
-        <tbody id="containers-tbody"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>名称 / ID</th><th>镜像</th><th>状态</th><th>端口映射</th><th>操作</th></tr></thead>
+          <tbody id="containers-tbody"></tbody>
+        </table>
+      </div>
       <div id="inspect-box" class="inspect-box" hidden>
         <div class="inspect-title" id="inspect-title">容器实时详情</div>
         <div class="inspect-meta" id="inspect-meta"></div>
@@ -52,7 +69,7 @@
     </section>
 
     <section data-pane="compose" class="card" hidden>
-      <h3>受管 Compose 编排栈（内置结构化特权/宿主机挂载安全静态扫描）</h3>
+      <h3>受管 Compose 编排栈（内置结构化特权/宿主机挂载安全静态扫描 · 异步支持 10 分钟大镜像拉取）</h3>
       <div class="form-grid">
         <label>栈名称 <input id="cp-name" placeholder="如 blog-stack（点击下方栈名可回填编辑）" /></label>
       </div>
@@ -62,27 +79,111 @@
       <div class="actions">
         <button class="btn" id="btn-deploy" type="button">校验并部署栈</button>
         <button class="btn ghost" id="btn-dryrun" type="button">仅安全校验并暂存 (Dry Run)</button>
+        <button class="btn ghost" id="btn-open-quick-run-2" type="button">可视化快速建容器</button>
       </div>
-      <table>
-        <thead><tr><th>栈名（点击回填）</th><th>状态</th><th>版本</th><th>安全提示 / 最近错误</th><th>操作</th></tr></thead>
-        <tbody id="stacks-tbody"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>栈名（点击回填）</th><th>状态</th><th>版本</th><th>安全提示 / 最近错误</th><th>操作</th></tr></thead>
+          <tbody id="stacks-tbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section data-pane="images" class="card" hidden>
-      <h3>本地镜像清理与容器有界日志查看（上限 500 行 / 64 KiB）</h3>
-      <div class="actions">
-        <button class="btn danger" id="btn-prune" type="button">清理悬空无用镜像</button>
+      <h3>本地镜像管理、存储卷清理与有界容器日志（上限 500 行 / 64 KiB）</h3>
+      <div class="inline-bar mt-10">
+        <input id="pull-image-input" class="flex-1" placeholder="输入镜像名拉取，例如 nginx:alpine 或 vaultwarden/server:latest" />
+        <button class="btn" id="btn-pull-image" type="button">拉取镜像</button>
+        <button class="btn danger" id="btn-prune" type="button">清理悬空镜像</button>
         <button class="btn ghost" id="btn-copy-logs" type="button">复制日志</button>
       </div>
-      <table>
-        <thead><tr><th>镜像 ID</th><th>标签</th><th>体积 (MiB)</th></tr></thead>
-        <tbody id="images-tbody"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>镜像 ID</th><th>标签</th><th>体积 (MiB)</th><th>操作</th></tr></thead>
+          <tbody id="images-tbody"></tbody>
+        </table>
+      </div>
+
+      <div class="banner-row mt-16">
+        <h4 class="section-subhead">本地存储卷 (Volumes)</h4>
+        <button class="btn danger btn-sm" id="btn-prune-volumes" type="button">清理未挂载存储卷</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>卷名称</th><th>驱动</th><th>宿主机路径</th><th>操作</th></tr></thead>
+          <tbody id="volumes-tbody"></tbody>
+        </table>
+      </div>
+
       <h4 class="section-subhead">容器日志输出</h4>
       <pre id="logs-pre">在容器列表点击“日志”后在此显示最新 100 行日志。</pre>
     </section>
   </main>
+
+  <!-- 快速新建容器（零 YAML 可视化向导，一键转换为受管 Compose 栈） -->
+  <div id="quick-run-backdrop" class="modal-backdrop" hidden></div>
+  <section id="quick-run-modal" class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="quick-run-title" hidden>
+    <header class="drawer-header">
+      <div class="drawer-header-meta">
+        <h3 id="quick-run-title" class="drawer-title">快速新建容器（可视化向导）</h3>
+        <div class="drawer-sub">无需手写 YAML，自动生成受管 Compose 栈部署；后续在「⚙ 设置」中支持无损改端口与一键 HTTPS 反代。</div>
+      </div>
+      <button id="qr-close" class="btn ghost btn-sm" type="button">关闭 ✕</button>
+    </header>
+    <div class="drawer-body">
+      <div class="form-grid">
+        <label>容器 / 栈名称（必填） <input id="qr-name" placeholder="例如 vaultwarden 或 redis" /></label>
+        <label>Docker 镜像（必填） <input id="qr-image" placeholder="例如 nginx:alpine 或 vaultwarden/server:latest" /></label>
+        <label>重启策略
+          <select id="qr-restart">
+            <option value="unless-stopped" selected>unless-stopped（推荐）</option>
+            <option value="always">always</option>
+            <option value="on-failure">on-failure</option>
+            <option value="no">no</option>
+          </select>
+        </label>
+        <label>内存上限 MiB（可选，防 OOM） <input id="qr-mem" type="number" min="16" max="65536" placeholder="例如 256（留空不限）" /></label>
+        <label>加入已有 Docker 网络（可选） <input id="qr-net" placeholder="留空使用默认隔离网桥" /></label>
+      </div>
+
+      <div class="sub-card mt-12">
+        <div class="banner-row">
+          <h4>端口映射（默认 127.0.0.1 回环安全隐身，配合 web.ingress 绑域名）</h4>
+          <button id="qr-add-port" class="btn ghost btn-sm" type="button">+ 添加端口</button>
+        </div>
+        <div id="qr-ports-list" class="quick-run-rows mt-8"></div>
+      </div>
+
+      <div class="sub-card mt-12">
+        <div class="banner-row">
+          <h4>持久化挂载卷（支持命名卷如 app_data 或栈相对路径 ./data）</h4>
+          <button id="qr-add-vol" class="btn ghost btn-sm" type="button">+ 添加挂载</button>
+        </div>
+        <div id="qr-vols-list" class="quick-run-rows mt-8"></div>
+      </div>
+
+      <div class="sub-card mt-12">
+        <div class="banner-row">
+          <h4>环境变量 (KEY = VALUE)</h4>
+          <button id="qr-add-env" class="btn ghost btn-sm" type="button">+ 添加环境变量</button>
+        </div>
+        <div id="qr-envs-list" class="quick-run-rows mt-8"></div>
+      </div>
+
+      <div id="qr-preview-box" class="mt-12" hidden>
+        <div class="muted-hint">生成的标准受管 compose.yml 预览：</div>
+        <pre id="qr-preview-yaml"></pre>
+      </div>
+
+      <div id="qr-error" class="alert-banner danger mt-12" hidden></div>
+
+      <div class="actions mt-16">
+        <button id="qr-submit" class="btn" type="button">一键创建并部署容器</button>
+        <button id="qr-preview-btn" class="btn ghost" type="button">预览 Compose YAML</button>
+        <button id="qr-to-editor" class="btn ghost" type="button">转入高级 YAML 编辑器</button>
+      </div>
+    </div>
+  </section>
   <div id="ct-drawer-backdrop" class="drawer-backdrop" hidden></div>
   <aside id="ct-drawer" class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="ct-drawer-title" hidden>
     <header class="drawer-header">

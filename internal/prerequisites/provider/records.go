@@ -60,8 +60,8 @@ func writeRecord(scope dns.Scope, record dns.Record, create bool) (dns.Record, e
 	if record.TTL != 1 && (record.TTL < 60 || record.TTL > 86400) {
 		return dns.Record{}, fault.New("VALIDATION_FAILED", "DNS 写入 TTL 无效")
 	}
-	if scope.Kind == dns.Aliyun && (record.Proxied || record.TTL == 1) {
-		return dns.Record{}, fault.New("VALIDATION_FAILED", "阿里云记录必须指定 TTL 且不支持 Cloudflare 代理")
+	if scope.Kind != dns.Cloudflare && (record.Proxied || record.TTL == 1) {
+		return dns.Record{}, fault.New("VALIDATION_FAILED", "非 Cloudflare DNS 记录必须指定 TTL 且不支持 Cloudflare 代理")
 	}
 	if record.ManagedBy != "" {
 		decoded, err := hex.DecodeString(record.ManagedBy)

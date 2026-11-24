@@ -372,7 +372,9 @@ func (p *IngressHTTP01Presenter) CleanUp(ctx context.Context, token string) erro
 	if err != nil {
 		return nil
 	}
-	return p.invoke(ctx, "ingress.acme.cleanup", payload)
+	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	return p.invoke(cleanCtx, "ingress.acme.cleanup", payload)
 }
 
 func (p *IngressHTTP01Presenter) invoke(ctx context.Context, operation string, payload []byte) error {

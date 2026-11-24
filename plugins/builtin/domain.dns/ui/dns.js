@@ -6,11 +6,15 @@
   const pick = (v, opts, fb) => (opts.includes(v) ? v : fb);
   const initial = new URLSearchParams(location.hash.slice(1));
   root.dataset.theme = pick(initial.get('theme'), ['light', 'dark'], 'light');
+  root.style.colorScheme = root.dataset.theme;
   root.dataset.motion = pick(initial.get('motion'), ['full', 'reduced', 'off'], 'reduced');
+  root.dataset.density = pick(initial.get('density'), ['comfortable', 'compact'], 'comfortable');
 
   const $ = (id) => document.getElementById(id);
+  const SUBJECT_PREFIX = 'plugins/domain.dns/resources/';
   let port;
   let seq = 0;
+  let refreshTimer = null;
   const pending = new Map();
   const pendingConfirm = new Map();
 
@@ -20,9 +24,52 @@
   let currentZoneRevision = '';
 
   const send = (msg) => { if (port) port.postMessage(msg); };
+  const dnsSubject = (rel) => {
+    const clean = String(rel || '').replace(/^\/+/, '');
+    return clean.startsWith('plugins/') ? clean : SUBJECT_PREFIX + clean;
+  };
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
+
+  function applyHostVisualSettings(msg) {
+    const theme = pick(msg.theme, ['light', 'dark'], root.dataset.theme);
+    root.dataset.theme = theme;
+    root.style.colorScheme = theme;
+    root.dataset.motion = pick(msg.motion, ['full', 'reduced', 'off'], 'reduced');
+    if (msg.density === 'comfortable' || msg.density === 'compact') {
+      root.dataset.density = msg.density;
+    }
+    if (msg.tokens && typeof msg.tokens === 'object') {
+      for (const [k, v] of Object.entries(msg.tokens)) {
+        if (k.startsWith('--') && typeof v === 'string' && !/[;{}<>]/.test(v)) {
+          root.style.setProperty(k, v.trim());
+        }
+      }
+    }
+  }
+
+  function normalizeFQDN(inputName, zoneApex) {
+    const name = String(inputName || '').trim().toLowerCase().replace(/\.+$/, '');
+    const apex = String(zoneApex || '').trim().toLowerCase().replace(/\.+$/, '');
+    if (!apex) return name;
+    if (!name || name === '@' || name === apex) return apex;
+    if (name.endsWith('.' + apex)) return name;
+    return `${name}.${apex}`;
+  }
+
+  function findZoneApex(providerId, zoneId) {
+    const list = zonesByProvider.get(providerId) || [];
+    const hit = list.find((z) => z.zone_id === zoneId);
+    return hit?.name || '';
+  }
+
+  function clearRegisterSecrets() {
+    $('reg-cf-token').value = '';
+    $('reg-ali-secret').value = '';
+    if ($('reg-dnspod-key')) $('reg-dnspod-key').value = '';
+    $('register-modal').hidden = true;
+  }
 
   function setStatus(text, level = '') {
     const el = $('status');
@@ -52,7 +99,7 @@
     return errObj.detail || errObj.message || errObj.code || fallback;
   }
 
-  function invoke(operation, payload = {}, timeoutMs = 35000, preconditions = undefined) {
+  function invoke(operation, payload = {}, timeoutMs = 35000, opts = undefined) {
     if (!port) return Promise.reject(new Error('宿主通道未就绪'));
     const id = String(++seq);
     return new Promise((resolve, reject) => {
@@ -62,8 +109,12 @@
       }, timeoutMs);
       pending.set(id, { resolve, reject, deadline });
       const msg = { t: 'api.invoke', id, operation, payload };
-      if (Array.isArray(preconditions) && preconditions.length > 0) {
-        msg.preconditions = preconditions;
+      if (Array.isArray(opts) && opts.length > 0 && opts[0]) {
+        if (opts[0].subject) msg.subject = dnsSubject(opts[0].subject);
+        if (opts[0].revision) msg.expected_revision = opts[0].revision;
+      } else if (opts && typeof opts === 'object') {
+        if (opts.subject) msg.subject = dnsSubject(opts.subject);
+        if (opts.expected_revision) msg.expected_revision = opts.expected_revision;
       }
       send(msg);
     });
@@ -74,7 +125,7 @@
     const id = `cf_${++seq}`;
     return new Promise((resolve) => {
       pendingConfirm.set(id, { resolve });
-      send({ t: 'ui.confirm', id, title, message, destructive: true });
+      send({ t: 'ui.confirm', id, title, body: message, danger: true });
     });
   }
 
@@ -111,8 +162,15 @@
       return;
     }
     if (msg.t === 'ui.settings') {
-      root.dataset.theme = pick(msg.theme, ['light', 'dark'], root.dataset.theme);
-      root.dataset.motion = pick(msg.motion, ['full', 'reduced', 'off'], 'reduced');
+      applyHostVisualSettings(msg);
+      return;
+    }
+    if (msg.t === 'api.event') {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        void refreshSummaryAndProviders();
+      }, 400);
     }
   }
 
@@ -223,7 +281,7 @@
     $('rec-type').value = 'A';
     $('rec-name').value = '';
     $('rec-value').value = '';
-    $('rec-ttl').value = '300';
+    $('rec-ttl').value = '600';
     $('rec-proxied').checked = false;
     $('rec-form-title').textContent = '新增解析记录';
     $('rec-submit-btn').textContent = '提交记录变更';
@@ -251,7 +309,7 @@
       // summary best-effort
     }
     try {
-      const listRes = await invoke('providers.list', {}, 20000);
+      const listRes = await invoke('providers.list', {}, 20000, { subject: 'providers' });
       providers = Array.isArray(listRes.providers) ? listRes.providers : [];
       renderProviders();
       setStatus('已连接', 'ok');
@@ -265,7 +323,9 @@
     if (!providerId) return;
     setStatus('发现托管域…');
     try {
-      const res = await invoke('providers.zones', { provider_id: providerId }, 20000);
+      const res = await invoke('providers.zones', { provider_id: providerId }, 20000, {
+        subject: `providers/${providerId}`
+      });
       zonesByProvider.set(providerId, Array.isArray(res.zones) ? res.zones : []);
       renderZones(providerId);
       setStatus('已连接', 'ok');
@@ -283,7 +343,9 @@
     }
     setStatus('加载解析记录…');
     try {
-      const res = await invoke('records.list', { provider_id: target.providerId, zone_id: target.zoneId }, 25000);
+      const res = await invoke('records.list', { provider_id: target.providerId, zone_id: target.zoneId }, 25000, {
+        subject: `zones/${target.providerId}/${target.zoneId}`
+      });
       currentZoneRevision = res.revision || '';
       currentRecords = Array.isArray(res.records) ? res.records : [];
       $('records-rev-hint').textContent = `当前快照版本：${currentZoneRevision || '—'} · 共 ${currentRecords.length} 条记录`;
@@ -306,9 +368,10 @@
   $('open-register-btn').addEventListener('click', () => { $('register-modal').hidden = false; });
   $('close-register-btn').addEventListener('click', () => { $('register-modal').hidden = true; });
   $('reg-kind').addEventListener('change', () => {
-    const isAli = $('reg-kind').value === 'aliyun';
-    $('cred-cloudflare').hidden = isAli;
-    $('cred-aliyun').hidden = !isAli;
+    const kind = $('reg-kind').value;
+    $('cred-cloudflare').hidden = kind !== 'cloudflare';
+    $('cred-aliyun').hidden = kind !== 'aliyun';
+    $('cred-dnspod').hidden = kind !== 'dnspod';
   });
 
   $('submit-register-btn').addEventListener('click', async () => {
@@ -319,20 +382,25 @@
       showNotice('请填写服务商 ID 和显示名称', 'warn');
       return;
     }
-    const credential = kind === 'aliyun'
-      ? { access_key_id: $('reg-ali-id').value.trim(), access_key_secret: $('reg-ali-secret').value.trim() }
-      : { token: $('reg-cf-token').value.trim() };
+    let credential;
+    if (kind === 'aliyun') {
+      credential = { access_key_id: $('reg-ali-id').value.trim(), access_key_secret: $('reg-ali-secret').value.trim() };
+    } else if (kind === 'dnspod') {
+      credential = { secret_id: $('reg-dnspod-id').value.trim(), secret_key: $('reg-dnspod-key').value.trim() };
+    } else {
+      credential = { token: $('reg-cf-token').value.trim() };
+    }
     try {
-      const res = await invoke('providers.register', { provider_id: providerId, kind, name, credential }, 35000, [
-        { subject: `providers/${providerId}`, revision: 'absent' }
-      ]);
+      const res = await invoke('providers.register', { provider_id: providerId, kind, name, credential }, 35000, {
+        subject: `providers/${providerId}`,
+        expected_revision: 'absent'
+      });
       if (Array.isArray(res.zones)) zonesByProvider.set(providerId, res.zones);
-      $('reg-cf-token').value = '';
-      $('reg-ali-secret').value = '';
-      $('register-modal').hidden = true;
+      clearRegisterSecrets();
       showNotice(`服务商「${name}」已登记并发现 ${(res.zones || []).length} 个托管域`);
       await refreshSummaryAndProviders();
     } catch (err) {
+      if (err.awaitingApproval) clearRegisterSecrets();
       showNotice(err.message, err.awaitingApproval ? 'warn' : 'error');
     }
   });
@@ -353,7 +421,10 @@
       const ok = await hostConfirm('撤销 DNS 服务商授权', `确认撤销服务商 ${pid}？撤销后不再执行新的 DNS 变更或续期。`);
       if (!ok) return;
       try {
-        await invoke('providers.revoke', { provider_id: pid }, 20000, rev ? [{ subject: `providers/${pid}`, revision: rev }] : undefined);
+        await invoke('providers.revoke', { provider_id: pid }, 20000, {
+          subject: `providers/${pid}`,
+          expected_revision: rev || undefined
+        });
         showNotice(`已撤销服务商 ${pid}`);
         await refreshSummaryAndProviders();
       } catch (err) {
@@ -372,7 +443,10 @@
       const [pid, zid] = authBtn.dataset.zoneAuth.split('|');
       const rev = authBtn.dataset.rev;
       try {
-        await invoke('zones.authorize', { provider_id: pid, zone_id: zid }, 20000, rev ? [{ subject: `zones/${pid}/${zid}`, revision: rev }] : undefined);
+        await invoke('zones.authorize', { provider_id: pid, zone_id: zid }, 20000, {
+          subject: `zones/${pid}/${zid}`,
+          expected_revision: rev || 'absent'
+        });
         showNotice(`托管域 ${zid} 已授权`);
         await loadZonesForProvider(pid);
       } catch (err) {
@@ -387,7 +461,10 @@
       const ok = await hostConfirm('解绑托管域授权', `确认撤销托管域 ${zid} 授权？`);
       if (!ok) return;
       try {
-        await invoke('zones.revoke', { provider_id: pid, zone_id: zid }, 20000, rev ? [{ subject: `zones/${pid}/${zid}`, revision: rev }] : undefined);
+        await invoke('zones.revoke', { provider_id: pid, zone_id: zid }, 20000, {
+          subject: `zones/${pid}/${zid}`,
+          expected_revision: rev || undefined
+        });
         showNotice(`已解绑托管域 ${zid}`);
         await loadZonesForProvider(pid);
       } catch (err) {
@@ -414,21 +491,23 @@
     }
     const editId = $('rec-edit-id').value.trim();
     const editRev = $('rec-edit-rev').value.trim();
-    const recName = $('rec-name').value.trim();
+    const zoneApex = findZoneApex(target.providerId, target.zoneId);
+    const recName = normalizeFQDN($('rec-name').value, zoneApex);
     const recVal = $('rec-value').value.trim();
     if (!recName || !recVal) {
-      showNotice('请填写完整域名与记录目标值', 'warn');
+      showNotice('请填写域名（可填 @ 或子域名前缀）与记录目标值', 'warn');
       return;
     }
     const attemptId = makeAttemptID('dns-apply');
     $('rec-attempt-id').value = attemptId;
+    const rawTTL = Math.floor(Number($('rec-ttl').value || 600));
     const change = {
       action: editId ? 'update' : 'create',
       record: {
         type: $('rec-type').value,
         name: recName,
         value: recVal,
-        ttl: Math.max(0, Math.min(86400, Math.floor(Number($('rec-ttl').value || 0)))),
+        ttl: rawTTL === 1 ? 1 : Math.max(60, Math.min(86400, rawTTL || 600)),
         proxied: $('rec-proxied').checked
       }
     };
@@ -442,7 +521,10 @@
         zone_id: target.zoneId,
         attempt_id: attemptId,
         change
-      }, 35000, currentZoneRevision ? [{ subject: `zones/${target.providerId}/${target.zoneId}`, revision: currentZoneRevision }] : undefined);
+      }, 35000, {
+        subject: `zones/${target.providerId}/${target.zoneId}`,
+        expected_revision: currentZoneRevision || undefined
+      });
       showNotice(`记录变更状态：${res.state || 'applied'}（attempt_id: ${attemptId}）`);
       resetRecordForm();
       await loadRecordsForSelectedZone();
@@ -463,7 +545,9 @@
         provider_id: target.providerId,
         zone_id: target.zoneId,
         attempt_id: attemptId
-      }, 35000);
+      }, 35000, {
+        subject: `zones/${target.providerId}/${target.zoneId}`
+      });
       showNotice(`对账完成：当前状态 ${res.state || 'reconciled'}`);
       await loadRecordsForSelectedZone();
     } catch (err) {
@@ -518,7 +602,10 @@
             expected_record_revision: rec.revision || '',
             record: { id: rec.id, type: rec.type, name: rec.name, value: rec.value, ttl: rec.ttl || 0, proxied: Boolean(rec.proxied) }
           }
-        }, 35000, currentZoneRevision ? [{ subject: `zones/${target.providerId}/${target.zoneId}`, revision: currentZoneRevision }] : undefined);
+        }, 35000, {
+          subject: `zones/${target.providerId}/${target.zoneId}`,
+          expected_revision: currentZoneRevision || undefined
+        });
         showNotice(`已删除解析记录 ${rec.name}`);
         await loadRecordsForSelectedZone();
       } catch (err) {
@@ -529,7 +616,8 @@
 
   $('run-check-btn').addEventListener('click', async () => {
     const target = parseSelectedZone();
-    const name = $('chk-name').value.trim();
+    const zoneApex = target ? findZoneApex(target.providerId, target.zoneId) : '';
+    const name = normalizeFQDN($('chk-name').value, zoneApex);
     const type = $('chk-type').value;
     const value = $('chk-value').value.trim();
     if (!target || !name || !value) {
@@ -544,7 +632,9 @@
         name,
         type,
         value
-      }, 25000);
+      }, 25000, {
+        subject: `zones/${target.providerId}/${target.zoneId}`
+      });
       $('chk-summary').textContent = res.propagated
         ? '传播已生效（权威 NS 与公共解析器均观测到期望值）'
         : `尚未完全传播${res.retry_at ? ` · 建议重试时间 ${res.retry_at}` : ''}`;
@@ -576,10 +666,12 @@
     port = event.ports[0];
     port.onmessage = (e) => accept(e.data);
     send({ t: 'ui.ready' });
+    send({ t: 'api.subscribe', subjects: ['plugins/domain.dns'] });
     void refreshSummaryAndProviders();
   });
 
   window.addEventListener('pagehide', () => {
+    if (refreshTimer) clearTimeout(refreshTimer);
     observer.disconnect();
     for (const req of pending.values()) {
       clearTimeout(req.deadline);

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -56,6 +57,8 @@ var BlockedLinuxCapabilities = []string{
 	"CAP_SYS_PTRACE",
 	"SYS_BOOT",
 	"CAP_SYS_BOOT",
+	"SYS_TIME",
+	"CAP_SYS_TIME",
 	"DAC_READ_SEARCH",
 	"CAP_DAC_READ_SEARCH",
 	"DAC_OVERRIDE",
@@ -64,6 +67,16 @@ var BlockedLinuxCapabilities = []string{
 	"CAP_BPF",
 	"PERFMON",
 	"CAP_PERFMON",
+	"CHECKPOINT_RESTORE",
+	"CAP_CHECKPOINT_RESTORE",
+	"MAC_ADMIN",
+	"CAP_MAC_ADMIN",
+	"MAC_OVERRIDE",
+	"CAP_MAC_OVERRIDE",
+	"AUDIT_CONTROL",
+	"CAP_AUDIT_CONTROL",
+	"LINUX_IMMUTABLE",
+	"CAP_LINUX_IMMUTABLE",
 }
 
 // ValidateComposeYAMLStrict 使用基于缩进栈的键值/列表令牌状态机（零外部依赖，且免疫冒号前后空格、多行值、YAML 布尔别名 yes/on/true、路径 // 与 .. 折叠、变量插值、转义序列、内联/跨行流式语法及高危指令绕过）
@@ -206,19 +219,20 @@ func checkComposeDirective(lineNo int, keyPath []string, key, rawVal string, war
 
 	switch key {
 	case "driver_opts", "build", "extends", "include", "secrets", "configs",
-		"env_file", "cgroup", "cgroup_parent", "uts", "userns_mode", "volumes_from":
+		"env_file", "cgroup", "cgroup_parent", "uts", "userns_mode", "volumes_from",
+		"device_cgroup_rules":
 		return fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止使用 %s 指令", lineNo, key)
 	case "privileged":
 		if isYAMLTruthy(lowVal) || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
 			return fmt.Errorf("第 %d 行：严禁部署 privileged 特权容器", lineNo)
 		}
 	case "pid":
-		if lowVal == "host" || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
-			return fmt.Errorf("第 %d 行：严禁使用 pid: host 共享宿主机进程命名空间", lineNo)
+		if lowVal == "host" || strings.HasPrefix(lowVal, "container:") || strings.HasPrefix(lowVal, "service:") || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
+			return fmt.Errorf("第 %d 行：严禁使用 pid: %s 共享宿主机或其他容器进程命名空间", lineNo, val)
 		}
 	case "ipc":
-		if lowVal == "host" || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
-			return fmt.Errorf("第 %d 行：严禁使用 ipc: host 共享宿主机 IPC 命名空间", lineNo)
+		if lowVal == "host" || strings.HasPrefix(lowVal, "container:") || strings.HasPrefix(lowVal, "service:") || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
+			return fmt.Errorf("第 %d 行：严禁使用 ipc: %s 共享宿主机或其他容器 IPC 命名空间", lineNo, val)
 		}
 	case "devices":
 		if val != "" && val != "[]" {
@@ -303,8 +317,8 @@ func validateHostBindPath(lineNo int, src string) error {
 		return fmt.Errorf("第 %d 行：严禁将宿主机根目录 / 挂载进容器", lineNo)
 	}
 	for _, blocked := range ForbiddenHostMountPrefixes {
-		if cleaned == blocked || strings.HasPrefix(cleaned, blocked+"/") {
-			return fmt.Errorf("第 %d 行：严禁挂载受保护的宿主机敏感路径 %q", lineNo, cleaned)
+		if cleaned == blocked || strings.HasPrefix(cleaned, blocked+"/") || strings.HasPrefix(blocked, cleaned+"/") {
+			return fmt.Errorf("第 %d 行：严禁挂载受保护的宿主机敏感路径或其祖先目录 %q", lineNo, cleaned)
 		}
 	}
 	return nil
@@ -325,6 +339,34 @@ func isBlockedCap(capName string) bool {
 }
 
 func splitYAMLKeyValue(s string) (key, val string, ok bool) {
+	// YAML 1.2 允许带引号的键名紧跟冒号且后无空格（例如 "privileged":true 或 'pid':host）
+	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') {
+		q := s[0]
+		end := -1
+		for i := 1; i < len(s); i++ {
+			if s[i] == q {
+				if q == '\'' && i+1 < len(s) && s[i+1] == '\'' {
+					i++
+					continue
+				}
+				end = i
+				break
+			}
+		}
+		if end > 0 {
+			rest := strings.TrimLeft(s[end+1:], " \t")
+			if strings.HasPrefix(rest, ":") {
+				rawKey := s[1:end]
+				if q == '\'' {
+					rawKey = strings.ReplaceAll(rawKey, "''", "'")
+				}
+				k := strings.ToLower(strings.TrimSpace(rawKey))
+				if k != "" && !strings.ContainsAny(k, " \t") {
+					return k, strings.TrimSpace(rest[1:]), true
+				}
+			}
+		}
+	}
 	idx := strings.IndexByte(s, ':')
 	if idx <= 0 {
 		return "", "", false
@@ -550,4 +592,166 @@ func BuildSafeDockerUpdatePayload(memoryLimitMB int64, cpuQuotaPercent float64) 
 		return nil, errors.New("至少需要指定 memory_limit_mb 或 cpu_percent 之一")
 	}
 	return json.Marshal(payload)
+}
+
+// ValidateComposeBindSymlinks 在 docker compose up 前结合真实宿主机文件系统解析所有宿主机挂载源路径的符号链接，
+// 防止工作目录内或宿主机路径中预先放置的符号链接越出栈目录或指向受保护系统目录。
+func ValidateComposeBindSymlinks(stacksRoot, workDir, raw string) error {
+	absWork, err := filepath.Abs(workDir)
+	if err != nil {
+		return fmt.Errorf("解析 Compose 工作目录失败: %w", err)
+	}
+	realWork, err := resolvePathDeepestSymlink(absWork)
+	if err != nil {
+		return fmt.Errorf("解析 Compose 工作目录符号链接失败: %w", err)
+	}
+	if strings.TrimSpace(stacksRoot) != "" {
+		absRoot, aerr := filepath.Abs(stacksRoot)
+		if aerr != nil {
+			return fmt.Errorf("解析 Compose 根目录失败: %w", aerr)
+		}
+		realRoot, rerr := resolvePathDeepestSymlink(absRoot)
+		if rerr != nil {
+			return fmt.Errorf("解析 Compose 根目录符号链接失败: %w", rerr)
+		}
+		relWork, relErr := filepath.Rel(realRoot, realWork)
+		if relErr != nil || relWork == "." || relWork == ".." || strings.HasPrefix(relWork, ".."+string(filepath.Separator)) {
+			return errors.New("compose 工作目录经符号链接解析后越出受控栈根目录")
+		}
+	}
+
+	type bindEntry struct {
+		lineNo int
+		src    string
+	}
+	type indentScope struct {
+		indent int
+		key    string
+	}
+	var stack []indentScope
+	var binds []bindEntry
+	addShort := func(lineNo int, spec string) {
+		first, rest, hasColon := strings.Cut(spec, ":")
+		if !hasColon {
+			return
+		}
+		src := strings.TrimSpace(first)
+		if src == "" {
+			return
+		}
+		if strings.HasPrefix(src, "/") || strings.HasPrefix(src, ".") || strings.HasPrefix(src, "~") || strings.Contains(src, "/") || strings.Contains(rest, "docker.sock") {
+			binds = append(binds, bindEntry{lineNo: lineNo, src: src})
+		}
+	}
+
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	for lineNo, rawLine := range lines {
+		line := stripYAMLComment(rawLine)
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || trimmed == "---" || trimmed == "..." {
+			continue
+		}
+		indent := countLeadingIndent(rawLine)
+		for len(stack) > 0 && indent <= stack[len(stack)-1].indent && !strings.HasPrefix(trimmed, "-") {
+			stack = stack[:len(stack)-1]
+		}
+		for len(stack) > 1 && indent < stack[len(stack)-1].indent && strings.HasPrefix(trimmed, "-") {
+			stack = stack[:len(stack)-1]
+		}
+		pathKeys := make([]string, len(stack))
+		for i, s := range stack {
+			pathKeys[i] = s.key
+		}
+		if strings.HasPrefix(trimmed, "-") {
+			item := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+			parentKey := ""
+			if len(pathKeys) > 0 {
+				parentKey = pathKeys[len(pathKeys)-1]
+			}
+			if k, v, ok := splitYAMLKeyValue(item); ok {
+				if (k == "source" || k == "src") && slices.Contains(pathKeys, "volumes") {
+					if val := unquoteYAML(v); val != "" {
+						binds = append(binds, bindEntry{lineNo: lineNo + 1, src: val})
+					}
+				}
+				stack = append(stack, indentScope{indent: indent + 1, key: k})
+				continue
+			}
+			if parentKey == "volumes" {
+				addShort(lineNo+1, unquoteYAML(item))
+			}
+			continue
+		}
+		key, val, ok := splitYAMLKeyValue(trimmed)
+		if !ok {
+			continue
+		}
+		if (key == "source" || key == "src") && slices.Contains(pathKeys, "volumes") {
+			if uv := unquoteYAML(val); uv != "" {
+				binds = append(binds, bindEntry{lineNo: lineNo + 1, src: uv})
+			}
+		} else if key == "volumes" {
+			uv := unquoteYAML(val)
+			if strings.HasPrefix(uv, "[") {
+				for _, item := range splitInlineYAMLList(uv) {
+					addShort(lineNo+1, item)
+				}
+			}
+		}
+		if val == "" || isYAMLBlockScalar(val) {
+			stack = append(stack, indentScope{indent: indent, key: key})
+		}
+	}
+
+	for _, b := range binds {
+		if strings.HasPrefix(b.src, "/") {
+			resolved, rerr := resolvePathDeepestSymlink(b.src)
+			if rerr != nil {
+				return fmt.Errorf("第 %d 行：解析挂载源路径符号链接失败: %w", b.lineNo, rerr)
+			}
+			if err := validateHostBindPath(b.lineNo, filepath.ToSlash(resolved)); err != nil {
+				return err
+			}
+			continue
+		}
+		candidate := filepath.Join(realWork, b.src)
+		resolved, rerr := resolvePathDeepestSymlink(candidate)
+		if rerr != nil {
+			return fmt.Errorf("第 %d 行：解析相对挂载路径符号链接失败: %w", b.lineNo, rerr)
+		}
+		rel, relErr := filepath.Rel(realWork, resolved)
+		if relErr != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("第 %d 行：禁止通过符号链接越出当前 Compose 栈目录挂载 %q", b.lineNo, b.src)
+		}
+	}
+	return nil
+}
+
+func resolvePathDeepestSymlink(target string) (string, error) {
+	clean := filepath.Clean(target)
+	var tail []string
+	cur := clean
+	for {
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			if len(tail) == 0 {
+				return resolved, nil
+			}
+			parts := make([]string, 0, len(tail)+1)
+			parts = append(parts, resolved)
+			for i := len(tail) - 1; i >= 0; i-- {
+				parts = append(parts, tail[i])
+			}
+			return filepath.Join(parts...), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return clean, nil
+		}
+		tail = append(tail, filepath.Base(cur))
+		cur = parent
+	}
 }

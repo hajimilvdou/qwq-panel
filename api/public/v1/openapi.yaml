@@ -2675,6 +2675,99 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/system/backups:
+    get:
+      operationId: listSystemBackups
+      tags: [system]
+      summary: List consistent system backup archives
+      description: Lists available host backup archives stored in the data directory backups folder. Administrators only.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Available system backup archives ordered newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemBackupList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createSystemBackup
+      tags: [system]
+      summary: Create a consistent system backup archive
+      description: Creates a new consistent tar.gz backup containing the database snapshot, master key, TLS material, agent workspace, configuration, and plugin state. Administrators only.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Each invocation creates a new timestamped backup archive and prunes older snapshots beyond the retention count.
+      x-qwq-action-exempt: Direct host backup creation invoked by administrators; audited directly by the host API.
+      responses:
+        '201':
+          description: Metadata of the newly created backup archive.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemBackupEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/system/backups/{filename}:
+    get:
+      operationId: downloadSystemBackup
+      tags: [system]
+      summary: Download a system backup archive
+      description: Streams a validated backup tar.gz archive from the backups directory with Cache-Control no-store. Administrators only.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          description: Exact backup archive filename matching qwq-<timestamp>.tar.gz.
+          schema:
+            type: string
+            maxLength: 64
+            pattern: '^qwq-[0-9]{8}T[0-9]{6}(\.[0-9]{3})?Z\.tar\.gz$'
+      responses:
+        '200':
+          description: The backup tar.gz archive; Cache-Control is no-store.
+          content:
+            application/gzip:
+              schema: { type: string, format: binary, description: The consistent host backup archive. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/system/support-bundle:
+    post:
+      operationId: createSystemSupportBundle
+      tags: [system]
+      summary: Export a redacted diagnostic support bundle
+      description: Generates and streams a redacted tar.gz diagnostic bundle containing build info, system status, scrubbed configuration, and recent logs. Administrators only.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Read-only diagnostic export producing a fresh timestamped support bundle stream.
+      x-qwq-action-exempt: Direct diagnostic bundle export invoked by administrators; audited directly by the host API.
+      responses:
+        '200':
+          description: The redacted support bundle tar.gz stream; Cache-Control is no-store.
+          content:
+            application/gzip:
+              schema: { type: string, format: binary, description: The redacted diagnostic support bundle archive. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
   # ---------------------------------------------------------------- dual-stack network & China routing (ADR-0027)
   /api/v1/network/facts:
     get:
@@ -5848,6 +5941,26 @@ components:
         port_changed: { type: boolean, description: True when a PUT request rebound the listener to a new TCP port. }
         revision: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Monotonic revision counter for optimistic concurrency checks. }
         updated_at: { $ref: '#/components/schemas/Timestamp' }
+    SystemBackupEntry:
+      type: object
+      additionalProperties: false
+      description: Metadata of one consistent host backup archive.
+      required: [filename, size_bytes, created_at]
+      properties:
+        filename: { type: string, maxLength: 64, description: Backup archive filename. }
+        size_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Archive size in bytes. }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+    SystemBackupList:
+      type: object
+      additionalProperties: false
+      description: Collection of available system backup archives.
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 200
+          description: Backup archives ordered newest first.
+          items: { $ref: '#/components/schemas/SystemBackupEntry' }
     NodeList:
       description: A page of nodes.
       allOf:

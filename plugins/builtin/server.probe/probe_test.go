@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -706,5 +707,79 @@ func TestProbeConfigSecretRefSkippedWithoutRevealError(t *testing.T) {
 	}
 	if got := readStoredVerifier(); got != origVerifier {
 		t.Fatalf("expected DB verifier preserved across restart, got %q want %q", got, origVerifier)
+	}
+}
+
+func TestTimeWeightedSLAPinnedInstallAndBinaryStreaming(t *testing.T) {
+	// 1. ComputeTimeWeightedSLA returns -1 when unobserved, and weights by seconds (not sample count)
+	if got := ComputeTimeWeightedSLA(0, 0); got != -1 {
+		t.Fatalf("expected -1 for unobserved node, got %v", got)
+	}
+	if got := ComputeTimeWeightedSLA(100, 10); got != 90.0 {
+		t.Fatalf("expected 90.0%% SLA for 10s down out of 100s, got %v", got)
+	}
+	store := NewProbeStore()
+	store.nodes["pending-node"] = &NodeRecord{ID: "pending-node", Name: "Pending", RegionCode: "JP", ReportInterval: 30}
+	pub := store.BuildPublicNodes(time.Now())
+	if len(pub) != 1 || pub[0].Uptime90dPct != -1 {
+		t.Fatalf("pending node must report Uptime90dPct=-1, got %+v", pub)
+	}
+
+	// 2. BuildAgentInstallCommandWithPin adds --ca-sha256 and -k for self-signed HTTPS
+	pin := strings.Repeat("ab", 32)
+	pinnedCmd := BuildAgentInstallCommandWithPin("linux", "https://203.0.113.10:18443/p/server.probe/agent/v1/report", "n1", "prb_agt_1234567890123456", pin)
+	if !strings.Contains(pinnedCmd, "curl -fsSLk") || !strings.Contains(pinnedCmd, "--ca-sha256 '"+pin+"'") {
+		t.Fatalf("expected pinned install command, got %s", pinnedCmd)
+	}
+	// Custom domain / no pin stays strict curl -fsSL without --ca-sha256
+	plainCmd := BuildAgentInstallCommandWithPin("linux", "https://status.example.com/api/probe/v1/report", "n1", "prb_agt_1234567890123456", "")
+	if strings.Contains(plainCmd, "-fsSLk") || strings.Contains(plainCmd, "--ca-sha256") {
+		t.Fatalf("unexpected pin flags in plain command: %s", plainCmd)
+	}
+
+	// 3. ServeHTTP streams bundled probe-agent binary over public-stream.sock with zero 4MiB cap
+	binDir := t.TempDir()
+	fakeBin := bytes.Repeat([]byte("ELF"), 1024)
+	if err := os.WriteFile(filepath.Join(binDir, "qwq-probe-agent-linux-amd64"), fakeBin, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("QWQ_PROBE_AGENT_BIN_DIR", binDir)
+	inst := &instance{
+		store:  store,
+		portal: NewPortalGateway(store, NewDomainBindingCoordinator(t.TempDir(), []byte("seed"), nil, nil), nil, "", time.Now),
+	}
+	defer inst.portal.Close()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://server.probe.qwq.internal/portal/bin/qwq-probe-agent-linux-amd64", nil)
+	inst.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), fakeBin) {
+		t.Fatalf("expected 200 streamed binary, got status=%d len=%d", rec.Code, rec.Body.Len())
+	}
+
+	// 4. Service monitor CRUD blocks SSRF loopback targets and persists public targets
+	code, _, body := inst.portal.handleStandaloneAdminAction(time.Now(), http.MethodPost, "/api/admin/monitors", nil, []byte(`{"name":"bad","kind":"tcp","carrier_tag":"ct","target_addr":"127.0.0.1:22"}`))
+	if code != http.StatusBadRequest {
+		t.Fatalf("expected SSRF monitor target to be rejected with 400, got %d body=%s", code, string(body))
+	}
+	code, _, body = inst.portal.handleStandaloneAdminAction(time.Now(), http.MethodPost, "/api/admin/monitors", nil, []byte(`{"id":"ct-1","name":"CT","kind":"tcp","carrier_tag":"ct","target_addr":"1.1.1.1:443"}`))
+	if code != http.StatusOK {
+		t.Fatalf("expected public monitor target to succeed, got %d body=%s", code, string(body))
+	}
+	if len(store.ListServiceMonitors()) != 1 {
+		t.Fatalf("expected 1 stored monitor")
+	}
+	code, _, _ = inst.portal.handleStandaloneAdminAction(time.Now(), http.MethodDelete, "/api/admin/monitors/ct-1", nil, nil)
+	if code != http.StatusOK || len(store.ListServiceMonitors()) != 0 {
+		t.Fatalf("expected monitor deletion to succeed, got %d", code)
+	}
+
+	// 5. Embedded install script stays 100% synced with scripts/install-probe-agent.sh
+	if diskScript, err := os.ReadFile(filepath.Join("..", "..", "..", "scripts", "install-probe-agent.sh")); err == nil {
+		normDisk := strings.ReplaceAll(string(diskScript), "\r\n", "\n")
+		normEmbed := strings.ReplaceAll(probeAgentInstallSH, "\r\n", "\n")
+		if strings.TrimSpace(normDisk) != strings.TrimSpace(normEmbed) {
+			t.Fatalf("probeAgentInstallSH diverged from scripts/install-probe-agent.sh")
+		}
 	}
 }

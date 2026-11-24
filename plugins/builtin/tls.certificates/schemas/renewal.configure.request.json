@@ -1,12 +1,10 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "description": "登记或更新证书自动续期策略范围请求（严格对齐 hostauth.RenewalPolicyArgs）",
+  "description": "登记或更新证书自动续期策略范围请求（严格对齐 hostauth.RenewalPolicyArgs，支持 DNS-01 与免 DNS Token 的 HTTP-01）",
   "required": [
     "policy_id",
     "certificate_id",
-    "provider_id",
-    "zone_id",
     "ca",
     "binding_refs",
     "expires_at"
@@ -26,19 +24,25 @@
       "pattern": "^[A-Za-z0-9._-]+$",
       "description": "关联的证书资源 ID"
     },
+    "challenge_type": {
+      "type": "string",
+      "enum": [
+        "dns-01",
+        "http-01"
+      ],
+      "description": "ACME 自动续期验证方式（dns-01 或免 DNS Token 的 http-01）"
+    },
     "provider_id": {
       "type": "string",
-      "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[A-Za-z0-9._-]+$",
-      "description": "已授权的 DNS 提供商 ID"
+      "pattern": "^[A-Za-z0-9._-]*$",
+      "description": "已授权的 DNS 提供商 ID（仅 dns-01 必填）"
     },
     "zone_id": {
       "type": "string",
-      "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[A-Za-z0-9._-]+$",
-      "description": "已授权的 DNS 托管域 ID"
+      "pattern": "^[A-Za-z0-9._-]*$",
+      "description": "已授权的 DNS 托管域 ID（仅 dns-01 必填）"
     },
     "ca": {
       "type": "string",

@@ -125,9 +125,9 @@ func TestNotifyHubEndToEndRoutingQuietCooldownAndHMAC(t *testing.T) {
 	}}
 	srv := startNotifyTestServer(t, p, []byte(`{"allow_private_endpoints":true,"http_timeout_seconds":5}`))
 
-	// 1. 注册 4 类真实通道并验证响应不泄露明文密钥
+	// 1. 注册 4 类真实通道并验证响应不泄露明文密钥（显式关闭自动默认规则以便精确检验自定义多渠道路由）
 	chTG := invokeNotify(t, srv, "notify.channel.upsert", map[string]any{
-		"name": "ops-tg", "kind": "telegram",
+		"name": "ops-tg", "kind": "telegram", "auto_rule": false,
 		"config": map[string]any{"bot_token": "tok_secret_123", "chat_id": "-1009988", "api_base": httpSrv.URL},
 	})
 	chTGID := chTG["channel"].(map[string]any)["id"].(string)
@@ -137,19 +137,19 @@ func TestNotifyHubEndToEndRoutingQuietCooldownAndHMAC(t *testing.T) {
 	}
 
 	chFS := invokeNotify(t, srv, "notify.channel.upsert", map[string]any{
-		"name": "ops-feishu", "kind": "feishu",
+		"name": "ops-feishu", "kind": "feishu", "auto_rule": false,
 		"config": map[string]any{"webhook_url": httpSrv.URL + "/feishu", "secret": "fs_sec"},
 	})
 	chFSID := chFS["channel"].(map[string]any)["id"].(string)
 
 	chDT := invokeNotify(t, srv, "notify.channel.upsert", map[string]any{
-		"name": "ops-ding", "kind": "dingtalk",
+		"name": "ops-ding", "kind": "dingtalk", "auto_rule": false,
 		"config": map[string]any{"webhook_url": httpSrv.URL + "/dingtalk", "secret": "dt_sec"},
 	})
 	chDTID := chDT["channel"].(map[string]any)["id"].(string)
 
 	chWH := invokeNotify(t, srv, "notify.channel.upsert", map[string]any{
-		"name": "ops-wh", "kind": "webhook",
+		"name": "ops-wh", "kind": "webhook", "auto_rule": false,
 		"config": map[string]any{"webhook_url": httpSrv.URL + "/webhook", "secret": "wh_hmac_key"},
 	})
 	chWHID := chWH["channel"].(map[string]any)["id"].(string)
@@ -324,7 +324,7 @@ func TestNotifyHubMultiRuleCooldownDoesNotBlockOtherRule(t *testing.T) {
 	srv := startNotifyTestServer(t, p, []byte(`{"allow_private_endpoints":true,"http_timeout_seconds":5}`))
 
 	chRes := invokeNotify(t, srv, "notify.channel.upsert", map[string]any{
-		"name": "shared-wh", "kind": "webhook",
+		"name": "shared-wh", "kind": "webhook", "auto_rule": false,
 		"config": map[string]any{"webhook_url": httpSrv.URL + "/hook"},
 	})
 	chID := chRes["channel"].(map[string]any)["id"].(string)
@@ -381,7 +381,7 @@ func TestNotifyHubPersistentCooldownSurvivesRestart(t *testing.T) {
 	p1 := &Plugin{now: func() time.Time { return now }}
 	srv1 := startNotifyTestServerAtDir(t, p1, dataDir, []byte(`{"allow_private_endpoints":true,"http_timeout_seconds":5}`))
 	chRes := invokeNotify(t, srv1, "notify.channel.upsert", map[string]any{
-		"name": "persist-wh", "kind": "webhook",
+		"name": "persist-wh", "kind": "webhook", "auto_rule": false,
 		"config": map[string]any{"webhook_url": httpSrv.URL + "/hook"},
 	})
 	chID := chRes["channel"].(map[string]any)["id"].(string)
@@ -566,5 +566,57 @@ func TestNotifyHubSMTPRFC2047SubjectAndDeadline(t *testing.T) {
 	}, NotifyEvent{Title: "timeout-check", Severity: "info", Source: "notify.hub", Timestamp: time.Now()})
 	if stallOut.Err == nil || time.Since(start) > 1500*time.Millisecond {
 		t.Fatalf("expected bounded SMTP deadline error, got err=%v elapsed=%v", stallOut.Err, time.Since(start))
+	}
+}
+
+func TestNotifyHubAutoCatchAllRuleAndDeactivateKeepOpen(t *testing.T) {
+	var hits atomic.Int32
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer httpSrv.Close()
+
+	srv := startNotifyTestServer(t, New(), []byte(`{"allow_private_endpoints":true,"http_timeout_seconds":5}`))
+
+	// 1. 首次创建启用渠道（不传 auto_rule，默认 true）且规则表为空时，自动创建默认全局告警规则。
+	first := invokeNotify(t, srv, "notify.channel.upsert", map[string]any{
+		"name": "first-wh", "kind": "webhook",
+		"config": map[string]any{"webhook_url": httpSrv.URL + "/hook"},
+	})
+	autoRule, ok := first["auto_created_rule"].(map[string]any)
+	if !ok || autoRule["source_pattern"] != "*" || autoRule["min_severity"] != "warn" {
+		t.Fatalf("expected auto_created_rule catch-all warn rule, got %+v", first)
+	}
+
+	// 2. 不手动创建规则，真实 warn 告警也能立刻送达。
+	d1 := invokeNotify(t, srv, "notify.dispatch", map[string]any{
+		"source": "monitor.basic", "severity": "warn",
+		"title": "内存偏高", "dedup_key": "mem-warn-auto",
+	})
+	if int(d1["sent"].(float64)) != 1 || hits.Load() != 1 {
+		t.Fatalf("expected auto catch-all rule to deliver warn alert, got %+v hits=%d", d1, hits.Load())
+	}
+
+	// 3. 再次添加第二个渠道时不再重复生成自动规则。
+	second := invokeNotify(t, srv, "notify.channel.upsert", map[string]any{
+		"name": "second-wh", "kind": "webhook",
+		"config": map[string]any{"webhook_url": httpSrv.URL + "/hook2"},
+	})
+	if _, exists := second["auto_created_rule"]; exists {
+		t.Fatalf("did not expect auto_created_rule on second channel when rules exist: %+v", second)
+	}
+
+	// 4. Deactivate 后重新 Activate，SQLite 连接池必须保持可用（仅在 Stop/Release 关闭）。
+	rc := &pb.RequestContext{InstanceId: "default", NodeId: "local", Locale: "zh-CN"}
+	if _, err := srv.Deactivate(t.Context(), &pb.DeactivateRequest{Context: rc}); err != nil {
+		t.Fatalf("Deactivate: %v", err)
+	}
+	if _, err := srv.Activate(t.Context(), &pb.ActivateRequest{Context: rc}); err != nil {
+		t.Fatalf("re-Activate: %v", err)
+	}
+	ov := invokeNotify(t, srv, "notify.overview", map[string]any{})
+	if len(ov["channels"].([]any)) != 2 || len(ov["rules"].([]any)) != 1 {
+		t.Fatalf("expected store to remain open across Deactivate->Activate, got %+v", ov)
 	}
 }

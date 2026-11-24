@@ -21,6 +21,22 @@ export interface KitHostSettings {
   tokens: Record<string, string>;
   visible: boolean;
   public_origin?: string;
+  panel_tls_mode?: string;
+  panel_tls_sha256?: string;
+}
+
+export interface KitEnsurePluginsFailure {
+  plugin_id: string;
+  detail: string;
+}
+
+export interface KitEnsurePluginsResult {
+  ready: boolean;
+  cancelled?: boolean;
+  installed: string[];
+  enabled: string[];
+  already_ready: string[];
+  failed?: KitEnsurePluginsFailure[];
 }
 
 export interface KitInvokeOptions {
@@ -146,6 +162,7 @@ export interface PluginBridgeClient {
   ): Promise<InvokeOutcome<TRes>>;
   confirm(options: KitConfirmOptions): Promise<boolean>;
   copyText(text: string, label?: string): Promise<void>;
+  ensurePlugins(plugins: readonly string[], reason?: string): Promise<KitEnsurePluginsResult>;
   buildPublicURL(publicSubpath: string): string;
   subscribe(subjects: readonly string[], fn: (event: KitEvent) => void): () => void;
   resize(height: number): void;
@@ -191,16 +208,57 @@ function applyTokenStylesheet(tokens: Record<string, string>): boolean {
   }
 }
 
+export interface KitHostViewport {
+  offsetTopPx: number;
+  viewportHeightPx: number;
+  visibleTop: number;
+  visibleHeight: number;
+  visibleCenterY: number;
+}
+
 /** 将宿主下发的主题、动效、密度与 CSS 变量白名单同步到沙箱文档根节点（优先使用 CSP 安全的 adoptedStyleSheets） */
 export function applyHostSettings(s: KitHostSettings, root?: HTMLElement | null): void {
   const el = root ?? (typeof document !== 'undefined' ? document.documentElement : null);
   if (!el) return;
   el.dataset.theme = s.theme;
+  el.style.colorScheme = s.theme;
   el.dataset.motion = s.motion;
   el.dataset.density = s.density;
   if (s.tokens && Object.keys(s.tokens).length > 0) {
     applyTokenStylesheet(s.tokens);
   }
+}
+
+function applyHostViewport(msg: Record<string, unknown>, root?: HTMLElement | null): void {
+  const el = root ?? (typeof document !== 'undefined' ? document.documentElement : null);
+  if (!el) return;
+  const rawTop =
+    typeof msg.offsetTopPx === 'number'
+      ? msg.offsetTopPx
+      : typeof msg.visibleTop === 'number'
+        ? msg.visibleTop
+        : typeof msg.scroll_top === 'number'
+          ? msg.scroll_top
+          : 0;
+  const rawHeight =
+    typeof msg.viewportHeightPx === 'number'
+      ? msg.viewportHeightPx
+      : typeof msg.visibleHeight === 'number'
+        ? msg.visibleHeight
+        : typeof msg.visible_height === 'number'
+          ? msg.visible_height
+          : 720;
+  const topPx = Math.max(0, Math.round(rawTop));
+  const hPx = Math.max(240, Math.round(rawHeight));
+  el.style.setProperty('--qwq-vp-top', `${topPx}px`);
+  el.style.setProperty('--qwq-vp-h', `${hPx}px`);
+  el.style.setProperty('--host-modal-top', `${Math.max(16, topPx + 24)}px`);
+}
+
+function matchesKitSubject(pattern: string, incoming: string): boolean {
+  const clean = pattern.replace(/\/\*+$/, '').replace(/\/+$/, '');
+  if (!clean) return false;
+  return incoming === clean || incoming.startsWith(clean + '/');
 }
 
 /** 解析首帧 URL fragment（#theme=light&motion=full&density=comfortable&path=/） */
@@ -335,6 +393,12 @@ export function createPluginBridge(opts: BridgeConnectOptions = {}): Promise<Plu
       copyText(text: string, label = '已复制到剪贴板'): Promise<void> {
         return rpc<unknown>({ t: 'ui.copy', text, label }, { timeoutMs: 5000 }).then(() => undefined);
       },
+      ensurePlugins(plugins: readonly string[], reason?: string): Promise<KitEnsurePluginsResult> {
+        return rpc<KitEnsurePluginsResult>(
+          { t: 'ui.ensure_plugins', plugins: [...plugins], ...(reason ? { reason } : {}) },
+          { timeoutMs: 300_000 },
+        );
+      },
       buildPublicURL(publicSubpath: string): string {
         const clean = publicSubpath.startsWith('/') ? publicSubpath : `/${publicSubpath}`;
         return publicOrigin ? `${publicOrigin}${clean}` : clean;
@@ -427,9 +491,15 @@ export function createPluginBridge(opts: BridgeConnectOptions = {}): Promise<Plu
               tokens: (msg.tokens && typeof msg.tokens === 'object' ? msg.tokens : {}) as Record<string, string>,
               visible: msg.visible !== false,
               public_origin: publicOrigin || undefined,
+              panel_tls_mode: typeof msg.panel_tls_mode === 'string' && msg.panel_tls_mode ? msg.panel_tls_mode : undefined,
+              panel_tls_sha256: typeof msg.panel_tls_sha256 === 'string' && msg.panel_tls_sha256 ? msg.panel_tls_sha256 : undefined,
             };
             applyHostSettings(currentSettings);
             for (const fn of settingsListeners) fn(currentSettings);
+            break;
+          }
+          case 'ui.viewport': {
+            applyHostViewport(msg);
             break;
           }
           case 'ui.route': {
@@ -441,7 +511,8 @@ export function createPluginBridge(opts: BridgeConnectOptions = {}): Promise<Plu
           }
           case 'api.result':
           case 'ui.confirm.result':
-          case 'ui.copy.result': {
+          case 'ui.copy.result':
+          case 'ui.ensure_plugins.result': {
             const id = typeof msg.id === 'string' || typeof msg.id === 'number' ? String(msg.id) : '';
             const entry = pending.get(id);
             if (!entry) return;
@@ -467,7 +538,7 @@ export function createPluginBridge(opts: BridgeConnectOptions = {}): Promise<Plu
               for (const sub of eventListeners) {
                 if (
                   sub.subjects.length === 0 ||
-                  sub.subjects.some((s) => evObj.subject === s || evObj.subject.startsWith(s.endsWith('/') ? s : s + '/'))
+                  sub.subjects.some((s) => matchesKitSubject(s, evObj.subject))
                 ) {
                   sub.fn(evObj);
                 }
@@ -552,6 +623,11 @@ export class QwqPluginBridge {
   copyText(text: string, label = '已复制到剪贴板'): Promise<void> {
     if (!this.#client) return Promise.reject(new PluginInvokeError({ code: 'UNAVAILABLE', detail: '插件尚未完成宿主握手' }));
     return this.#client.copyText(text, label);
+  }
+
+  ensurePlugins(plugins: readonly string[], reason?: string): Promise<KitEnsurePluginsResult> {
+    if (!this.#client) return Promise.reject(new PluginInvokeError({ code: 'UNAVAILABLE', detail: '插件尚未完成宿主握手' }));
+    return this.#client.ensurePlugins(plugins, reason);
   }
 
   buildPublicURL(publicSubpath: string): string {

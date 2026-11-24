@@ -96,8 +96,8 @@
     "schemas/warp.status.request.json": "sha256:9fecaf0be57870533738379f6bd1dab1d8303d91d77ad4e88731cdc2cb7e7665",
     "schemas/warp.status.response.json": "sha256:ca1da9258a97ab1f47ea5f48657025b16fc3582cf49699b713b36115aa78857b",
     "ui/index.html": "sha256:9d588c89c734c202d384e3325ef465fc8a280ad61e451653cf4dad3f53e78e6d",
-    "ui/proxy.css": "sha256:86927c2142f3976264c407ffb9a735e5e3046a32ff140bc2feee409c76d91fca",
-    "ui/proxy.js": "sha256:3dd709d8e963cd9062dc5187eb29331b09cbfcafe41dfa301432a55c2ae5261e"
+    "ui/proxy.css": "sha256:1328b57266c713b524ddb33be3d630ea1ce9a9032af581764f5325607657c2bc",
+    "ui/proxy.js": "sha256:8f305a5a32d79d1252435523b35ecaaadaf3f6a7e7aeb9fbf86cc89a15d4ff20"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

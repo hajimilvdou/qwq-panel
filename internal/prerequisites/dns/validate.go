@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/qwq-panel/qwq/internal/prerequisites/fault"
@@ -21,7 +23,7 @@ func validateScope(scope Scope) error {
 	if err != nil || zone != scope.ZoneName || !names.ID(scope.ProviderID) || !names.ID(scope.ZoneID) || !names.ID(scope.Revision) {
 		return fault.New("SCOPE_INVALID", "DNS 资源范围无效")
 	}
-	if scope.Kind != Cloudflare && scope.Kind != Aliyun {
+	if scope.Kind != Cloudflare && scope.Kind != Aliyun && scope.Kind != DNSPod {
 		return fault.New("SCOPE_INVALID", "DNS 提供商不受支持")
 	}
 	return nil
@@ -73,13 +75,13 @@ func normalizeRecord(scope Scope, record Record, mutation bool) (Record, error) 
 	}
 	record.Name = name
 	if mutation && !record.Type.Supported() {
-		return Record{}, fault.New("VALIDATION_FAILED", "首期仅允许 A、AAAA、CNAME 和 TXT")
+		return Record{}, fault.New("VALIDATION_FAILED", "仅允许 A、AAAA、CNAME、TXT、MX、CAA、SRV 和 NS 记录")
 	}
 	if mutation && record.TTL != 1 && (record.TTL < 60 || record.TTL > 86400) {
 		return Record{}, fault.New("VALIDATION_FAILED", "TTL 必须为自动或 60 至 86400 秒")
 	}
-	if mutation && scope.Kind == Aliyun && record.TTL == 1 {
-		return Record{}, fault.New("VALIDATION_FAILED", "阿里云 DNS 必须指定 TTL，不支持 Cloudflare 自动 TTL")
+	if mutation && scope.Kind != Cloudflare && record.TTL == 1 {
+		return Record{}, fault.New("VALIDATION_FAILED", "非 Cloudflare DNS 提供商必须指定 TTL，不支持自动 TTL")
 	}
 	if record.TTL == 0 || record.TTL > 604800 || len(record.Value) > 4096 || strings.ContainsAny(record.Value, "\x00\r\n") {
 		return Record{}, fault.New("VALIDATION_FAILED", "提供商记录内容无效")
@@ -107,7 +109,43 @@ func normalizeRecord(scope Scope, record Record, mutation bool) (Record, error) 
 		record.Value = target
 	case TXT:
 		if mutation && len(record.Value) > 2048 {
-			return Record{}, fault.New("VALIDATION_FAILED", "TXT 内容超过首期上限")
+			return Record{}, fault.New("VALIDATION_FAILED", "TXT 内容超过上限")
+		}
+	case MX:
+		norm, err := normalizeMXValue(record.Value)
+		if err != nil {
+			if mutation {
+				return Record{}, err
+			}
+		} else {
+			record.Value = norm
+		}
+	case NS:
+		target, err := names.DNS(record.Value, false)
+		if err != nil {
+			if mutation {
+				return Record{}, fault.New("VALIDATION_FAILED", "NS 目标域名无效")
+			}
+		} else {
+			record.Value = target
+		}
+	case CAA:
+		norm, err := normalizeCAAValue(record.Value)
+		if err != nil {
+			if mutation {
+				return Record{}, err
+			}
+		} else {
+			record.Value = norm
+		}
+	case SRV:
+		norm, err := normalizeSRVValue(record.Value)
+		if err != nil {
+			if mutation {
+				return Record{}, err
+			}
+		} else {
+			record.Value = norm
 		}
 	default:
 		if len(record.Type) == 0 || len(record.Type) > 16 {
@@ -131,6 +169,101 @@ func ValidateScope(scope Scope) error { return validateScope(scope) }
 // CanonicalRecord 复用业务快照的记录校验与完整指纹，不提供写入权限。
 func CanonicalRecord(scope Scope, record Record) (Record, error) {
 	return normalizeRecord(scope, record, false)
+}
+
+// ParseMXValue 解析标准 MX 值 "<priority> <exchange>"（若省略优先级则默认 10）。
+func ParseMXValue(raw string) (uint16, string, error) {
+	fields := strings.Fields(strings.TrimSpace(raw))
+	if len(fields) == 1 {
+		target, err := names.DNS(fields[0], false)
+		if err != nil {
+			return 0, "", fault.New("VALIDATION_FAILED", "MX 目标域名无效")
+		}
+		return 10, target, nil
+	}
+	if len(fields) != 2 {
+		return 0, "", fault.New("VALIDATION_FAILED", "MX 记录格式应为「优先级 目标域名」，例如 10 mail.example.com")
+	}
+	prio, err := strconv.ParseUint(fields[0], 10, 16)
+	if err != nil {
+		return 0, "", fault.New("VALIDATION_FAILED", "MX 优先级必须在 0 至 65535 之间")
+	}
+	target, err := names.DNS(fields[1], false)
+	if err != nil {
+		return 0, "", fault.New("VALIDATION_FAILED", "MX 目标域名无效")
+	}
+	return uint16(prio), target, nil
+}
+
+func normalizeMXValue(raw string) (string, error) {
+	prio, target, err := ParseMXValue(raw)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d %s", prio, target), nil
+}
+
+// ParseCAAValue 解析标准 CAA 值 "<flags> <tag> <value>"，供提供商适配器组装结构化字段。
+func ParseCAAValue(raw string) (uint8, string, string, error) {
+	fields := strings.Fields(strings.TrimSpace(raw))
+	if len(fields) < 3 {
+		return 0, "", "", fault.New("VALIDATION_FAILED", "CAA 记录格式应为「flags tag value」，例如 0 issue \"letsencrypt.org\"")
+	}
+	flags, err := strconv.ParseUint(fields[0], 10, 8)
+	if err != nil {
+		return 0, "", "", fault.New("VALIDATION_FAILED", "CAA flags 必须在 0 至 255 之间")
+	}
+	tag := strings.ToLower(fields[1])
+	switch tag {
+	case "issue", "issuewild", "iodef", "contactemail", "contactphone":
+	default:
+		return 0, "", "", fault.New("VALIDATION_FAILED", "CAA tag 仅支持 issue、issuewild、iodef、contactemail 或 contactphone")
+	}
+	val := strings.TrimSpace(strings.Join(fields[2:], " "))
+	val = strings.Trim(val, "\"")
+	if len(val) > 512 || strings.ContainsAny(val, "\x00\r\n\"") {
+		return 0, "", "", fault.New("VALIDATION_FAILED", "CAA 记录值无效")
+	}
+	return uint8(flags), tag, val, nil
+}
+
+func normalizeCAAValue(raw string) (string, error) {
+	flags, tag, val, err := ParseCAAValue(raw)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d %s %q", flags, tag, val), nil
+}
+
+// ParseSRVValue 解析标准 SRV 值 "<priority> <weight> <port> <target>"，供提供商适配器组装结构化字段。
+func ParseSRVValue(raw string) (uint16, uint16, uint16, string, error) {
+	fields := strings.Fields(strings.TrimSpace(raw))
+	if len(fields) != 4 {
+		return 0, 0, 0, "", fault.New("VALIDATION_FAILED", "SRV 记录格式应为「优先级 权重 端口 目标域名」，例如 10 5 443 target.example.com")
+	}
+	prio, err1 := strconv.ParseUint(fields[0], 10, 16)
+	weight, err2 := strconv.ParseUint(fields[1], 10, 16)
+	port, err3 := strconv.ParseUint(fields[2], 10, 16)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return 0, 0, 0, "", fault.New("VALIDATION_FAILED", "SRV 优先级、权重和端口必须为 0 至 65535 的整数")
+	}
+	target := fields[3]
+	if target != "." {
+		var err error
+		target, err = names.DNS(target, false)
+		if err != nil {
+			return 0, 0, 0, "", fault.New("VALIDATION_FAILED", "SRV 目标域名无效")
+		}
+	}
+	return uint16(prio), uint16(weight), uint16(port), target, nil
+}
+
+func normalizeSRVValue(raw string) (string, error) {
+	prio, weight, port, target, err := ParseSRVValue(raw)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d %d %d %s", prio, weight, port, target), nil
 }
 
 func normalizedSnapshot(scope Scope, records []Record, maxRecords int) ([]Record, string, error) {

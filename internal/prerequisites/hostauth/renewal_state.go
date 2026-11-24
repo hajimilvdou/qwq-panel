@@ -106,10 +106,12 @@ func (a *Authority) renewalDispatch(ctx context.Context, operation, policyID, ex
 	}
 	value.mu.RLock()
 	defer value.mu.RUnlock()
+	validEffect := (operation == "renewal.revoke" && value.snapshot.Action.Effect == operations.EffectDestructive) ||
+		(operation != "renewal.revoke" && value.snapshot.Action.Effect == operations.EffectWrite)
 	if value.released || ctx.Err() != nil || value.invocation.PluginID != "tls.certificates" ||
 		value.invocation.Operation != operation || value.invocation.Subject != renewalPolicySubject(policyID) ||
 		!names.ID(policyID) || expected == "" || value.snapshot.ExpectedRevision != expected ||
-		value.snapshot.Action.Source != operations.PluginSource || value.snapshot.Action.Effect != operations.EffectWrite ||
+		value.snapshot.Action.Source != operations.PluginSource || !validEffect ||
 		value.snapshot.Action.EffectiveRisk() != operations.RiskHigh {
 		return bindingOrigin{}, actor.Actor{}, actor.Actor{}, fault.New("PERMISSION_DENIED", "续期登记不是原operation的策略和版本")
 	}
@@ -139,8 +141,10 @@ func (a *Authority) loadRenewalLedger(ctx context.Context) (renewalAuthorization
 	seen, certificatesSeen := map[string]bool{}, map[string]bool{}
 	for _, entry := range state.Entries {
 		canonical, canonicalErr := certificates.CanonicalRenewalScope(entry.Dependencies.Scope)
+		validDNSDeps := (canonical.Issuance.IsHTTP01() && entry.Dependencies.ProviderRevision == "" && entry.Dependencies.ZoneRevision == "") ||
+			(!canonical.Issuance.IsHTTP01() && validDigest(entry.Dependencies.ProviderRevision) && validDigest(entry.Dependencies.ZoneRevision))
 		validScope := canonicalErr == nil && sameRenewalScope(canonical, entry.Dependencies.Scope) && canonical.OwnerID == a.ownerID &&
-			validDigest(entry.Dependencies.CertificateRevision) && validDigest(entry.Dependencies.ProviderRevision) && validDigest(entry.Dependencies.ZoneRevision) &&
+			validDigest(entry.Dependencies.CertificateRevision) && validDNSDeps &&
 			len(entry.Dependencies.Bindings) > 0 && len(entry.Dependencies.Bindings) <= 8 && len(canonical.Consumers) == len(entry.Dependencies.Bindings)
 		previous := ""
 		for _, binding := range entry.Dependencies.Bindings {

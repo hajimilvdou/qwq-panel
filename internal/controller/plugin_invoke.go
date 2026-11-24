@@ -16,6 +16,8 @@ import (
 	"github.com/qwq-panel/qwq/internal/platform/clock"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 	"github.com/qwq-panel/qwq/internal/pluginhost/hostsvc"
+	"github.com/qwq-panel/qwq/internal/prerequisites/certificates"
+	"github.com/qwq-panel/qwq/internal/prerequisites/names"
 	"github.com/qwq-panel/qwq/internal/storage"
 )
 
@@ -122,14 +124,43 @@ func (h *hostInvoker) InvokePlugin(ctx context.Context, call hostsvc.InvokeCall)
 	if key == "" {
 		key = oneTimeInvokeKey()
 	}
+	target := operations.Target{NodeID: nodeID, PluginID: call.TargetPluginID, InstanceID: instanceID}
+	expectedRevision := ""
+	if call.TargetPluginID == "tls.certificates" {
+		if call.Operation == "certificates.list" {
+			target.Subject = "plugins/tls.certificates/resources/certificates"
+		} else if len(args) > 0 {
+			var certArgs struct {
+				CertificateID string `json:"certificate_id"`
+			}
+			if json.Unmarshal(args, &certArgs) == nil && names.ID(certArgs.CertificateID) {
+				target.Subject = "plugins/tls.certificates/resources/certificates/" + certArgs.CertificateID
+				switch call.Operation {
+				case "certificates.issue", "certificates.import", "certificates.test",
+					"bindings.reserve", "bindings.bind", "bindings.deploy", "bindings.rollback", "bindings.unbind",
+					"generations.remove", "certificates.remove":
+					if h.certRevision != nil {
+						if rev, found, rerr := h.certRevision(ctx, certArgs.CertificateID); rerr == nil {
+							if found && rev != "" {
+								expectedRevision = rev
+							} else if call.Operation == "certificates.issue" || call.Operation == "certificates.import" || call.Operation == "certificates.test" {
+								expectedRevision = certificates.MissingRevision
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 	resp, err := h.runner.Run(ctx, operations.RunRequest{
-		Actor:     parent.Actor,
-		TraceID:   parent.TraceID,
-		RequestID: parent.RequestID,
-		NodeID:    h.nodeID,
-		Action:    action,
-		Target:    operations.Target{NodeID: nodeID, PluginID: call.TargetPluginID, InstanceID: instanceID},
-		Args:      json.RawMessage(args),
+		Actor:            parent.Actor,
+		TraceID:          parent.TraceID,
+		RequestID:        parent.RequestID,
+		NodeID:           h.nodeID,
+		Action:           action,
+		Target:           target,
+		Args:             json.RawMessage(args),
+		ExpectedRevision: expectedRevision,
 		// The child runs as the parent's actor, so keys are scoped to the
 		// calling instance by route (ADR-0011 §7).
 		Idempotency: operations.Idempotency{
@@ -293,11 +324,15 @@ func (h *hostInvoker) invokeBackgroundRead(ctx context.Context, call hostsvc.Inv
 	if key == "" {
 		key = oneTimeInvokeKey()
 	}
+	bgTarget := operations.Target{NodeID: nodeID, PluginID: call.TargetPluginID, InstanceID: instanceID}
+	if call.TargetPluginID == "tls.certificates" && call.Operation == "certificates.list" {
+		bgTarget.Subject = "plugins/tls.certificates/resources/certificates"
+	}
 	resp, err := h.runner.Run(bgCtx, operations.RunRequest{
 		Actor:  actor.SystemActor("plugin:" + h.pluginID),
 		NodeID: h.nodeID,
 		Action: action,
-		Target: operations.Target{NodeID: nodeID, PluginID: call.TargetPluginID, InstanceID: instanceID},
+		Target: bgTarget,
 		Args:   json.RawMessage(args),
 		Idempotency: operations.Idempotency{
 			Key: key, Method: "POST", Route: "plugin-invoke-bg:" + h.pluginID + "/" + h.instanceID,

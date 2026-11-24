@@ -57,6 +57,8 @@ type RPCNotificationHandler func(ctx context.Context, method string, params json
 // result or an error.
 type RPCRequestHandler func(ctx context.Context, method string, params json.RawMessage) (any, error)
 
+const maxConcurrentServerRPCRequests = 4
+
 // JSONRPCConn manages one newline-delimited JSON-RPC 2.0 stream.
 type JSONRPCConn struct {
 	w        io.Writer
@@ -64,6 +66,7 @@ type JSONRPCConn struct {
 	nextID   atomic.Int64
 	pendingM sync.Mutex
 	pending  map[string]chan rpcEnvelope
+	reqSem   chan struct{}
 
 	onNotify  RPCNotificationHandler
 	onRequest RPCRequestHandler
@@ -77,6 +80,7 @@ func NewJSONRPCConn(ctx context.Context, r io.Reader, w io.Writer, onNotify RPCN
 	c := &JSONRPCConn{
 		w:         w,
 		pending:   map[string]chan rpcEnvelope{},
+		reqSem:    make(chan struct{}, maxConcurrentServerRPCRequests),
 		onNotify:  onNotify,
 		onRequest: onRequest,
 		done:      make(chan struct{}),
@@ -192,9 +196,22 @@ func (c *JSONRPCConn) readLoop(ctx context.Context, r io.Reader) {
 		switch {
 		case env.Method != "" && hasID:
 			// Server-to-client request (e.g. approval or MCP tool call): handle asynchronously
-			// so reading notifications does not deadlock while awaiting human approval.
+			// under a bounded concurrency semaphore so floods cannot spawn unbounded goroutines
+			// or deadlock notifications while awaiting human approval.
 			reqEnv := env
-			go c.handleServerRequest(ctx, reqEnv)
+			select {
+			case c.reqSem <- struct{}{}:
+				go func() {
+					defer func() { <-c.reqSem }()
+					c.handleServerRequest(ctx, reqEnv)
+				}()
+			default:
+				_ = c.writeFrame(rpcEnvelope{
+					JSONRPC: "2.0",
+					ID:      reqEnv.ID,
+					Error:   &rpcError{Code: -32001, Message: "too many concurrent server requests"},
+				})
+			}
 
 		case env.Method != "":
 			if c.onNotify != nil {

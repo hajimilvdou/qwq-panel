@@ -308,3 +308,32 @@ func TestGatewayTrailingSlashRedirectThemeSandboxAndUploadLimit(t *testing.T) {
 		t.Fatalf("custom domain root = %d (loc=%q), want 200", recCustom.Code, recCustom.Header().Get("Location"))
 	}
 }
+
+func TestGatewayExtractClientIPMultipleXFFAndXRealIP(t *testing.T) {
+	gw := NewGateway(&fakePublicDispatcher{}, time.Now)
+	// Multi-header X-Forwarded-For must be walked right-to-left across all header lines.
+	r1 := httptest.NewRequest(http.MethodGet, "/p/ai.relay/v1/models", nil)
+	r1.RemoteAddr = "127.0.0.1:40000"
+	r1.Header.Add("X-Forwarded-For", "198.51.100.1")
+	r1.Header.Add("X-Forwarded-For", "203.0.113.55, 127.0.0.1")
+	if got := gw.extractClientIP(r1); got != "203.0.113.55" {
+		t.Fatalf("multi-header XFF client IP = %q, want 203.0.113.55", got)
+	}
+
+	// Single valid X-Real-IP is honored only when X-Forwarded-For is absent.
+	r2 := httptest.NewRequest(http.MethodGet, "/p/ai.relay/v1/models", nil)
+	r2.RemoteAddr = "127.0.0.1:40001"
+	r2.Header.Set("X-Real-IP", "198.51.100.77")
+	if got := gw.extractClientIP(r2); got != "198.51.100.77" {
+		t.Fatalf("X-Real-IP fallback = %q, want 198.51.100.77", got)
+	}
+
+	// Malformed X-Forwarded-For must NOT fall back to spoofable X-Real-IP.
+	r3 := httptest.NewRequest(http.MethodGet, "/p/ai.relay/v1/models", nil)
+	r3.RemoteAddr = "127.0.0.1:40002"
+	r3.Header.Set("X-Forwarded-For", "not-an-ip")
+	r3.Header.Set("X-Real-IP", "198.51.100.77")
+	if got := gw.extractClientIP(r3); got != "127.0.0.1" {
+		t.Fatalf("malformed XFF must not fall back to X-Real-IP, got %q", got)
+	}
+}

@@ -36,7 +36,11 @@
         "A",
         "AAAA",
         "CNAME",
-        "TXT"
+        "TXT",
+        "MX",
+        "CAA",
+        "NS",
+        "SRV"
       ],
       "description": "待校验的记录类型"
     },

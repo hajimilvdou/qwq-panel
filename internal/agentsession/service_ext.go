@@ -31,6 +31,12 @@ func (s *Service) registerDefaultAdapterCores(opts Options) {
 		EgressAllowPrefixes: opts.Native.EgressAllowPrefixes,
 		EgressAllowAddrs:    opts.Native.EgressAllowAddrs,
 	}
+	minter := opts.ApprovalMinter
+	if minter == nil {
+		if m, ok := opts.Approvals.(HostApprovalMinter); ok {
+			minter = m
+		}
+	}
 	nativeCore := NewEnhancedNativeCore(nativeOpts, skills)
 	nativeCore.SetWorkspace(s.workspace)
 	s.cores[string(CoreNative)] = nativeCore
@@ -42,6 +48,7 @@ func (s *Service) registerDefaultAdapterCores(opts Options) {
 		Workspace: s.workspace,
 	})
 	s.cores[string(CoreCodex)] = NewCodexCore(CodexOptions{
+		Minter:    minter,
 		Bridge:    opts.Approvals,
 		Providers: s,
 		Skills:    skills,
@@ -49,19 +56,23 @@ func (s *Service) registerDefaultAdapterCores(opts Options) {
 		Workspace: s.workspace,
 	})
 	s.cores[string(CoreOpencode)] = NewOpenCodeCore(OpenCodeOptions{
+		Minter:    minter,
 		Bridge:    opts.Approvals,
 		Providers: s,
 		Skills:    skills,
 		Auth:      s.cliAuth,
 	})
 	s.cores[string(CoreDSH)] = NewDSHCore(DSHOptions{
+		Minter:    minter,
 		Bridge:    opts.Approvals,
 		Providers: s,
 		Skills:    skills,
+		Auth:      s.cliAuth,
 	})
 	s.cores[string(CoreACP)] = NewGenericACPCore(GenericACPOptions{
 		CoreName:    CoreACP,
 		DisplayName: "Generic ACP Agent",
+		Minter:      minter,
 		Bridge:      opts.Approvals,
 		Providers:   s,
 		Skills:      skills,
@@ -176,6 +187,16 @@ func (s *Service) tryHandleSlashCommand(ctx context.Context, rt *sessionRuntime,
 			_ = emitExtended(emit, EventCommandResult, CommandResult{
 				Command: "/mode", OK: false, Summary: "用法：/mode <read_only|safe|full>",
 			})
+			return true
+		}
+		if s.roleResolver == nil && (m == operations.PermissionFull || sess.Core != CoreNative) {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{
+				Command: "/mode", OK: false, Summary: "宿主权限解析器未就绪，已拒绝切换到高权限模式。",
+			})
+			return true
+		}
+		if berr := s.enforceSecurityBoundary(ctx, owner, sess.Core, m); berr != nil {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/mode", OK: false, Summary: problem.From(berr).Detail})
 			return true
 		}
 		if _, err := s.Update(ctx, owner, sess.ID, UpdateRequest{PermissionMode: m}); err != nil {
@@ -434,5 +455,57 @@ func (s *Service) persistCompactionCheckpoint(ctx context.Context, rt *sessionRu
 	rt.session.Config = updatedCfg
 	rt.session.Revision = updatedRev
 	rt.mu.Unlock()
+	return nil
+}
+
+// persistExternalResumeID merges an external CLI session/thread identifier into
+// agent_sessions.config_json in SQLite and updates the live runtime snapshot so
+// turn 2+ resumes the external conversation automatically.
+func (s *Service) persistExternalResumeID(ctx context.Context, rt *sessionRuntime, key, externalID string) error {
+	externalID = strings.TrimSpace(externalID)
+	if externalID == "" || key == "" {
+		return nil
+	}
+	sess := rt.snapshot()
+	owner := rt.owner()
+	var updatedCfg json.RawMessage
+	var updatedRev string
+	var changed bool
+	err := s.db.Update(ctx, func(tx *storage.Tx) error {
+		cur, err := loadSessionFor(ctx, tx, owner, sess.ID)
+		if err != nil {
+			return err
+		}
+		nextRaw, didChange, err := MergeExternalResumeConfig(cur.Config, key, externalID)
+		if err != nil || !didChange {
+			return err
+		}
+		tx.SetOrigin(storage.Origin{Actor: owner})
+		rev, err := tx.Changed(ctx, storage.Change{
+			Subject:  sessionSubject(cur.ID),
+			Kind:     storage.Updated,
+			Pointers: []string{"/config"},
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE agent_sessions SET config_json = ?, updated_at = ?, revision = ? WHERE session_id = ?`,
+			string(nextRaw), storage.FormatTime(tx.Now()), rev, cur.ID); err != nil {
+			return fmt.Errorf("agentsession: persist external resume id: %w", err)
+		}
+		updatedCfg = nextRaw
+		updatedRev = storage.Revision(rev)
+		changed = true
+		return nil
+	})
+	if err != nil {
+		return problem.From(err)
+	}
+	if changed {
+		rt.mu.Lock()
+		rt.session.Config = updatedCfg
+		rt.session.Revision = updatedRev
+		rt.mu.Unlock()
+	}
 	return nil
 }

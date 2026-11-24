@@ -192,6 +192,13 @@ func (f *fakeInstaller) RemoveUnit(_ context.Context, pluginID, version string) 
 	return f.removeErr
 }
 
+func (f *fakeInstaller) PruneVersion(_ context.Context, pluginID, version string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removed = append(f.removed, "prune|"+pluginID+"@"+version)
+	return f.removeErr
+}
+
 func (f *fakeInstaller) PurgeData(context.Context, string) error { return nil }
 
 func (f *fakeInstaller) counts() (stage, discard int, installs []string) {

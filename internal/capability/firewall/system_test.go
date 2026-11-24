@@ -5,10 +5,14 @@ package firewall
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/qwq-panel/qwq/internal/capability/local"
 	"github.com/qwq-panel/qwq/internal/platform/config"
+	"github.com/qwq-panel/qwq/internal/sandbox"
 )
 
 type guardExecutor struct{ sshOutput []byte }
@@ -72,7 +76,7 @@ func TestRuntimeSSHPortsBindProcessIdentity(t *testing.T) {
 }
 
 func TestSystemGuardManagementPortsAndMultilineConfig(t *testing.T) {
-	cfg := config.Config{HTTP: config.HTTP{Listen: "127.0.0.1:8443", PublicOrigins: []string{"https://panel.example.invalid", "https://panel.example.invalid:9443"}}}
+	cfg := config.Config{HTTP: config.HTTP{Listen: "0.0.0.0:8443", PublicOrigins: []string{"https://panel.example.invalid", "https://panel.example.invalid:9443"}}}
 	raw, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -83,15 +87,55 @@ func TestSystemGuardManagementPortsAndMultilineConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []uint32{22, 443, 2022, 2023, 8443, 9443} {
-		found := false
-		for _, port := range ports {
-			if port == want {
-				found = true
-			}
+		if !slices.Contains(ports, want) {
+			t.Fatalf("required management port %d missing from %v", want, ports)
 		}
-		if !found {
-			t.Fatal("required management port missing")
-		}
+	}
+	// Loopback bootstrap listen must not punch a hole on public firewall while keeping PublicOrigins + SSH.
+	loopCfg := config.Config{HTTP: config.HTTP{Listen: "127.0.0.1:8443", PublicOrigins: []string{"https://panel.example.invalid"}}}
+	loopRaw, _ := json.Marshal(loopCfg)
+	loopGuard := SystemGuard{Config: &fakeState{raw: loopRaw}, Executor: guardExecutor{sshOutput: []byte("port 22\n")}}
+	loopPreserved, err := loopGuard.PreservedPorts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(loopPreserved, 8443) {
+		t.Fatalf("loopback panel port 8443 must not be opened on public firewall: %v", loopPreserved)
+	}
+	if !slices.Contains(loopPreserved, 22) || !slices.Contains(loopPreserved, 443) {
+		t.Fatalf("expected SSH 22 and origin 443 preserved: %v", loopPreserved)
+	}
+	// Authoritative panel-port.json overrides static qwq.json port and respects loopback listen_host.
+	tmpRoot := t.TempDir()
+	hintDir := filepath.Join(tmpRoot, "var", "lib", "qwq-capability")
+	if err := os.MkdirAll(hintDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hintDir, "panel-port.json"), []byte(`{"port":45001,"listen_host":"0.0.0.0","updated_at":"2026-11-24T00:00:00Z"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	authGuard := SystemGuard{
+		Config:   &fakeState{raw: raw},
+		Executor: guardExecutor{sshOutput: []byte("port 22\n")},
+		RootPath: tmpRoot,
+		Trust:    sandbox.TrustPolicy{UID: os.Geteuid()},
+	}
+	authPorts, err := authGuard.PreservedPorts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(authPorts, 45001) || slices.Contains(authPorts, 8443) {
+		t.Fatalf("panel-port.json should replace static 8443 with 45001, got %v", authPorts)
+	}
+	if err := os.WriteFile(filepath.Join(hintDir, "panel-port.json"), []byte(`{"port":45001,"listen_host":"127.0.0.1","updated_at":"2026-11-24T00:00:00Z"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	authLoopPorts, err := authGuard.PreservedPorts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(authLoopPorts, 45001) || slices.Contains(authLoopPorts, 8443) {
+		t.Fatalf("loopback panel-port.json must not expose panel port publicly, got %v", authLoopPorts)
 	}
 	for _, listen := range []string{"127.0.0.1:0", "127.0.0.1:65536", "invalid"} {
 		if _, err := ManagementPorts(config.HTTP{Listen: listen}); err == nil {

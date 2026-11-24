@@ -508,11 +508,15 @@ func unitSpecFor(m *manifest.Manifest, versionDir, dataRoot string) (sandbox.Uni
 	// to PrivateNetwork=no + AF_INET/AF_INET6 and low-port capabilities to
 	// CAP_NET_BIND_SERVICE.
 	networkProxyDirect := false
+	hasPublicRoute := false
 	caps := make([]sandbox.CapabilityRef, len(m.Capabilities))
 	for idx, c := range m.Capabilities {
 		caps[idx] = sandbox.CapabilityRef{Name: c.Name, Scope: c.Scope}
 		if c.Name == "network.proxy" && c.Scope == "direct" {
 			networkProxyDirect = true
+		}
+		if c.Name == "public.route" {
+			hasPublicRoute = true
 		}
 	}
 	relaxations := sandbox.DeriveSandboxRelaxations(caps)
@@ -540,6 +544,7 @@ func unitSpecFor(m *manifest.Manifest, versionDir, dataRoot string) (sandbox.Uni
 		DataDir:            dataDir,
 		Startup:            m.Lifecycle.Startup,
 		Background:         m.Lifecycle.Background,
+		PublicStream:       hasPublicRoute,
 	}, nil
 }
 
@@ -774,6 +779,37 @@ func (i *PluginInstaller) RemoveUnit(ctx context.Context, pluginID, version stri
 		}
 	}
 	i.releaseHostChannel(pluginID, others)
+	return nil
+}
+
+// PruneVersion deletes an obsolete inactive version directory while keeping
+// the plugin's active systemd unit intact (KeepUnit=true). The privileged
+// helper verifies that the running process does not execute from versionDir.
+func (i *PluginInstaller) PruneVersion(ctx context.Context, pluginID, version string) error {
+	versionDir, err := i.versionDir(pluginID, version)
+	if err != nil {
+		return err
+	}
+	if i.Helper != nil {
+		_, err := i.removeWithHelper(ctx, sandbox.HelperRemove{
+			ID:       pluginID,
+			Version:  version,
+			Paths:    []string{versionDir},
+			KeepUnit: true,
+		})
+		if err != nil {
+			return wrapInstallerFailure(
+				fmt.Sprintf("The obsolete version %s of plugin %s could not be pruned.", version, pluginID), err)
+		}
+		return nil
+	}
+	if err := removeVersionTree(versionDir); err != nil {
+		return &problem.Error{
+			Code:   problem.Internal,
+			Detail: fmt.Sprintf("The obsolete version %s of plugin %s could not be pruned.", version, pluginID),
+			Cause:  err,
+		}
+	}
 	return nil
 }
 

@@ -61,6 +61,7 @@ type ModelMessage struct {
 	Role             string
 	Content          string
 	ReasoningContent string
+	ThinkingBlocks   []AnthropicThinkingBlock
 	ToolCalls        []ModelToolCall
 	ToolCallID       string
 }
@@ -95,6 +96,7 @@ type ProviderRequest struct {
 type ProviderResponse struct {
 	Content          string
 	ReasoningContent string
+	ThinkingBlocks   []AnthropicThinkingBlock
 	ToolCalls        []ModelToolCall
 }
 
@@ -217,6 +219,7 @@ type LoopEvent struct {
 	Delta            string
 	Content          string
 	ReasoningContent string
+	ThinkingBlocks   []AnthropicThinkingBlock
 	Calls            []ModelToolCall
 	Call             *ModelToolCall
 	Tool             *ToolDef
@@ -351,12 +354,12 @@ func RunLoop(ctx context.Context, provider Provider, tools ToolRegistry, gate Ga
 			}
 		}
 		if err := publish(LoopEvent{
-			Type: LoopEventAssistant, Step: step, Content: response.Content, ReasoningContent: response.ReasoningContent, Calls: calls,
+			Type: LoopEventAssistant, Step: step, Content: response.Content, ReasoningContent: response.ReasoningContent, ThinkingBlocks: response.ThinkingBlocks, Calls: calls,
 		}); err != nil {
 			return result, err
 		}
 		messages = append(messages, ModelMessage{
-			Role: LoopRoleAssistant, Content: response.Content, ReasoningContent: response.ReasoningContent, ToolCalls: boundedCalls(calls),
+			Role: LoopRoleAssistant, Content: response.Content, ReasoningContent: response.ReasoningContent, ThinkingBlocks: response.ThinkingBlocks, ToolCalls: boundedCalls(calls),
 		})
 		if len(calls) == 0 {
 			result.Status = LoopCompleted
@@ -625,7 +628,7 @@ func SanitizeHistory(in []ModelMessage) []ModelMessage {
 		case LoopRoleAssistant:
 			if len(msg.ToolCalls) == 0 {
 				if msg.Content != "" {
-					out = append(out, ModelMessage{Role: LoopRoleAssistant, Content: msg.Content})
+					out = append(out, ModelMessage{Role: LoopRoleAssistant, Content: msg.Content, ThinkingBlocks: msg.ThinkingBlocks})
 				}
 				continue
 			}
@@ -653,7 +656,7 @@ func SanitizeHistory(in []ModelMessage) []ModelMessage {
 				continue
 			}
 			out = append(out, ModelMessage{
-				Role: LoopRoleAssistant, Content: msg.Content, ReasoningContent: msg.ReasoningContent, ToolCalls: msg.ToolCalls,
+				Role: LoopRoleAssistant, Content: msg.Content, ReasoningContent: msg.ReasoningContent, ThinkingBlocks: msg.ThinkingBlocks, ToolCalls: msg.ToolCalls,
 			})
 			for _, call := range msg.ToolCalls {
 				result := results[call.CallID]

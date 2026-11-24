@@ -31,6 +31,10 @@ type snapshotResponse struct {
 	Disks            []diskSnapshot `json:"disks"`
 	PrimaryDiskMount string         `json:"primary_disk_mount"`
 	Levels           metricLevels   `json:"levels"`
+	Thresholds       thresholds     `json:"thresholds"`
+}
+type thresholdsResponse struct {
+	Thresholds thresholds `json:"thresholds"`
 }
 type historyRequest struct {
 	Range  string `json:"range,omitempty"`
@@ -60,15 +64,29 @@ type seriesResponse struct {
 	Series []seriesLine `json:"series"`
 }
 
-// register 只注册七项只读处理器，采样及历史由本实例维护。
+// register 注册监控查询与阈值设置处理器，采样及历史由本实例维护。
 func (i *instance) register() {
 	pluginsdk.HandleInvoke(i, "monitor.snapshot", i.snapshot)
 	pluginsdk.HandleInvoke(i, "monitor.history", i.history)
+	pluginsdk.HandleInvoke(i, "monitor.thresholds.set", i.setThresholds)
 	pluginsdk.HandleInvoke(i, "monitor.stat.cpu", func(ctx context.Context, _ emptyRequest) (statResponse, error) { return i.stat(ctx, "cpu") })
 	pluginsdk.HandleInvoke(i, "monitor.stat.mem", func(ctx context.Context, _ emptyRequest) (statResponse, error) { return i.stat(ctx, "mem") })
 	pluginsdk.HandleInvoke(i, "monitor.stat.disk", func(ctx context.Context, _ emptyRequest) (statResponse, error) { return i.stat(ctx, "disk") })
 	pluginsdk.HandleInvoke(i, "monitor.series.net", func(ctx context.Context, _ emptyRequest) (seriesResponse, error) { return i.series(ctx, "net") })
 	pluginsdk.HandleInvoke(i, "monitor.series.load", func(ctx context.Context, _ emptyRequest) (seriesResponse, error) { return i.series(ctx, "load") })
+}
+
+func (i *instance) setThresholds(ctx context.Context, req thresholds) (thresholdsResponse, error) {
+	for _, level := range []threshold{req.CPU, req.Memory, req.Disk} {
+		if level.Warn < 0 || level.Warn >= level.Crit || level.Crit > 100 {
+			return thresholdsResponse{}, pluginsdk.Errorf("VALIDATION_FAILED", "监控阈值必须满足 0 ≤ warn < crit ≤ 100")
+		}
+	}
+	if err := i.persistThresholds(ctx, req); err != nil {
+		return thresholdsResponse{}, pluginsdk.Errorf("UNAVAILABLE", "持久化告警阈值失败: %s", err.Error())
+	}
+	i.samples.setThresholds(req)
+	return thresholdsResponse{Thresholds: req}, nil
 }
 
 func (i *instance) snapshot(_ context.Context, _ emptyRequest) (snapshotResponse, error) {
@@ -98,6 +116,7 @@ func (i *instance) snapshot(_ context.Context, _ emptyRequest) (snapshotResponse
 		Disks:            i.samples.diskSnapshotsLocked(),
 		PrimaryDiskMount: i.samples.cfg.primaryDiskMount(),
 		Levels:           levels,
+		Thresholds:       i.samples.cfg.Thresholds,
 	}, nil
 }
 

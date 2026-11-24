@@ -70,6 +70,17 @@ export function hostSettings(): HostSettings {
       if (v) tokens[k] = v;
     }
   }
+  let panelTlsMode = '';
+  let panelTlsSha256 = '';
+  const sys = resources.peek('system.info');
+  if (sys && typeof sys === 'object' && 'tls' in sys) {
+    const tls = (sys as { tls?: { mode?: string; fingerprint?: string } }).tls;
+    if (typeof tls?.mode === 'string') panelTlsMode = tls.mode;
+    if (typeof tls?.fingerprint === 'string') {
+      const hex = tls.fingerprint.replace(/:/g, '').replace(/^sha256/i, '').trim().toLowerCase();
+      if (/^[0-9a-f]{64}$/.test(hex)) panelTlsSha256 = hex;
+    }
+  }
   return {
     theme: prefs.resolvedTheme,
     motion: prefs.resolvedMotion,
@@ -77,6 +88,8 @@ export function hostSettings(): HostSettings {
     tokens,
     visible: typeof document === 'undefined' || document.visibilityState === 'visible',
     public_origin: typeof window !== 'undefined' ? window.location.origin : '',
+    panel_tls_mode: panelTlsMode || undefined,
+    panel_tls_sha256: panelTlsSha256 || undefined,
   };
 }
 
@@ -196,7 +209,7 @@ const ENSURE_PLUGIN_LABELS: Record<string, string> = {
 
 function computeBridgeJobWaitMs(declaredTimeoutMs?: number): number {
   const base = declaredTimeoutMs && declaredTimeoutMs > 0 ? declaredTimeoutMs + 15_000 : 90_000;
-  return Math.min(Math.max(base, 90_000), 600_000);
+  return Math.min(Math.max(base, 90_000), 660_000);
 }
 
 export interface EnsurePluginsHandlerDeps {

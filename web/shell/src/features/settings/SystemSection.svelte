@@ -6,11 +6,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Alert, Button, Card, Chip, CopyButton, Dialog, ErrorState, Input, OtpInput, Select, Skeleton, Switch } from '$ui';
-  import type { DisguiseMode, PanelAccessSettings, PanelAccessUpdateRequest } from '$api/additions';
+  import type { DisguiseMode, PanelAccessSettings, PanelAccessUpdateRequest, SystemBackupList } from '$api/additions';
   import { system } from '$api/endpoints';
   import { describeError } from '$lib/errors';
-  import { dateTime, relativeTime } from '$lib/format';
-  import { useResource } from '$lib/resource.svelte';
+  import { bytes, dateTime, relativeTime } from '$lib/format';
+  import { resources, useResource } from '$lib/resource.svelte';
   import { session } from '$lib/session.svelte';
   import { toasts } from '$lib/toast.svelte';
 
@@ -31,6 +31,13 @@
     key: 'system.access',
     load: () => (isAdmin ? system.access() : Promise.resolve(null)),
   });
+  const backups = useResource<SystemBackupList | null>({
+    key: 'system.backups',
+    load: () => (isAdmin ? system.listBackups() : Promise.resolve(null)),
+  });
+  let creatingBackup = $state(false);
+  let exportingBundle = $state(false);
+  let entryChangedUrl = $state('');
 
   const ROLE: Record<string, string> = { standalone: '单机', controller: '控制节点', agent: '被控节点' };
   const TLS: Record<string, string> = { self_signed: '自签名证书', acme: '自动签发（ACME）', proxy: '由反向代理终止' };
@@ -188,14 +195,24 @@
     saving = true;
     saveError = '';
     mfaErr = '';
+    const prevEffectiveEntry = access.data?.effective_entry_path ?? '';
     try {
       const updated = await system.updateAccess(body, code);
       mfaOpen = false;
       mfaCode = '';
       pendingBody = null;
       syncedRevision = null;
+      resources.invalidate('plugins');
       await Promise.all([access.refresh(), info.refresh()]);
       toasts.success(updated.port_changed ? `面板监听地址已热切换至 ${updated.listen}` : '面板入口与伪装设置已生效');
+      const nextUrl = buildReboundPanelUrl({
+        panelDomain: updated.panel_domain,
+        autoDisableOnDomain: updated.auto_disable_on_domain,
+        listenHost: updated.listen_host,
+        tlsMode: updated.tls_mode,
+        port: updated.port,
+        effectiveEntryPath: updated.effective_entry_path,
+      });
       if (updated.port_changed) {
         const curHost = typeof location !== 'undefined' ? location.hostname : '';
         reboundLoopbackWarning =
@@ -203,14 +220,12 @@
           Boolean(curHost) &&
           !isLoopbackAddress(curHost) &&
           !updated.panel_domain;
-        reboundUrl = buildReboundPanelUrl({
-          panelDomain: updated.panel_domain,
-          autoDisableOnDomain: updated.auto_disable_on_domain,
-          listenHost: updated.listen_host,
-          tlsMode: updated.tls_mode,
-          port: updated.port,
-          effectiveEntryPath: updated.effective_entry_path,
-        });
+        reboundUrl = nextUrl;
+        entryChangedUrl = '';
+      } else if (updated.effective_entry_path !== prevEffectiveEntry) {
+        entryChangedUrl = nextUrl;
+      } else {
+        entryChangedUrl = '';
       }
     } catch (err) {
       const v = describeError(err);
@@ -262,6 +277,41 @@
     const val = (code ?? mfaCode).trim();
     if (!pendingBody || !val || saving) return;
     void submitAccess(pendingBody, val);
+  }
+
+  async function handleCreateBackup() {
+    if (creatingBackup) return;
+    creatingBackup = true;
+    try {
+      const created = await system.createBackup();
+      await backups.refresh();
+      toasts.success(`系统备份已创建：${created.filename}`);
+    } catch (err) {
+      toasts.error(describeError(err).message);
+    } finally {
+      creatingBackup = false;
+    }
+  }
+
+  async function handleExportSupportBundle() {
+    if (exportingBundle) return;
+    exportingBundle = true;
+    try {
+      const { blob, filename } = await system.exportSupportBundle();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toasts.success(`脱敏故障诊断包已导出：${filename}`);
+    } catch (err) {
+      toasts.error(describeError(err).message);
+    } finally {
+      exportingBundle = false;
+    }
   }
 </script>
 
@@ -343,6 +393,13 @@
                 {#if !reboundLoopbackWarning}
                   <a class="jump" href={reboundUrl} data-external>前往新地址 →</a>
                 {/if}
+              </div>
+            </Alert>
+          {:else if entryChangedUrl}
+            <Alert tone="info" title="安全密道已变更，请更新书签并在下次登录时使用新入口地址">
+              <div class="url-row">
+                <code class="mono">{entryChangedUrl}</code>
+                <CopyButton text={entryChangedUrl} label="复制新入口" />
               </div>
             </Alert>
           {/if}
@@ -458,6 +515,39 @@
       {/if}
     </dl>
   </Card>
+
+  {#if isAdmin}
+    <Card title="系统备份与故障诊断包" icon="backup" color="amber">
+      <div class="backup-head">
+        <p class="backup-note">
+          备份包含主数据库一致性快照、主密钥、证书、Agent 工作区及插件状态（默认保留最近 7 份）；故障诊断包已自动脱敏口令、令牌与安全密道。
+        </p>
+        <div class="backup-actions">
+          <Button variant="primary" loading={creatingBackup} onclick={handleCreateBackup}>立即创建备份</Button>
+          <Button variant="ghost" loading={exportingBundle} onclick={handleExportSupportBundle}>导出脱敏诊断包</Button>
+        </div>
+      </div>
+      {#if backups.status === 'loading' && !backups.data}
+        <Skeleton lines={3} height={16} />
+      {:else if backups.status === 'error' && !backups.data}
+        <ErrorState compact message={describeError(backups.error).message} requestId={describeError(backups.error).requestId} onretry={backups.refresh} />
+      {:else if backups.data && backups.data.items.length > 0}
+        <ul class="backup-list">
+          {#each backups.data.items as item (item.filename)}
+            <li class="backup-item">
+              <div class="backup-meta">
+                <code class="mono">{item.filename}</code>
+                <span class="faint">{bytes(item.size_bytes)} · {dateTime(item.created_at)}</span>
+              </div>
+              <a class="jump" href={system.downloadBackupUrl(item.filename)} download={item.filename} data-external>下载</a>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="faint backup-empty">暂无历史备份文件，点击「立即创建备份」生成首份全量快照。</p>
+      {/if}
+    </Card>
+  {/if}
   <Dialog
     bind:open={mfaOpen}
     title="两步验证确认"
@@ -515,94 +605,31 @@
 {/if}
 
 <style>
-  .drift-warn {
-    margin-top: var(--s-4);
-  }
-  .otp {
-    display: flex;
-    justify-content: center;
-    margin-bottom: var(--s-3);
-  }
-  .mfa-toggle {
-    display: flex;
-    justify-content: center;
-    margin-bottom: var(--s-2);
-  }
-  .kv {
-    display: grid;
-    grid-template-columns: 112px minmax(0, 1fr);
-    gap: var(--s-3) var(--s-4);
-    margin: 0;
-  }
-  dt {
-    color: var(--text-3);
-  }
-  dd {
-    margin: 0;
-    min-width: 0;
-    word-break: break-all;
-  }
-  .fp,
-  .url-row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .fp code,
-  .url-row code {
-    font-size: var(--fs-xs);
-    word-break: break-all;
-  }
-  .access-form {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-4);
-  }
-  .status-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .inline-field {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--s-3);
-    align-items: start;
-  }
-  .inline-act {
-    padding-top: 26px;
-  }
-  .preview {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 10px 12px;
-    border-radius: var(--r-sm);
-    background: var(--surface-2);
-  }
-  .preview-label {
-    color: var(--text-3);
-    font-size: var(--fs-xs);
-  }
-  .jump {
-    color: var(--accent-text);
-    font-weight: var(--fw-medium);
-    text-decoration: none;
-  }
-  .jump:hover {
-    text-decoration: underline;
-  }
-  .foot {
-    display: flex;
-    justify-content: flex-end;
-  }
+  .drift-warn { margin-top: var(--s-4); }
+  .otp, .mfa-toggle { display: flex; justify-content: center; margin-bottom: var(--s-3); }
+  .kv { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: var(--s-3) var(--s-4); margin: 0; }
+  dt { color: var(--text-3); }
+  dd { margin: 0; min-width: 0; word-break: break-all; }
+  .fp, .url-row, .status-row, .backup-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .fp code, .url-row code, .backup-meta code, .backup-meta .faint, .preview-label { font-size: var(--fs-xs); }
+  .fp code, .url-row code, .backup-meta code { word-break: break-all; }
+  .access-form, .backup-head, .backup-list, .backup-meta, .preview { display: flex; flex-direction: column; }
+  .access-form { gap: var(--s-4); }
+  .backup-head { gap: var(--s-3); margin-bottom: var(--s-4); }
+  .backup-list { list-style: none; margin: 0; padding: 0; gap: var(--s-2); }
+  .backup-meta { gap: 2px; min-width: 0; }
+  .inline-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s-3); align-items: start; }
+  .inline-act { padding-top: 26px; }
+  .preview, .backup-item { padding: 10px 12px; border-radius: var(--r-sm); background: var(--surface-2); }
+  .preview { gap: 6px; }
+  .backup-item { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
+  .preview-label, .backup-note, .backup-empty { color: var(--text-3); }
+  .backup-note, .backup-empty { margin: 0; font-size: var(--fs-sm); }
+  .jump { color: var(--accent-text); font-weight: var(--fw-medium); text-decoration: none; }
+  .jump:hover { text-decoration: underline; }
+  .foot { display: flex; justify-content: flex-end; }
   @media (max-width: 640px) {
-    .inline-field {
-      grid-template-columns: 1fr;
-    }
-    .inline-act {
-      padding-top: 0;
-    }
+    .inline-field { grid-template-columns: 1fr; }
+    .inline-act { padding-top: 0; }
   }
 </style>

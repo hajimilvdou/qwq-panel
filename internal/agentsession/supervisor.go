@@ -401,6 +401,125 @@ func (p *ChildProcess) Close(grace time.Duration) error {
 	return waitErr
 }
 
+const defaultProviderSentinel = "__default__"
+
+// ResolveCLIProviderIDWithDefault resolves the AI provider ID for an external
+// CLI session: explicit "oauth" returns "" (never overrides OAuth login); an
+// explicit provider_id wins; otherwise falls back to the host's default AI
+// provider via defaultProviderFn (matching NativeCore's default fallback).
+func ResolveCLIProviderIDWithDefault(
+	ctx context.Context,
+	authMode, explicitProviderID string,
+	defaultProviderFn func(context.Context) (string, error),
+) string {
+	if strings.EqualFold(strings.TrimSpace(authMode), "oauth") {
+		return ""
+	}
+	if p := strings.TrimSpace(explicitProviderID); p != "" {
+		return p
+	}
+	if defaultProviderFn != nil {
+		if defID, err := defaultProviderFn(ctx); err == nil {
+			return strings.TrimSpace(defID)
+		}
+	}
+	return ""
+}
+
+func isProviderCompatibleWithCore(core CoreName, epKind string) bool {
+	kind := strings.TrimSpace(epKind)
+	if kind == "" {
+		kind = ProviderKindOpenAI
+	}
+	switch core {
+	case CoreClaudeCode:
+		return kind == ProviderKindAnthropic
+	case CoreCodex, CoreDSH:
+		return kind != ProviderKindAnthropic
+	default:
+		return true
+	}
+}
+
+func defaultProviderIDLookupForCore(providers ProviderResolver, core CoreName) func(context.Context) (string, error) {
+	if providers == nil {
+		return nil
+	}
+	return func(ctx context.Context) (string, error) {
+		ep, found, err := providers.ResolveProvider(ctx, "")
+		if err != nil {
+			return "", err
+		}
+		clear(ep.Key)
+		if !found || !isProviderCompatibleWithCore(core, ep.Kind) {
+			return "", nil
+		}
+		if strings.TrimSpace(ep.ID) != "" {
+			return strings.TrimSpace(ep.ID), nil
+		}
+		if strings.TrimSpace(ep.BaseURL) != "" {
+			return defaultProviderSentinel, nil
+		}
+		return "", nil
+	}
+}
+
+// resolveCLIAuthEnvForSession resolves either global AI provider credentials
+// (explicit or default fallback when no local OAuth login is active in auto
+// mode) or persistent isolated OAuth credentials for an external CLI core.
+func resolveCLIAuthEnvForSession(
+	ctx context.Context,
+	providers ProviderResolver,
+	auth *CLIAuthManager,
+	core CoreName,
+	authMode, explicitProviderID, sessionID string,
+) (extraEnv []string, ep ProviderEndpoint, found bool, cleanup func(), err error) {
+	noop := func() {}
+	mode := strings.ToLower(strings.TrimSpace(authMode))
+	explicit := strings.TrimSpace(explicitProviderID)
+
+	// In auto mode (auth_mode=="" && provider_id==""), respect an active
+	// persistent official OAuth login before falling back to the default provider.
+	if mode == "" && explicit == "" && auth != nil {
+		if oauthEnv := auth.PersistentEnvFor(core); len(oauthEnv) > 0 {
+			return oauthEnv, ProviderEndpoint{}, false, noop, nil
+		}
+	}
+
+	resolvedID := ResolveCLIProviderIDWithDefault(ctx, mode, explicit, defaultProviderIDLookupForCore(providers, core))
+	if resolvedID != "" {
+		pEnv, pEp, pFound, pCleanup, pErr := ResolveProviderForCLI(ctx, providers, resolvedID, core)
+		if pErr != nil {
+			return nil, ProviderEndpoint{}, false, noop, pErr
+		}
+		if !pFound {
+			if explicit != "" {
+				return nil, ProviderEndpoint{}, false, noop, problem.New(problem.Unavailable,
+					"The AI provider config.provider_id names no longer exists; pick another one or ask an administrator.")
+			}
+			if mode == "provider" {
+				return nil, ProviderEndpoint{}, false, noop, problem.New(problem.Unavailable,
+					"No compatible global AI provider is configured for this external CLI core.")
+			}
+		} else {
+			if sessionID != "" && auth != nil {
+				if stEnv := auth.SessionStateEnvFor(core, sessionID); len(stEnv) > 0 {
+					pEnv = append(stEnv, pEnv...)
+				}
+			}
+			return pEnv, pEp, true, pCleanup, nil
+		}
+	}
+	if mode == "provider" {
+		return nil, ProviderEndpoint{}, false, noop, problem.New(problem.Unavailable,
+			"No compatible global AI provider is configured for this external CLI core.")
+	}
+	if auth != nil {
+		return auth.PersistentEnvFor(core), ProviderEndpoint{}, false, noop, nil
+	}
+	return nil, ProviderEndpoint{}, false, noop, nil
+}
+
 // ResolveProviderEnv safely resolves a global AIProvider's API key into child
 // CLI environment variables when a session explicitly configures provider_id.
 // The plaintext key never touches config_json, logs or errors, and cleanup
@@ -419,7 +538,11 @@ func ResolveProviderForCLI(ctx context.Context, providers ProviderResolver, prov
 	if providers == nil || providerID == "" {
 		return nil, ProviderEndpoint{}, false, noop, nil
 	}
-	ep, found, err := providers.ResolveProvider(ctx, providerID)
+	lookupID := providerID
+	if lookupID == defaultProviderSentinel {
+		lookupID = ""
+	}
+	ep, found, err := providers.ResolveProvider(ctx, lookupID)
 	if err != nil {
 		return nil, ProviderEndpoint{}, false, noop, problem.From(err)
 	}

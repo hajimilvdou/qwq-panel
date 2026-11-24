@@ -186,6 +186,19 @@ func deleteVersionTx(ctx context.Context, tx *storage.Tx, pluginID, version stri
 	return requireOneRow(res)
 }
 
+// deleteInactiveVersionTx removes an obsolete inactive version row during GC,
+// guarding against deleting an active version even under concurrent changes.
+func deleteInactiveVersionTx(ctx context.Context, tx *storage.Tx, pluginID, version string) error {
+	if _, err := tx.Changed(ctx, storage.Change{Subject: versionSubject(pluginID, version), Kind: storage.Deleted}); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM plugin_versions WHERE plugin_id = ? AND version = ? AND active = 0`, pluginID, version)
+	if err != nil {
+		return err
+	}
+	return requireOneRow(res)
+}
+
 // listActiveConfigs loads the applied configuration of every plugin.
 func (u *Updater) listActiveConfigs(ctx context.Context) (map[string]ConfigRevision, error) {
 	out := make(map[string]ConfigRevision)

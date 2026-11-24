@@ -179,6 +179,36 @@ type serverAuthSnapshot struct {
 	users       []userEntry
 }
 
+// TrackedUserConn 绑定已鉴权客户端连接与其用户凭据 SHA-256 指纹，供 HotUpdate 实时驱逐被吊销/超额用户连接。
+type TrackedUserConn struct {
+	Conn         net.Conn
+	UserKeySHA   [32]byte
+	CloseSession func()
+}
+
+// EvictRevokedAnyTLSConnections 立即关闭所有不再位于新白名单中的存量 AnyTLS 连接及其全部复用子流。
+func EvictRevokedAnyTLSConnections(active []TrackedUserConn, allowedUserDigests map[[32]byte]struct{}) int {
+	evicted := 0
+	for _, item := range active {
+		if _, stillAllowed := allowedUserDigests[item.UserKeySHA]; !stillAllowed {
+			if item.CloseSession != nil {
+				item.CloseSession()
+			}
+			if item.Conn != nil {
+				_ = item.Conn.Close()
+			}
+			evicted++
+		}
+	}
+	return evicted
+}
+
+type activeConnState struct {
+	authed       bool
+	userDigest   [32]byte
+	closeSession func()
+}
+
 // Server 承载单个 AnyTLS v1/v2 TLS 监听实例并统计入站/逐用户流量。
 type Server struct {
 	profileID          string
@@ -198,7 +228,7 @@ type Server struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	connsMu     sync.Mutex
-	activeConns map[net.Conn]struct{}
+	activeConns map[net.Conn]*activeConnState
 	stopped     bool
 	wg          sync.WaitGroup
 	stopOnce    sync.Once
@@ -324,7 +354,7 @@ func NewServer(spec ProfileSpec) (*Server, error) {
 		dialTarget:         dialFn,
 		preAuthSem:         make(chan struct{}, maxPreAuthConns),
 		activeSem:          make(chan struct{}, maxActiveConns),
-		activeConns:        make(map[net.Conn]struct{}),
+		activeConns:        make(map[net.Conn]*activeConnState),
 	}
 	s.cert.Store(&cert)
 	s.state.Store(snap)
@@ -345,7 +375,7 @@ func (s *Server) serverNameValue() string {
 	return ""
 }
 
-// HotUpdate 在监听地址不变时无中断热更新 TLS 证书、用户列表与填充方案，并完整保留流量计数。
+// HotUpdate 在监听地址不变时无中断热更新 TLS 证书、用户列表与填充方案，保留在席用户流量计数，并立即踢除被吊销/超额用户的存量长连接。
 func (s *Server) HotUpdate(spec ProfileSpec) error {
 	cert, err := tls.X509KeyPair(spec.CertPEM, spec.KeyPEM)
 	if err != nil {
@@ -357,6 +387,24 @@ func (s *Server) HotUpdate(spec ProfileSpec) error {
 	}
 	s.cert.Store(&cert)
 	s.state.Store(snap)
+
+	allowed := make(map[[32]byte]struct{}, len(snap.users))
+	for _, u := range snap.users {
+		allowed[u.digest] = struct{}{}
+	}
+	s.connsMu.Lock()
+	tracked := make([]TrackedUserConn, 0, len(s.activeConns))
+	for c, st := range s.activeConns {
+		if st != nil && st.authed {
+			tracked = append(tracked, TrackedUserConn{
+				Conn:         c,
+				UserKeySHA:   st.userDigest,
+				CloseSession: st.closeSession,
+			})
+		}
+	}
+	s.connsMu.Unlock()
+	EvictRevokedAnyTLSConnections(tracked, allowed)
 	return nil
 }
 
@@ -420,11 +468,18 @@ func (s *Server) Stop(timeout time.Duration) {
 		s.connsMu.Lock()
 		s.stopped = true
 		conns := make([]net.Conn, 0, len(s.activeConns))
-		for c := range s.activeConns {
+		closeFns := make([]func(), 0, len(s.activeConns))
+		for c, st := range s.activeConns {
 			conns = append(conns, c)
+			if st != nil && st.closeSession != nil {
+				closeFns = append(closeFns, st.closeSession)
+			}
 		}
 		clear(s.activeConns)
 		s.connsMu.Unlock()
+		for _, fn := range closeFns {
+			fn()
+		}
 		for _, c := range conns {
 			_ = c.Close()
 		}
@@ -561,7 +616,35 @@ func (s *Server) registerConn(conn net.Conn) bool {
 	if s.stopped {
 		return false
 	}
-	s.activeConns[conn] = struct{}{}
+	s.activeConns[conn] = &activeConnState{}
+	return true
+}
+
+func (s *Server) bindConnAuthDigest(conn net.Conn, digest [32]byte) bool {
+	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	if s.stopped {
+		return false
+	}
+	st, ok := s.activeConns[conn]
+	if !ok {
+		return false
+	}
+	// 在锁内二次确认当前最新快照仍允许该用户，彻底闭合 matchUser 与并发 HotUpdate 间的竞态窗口
+	if cur := s.state.Load(); cur != nil {
+		stillValid := false
+		for idx := range cur.users {
+			if subtle.ConstantTimeCompare(cur.users[idx].digest[:], digest[:]) == 1 {
+				stillValid = true
+				break
+			}
+		}
+		if !stillValid {
+			return false
+		}
+	}
+	st.authed = true
+	st.userDigest = digest
 	return true
 }
 
@@ -607,6 +690,9 @@ func (s *Server) handleConn(conn net.Conn) {
 	if user == nil || snap == nil {
 		return
 	}
+	if !s.bindConnAuthDigest(conn, user.digest) {
+		return
+	}
 	padLen := int(binary.BigEndian.Uint16(authHeader[32:34]))
 	if padLen > maxAuthPadBytes {
 		return
@@ -639,6 +725,27 @@ func (s *Server) handleConn(conn net.Conn) {
 		clientVersion: 1,
 		streams:       make(map[uint32]*anytlsStream),
 	}
+	s.connsMu.Lock()
+	st, ok := s.activeConns[conn]
+	stillValid := ok && !s.stopped && st != nil && st.authed
+	if stillValid {
+		if cur := s.state.Load(); cur != nil {
+			matched := false
+			for idx := range cur.users {
+				if subtle.ConstantTimeCompare(cur.users[idx].digest[:], user.digest[:]) == 1 {
+					matched = true
+					break
+				}
+			}
+			stillValid = matched
+		}
+	}
+	if !stillValid {
+		s.connsMu.Unlock()
+		return
+	}
+	st.closeSession = sess.closeAllStreams
+	s.connsMu.Unlock()
 	sess.run()
 }
 

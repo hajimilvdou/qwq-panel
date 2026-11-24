@@ -9,6 +9,12 @@
   import Icon from './Icon.svelte';
   import IconButton from './IconButton.svelte';
   import type { IconName } from './icons';
+  import {
+    getTopModalDialog,
+    hideToasterFromTopLayer,
+    onTopLayerChanged,
+    promoteToasterToTopLayer,
+  } from './toplayer';
 
   export interface ToastItem {
     id: number;
@@ -24,6 +30,77 @@
   }
   let { items, ondismiss }: Props = $props();
 
+  let anchorEl = $state<HTMLSpanElement>();
+  let hostEl = $state<HTMLDivElement>();
+  let lastMaxId = 0;
+
+  function syncMountTarget(wantPortal: boolean): boolean {
+    if (!hostEl) return false;
+    const modal = wantPortal ? getTopModalDialog() : null;
+    if (modal) {
+      if (hostEl.parentElement !== modal) {
+        modal.appendChild(hostEl);
+        return true;
+      }
+      return false;
+    }
+    const anchor = anchorEl;
+    const home = anchor?.parentElement;
+    if (anchor && home && hostEl.parentElement !== home) {
+      home.insertBefore(hostEl, anchor.nextSibling);
+      return true;
+    }
+    return false;
+  }
+
+  function isPopoverOpen(el: HTMLElement): boolean {
+    try {
+      return el.matches(':popover-open');
+    } catch {
+      return false;
+    }
+  }
+
+  $effect(() => {
+    const count = items.length;
+    let maxId = 0;
+    for (const item of items) {
+      if (item.id > maxId) maxId = item.id;
+    }
+    if (!hostEl) return;
+    if (count > 0) {
+      const moved = syncMountTarget(true);
+      const hasNew = maxId > lastMaxId;
+      if (moved || hasNew || !isPopoverOpen(hostEl)) {
+        promoteToasterToTopLayer(hostEl);
+      }
+      if (maxId > lastMaxId) lastMaxId = maxId;
+    } else {
+      lastMaxId = 0;
+      hideToasterFromTopLayer(hostEl);
+      syncMountTarget(false);
+    }
+  });
+
+  $effect(() => {
+    const off = onTopLayerChanged(() => {
+      if (!hostEl) return;
+      if (items.length > 0) {
+        syncMountTarget(true);
+        promoteToasterToTopLayer(hostEl);
+      } else {
+        syncMountTarget(false);
+      }
+    });
+    return () => {
+      off();
+      if (hostEl) {
+        hideToasterFromTopLayer(hostEl);
+        syncMountTarget(false);
+      }
+    };
+  });
+
   const ICON: Record<ToastItem['kind'], IconName> = {
     info: 'info',
     success: 'check-circle',
@@ -32,7 +109,8 @@
   };
 </script>
 
-<div class="toaster" aria-live="polite" aria-relevant="additions">
+<span bind:this={anchorEl} hidden></span>
+<div bind:this={hostEl} class="toaster" popover="manual" aria-live="polite" aria-relevant="additions">
   {#each items as t (t.id)}
     <div class="toast {t.kind}" role={t.kind === 'error' ? 'alert' : 'status'}>
       <span class="ic"><Icon name={ICON[t.kind]} size={18} /></span>
@@ -58,16 +136,31 @@
 <style>
   .toaster {
     position: fixed;
-    top: 16px;
-    left: 50%;
+    inset: 16px auto auto 50%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    overflow: visible;
     z-index: var(--z-toast);
-    display: flex;
     flex-direction: column;
     align-items: center;
     gap: 8px;
     width: min(480px, calc(100vw - 24px));
     transform: translateX(-50%);
     pointer-events: none;
+  }
+  .toaster:popover-open {
+    display: flex;
+  }
+  .toaster:not(:popover-open) {
+    display: none;
+  }
+  @supports not selector(:popover-open) {
+    .toaster {
+      display: flex;
+    }
   }
   .toast {
     display: flex;

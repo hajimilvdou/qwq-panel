@@ -56,6 +56,14 @@ const (
 	// helper builds every journalctl argument itself and only ever addresses
 	// qwq-plugin@<id>.service (GAPS gap 7).
 	HelperOpLogs = "logs"
+	// HelperOpBackupPluginData snapshots DynamicUser plugin private data trees
+	// (including consistent SQLite VACUUM INTO copies) into a root-owned
+	// read-only backup staging directory (0750 root:qwq) so `qwq backup` can
+	// archive full plugin state without running as root.
+	HelperOpBackupPluginData = "backup-plugin-data"
+	// HelperOpBackupPluginCleanup removes a root-owned plugin backup staging
+	// directory created by HelperOpBackupPluginData after archiving completes.
+	HelperOpBackupPluginCleanup = "backup-plugin-cleanup"
 )
 
 // Log limits of the helper. MaxLogLines keeps one response well inside
@@ -106,6 +114,22 @@ type HelperRequest struct {
 	Cursor string `json:"cursor,omitempty"`
 	Limit  int    `json:"limit,omitempty"`
 	Stream string `json:"stream,omitempty"`
+	// BackupSpecs and BackupStageName are the backup-plugin-data fields.
+	BackupSpecs     []PluginBackupSpec `json:"backup_specs,omitempty"`
+	BackupStageName string             `json:"backup_stage_name,omitempty"`
+}
+
+// PluginBackupSpec declares which relative paths inside one plugin's private
+// StateDirectory (<PrivateDataRoot>/<PluginID>/default) should be snapshotted.
+type PluginBackupSpec struct {
+	PluginID    string   `json:"plugin_id"`
+	BackupPaths []string `json:"backup_paths"`
+}
+
+// PluginBackupResult reports the staged plugin backup directory and plugins.
+type PluginBackupResult struct {
+	StageDir      string   `json:"stage_dir"`
+	StagedPlugins []string `json:"staged_plugins,omitempty"`
 }
 
 // HelperLogs is the client-side form of a logs request.
@@ -139,15 +163,16 @@ type LogResult struct {
 // could not be enabled after the files were written or disabled before they
 // were removed.
 type HelperResponse struct {
-	OK       bool           `json:"ok"`
-	Code     string         `json:"code,omitempty"`
-	Error    string         `json:"error,omitempty"`
-	Install  *InstallResult `json:"install,omitempty"`
-	Remove   *RemoveResult  `json:"remove,omitempty"`
-	Publish  *PublishResult `json:"publish,omitempty"`
-	Logs     *LogResult     `json:"logs,omitempty"`
-	Warnings []string       `json:"warnings,omitempty"`
-	Version  string         `json:"version,omitempty"`
+	OK           bool                `json:"ok"`
+	Code         string              `json:"code,omitempty"`
+	Error        string              `json:"error,omitempty"`
+	Install      *InstallResult      `json:"install,omitempty"`
+	Remove       *RemoveResult       `json:"remove,omitempty"`
+	Publish      *PublishResult      `json:"publish,omitempty"`
+	Logs         *LogResult          `json:"logs,omitempty"`
+	PluginBackup *PluginBackupResult `json:"plugin_backup,omitempty"`
+	Warnings     []string            `json:"warnings,omitempty"`
+	Version      string              `json:"version,omitempty"`
 	// UID is the helper's effective uid. It is not omitempty: the ping reply
 	// must show 0 explicitly, and a non-zero value would mean the helper is
 	// not running as root.
@@ -320,6 +345,39 @@ func (c *HelperClient) Ping(ctx context.Context) (HelperPing, error) {
 		return HelperPing{}, err
 	}
 	return HelperPing{Version: resp.Version, UID: resp.UID}, nil
+}
+
+// BackupPluginData asks the privileged helper to snapshot the declared
+// DynamicUser plugin private data directories into a root-owned backup staging
+// directory readable by the agent group.
+func (c *HelperClient) BackupPluginData(ctx context.Context, stageName string, specs []PluginBackupSpec) (PluginBackupResult, error) {
+	client := *c
+	if client.Timeout == 0 {
+		client.Timeout = 3 * time.Minute
+	}
+	resp, err := client.call(ctx, HelperRequest{
+		Op:              HelperOpBackupPluginData,
+		BackupStageName: stageName,
+		BackupSpecs:     specs,
+	})
+	if err != nil {
+		return PluginBackupResult{}, err
+	}
+	if resp.PluginBackup == nil {
+		return PluginBackupResult{}, problem.New(problem.Internal,
+			"The privileged helper did not report the staged plugin backup directory.")
+	}
+	return *resp.PluginBackup, nil
+}
+
+// BackupPluginCleanup asks the privileged helper to remove a root-owned plugin
+// backup staging directory created by BackupPluginData.
+func (c *HelperClient) BackupPluginCleanup(ctx context.Context, stageName string) error {
+	_, err := c.call(ctx, HelperRequest{
+		Op:              HelperOpBackupPluginCleanup,
+		BackupStageName: stageName,
+	})
+	return err
 }
 
 // call performs one request/response exchange. It retries only the connect.

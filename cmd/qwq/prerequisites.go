@@ -252,6 +252,16 @@ func wirePrerequisites(
 	if err := c.SetRenewalPolicySource(authority); err != nil {
 		return nil, fmt.Errorf("bind renewal policy source: %w", err)
 	}
+	if rt != nil {
+		rt.SetCertRevisionLookup(func(ctx context.Context, certID string) (string, bool, error) {
+			entry, found, err := certRepo.Get(ctx, certificates.ResourceKey(prerequisiteOwnerID, certID))
+			if err != nil || !found {
+				return "", found, err
+			}
+			clear(entry.Value)
+			return entry.Revision, true, nil
+		})
+	}
 
 	providers, err := provider.New(provider.Options{
 		Source: hostauth.CredentialSource{Authority: authority},

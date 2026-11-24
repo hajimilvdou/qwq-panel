@@ -6,12 +6,11 @@ package main
 //  qwq support-bundle —— 收集排障信息（DEP-05）
 // -----------------------------------------------------------------------------
 //  内容：doctor.json、最近 1 小时 qwq* 日志、qwq unit 文件、脱敏后的
-//  qwq.json、buildinfo。日志与配置按 logging 的敏感键表脱敏；归档 0600。
+//  qwq.json、buildinfo。日志与配置按 logging 的敏感键表及 URL/前缀脱敏；归档 0600。
 // =============================================================================
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -21,23 +20,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/buildinfo"
 	"github.com/qwq-panel/qwq/internal/doctor"
+	"github.com/qwq-panel/qwq/internal/hostbackup"
+	"github.com/qwq-panel/qwq/internal/panelaccess"
 	"github.com/qwq-panel/qwq/internal/platform/config"
-	"github.com/qwq-panel/qwq/internal/platform/logging"
+	"github.com/qwq-panel/qwq/internal/storage"
 )
-
-const redactedValue = "[REDACTED]"
 
 // bundleSources are what a bundle collects; tests replace them.
 type bundleSources struct {
 	Doctor     func(ctx context.Context) []doctor.Result
 	Journal    func(ctx context.Context) (string, error)
 	ConfigPath string
+	// EntryPath optionally provides the live secret entry path to redact from logs.
+	EntryPath string
 	// UnitGlobs list the unit files and drop-ins to include.
 	UnitGlobs []string
 }
@@ -65,15 +65,27 @@ func runSupportBundle(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	liveEntryPath := ""
+	if cfg, cerr := config.Load(*configPath); cerr == nil {
+		dbPath := filepath.Join(cfg.DataDir, hostbackup.BackupDBName)
+		if _, serr := os.Stat(dbPath); serr == nil {
+			if db, oerr := storage.Open(ctx, storage.Options{Path: dbPath, NoMigrate: true}); oerr == nil {
+				_, _, rawEP, _, _ := panelaccess.ReadEffectiveFromDB(ctx, db, cfg.HTTP)
+				liveEntryPath = rawEP
+				_ = db.Close()
+			}
+		}
+	}
 	src := bundleSources{
 		Doctor: func(ctx context.Context) []doctor.Result {
 			return collectDoctor(ctx, doctor.System(), doctorOptions{ConfigPath: *configPath, Sandbox: true})
 		},
 		Journal: func(ctx context.Context) (string, error) {
-			out, err := exec.CommandContext(ctx, "journalctl", "-u", "qwq*", "--since", "-1h", "--no-pager", "-o", "short-iso").Output()
+			out, err := exec.CommandContext(ctx, "journalctl", "-u", "qwq*", "--since", "-1h", "-n", "5000", "--no-pager", "-o", "short-iso").Output()
 			return string(out), err
 		},
 		ConfigPath: *configPath,
+		EntryPath:  liveEntryPath,
 		UnitGlobs: []string{
 			"/etc/systemd/system/qwq-*.service", "/etc/systemd/system/qwq-*.socket",
 			"/etc/systemd/system/qwq-*.service.d/*.conf", "/etc/tmpfiles.d/qwq-plugin-*.conf",
@@ -107,6 +119,12 @@ func writeSupportBundle(ctx context.Context, w io.Writer, src bundleSources) err
 	}
 	var problems []string
 
+	entryPath := strings.Trim(strings.TrimSpace(src.EntryPath), "/")
+	rawCfg, cfgErr := os.ReadFile(src.ConfigPath)
+	if cfgErr == nil && entryPath == "" {
+		entryPath = hostbackup.ExtractEntryPathFromConfig(rawCfg)
+	}
+
 	rs, err := json.MarshalIndent(src.Doctor(ctx), "", "  ")
 	if err != nil {
 		return err
@@ -118,12 +136,12 @@ func writeSupportBundle(ctx context.Context, w io.Writer, src bundleSources) err
 	if err != nil {
 		problems = append(problems, "journal: "+err.Error())
 	}
-	if err := add("journal.txt", []byte(redactLog(journal))); err != nil {
+	if err := add("journal.txt", []byte(hostbackup.RedactLog(journal, entryPath))); err != nil {
 		return err
 	}
-	if raw, err := os.ReadFile(src.ConfigPath); err != nil {
-		problems = append(problems, "config: "+err.Error())
-	} else if err := add("qwq.json", redactJSONDocument(raw)); err != nil {
+	if cfgErr != nil {
+		problems = append(problems, "config: "+cfgErr.Error())
+	} else if err := add("qwq.json", hostbackup.RedactJSONDocument(rawCfg, entryPath)); err != nil {
 		return err
 	}
 	for _, pattern := range src.UnitGlobs {
@@ -134,7 +152,7 @@ func writeSupportBundle(ctx context.Context, w io.Writer, src bundleSources) err
 				problems = append(problems, f+": "+err.Error())
 				continue
 			}
-			if err := add("units/"+strings.TrimPrefix(f, "/"), b); err != nil {
+			if err := add("units/"+strings.TrimPrefix(f, "/"), []byte(hostbackup.RedactLog(string(b), entryPath))); err != nil {
 				return err
 			}
 		}
@@ -151,81 +169,4 @@ func writeSupportBundle(ctx context.Context, w io.Writer, src bundleSources) err
 		return err
 	}
 	return gz.Close()
-}
-
-// sensitiveField also treats contact data as sensitive: a bundle is shared
-// with third parties.
-func sensitiveField(key string) bool {
-	return logging.IsSensitiveKey(key) || strings.EqualFold(key, "email")
-}
-
-// redactJSON replaces the values of sensitive keys at any depth.
-func redactJSON(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		for k, val := range t {
-			if sensitiveField(k) {
-				t[k] = redactedValue
-			} else {
-				t[k] = redactJSON(val)
-			}
-		}
-	case []any:
-		for i := range t {
-			t[i] = redactJSON(t[i])
-		}
-	}
-	return v
-}
-
-// redactJSONDocument redacts a JSON document; anything unparsable is
-// withheld rather than copied verbatim.
-func redactJSONDocument(raw []byte) []byte {
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return []byte("[unparsable; withheld]\n")
-	}
-	out, err := json.MarshalIndent(redactJSON(v), "", "  ")
-	if err != nil {
-		return []byte("[unencodable; withheld]\n")
-	}
-	return append(out, '\n')
-}
-
-// authHeaderPattern redacts the full credential value following
-// `Authorization: Bearer <token>` or `Authorization: Basic <token>` before
-// generic kvPair matching runs (which would otherwise stop at the space).
-var authHeaderPattern = regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*(?:bearer|basic)\s+)([^\s"',}&#]+)`)
-
-// kvPair matches key=value and "key": "value" pairs in text log lines.
-var kvPair = regexp.MustCompile(`("?)([A-Za-z0-9_.-]+)("?\s*[=:]\s*)("[^"]*"|[^\s,}&#]+)`)
-
-// redactLog redacts every line: the JSON object of a structured log line, or
-// key=value pairs in any other line.
-func redactLog(s string) string {
-	var b bytes.Buffer
-	for _, line := range strings.SplitAfter(s, "\n") {
-		if i := strings.IndexByte(line, '{'); i >= 0 {
-			body := strings.TrimRight(line[i:], "\n")
-			var v map[string]any
-			if json.Unmarshal([]byte(body), &v) == nil {
-				out, _ := json.Marshal(redactJSON(v))
-				b.WriteString(line[:i])
-				b.Write(out)
-				if strings.HasSuffix(line, "\n") {
-					b.WriteByte('\n')
-				}
-				continue
-			}
-		}
-		redactedLine := authHeaderPattern.ReplaceAllString(line, "${1}"+redactedValue)
-		b.WriteString(kvPair.ReplaceAllStringFunc(redactedLine, func(m string) string {
-			p := kvPair.FindStringSubmatch(m)
-			if !sensitiveField(p[2]) {
-				return m
-			}
-			return p[1] + p[2] + p[3] + redactedValue
-		}))
-	}
-	return b.String()
 }

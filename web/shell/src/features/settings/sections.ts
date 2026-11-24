@@ -5,6 +5,6 @@ export const SETTINGS_SECTIONS = [
   { id: 'appearance', title: '外观' },
   { id: 'users', title: '用户', perm: 'host.users:read' },
   { id: 'delegations', title: 'AI 令牌', perm: 'host.delegations:read' },
-  { id: 'ai', title: 'AI 服务', perm: 'host.ai_providers:read' },
+  { id: 'ai', title: 'AI 服务', perm: 'host.ai_providers:create' },
   { id: 'system', title: '系统', perm: 'host.system:read' },
 ] as const satisfies readonly { id: string; title: string; perm?: string }[];

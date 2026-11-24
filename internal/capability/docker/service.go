@@ -6,6 +6,7 @@
 package docker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -36,6 +38,9 @@ const (
 
 var (
 	containerRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+	imageRefPattern     = regexp.MustCompile(`^(?:sha256:)?[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+	imagePullRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$`)
+	imageTagPattern     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
 	stackNamePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,47}$`)
 )
 
@@ -108,11 +113,31 @@ func (r *ControlledDockerCapabilityRunner) ProxyAllowlistedRequest(
 	if !isAllowedDockerEndpoint(method, cleanRelPath) {
 		return 0, nil, errors.New("DOCKER_ENDPOINT_FORBIDDEN: 该 Docker API 端点不在受控白名单内")
 	}
+	httpTimeout := 25 * time.Second
+	isImagePull := method == http.MethodPost && cleanRelPath == "/images/create"
+	encodedQuery := query.Encode()
+	if isImagePull {
+		if len(jsonBody) > 0 {
+			return 0, nil, errors.New("INVALID_ARGUMENT: 拉取镜像请求不允许携带请求体")
+		}
+		cleanQ, err := validateImagePullQuery(query)
+		if err != nil {
+			return 0, nil, err
+		}
+		encodedQuery = cleanQ.Encode()
+		httpTimeout = 10 * time.Minute
+	}
 	u := &url.URL{
 		Scheme:   "http",
 		Host:     "docker",
 		Path:     "/v1.41" + cleanRelPath,
-		RawQuery: query.Encode(),
+		RawQuery: encodedQuery,
+	}
+	if strings.Contains(cleanRelPath, "%") {
+		if unescaped, uerr := url.PathUnescape(cleanRelPath); uerr == nil {
+			u.Path = "/v1.41" + unescaped
+			u.RawPath = "/v1.41" + cleanRelPath
+		}
 	}
 	var bodyReader io.Reader
 	if len(jsonBody) > 0 {
@@ -125,13 +150,142 @@ func (r *ControlledDockerCapabilityRunner) ProxyAllowlistedRequest(
 	if len(jsonBody) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := r.dialClient(25 * time.Second).Do(req)
+	resp, err := r.dialClient(httpTimeout).Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
+	if isImagePull && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		summary, pullErr := drainDockerPullNDJSON(resp.Body)
+		if pullErr != nil {
+			return 0, nil, pullErr
+		}
+		out, _ := json.Marshal(map[string]string{"status": summary})
+		return resp.StatusCode, out, nil
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxProxyResponseBytes))
 	return resp.StatusCode, raw, err
+}
+
+func drainDockerPullNDJSON(r io.Reader) (string, error) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 32<<10), 256<<10)
+	lastStatus := "Image pull completed"
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var ev struct {
+			Status      string `json:"status"`
+			Error       string `json:"error"`
+			ErrorDetail *struct {
+				Message string `json:"message"`
+			} `json:"errorDetail"`
+		}
+		if json.Unmarshal([]byte(line), &ev) == nil {
+			if msg := strings.TrimSpace(ev.Error); msg != "" {
+				return "", fmt.Errorf("docker pull failed: %s", msg)
+			}
+			if ev.ErrorDetail != nil && strings.TrimSpace(ev.ErrorDetail.Message) != "" {
+				return "", fmt.Errorf("docker pull failed: %s", strings.TrimSpace(ev.ErrorDetail.Message))
+			}
+			if st := strings.TrimSpace(ev.Status); st != "" {
+				lastStatus = st
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("docker pull stream error: %w", err)
+	}
+	return lastStatus, nil
+}
+
+var blockedRegistryPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("0000::/8"),
+	netip.MustParsePrefix("fd00:ec2::254/128"),
+}
+
+func isForbiddenRegistryHost(fromImage string) bool {
+	firstSeg, _, hasSlash := strings.Cut(fromImage, "/")
+	if !hasSlash {
+		return false
+	}
+	// Docker treats first segment as a registry host only when it contains '.', ':', or equals 'localhost'.
+	if !strings.ContainsAny(firstSeg, ".:") && !strings.EqualFold(firstSeg, "localhost") {
+		return false
+	}
+	host := firstSeg
+	if h, _, err := net.SplitHostPort(firstSeg); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.Trim(strings.TrimSpace(host), "[]"))
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") ||
+		host == "metadata.google.internal" || host == "metadata.goog" {
+		return true
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		u := ip.Unmap()
+		if !u.IsValid() || u.IsLoopback() || u.IsPrivate() || u.IsLinkLocalUnicast() ||
+			u.IsLinkLocalMulticast() || u.IsMulticast() || u.IsUnspecified() {
+			return true
+		}
+		for _, pfx := range blockedRegistryPrefixes {
+			if pfx.Contains(u) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func validateImagePullQuery(query url.Values) (url.Values, error) {
+	if len(query["fromImage"]) != 1 {
+		return nil, errors.New("INVALID_ARGUMENT: 拉取镜像必须且只能携带单个 fromImage 参数")
+	}
+	fromImage := strings.TrimSpace(query["fromImage"][0])
+	if fromImage == "" || strings.Contains(fromImage, "..") || !imagePullRefPattern.MatchString(fromImage) {
+		return nil, errors.New("INVALID_ARGUMENT: 拉取镜像缺少合法的 fromImage 参数")
+	}
+	if isForbiddenRegistryHost(fromImage) {
+		return nil, errors.New("DOCKER_ENDPOINT_FORBIDDEN: 禁止从回环、内网或云元数据地址拉取镜像")
+	}
+	clean := url.Values{}
+	clean.Set("fromImage", fromImage)
+	for k, vals := range query {
+		switch k {
+		case "fromImage":
+		case "tag":
+			if len(vals) != 1 {
+				return nil, errors.New("INVALID_ARGUMENT: 非法的重复 tag 参数")
+			}
+			tag := strings.TrimSpace(vals[0])
+			if tag != "" {
+				if !imageTagPattern.MatchString(tag) {
+					return nil, errors.New("INVALID_ARGUMENT: 非法的镜像 tag 参数")
+				}
+				clean.Set("tag", tag)
+			}
+		default:
+			return nil, fmt.Errorf("DOCKER_ENDPOINT_FORBIDDEN: 拉取镜像不支持参数 %q", k)
+		}
+	}
+	return clean, nil
+}
+
+func isValidImageInspectSegment(seg string) bool {
+	if seg == "" || len(seg) > 384 || strings.Contains(seg, "..") {
+		return false
+	}
+	decoded, err := url.PathUnescape(seg)
+	if err != nil || decoded == "" || strings.Contains(decoded, "..") || strings.ContainsAny(decoded, "\\\x00\r\n\t ?#") {
+		return false
+	}
+	return imageRefPattern.MatchString(decoded) || imagePullRefPattern.MatchString(decoded)
 }
 
 func isAllowedDockerEndpoint(method, p string) bool {
@@ -147,7 +301,7 @@ func isAllowedDockerEndpoint(method, p string) bool {
 	}
 	switch method {
 	case http.MethodGet:
-		if p == "/info" || p == "/containers/json" || p == "/images/json" {
+		if p == "/info" || p == "/containers/json" || p == "/images/json" || p == "/volumes" {
 			return true
 		}
 		if len(segs) == 3 && segs[0] == "containers" && isValidContainerID(segs[1]) {
@@ -155,7 +309,7 @@ func isAllowedDockerEndpoint(method, p string) bool {
 		}
 		return false
 	case http.MethodPost:
-		if p == "/images/prune" {
+		if p == "/images/prune" || p == "/images/create" || p == "/volumes/prune" {
 			return true
 		}
 		if len(segs) == 3 && segs[0] == "containers" && isValidContainerID(segs[1]) {
@@ -163,7 +317,16 @@ func isAllowedDockerEndpoint(method, p string) bool {
 		}
 		return false
 	case http.MethodDelete:
-		return len(segs) == 2 && segs[0] == "containers" && isValidContainerID(segs[1])
+		if len(segs) == 2 && segs[0] == "containers" && isValidContainerID(segs[1]) {
+			return true
+		}
+		if len(segs) == 2 && segs[0] == "images" && isValidImageRef(segs[1]) {
+			return true
+		}
+		if len(segs) == 2 && segs[0] == "volumes" && isValidContainerID(segs[1]) {
+			return true
+		}
+		return false
 	default:
 		return false
 	}
@@ -173,7 +336,11 @@ func isValidContainerID(id string) bool {
 	return containerRefPattern.MatchString(id) && !strings.Contains(id, "..")
 }
 
-// ExecuteVerifiedCompose 在宿主 helper 侧二次核验 YAML 后执行受管栈编排（最长 85s，有界输出 64KiB）。
+func isValidImageRef(id string) bool {
+	return imageRefPattern.MatchString(id) && !strings.Contains(id, "..")
+}
+
+// ExecuteVerifiedCompose 在宿主 helper 侧二次核验 YAML 后执行受管栈编排（最长 10 分钟，有界输出 64KiB）。
 func (r *ControlledDockerCapabilityRunner) ExecuteVerifiedCompose(
 	ctx context.Context,
 	stackName string,
@@ -203,6 +370,9 @@ func (r *ControlledDockerCapabilityRunner) ExecuteVerifiedCompose(
 	if action == "up" {
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
 			return "", nil, fmt.Errorf("准备 Compose 工作目录失败: %w", err)
+		}
+		if err := ValidateComposeBindSymlinks(stacksRoot, workDir, yamlContent); err != nil {
+			return "", nil, err
 		}
 	}
 
@@ -252,7 +422,7 @@ func (r *ControlledDockerCapabilityRunner) ExecuteVerifiedCompose(
 		"DOCKER_HOST=unix://" + sock,
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, 85*time.Second)
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
 	if r.composeRunner != nil {

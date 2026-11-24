@@ -84,7 +84,7 @@ fi
 export QWQ_TRUST_PUBKEYS="$PLUGIN_PUB"
 
 # ── 第三方许可证 ─────────────────────────────────────────────────────────────
-GOARCH=amd64 go-licenses save ./cmd/qwq ./cmd/qwq-privileged ./cmd/qwq-capability ./cmd/qwq-compat-unitctl ./cmd/qwqctl \
+GOARCH=amd64 go-licenses save ./cmd/qwq ./cmd/qwq-privileged ./cmd/qwq-capability ./cmd/qwq-compat-unitctl ./cmd/qwqctl ./cmd/qwq-probe-agent \
   --ignore github.com/qwq-panel/qwq --save_path "$W/THIRD_PARTY_LICENSES"
 export QWQ_THIRD_PARTY_DIR=$W/THIRD_PARTY_LICENSES
 
@@ -115,12 +115,15 @@ ensure_pinned_xray_assets() {
       ;;
   esac
   python3 - "$cached_bin" "$cached_geoip" "$cached_geosite" "$zip_url" "$zip_sha" "$bin_sha" <<'PY'
-import hashlib, io, os, pathlib, sys, time, urllib.request, zipfile
+import hashlib, io, os, pathlib, re, sys, time, urllib.request, zipfile
 
 cached_bin = pathlib.Path(sys.argv[1])
 cached_geoip = pathlib.Path(sys.argv[2])
 cached_geosite = pathlib.Path(sys.argv[3])
 zip_url, want_zip_sha, want_bin_sha = sys.argv[4:7]
+geoip_sha_path = cached_geoip.with_name(cached_geoip.name + ".sha256")
+geosite_sha_path = cached_geosite.with_name(cached_geosite.name + ".sha256")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 def sha256_file(p: pathlib.Path) -> str:
     h = hashlib.sha256()
@@ -129,13 +132,19 @@ def sha256_file(p: pathlib.Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+def sidecar_matches(data_path: pathlib.Path, sidecar_path: pathlib.Path) -> bool:
+    if not data_path.is_file() or data_path.stat().st_size <= 0 or not sidecar_path.is_file():
+        return False
+    expected = sidecar_path.read_text(encoding="utf-8").strip().lower()
+    if not SHA256_RE.match(expected):
+        return False
+    return sha256_file(data_path) == expected
+
 if (
     cached_bin.is_file()
     and sha256_file(cached_bin) == want_bin_sha
-    and cached_geoip.is_file()
-    and cached_geoip.stat().st_size > 0
-    and cached_geosite.is_file()
-    and cached_geosite.stat().st_size > 0
+    and sidecar_matches(cached_geoip, geoip_sha_path)
+    and sidecar_matches(cached_geosite, geosite_sha_path)
 ):
     sys.exit(0)
 
@@ -166,10 +175,15 @@ got_bin = hashlib.sha256(xray_bytes).hexdigest()
 if got_bin != want_bin_sha:
     raise SystemExit(f"Xray 二进制摘要不匹配: got={got_bin} want={want_bin_sha}")
 
+geoip_digest = hashlib.sha256(geoip_bytes).hexdigest()
+geosite_digest = hashlib.sha256(geosite_bytes).hexdigest()
+
 for target, payload, mode in (
     (cached_bin, xray_bytes, 0o755),
     (cached_geoip, geoip_bytes, 0o644),
+    (geoip_sha_path, (geoip_digest + "\n").encode("ascii"), 0o644),
     (cached_geosite, geosite_bytes, 0o644),
+    (geosite_sha_path, (geosite_digest + "\n").encode("ascii"), 0o644),
 ):
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_bytes(payload)
@@ -195,6 +209,14 @@ pack_official_plugin() {
   chmod 0755 "$stage/bin/plugin"
   if [[ "$src_dir" == "plugins/builtin/core.xray" ]]; then
     ensure_pinned_xray_assets "$arch" "$stage/bin"
+  fi
+  if [[ "$src_dir" == "plugins/builtin/server.probe" ]]; then
+    mkdir -p "$stage/assets/bin"
+    for p_arch in amd64 arm64; do
+      cp "$W/probe-agents/qwq-probe-agent-linux-$p_arch" "$stage/assets/bin/"
+      cp "$W/probe-agents/qwq-probe-agent-linux-$p_arch.sha256" "$stage/assets/bin/"
+    done
+    chmod 0644 "$stage/assets/bin/"*
   fi
   for sub in schemas ui attestations LICENSES; do
     if [[ -d "$src_dir/$sub" ]]; then
@@ -250,6 +272,20 @@ OPTIONAL_SPECS=(
   "plugins/builtin/containers.docker:containers.docker"
   "plugins/builtin/notify.hub:notify.hub"
 )
+
+# ── 预构建跨架构单向只读探针受控端二进制（同时打入 server.probe 包与 Release 顶层）────
+mkdir -p "$W/probe-agents"
+for p_arch in amd64 arm64; do
+  CGO_ENABLED=0 GOOS=linux GOARCH=$p_arch go build -trimpath -ldflags "-s -w" \
+    -o "$W/probe-agents/qwq-probe-agent-linux-$p_arch" "./cmd/qwq-probe-agent"
+  chmod 0755 "$W/probe-agents/qwq-probe-agent-linux-$p_arch"
+  (
+    cd "$W/probe-agents"
+    sha256sum "qwq-probe-agent-linux-$p_arch" >"qwq-probe-agent-linux-$p_arch.sha256"
+  )
+  cp "$W/probe-agents/qwq-probe-agent-linux-$p_arch" "$OUT/qwq-probe-agent-linux-$p_arch"
+  chmod 0755 "$OUT/qwq-probe-agent-linux-$p_arch"
+done
 
 # ── 交叉编译并分层打包 ───────────────────────────────────────────────────────
 for arch in amd64 arm64; do
@@ -338,8 +374,8 @@ GOARCH=amd64 cyclonedx-gomod app -json -noserial -notimestamp -std -licenses -ma
 (
   cd "$OUT"
   LC_ALL=C
-  files=(qwq-"$V"-linux-*.tar.gz qwq-compat-polkit-"$V"-linux-*.tar.gz install.sh sbom.cdx.json plugins-index.json)
   shopt -s nullglob
+  files=(qwq-"$V"-linux-*.tar.gz qwq-compat-polkit-"$V"-linux-*.tar.gz qwq-probe-agent-linux-amd64 qwq-probe-agent-linux-arm64 install.sh sbom.cdx.json plugins-index.json)
   for p in *.qwqpkg; do files+=("$p"); done
   sha256sum -- "${files[@]}" >SHA256SUMS
 )

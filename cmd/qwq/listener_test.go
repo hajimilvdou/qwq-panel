@@ -3,10 +3,17 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestSameListenAddrWildcardNormalization(t *testing.T) {
@@ -104,5 +111,73 @@ func TestLiveHTTPListenerSamePortHostSwitchAndAbortRollback(t *testing.T) {
 	}
 	if err := live.Rebind(loopbackAddr); err != nil {
 		t.Fatalf("Rebind back to %s: %v", loopbackAddr, err)
+	}
+}
+
+func TestWrapListenerForSharedServerConcurrentTLSRebind(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("ok"))
+		}),
+		TLSConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{cert},
+			NextProtos:   []string{"h2", "http/1.1"},
+		},
+	}
+	live := newLiveHTTPListener(srv, true, nil)
+	live.retireGrace = 200 * time.Millisecond
+	defer live.Close()
+
+	addr1, err := live.Start("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := live.Rebind("127.0.0.1:0"); err != nil {
+		t.Fatalf("Rebind: %v", err)
+	}
+	live.mu.Lock()
+	addr2 := live.current.Addr()
+	live.mu.Unlock()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 3 * time.Second,
+	}
+	defer client.CloseIdleConnections()
+	for _, a := range []net.Addr{addr1, addr2} {
+		resp, err := client.Get("https://" + a.String())
+		if err != nil {
+			t.Fatalf("GET https://%s failed: %v", a.String(), err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET https://%s status = %d", a.String(), resp.StatusCode)
+		}
+	}
+	if !IsLoopbackOnlyHost("127.0.0.1") || !IsLoopbackOnlyHost("::1") || !IsLoopbackOnlyHost("localhost") {
+		t.Fatal("IsLoopbackOnlyHost missed loopback host")
+	}
+	if IsLoopbackOnlyHost("0.0.0.0") || IsLoopbackOnlyHost("::") {
+		t.Fatal("IsLoopbackOnlyHost misclassified wildcard host")
 	}
 }

@@ -30,21 +30,23 @@
     "schemas/ingress.apply.response.json": "sha256:11bee6ba0691dfe9fdacfa04374436781f748926bae62c05f5e18596fb5bf4b8",
     "schemas/ingress.delete.response.json": "sha256:d6b9084de92a9a5640506e09e8395dbfafcee62232d781e1856b112b65f17d75",
     "schemas/ingress.id.request.json": "sha256:94b6382be7e0bb471952ea5e274d039c44640acecec4fcfd8dd7c05421e476f8",
-    "schemas/ingress.overview.response.json": "sha256:1f0988a2afe75e7e6d42d6e39704383eb6e41f6ad58f9dc6ac3379a67a579638",
+    "schemas/ingress.overview.response.json": "sha256:bd6ab1342f14912dbac9b9450f64572140da492bc4a1f3d5df18f49d8ef7db89",
     "schemas/ingress.preview.response.json": "sha256:f247034a24b87f9962104530bc2df26cf3926cbb0a6011e97ffec6d90548c5bb",
     "schemas/ingress.probe.response.json": "sha256:bc95a60b106021a3c6b2fc147a5673e4fadeeb7d6d09260a7ad5064b16428d61",
     "schemas/ingress.rollback.request.json": "sha256:80dcf9217bac3de74eab49ca5123de9a6e4d61c27f4a0534db72db9df651e751",
     "schemas/ingress.rollback.response.json": "sha256:d9900ac8896c77504a37d9415da78438a09b53438a1102cf33c7718270862966",
     "schemas/ingress.site.upsert.request.json": "sha256:fe11b0c6f3c4728f93435d920659217eac76c664d648026a62d84c23dfdd207a",
     "schemas/ingress.site.upsert.response.json": "sha256:f2c9aa101c91475109f593a3ca606c531c63d5d6c7a304ae45a602c41faa6738",
+    "schemas/ingress.sni_passthrough.upsert.request.json": "sha256:f9524c87040b8a6862755f456ba017f95928754dcdcadb90a26ecd4b2fff5d8a",
+    "schemas/ingress.sni_passthrough.upsert.response.json": "sha256:81b9b6d31807b67ad8f4c2584b5b71b53668431bd73b0ed3cf7e98771775775f",
     "schemas/ingress.tls.inspect.request.json": "sha256:7c2c7187cf096c3a1f016dc854d110ccabec39c9d254a3d9e2756c2c412a5a7b",
     "schemas/ingress.tls.inspect.response.json": "sha256:eceedced80fbbcb25df8fa534bc2f7117a0eeeea8ef2a8e1ba9600bd44c09171",
     "schemas/ingress.tls.reload.request.json": "sha256:c061616ede3019520ea5d52ab2e12d54322edf4de860749d00c729b1f5128750",
     "schemas/ingress.tls.reload.response.json": "sha256:eceedced80fbbcb25df8fa534bc2f7117a0eeeea8ef2a8e1ba9600bd44c09171",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
-    "ui/index.html": "sha256:8121e3e3485d1acff66f594eefc36994befcceb09f24485a07c926ddb0232932",
-    "ui/plugin.css": "sha256:2f1453c2df04af45382a6f106f7e9ff5d56b820e0a8a72b806243a98bf8499d4",
-    "ui/plugin.js": "sha256:5e2772711ea0a43945c4bbb903bc9001df0033a6d29e20c4e75be8ad7a1ee811"
+    "ui/index.html": "sha256:7474d7bd04edc0e35036561f85a63160cbad3cc873c6bdc0d02253c49e8cd72c",
+    "ui/plugin.css": "sha256:1066df353359c68e09bc33cc8f693441672bc55e08bb0ab6563af942ed16a837",
+    "ui/plugin.js": "sha256:7adc132b9a9b317d903fb9d8a561f540adb735efa073ed69d1e7d05e5ffdc64d"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -357,6 +359,54 @@
       ],
       "request_schema": "schemas/ingress.acme.cleanup.request.json",
       "response_schema": "schemas/ingress.acme.response.json"
+    },
+    {
+      "name": "ingress.sni_passthrough.upsert",
+      "api_version": "v1",
+      "permission": "web.ingress:write",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "approval": "confirm",
+      "approval_summary": "新增或修改 TCP :443 四层 SNI 零解密透传分流规则",
+      "approval_description": "按 TLS ClientHello SNI 将指定域名直接四层透传至本机回环上游（如 core.xray Reality/Trojan），不解密 TLS 流量，实现建站与代理共用 443 端口。",
+      "summary": "配置 TCP :443 四层零解密 SNI 透传分流规则",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.listen",
+          "scope": "ingress"
+        }
+      ],
+      "request_schema": "schemas/ingress.sni_passthrough.upsert.request.json",
+      "response_schema": "schemas/ingress.sni_passthrough.upsert.response.json"
+    },
+    {
+      "name": "ingress.sni_passthrough.delete",
+      "api_version": "v1",
+      "permission": "web.ingress:delete",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "approval": "confirm",
+      "approval_summary": "删除 TCP :443 四层 SNI 透传分流规则",
+      "approval_description": "移除指定域名的四层 SNI 透传规则并立即热生效。",
+      "summary": "删除指定 TCP :443 四层 SNI 透传规则",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/ingress.id.request.json",
+      "response_schema": "schemas/ingress.delete.response.json"
     }
   ],
   "capabilities": [

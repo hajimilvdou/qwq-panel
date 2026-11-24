@@ -18,8 +18,8 @@
   "target": "linux/amd64",
   "entrypoint": "bin/plugin",
   "files": {
-    "attestations/sbom.spdx.json": "sha256:96d52cb06056302286a21b3f4b163eb05331a25f9184b2463bd505c91d753f93",
     "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "attestations/sbom.spdx.json": "sha256:96d52cb06056302286a21b3f4b163eb05331a25f9184b2463bd505c91d753f93",
     "schemas/checks.response.json": "sha256:ddafab2ab01b1da2df7e66256923fd59c988ed77c39b619f188131dc05fda94a",
     "schemas/config.schema.json": "sha256:ef61e31cabdd57ce8b76b89d70bfd1e691b081122e9ddeeb33e619b9a8dd0528",
     "schemas/docker.ai.digest.response.json": "sha256:ecce6f7c2dbee53ea71977162ab6e9602acf854af31bdbf30b6fb3a6161ee63e",
@@ -46,18 +46,25 @@
     "schemas/docker.id.request.json": "sha256:8c2849bb64263076eb92f54103a62d65ffb04d4557e35274dd73df73cb2a4715",
     "schemas/docker.images.prune.request.json": "sha256:ec4eef70cc273857a90d1b15b9409662b2c3fb3a2c5fed15eea669cb44f41f99",
     "schemas/docker.images.prune.response.json": "sha256:59b082cefbbb2eca92cf0fef9e1896378cbf1bb725ea9c33c41d37858673a7a3",
+    "schemas/docker.images.pull.request.json": "sha256:5301a3726dfae1c9ac962b7d86edf71c60ad1308fb6d973d51c1cde13b18f28b",
+    "schemas/docker.images.pull.response.json": "sha256:49fee9ca39b092b007bdf01885ed0260776395a7c22a25e7ccc12bdac7fe4860",
+    "schemas/docker.images.remove.request.json": "sha256:cb7b4cce245e27371c7a8dd3162cb2257b857b7109509657a339c56ec9fe9397",
+    "schemas/docker.images.remove.response.json": "sha256:cfdf197544d5d23cf1cf01c925ec49968593c3e684e7da68ec5a31c54a478144",
     "schemas/docker.network.create.request.json": "sha256:0e20ff3910ff27227dfeb59f9cd5179d20bfd00de8ea75612c26a5f8436945b0",
     "schemas/docker.network.create.response.json": "sha256:60fbe0446cc8ae7c5569bccaed2ce5702063d21c19d7f460aa6ebe0aa3ee969a",
     "schemas/docker.network.list.response.json": "sha256:ecb767f133f3cf026622c74ad3d73e8643680077803b0a94c9d1e6a9ff49e7b4",
     "schemas/docker.network.membership.request.json": "sha256:92b1c73da360a2e322376855216a2002b78f21c4580d435bc66d35438e883f10",
     "schemas/docker.network.membership.response.json": "sha256:4a9feab3ba6abafdede6779c611ef516e9b781ccc45e384fe9d0eba0a2f96dba",
-    "schemas/docker.overview.response.json": "sha256:5f3bba501e2aca08696e3d33a5623da1716475ae4951d014860ff013cc86a23b",
+    "schemas/docker.overview.response.json": "sha256:14174ecc68942c56812b8db6001ccd80c5df4f46e479ffcc4a37140f552dced3",
+    "schemas/docker.volumes.prune.response.json": "sha256:59b082cefbbb2eca92cf0fef9e1896378cbf1bb725ea9c33c41d37858673a7a3",
+    "schemas/docker.volumes.remove.request.json": "sha256:7ce3bd9056d391b3db8652fe81e399507e8bf63b1342e90536a5467884a90013",
+    "schemas/docker.volumes.remove.response.json": "sha256:7fa650916dfeccdae16e93967d9dec3f8ccf6979c1b9292f128eca766d0bcfaf",
     "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
     "ui/container-drawer.js": "sha256:a3bc8eb418ac8c99f7427002d4588c3aaf99f216a30ab319998ba7894afac6b5",
-    "ui/index.html": "sha256:139abf88b275b437698fe33a9207329dbfb68416d168c700204dba12aaae25d2",
-    "ui/plugin.css": "sha256:3c5a3d2d967679d13eff83743585f9fda20c0fa10e0700526da75221e84ffbd1",
-    "ui/plugin.js": "sha256:61107a6a532cd1bba308ab85afca7aba001bd295a7f1336b785021c027564ff8"
+    "ui/index.html": "sha256:9cd350f140cc16ac3924e2763b2f8df9d79d0cb9839c7b49e2c58c4204cf0294",
+    "ui/plugin.css": "sha256:4035b5b03a629d9b2ec96b87b89c48237676f33f1956e403e2cd5f77b1373b25",
+    "ui/plugin.js": "sha256:25b5978cc498bb04b2c723bf40f934b782ef0582ed76da625462fa4457c406e3"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -298,19 +305,107 @@
       "response_schema": "schemas/docker.images.prune.response.json"
     },
     {
+      "name": "docker.images.pull",
+      "api_version": "v1",
+      "permission": "containers.docker:write",
+      "mode": "job",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 300000,
+      "approval": "ai_confirm",
+      "approval_summary": "拉取指定 Docker 镜像",
+      "approval_description": "从镜像仓库拉取指定名称与标签的 Docker 镜像至宿主机本地缓存（大镜像支持最长 10 分钟异步拉取）。",
+      "summary": "异步拉取单个 Docker 镜像",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/docker.images.pull.request.json",
+      "response_schema": "schemas/docker.images.pull.response.json"
+    },
+    {
+      "name": "docker.images.remove",
+      "api_version": "v1",
+      "permission": "containers.docker:delete",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 30000,
+      "approval": "confirm",
+      "approval_summary": "删除指定本地 Docker 镜像",
+      "approval_description": "从宿主机移除指定 ID 的本地 Docker 镜像以释放磁盘空间。",
+      "summary": "删除单个本地 Docker 镜像",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/docker.images.remove.request.json",
+      "response_schema": "schemas/docker.images.remove.response.json"
+    },
+    {
+      "name": "docker.volumes.prune",
+      "api_version": "v1",
+      "permission": "containers.docker:delete",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 60000,
+      "approval": "confirm",
+      "approval_summary": "清理未挂载的无用 Docker 存储卷",
+      "approval_description": "删除所有当前未被任何容器挂载引用的匿名/闲置存储卷以释放磁盘空间。",
+      "summary": "清理未使用的 Docker 存储卷并报告释放空间",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/docker.volumes.prune.response.json"
+    },
+    {
+      "name": "docker.volumes.remove",
+      "api_version": "v1",
+      "permission": "containers.docker:delete",
+      "mode": "invoke",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "timeout_ms": 15000,
+      "approval": "confirm",
+      "approval_summary": "删除指定 Docker 存储卷",
+      "approval_description": "不可逆移除指定名称的 Docker 存储卷及其持久化数据。",
+      "summary": "删除单个 Docker 存储卷",
+      "capabilities": [
+        {
+          "name": "system.docker.manage",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/docker.volumes.remove.request.json",
+      "response_schema": "schemas/docker.volumes.remove.response.json"
+    },
+    {
       "name": "docker.compose.deploy",
       "api_version": "v1",
       "permission": "containers.docker:write",
-      "mode": "invoke",
+      "mode": "job",
       "effect": "write",
       "risk": "high",
       "idempotent": true,
       "plannable": true,
-      "timeout_ms": 90000,
+      "timeout_ms": 300000,
       "approval": "confirm",
       "approval_summary": "安全扫描并部署 Compose 编排栈",
-      "approval_description": "对 compose.yml 进行特权/宿主机挂载风险扫描，原子保存并执行 docker compose up -d。",
-      "summary": "校验、保存并部署 Docker Compose 编排栈",
+      "approval_description": "对 compose.yml 进行特权/宿主机挂载风险扫描，原子保存并异步执行 docker compose up -d（支持最长 10 分钟大镜像拉取）。",
+      "summary": "校验、保存并异步部署 Docker Compose 编排栈",
       "capabilities": [
         {
           "name": "system.docker.manage",
@@ -558,6 +653,10 @@
         },
         {
           "name": "plugin.invoke",
+          "scope": "tls.certificates/bindings.reserve"
+        },
+        {
+          "name": "plugin.invoke",
           "scope": "tls.certificates/bindings.bind"
         },
         {
@@ -654,6 +753,11 @@
       "name": "plugin.invoke",
       "scope": "tls.certificates/certificates.issue",
       "reason": "为容器绑定的域名通过受控 ACME 流程自动签发 HTTPS 证书"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "tls.certificates/bindings.reserve",
+      "reason": "为 web.ingress 预留稳定的 TLS 证书绑定引用 ID，满足宿主两步绑定安全契约"
     },
     {
       "name": "plugin.invoke",

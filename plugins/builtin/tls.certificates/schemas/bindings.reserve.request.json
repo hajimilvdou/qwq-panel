@@ -1,0 +1,66 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "description": "为受控消费者预留稳定证书绑定引用 ID（严格对齐 hostauth.ReserveBindingArgs）",
+  "required": [
+    "certificate_id",
+    "consumer",
+    "expected_config_revision"
+  ],
+  "properties": {
+    "certificate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "目标证书资源 ID"
+    },
+    "expected_config_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "目标消费者插件当前配置版本号（无配置时为 0）"
+    },
+    "consumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "plugin_id",
+        "profile_id",
+        "sni",
+        "purpose"
+      ],
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "plugin_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "sni": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "test": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

@@ -54,7 +54,7 @@ func IsAllowedNetworkOrInspectEndpoint(method, cleanPath string, segs []string) 
 		if len(segs) == 2 && segs[0] == "networks" && isValidContainerID(segs[1]) {
 			return true
 		}
-		if len(segs) == 3 && segs[0] == "images" && segs[1] != "" && segs[2] == "json" {
+		if len(segs) == 3 && segs[0] == "images" && isValidImageInspectSegment(segs[1]) && segs[2] == "json" {
 			return true
 		}
 	case http.MethodPost:

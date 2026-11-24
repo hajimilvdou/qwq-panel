@@ -254,6 +254,10 @@ func generateSelfSignedValidity(now time.Time, sans sanSet, validity time.Durati
 func (m *Manager) ensureSelfSigned() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.ensureSelfSignedLocked()
+}
+
+func (m *Manager) ensureSelfSignedLocked() error {
 	c, err := loadSelfSigned(m.dir, m.log)
 	if err == nil {
 		switch {

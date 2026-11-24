@@ -14,7 +14,7 @@
 -->
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Icon, IconButton, Menu, Orb } from '$ui';
+  import { Icon, IconButton, Menu, Orb, registerModalDialog, unregisterModalDialog } from '$ui';
   import { approvals } from '$lib/ai/approvals.svelte';
   import { dock } from '$lib/ai/dock.svelte';
   import { dockSession } from '$lib/ai/dock-session.svelte';
@@ -26,6 +26,7 @@
   import { events } from '$lib/events.svelte';
   import { useResource } from '$lib/resource.svelte';
   import { navigate } from '$lib/router.svelte';
+  import { session } from '$lib/session.svelte';
   import Composer from '../ai/Composer.svelte';
   import Transcript from '../ai/Transcript.svelte';
   import ApprovalStack from './ApprovalStack.svelte';
@@ -43,20 +44,23 @@
   let returnFocus: HTMLElement | null = null;
   let size = $state<DockSize | null>(loadSize());
 
+  const canChat = $derived(session.can('host.agent_sessions:write'));
+  const canApprove = $derived(session.can('host.approvals:approve'));
   const pending = $derived(approvals.pending);
   const firstUnseen = $derived(approvals.unseen[0]);
   const stream = $derived(dockSession.stream);
-  const chat = $derived(!dock.chatSuppressed);
+  const chat = $derived(canChat && !dock.chatSuppressed);
+  const showDock = $derived(canChat || (canApprove && pending.length > 0));
   const progress = $derived(stream ? turnProgress(stream.transcript) : { done: 0, total: 0 });
   const current = $derived(sessions.data?.find((s) => s.session_id === dockSession.id));
   const sessionBusy = $derived(stream?.busy ?? (current ? BUSY.has(current.status) : false));
 
   /* working：任一会话在跑（全局流 agent.session.updated 刷新列表） */
   $effect(() => {
-    dock.busy = !!sessions.data?.some((s) => s.status === 'running');
+    dock.busy = canChat && !!sessions.data?.some((s) => s.status === 'running');
   });
 
-  /* 展开或当前会话在跑时才保持会话流；在 Agent 页不需要 */
+  /* 展开或当前会话在跑时才保持会话流；在 Agent 页或只读角色不需要 */
   $effect(() => {
     const want = chat && (dock.expanded || (current?.status === 'running'));
     if (want) dockSession.attach();
@@ -72,23 +76,34 @@
 
   /* 打开 / 收回 <dialog> */
   $effect(() => {
-    if (!dlg) return;
-    if (dock.expanded && !dlg.open) {
+    const el = dlg;
+    if (!el) return;
+    if (dock.expanded && showDock && !el.open) {
       returnFocus = document.activeElement as HTMLElement | null;
-      dlg.showModal();
+      el.showModal();
+      registerModalDialog(el);
       if (dock.prompt) {
         draft = dock.prompt;
         dock.prompt = '';
       }
       void tick().then(() => {
-        if (!dock.focusApprovalId && !approvals.unseen.length) inputEl?.focus();
+        if (chat && !dock.focusApprovalId && !approvals.unseen.length) inputEl?.focus();
       });
-    } else if (!dock.expanded && dlg.open) {
-      dlg.close();
+    } else if ((!dock.expanded || !showDock) && el.open) {
+      unregisterModalDialog(el);
+      el.close();
     }
   });
 
+  $effect(() => {
+    const el = dlg;
+    return () => {
+      if (el) unregisterModalDialog(el);
+    };
+  });
+
   function onDialogClose() {
+    unregisterModalDialog(dlg);
     if (dock.expanded) dock.close();
     returnFocus?.focus?.();
     returnFocus = null;
@@ -156,7 +171,9 @@
 </script>
 
 <!-- ============================================================ 球 + 胶囊 -->
-<DockBall {progress} onopen={openFromBall} />
+{#if showDock}
+  <DockBall {progress} onopen={openFromBall} />
+{/if}
 
 <!-- ============================================================ 展开 -->
 <dialog

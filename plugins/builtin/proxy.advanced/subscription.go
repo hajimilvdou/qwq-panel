@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -46,7 +48,15 @@ func (i *instance) ServePublicRoute(ctx context.Context, req pluginsdk.PublicRou
 	if !validFmt {
 		return plainTextResponse(400, "unsupported subscription format"), nil
 	}
-	uaSummary := sanitizeUserAgent(headerValue(req.Headers, "user-agent"))
+	uaRaw := headerValue(req.Headers, "user-agent")
+	uaSummary := sanitizeUserAgent(uaRaw)
+	sbVerQuery := ""
+	if strings.TrimSpace(req.RawQuery) != "" {
+		if qv, qerr := url.ParseQuery(req.RawQuery); qerr == nil {
+			sbVerQuery = strings.TrimSpace(qv.Get("sb_ver"))
+		}
+	}
+	sbAtLeast112 := DetectSingboxAtLeast112(uaRaw, sbVerQuery)
 
 	if user.Status != "active" {
 		_ = i.store.RecordSubscriptionAccess(ctx, user.ID, format, uaSummary, 403)
@@ -57,7 +67,7 @@ func (i *instance) ServePublicRoute(ctx context.Context, req pluginsdk.PublicRou
 	chains, _ := i.store.ListChainsWithSecrets(ctx)
 	brutals, _ := i.store.ListBrutalBindings(ctx)
 	dbNodes, _ := i.store.ListNodes(ctx, "", "", "", "", true)
-	body, contentType, err := renderSubscriptionPayloadFull(cfg, user, format, chains, brutals, dbNodes)
+	body, contentType, err := renderSubscriptionPayloadWithOptions(cfg, user, format, chains, brutals, dbNodes, sbAtLeast112)
 	if err != nil {
 		return plainTextResponse(503, "subscription endpoint not configured"), nil
 	}
@@ -66,16 +76,21 @@ func (i *instance) ServePublicRoute(ctx context.Context, req pluginsdk.PublicRou
 	if user.ExpiresAt > 0 {
 		expireSec = user.ExpiresAt / 1000
 	}
-	userInfoHeader := fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d",
-		user.PeriodUpBytes, user.PeriodDownBytes, user.QuotaBytes, expireSec)
 
 	_ = i.store.RecordSubscriptionAccess(ctx, user.ID, format, uaSummary, 200)
 
+	profileTitle := firstNonEmpty(user.DisplayName, "qwq Proxy")
+	metaHdr := http.Header{}
+	WriteSubscriptionMetadataHeaders(metaHdr, profileTitle, user.PeriodUpBytes, user.PeriodDownBytes, user.QuotaBytes, expireSec, format == "clash")
+
 	headers := []pluginsdk.HTTPHeader{
 		{Name: "Content-Type", Value: contentType},
-		{Name: "Subscription-Userinfo", Value: userInfoHeader},
-		{Name: "Profile-Update-Interval", Value: "24"},
 		{Name: "Cache-Control", Value: "no-store"},
+	}
+	for _, key := range []string{"Profile-Title", "Profile-Update-Interval", "Content-Disposition", "Subscription-Userinfo"} {
+		if val := metaHdr.Get(key); val != "" {
+			headers = append(headers, pluginsdk.HTTPHeader{Name: key, Value: val})
+		}
 	}
 	if method == "HEAD" {
 		body = nil
@@ -160,14 +175,123 @@ func plainTextResponse(status uint32, msg string) pluginsdk.PublicRouteResponse 
 
 // ======================== 多协议订阅渲染（v2ray Base64 / Clash Meta YAML / sing-box JSON） ========================
 
+var singboxVerRe = regexp.MustCompile(`(?i)(?:sing-box|sfi|sfa|sfm)[/\s]+v?(\d+)\.(\d+)`)
+
+// DetectSingboxAtLeast112 从客户端 User-Agent 或显式 ?sb_ver=1.12 查询参数判断目标 Sing-box 内核是否为 1.12+。
+func DetectSingboxAtLeast112(userAgent, queryVer string) bool {
+	if q := strings.TrimSpace(queryVer); q != "" {
+		q = strings.TrimLeft(q, "vV")
+		parts := strings.Split(q, ".")
+		if len(parts) >= 2 {
+			major, err1 := strconv.Atoi(parts[0])
+			minorStr := parts[1]
+			for idx := 0; idx < len(minorStr); idx++ {
+				if minorStr[idx] < '0' || minorStr[idx] > '9' {
+					minorStr = minorStr[:idx]
+					break
+				}
+			}
+			minor, err2 := strconv.Atoi(minorStr)
+			if err1 == nil && err2 == nil {
+				return major > 1 || (major == 1 && minor >= 12)
+			}
+		}
+		if strings.HasPrefix(q, "1.10") || strings.HasPrefix(q, "1.11") {
+			return false
+		}
+		return true
+	}
+	m := singboxVerRe.FindStringSubmatch(userAgent)
+	if len(m) == 3 {
+		major, _ := strconv.Atoi(m[1])
+		minor, _ := strconv.Atoi(m[2])
+		if major < 1 || (major == 1 && minor < 12) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsSingboxOutboundSupported 过滤 Sing-box 内核不支持的 Xray 私有协议/传输层，杜绝生成 null 或假 HTTP/2 坏节点。
+func IsSingboxOutboundSupported(protocol, transport, vlessEncryption string, atLeast112 bool) bool {
+	if strings.EqualFold(transport, "xhttp") {
+		return false
+	}
+	if strings.EqualFold(protocol, "vless") && vlessEncryption != "" && !strings.EqualFold(vlessEncryption, "none") {
+		return false
+	}
+	if strings.EqualFold(protocol, "anytls") && !atLeast112 {
+		return false
+	}
+	return true
+}
+
+// NormalizeSingboxPortHopping 规范化 Hysteria2 server_ports：单端口 "40000" 必须输出为 "40000:40000"。
+func NormalizeSingboxPortHopping(expr string) []string {
+	var out []string
+	for _, seg := range strings.Split(expr, ",") {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		norm := strings.ReplaceAll(seg, "-", ":")
+		if !strings.Contains(norm, ":") {
+			norm = norm + ":" + norm
+		}
+		out = append(out, norm)
+	}
+	return out
+}
+
+// WriteSubscriptionMetadataHeaders 补齐主流代理客户端识别订阅名称、流量与到期时间的标准响应头。
+func WriteSubscriptionMetadataHeaders(
+	h http.Header,
+	profileTitle string,
+	uploadBytes, downloadBytes, quotaBytes int64,
+	expiresUnixSec int64,
+	isClashYAML bool,
+) {
+	title := strings.TrimSpace(profileTitle)
+	if title == "" {
+		title = "qwq Proxy"
+	}
+	title = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, title)
+	b64Title := base64.StdEncoding.EncodeToString([]byte(title))
+	h.Set("Profile-Title", "base64:"+b64Title)
+	h.Set("Profile-Update-Interval", "24")
+
+	ext := ".txt"
+	if isClashYAML {
+		ext = ".yaml"
+	}
+	escapedFile := url.PathEscape(title + ext)
+	h.Set("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", escapedFile))
+
+	userInfo := fmt.Sprintf("upload=%d; download=%d; total=%d", max(0, uploadBytes), max(0, downloadBytes), max(0, quotaBytes))
+	if expiresUnixSec > 0 {
+		userInfo += fmt.Sprintf("; expire=%d", expiresUnixSec)
+	} else {
+		userInfo += "; expire=0"
+	}
+	h.Set("Subscription-Userinfo", userInfo)
+}
+
 type subNode struct {
 	Name            string
+	Protocol        string
+	Transport       string
+	VLESSEncryption string
 	ShareURI        string
 	ClashNode       map[string]any
 	SingboxOutbound map[string]any
 }
 
-func renderSubscriptionPayloadFull(cfg proxyConfig, user userRecord, format string, chains []chainWithSecret, brutals []brutalBindingRecord, dbNodes []proxyNodeRecord) ([]byte, string, error) {
+func renderSubscriptionPayloadWithOptions(cfg proxyConfig, user userRecord, format string, chains []chainWithSecret, brutals []brutalBindingRecord, dbNodes []proxyNodeRecord, sbAtLeast112 bool) ([]byte, string, error) {
 	effCfg := applyBrutalSubPortOverrides(cfg, brutals)
 	effPublicHost := detectPrimaryPublicHost(effCfg.PublicHost, "")
 	if strings.TrimSpace(effCfg.PublicHost) == "" && effPublicHost != "" {
@@ -208,13 +332,19 @@ func renderSubscriptionPayloadFull(cfg proxyConfig, user userRecord, format stri
 	if len(nodes) == 0 {
 		return nil, "", fmt.Errorf("no public endpoints configured")
 	}
-	nodes = appendClientDialerChainNodes(nodes, user, chains)
 
 	switch format {
 	case "clash":
-		return []byte(renderClashSubscription(nodes)), "text/yaml; charset=utf-8", nil
+		clashNodes := make([]subNode, 0, len(nodes))
+		for _, n := range nodes {
+			if n.ClashNode != nil {
+				clashNodes = append(clashNodes, n)
+			}
+		}
+		clashNodes = appendClientDialerChainNodes(clashNodes, user, chains)
+		return []byte(renderClashSubscription(clashNodes)), "text/yaml; charset=utf-8", nil
 	case "singbox":
-		raw, err := renderSingboxSubscription(nodes, effCfg.PublicHost)
+		raw, err := renderSingboxSubscription(nodes, user, chains, effCfg.PublicHost, sbAtLeast112)
 		if err != nil {
 			return nil, "", err
 		}
@@ -333,7 +463,7 @@ func buildChainSubEntry(name, dialer string, c chainWithSecret) (map[string]any,
 		}
 		return cn, sb
 	case "http":
-		cn := map[string]any{"name": name, "type": "http", "server": c.Server, "port": c.Port, "udp": true, "dialer-proxy": dialer}
+		cn := map[string]any{"name": name, "type": "http", "server": c.Server, "port": c.Port, "udp": false, "dialer-proxy": dialer}
 		sb := map[string]any{"type": "http", "tag": name, "server": c.Server, "server_port": c.Port, "detour": dialer}
 		if c.Secret.Username != "" {
 			cn["username"] = c.Secret.Username
@@ -487,9 +617,21 @@ func buildUserSubscriptionNodes(cfg proxyConfig, user userRecord) []subNode {
 	if cfg.SSPort > 0 && cfg.SSMethod != "" {
 		name := prefix + "-ss2022"
 		hostPort := net.JoinHostPort(cleanHost, strconv.Itoa(int(cfg.SSPort)))
-		password := user.SS2022UserKey
-		if cfg.SSServerKey != "" {
-			password = cfg.SSServerKey + ":" + user.SS2022UserKey
+		ssProfileID := strings.TrimSpace(cfg.SSProfileID)
+		if ssProfileID == "" {
+			ssProfileID = "ss-main"
+		}
+		userPSK := user.SS2022UserKey
+		if derived, err := DeriveSS2022UserPSKForCipher(user.SS2022UserKey, cfg.SSMethod, ssProfileID); err == nil {
+			userPSK = derived
+		}
+		password := userPSK
+		if strings.EqualFold(strings.TrimSpace(cfg.SSMethod), "2022-blake3-chacha20-poly1305") {
+			if cfg.SSServerKey != "" {
+				password = cfg.SSServerKey
+			}
+		} else if cfg.SSServerKey != "" {
+			password = cfg.SSServerKey + ":" + userPSK
 		}
 		userInfo := base64.RawURLEncoding.EncodeToString([]byte(cfg.SSMethod + ":" + password))
 		obfsMode := strings.ToLower(strings.TrimSpace(cfg.SSObfsMode))
@@ -571,18 +713,114 @@ func firstStringFromAnySlice(v any, fallback string) string {
 	return fallback
 }
 
-func renderSingboxSubscription(nodes []subNode, publicHost string) ([]byte, error) {
-	tags := make([]string, 0, len(nodes))
-	outbounds := make([]any, 0, len(nodes)+2)
+// BuildSingbox112DNSAndRoute 生成符合 Sing-box 1.12 ~ 1.14+ 规范的无弃用警告 DNS 与路由骨架。
+func BuildSingbox112DNSAndRoute(proxySelectorTag, bootstrapHost string, vpsBypass []string) (dnsBlock map[string]any, routeRules []map[string]any, defaultDomainResolver string) {
+	if strings.TrimSpace(bootstrapHost) == "" {
+		bootstrapHost = "223.5.5.5"
+	}
+	dnsRules := make([]any, 0, 1)
+	if len(vpsBypass) > 0 {
+		dnsRules = append(dnsRules, map[string]any{
+			"domain": vpsBypass,
+			"server": "bootstrap_dns",
+		})
+	}
+	dnsBlock = map[string]any{
+		"servers": []map[string]any{
+			{
+				"type":            "https",
+				"tag":             "remote_doh",
+				"server":          "1.1.1.1",
+				"detour":          proxySelectorTag,
+				"domain_resolver": "bootstrap_dns",
+			},
+			{
+				"type":            "https",
+				"tag":             "domestic_doh",
+				"server":          "dns.alidns.com",
+				"domain_resolver": "bootstrap_dns",
+			},
+			{
+				"type":   "udp",
+				"tag":    "bootstrap_dns",
+				"server": bootstrapHost,
+			},
+		},
+		"final":    "remote_doh",
+		"strategy": "prefer_ipv4",
+	}
+	if len(dnsRules) > 0 {
+		dnsBlock["rules"] = dnsRules
+	}
+	routeRules = []map[string]any{
+		{"action": "sniff"},
+		{"protocol": "dns", "action": "hijack-dns"},
+		{"ip_is_private": true, "outbound": "direct"},
+	}
+	return dnsBlock, routeRules, "bootstrap_dns"
+}
+
+func convertSingboxWireGuardToEndpoint(ob map[string]any) map[string]any {
+	peer := map[string]any{
+		"address":     ob["server"],
+		"port":        ob["server_port"],
+		"public_key":  ob["peer_public_key"],
+		"allowed_ips": []string{"0.0.0.0/0", "::/0"},
+	}
+	if res, ok := ob["reserved"]; ok && res != nil {
+		peer["reserved"] = res
+	}
+	ep := map[string]any{
+		"type":        "wireguard",
+		"tag":         ob["tag"],
+		"address":     ob["local_address"],
+		"private_key": ob["private_key"],
+		"peers":       []map[string]any{peer},
+	}
+	if mtu, ok := ob["mtu"]; ok && mtu != nil {
+		ep["mtu"] = mtu
+	}
+	return ep
+}
+
+func renderSingboxSubscription(nodes []subNode, user userRecord, chains []chainWithSecret, publicHost string, atLeast112 bool) ([]byte, error) {
+	filtered := make([]subNode, 0, len(nodes))
 	for _, n := range nodes {
+		if n.SingboxOutbound == nil {
+			continue
+		}
+		proto := n.Protocol
+		if proto == "" {
+			proto, _ = n.SingboxOutbound["type"].(string)
+		}
+		if !IsSingboxOutboundSupported(proto, n.Transport, n.VLESSEncryption, atLeast112) {
+			continue
+		}
+		filtered = append(filtered, n)
+	}
+	filtered = appendClientDialerChainNodes(filtered, user, chains)
+
+	tags := make([]string, 0, len(filtered))
+	outbounds := make([]any, 0, len(filtered)+2)
+	endpoints := make([]any, 0)
+	for _, n := range filtered {
 		tags = append(tags, n.Name)
+	}
+	if len(tags) == 0 {
+		tags = []string{"direct"}
 	}
 	outbounds = append(outbounds, map[string]any{
 		"type":      "selector",
 		"tag":       "proxy",
 		"outbounds": tags,
 	})
-	for _, n := range nodes {
+	for _, n := range filtered {
+		if atLeast112 {
+			if obType, _ := n.SingboxOutbound["type"].(string); obType == "wireguard" {
+				endpoints = append(endpoints, convertSingboxWireGuardToEndpoint(n.SingboxOutbound))
+				continue
+			}
+		}
 		outbounds = append(outbounds, n.SingboxOutbound)
 	}
 	outbounds = append(outbounds, map[string]any{
@@ -595,6 +833,32 @@ func renderSingboxSubscription(nodes []subNode, publicHost string) ([]byte, erro
 	domesticAddr := firstStringFromAnySlice(antiPoison["domestic_doh"], "https://dns.alidns.com/dns-query")
 	remoteAddr := firstStringFromAnySlice(antiPoison["remote_doh"], "https://1.1.1.1/dns-query")
 	vpsBypass, _ := antiPoison["vps_bypass_domains"].([]string)
+
+	if atLeast112 {
+		dnsBlock, routeRules, defaultResolver := BuildSingbox112DNSAndRoute("proxy", bootstrapAddr, vpsBypass)
+		doc := map[string]any{
+			"inbounds": []any{
+				map[string]any{
+					"type":        "mixed",
+					"tag":         "mixed-in",
+					"listen":      "127.0.0.1",
+					"listen_port": 2080,
+				},
+			},
+			"dns":       dnsBlock,
+			"outbounds": outbounds,
+			"route": map[string]any{
+				"rules":                   routeRules,
+				"final":                   "proxy",
+				"auto_detect_interface":   true,
+				"default_domain_resolver": defaultResolver,
+			},
+		}
+		if len(endpoints) > 0 {
+			doc["endpoints"] = endpoints
+		}
+		return json.MarshalIndent(doc, "", "  ")
+	}
 
 	dnsRules := make([]any, 0, 2)
 	if len(vpsBypass) > 0 {
@@ -671,6 +935,21 @@ func writeYAMLListItemMap(b *strings.Builder, m map[string]any, indent int) {
 				b.WriteString(formatYAMLScalar(item))
 				b.WriteByte('\n')
 			}
+		case []int:
+			b.WriteString(prefix)
+			b.WriteString(k)
+			if len(val) == 0 {
+				b.WriteString(": []\n")
+				continue
+			}
+			b.WriteString(": [")
+			for i, item := range val {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString(strconv.Itoa(item))
+			}
+			b.WriteString("]\n")
 		default:
 			b.WriteString(prefix)
 			b.WriteString(k)
@@ -710,6 +989,21 @@ func writeYAMLMap(b *strings.Builder, m map[string]any, indent int) {
 				b.WriteString(formatYAMLScalar(item))
 				b.WriteByte('\n')
 			}
+		case []int:
+			b.WriteString(prefix)
+			b.WriteString(k)
+			if len(val) == 0 {
+				b.WriteString(": []\n")
+				continue
+			}
+			b.WriteString(": [")
+			for i, item := range val {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString(strconv.Itoa(item))
+			}
+			b.WriteString("]\n")
 		default:
 			b.WriteString(prefix)
 			b.WriteString(k)

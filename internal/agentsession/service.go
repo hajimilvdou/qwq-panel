@@ -115,6 +115,13 @@ type Options struct {
 	// Approvals lets a paused session learn the human decision. Nil leaves the
 	// session waiting_approval until the user cancels.
 	Approvals ApprovalBridge
+	// ApprovalMinter mints real host approvals for external CLI permission prompts.
+	// When nil and Approvals implements HostApprovalMinter, Approvals is used.
+	ApprovalMinter HostApprovalMinter
+	// RoleResolver optionally resolves the current RBAC role ("admin", "operator",
+	// "viewer") of a session owner to enforce security boundaries on turns and
+	// slash commands (e.g. /mode full).
+	RoleResolver func(ctx context.Context, owner actor.Actor) (string, error)
 	// Cores replaces or adds cores; the native core is always registered.
 	Cores []Core
 	// HTTPClient is used by the native core (tests inject one).
@@ -130,18 +137,19 @@ type Options struct {
 
 // Service is the agent session backend. It is safe for concurrent use.
 type Service struct {
-	db        *storage.DB
-	clock     clock.Clock
-	ids       *ids.Generator
-	log       *slog.Logger
-	cfg       Config
-	catalog   ToolCatalog
-	runner    Runner
-	bridge    ApprovalBridge
-	secrets   *secrets.Store
-	cliAuth   *CLIAuthManager
-	workspace *WorkspaceManager
-	registry  *RegistryManager
+	db           *storage.DB
+	clock        clock.Clock
+	ids          *ids.Generator
+	log          *slog.Logger
+	cfg          Config
+	catalog      ToolCatalog
+	runner       Runner
+	bridge       ApprovalBridge
+	roleResolver func(ctx context.Context, owner actor.Actor) (string, error)
+	secrets      *secrets.Store
+	cliAuth      *CLIAuthManager
+	workspace    *WorkspaceManager
+	registry     *RegistryManager
 
 	cores map[string]Core
 
@@ -194,23 +202,24 @@ func New(opts Options) (*Service, error) {
 	ws := NewWorkspaceManager(opts.DataDir, cliAuth)
 	reg := NewRegistryManager(ws, opts.HTTPClient)
 	s := &Service{
-		db:        opts.DB,
-		clock:     opts.Clock,
-		ids:       opts.IDs,
-		log:       opts.Logger,
-		cfg:       cfg,
-		catalog:   opts.Catalog,
-		runner:    opts.Runner,
-		bridge:    opts.Approvals,
-		secrets:   opts.Secrets,
-		cliAuth:   cliAuth,
-		workspace: ws,
-		registry:  reg,
-		cores:     map[string]Core{},
-		turnRate:  authz.NewRateLimiter(0, opts.Clock.Now),
-		base:      base,
-		cancel:    cancel,
-		sessions:  map[string]*sessionRuntime{},
+		db:           opts.DB,
+		clock:        opts.Clock,
+		ids:          opts.IDs,
+		log:          opts.Logger,
+		cfg:          cfg,
+		catalog:      opts.Catalog,
+		runner:       opts.Runner,
+		bridge:       opts.Approvals,
+		roleResolver: opts.RoleResolver,
+		secrets:      opts.Secrets,
+		cliAuth:      cliAuth,
+		workspace:    ws,
+		registry:     reg,
+		cores:        map[string]Core{},
+		turnRate:     authz.NewRateLimiter(0, opts.Clock.Now),
+		base:         base,
+		cancel:       cancel,
+		sessions:     map[string]*sessionRuntime{},
 	}
 	// The service itself resolves the global AI providers of the native and
 	// external adapter cores (GAP-2): it owns the rows and the secret store.
@@ -471,6 +480,20 @@ func checkOwner(a actor.Actor) error {
 	return problem.New(problem.PermissionDenied, "Agent sessions belong to a person or a service account.")
 }
 
+// enforceSecurityBoundary validates the session owner's current role and actor
+// kind against the session core and permission mode whenever RoleResolver is
+// wired.
+func (s *Service) enforceSecurityBoundary(ctx context.Context, owner actor.Actor, core CoreName, mode operations.PermissionMode) error {
+	if s.roleResolver == nil {
+		return nil
+	}
+	role, err := s.roleResolver(ctx, owner)
+	if err != nil {
+		return problem.From(err)
+	}
+	return ValidateAgentSessionActorBoundary(owner, role, string(core), string(mode))
+}
+
 // Create creates a session owned by owner.
 func (s *Service) Create(ctx context.Context, owner actor.Actor, req CreateRequest) (*Session, error) {
 	if err := checkOwner(owner); err != nil {
@@ -499,6 +522,9 @@ func (s *Service) Create(ctx context.Context, owner actor.Actor, req CreateReque
 			Pointer: "/permission_mode", Code: "INVALID",
 			Message: "permission_mode must be read_only, safe, full or custom.",
 		})
+	}
+	if err := s.enforceSecurityBoundary(ctx, owner, core, mode); err != nil {
+		return nil, err
 	}
 	cfg, err := normalizeConfig(core, req.Config)
 	if err != nil {
@@ -628,6 +654,13 @@ func (s *Service) Update(ctx context.Context, owner actor.Actor, sessionID strin
 			Message: "permission_mode must be read_only, safe, full or custom.",
 		})
 	}
+	nextMode := rec.PermissionMode
+	if req.PermissionMode != "" {
+		nextMode = req.PermissionMode
+	}
+	if err := s.enforceSecurityBoundary(ctx, owner, rec.Core, nextMode); err != nil {
+		return nil, err
+	}
 	var mergedCfg json.RawMessage
 	if len(req.Config) > 0 {
 		var err error
@@ -649,6 +682,13 @@ func (s *Service) Update(ctx context.Context, owner actor.Actor, sessionID strin
 	updated, err := s.updateSession(ctx, owner, sessionID, 0, pointers, func(cur *Session) error {
 		if req.ExpectedRevision != "" && req.ExpectedRevision != cur.Revision {
 			return problem.Conflict(cur.Revision)
+		}
+		effMode := cur.PermissionMode
+		if req.PermissionMode != "" {
+			effMode = req.PermissionMode
+		}
+		if err := s.enforceSecurityBoundary(ctx, owner, cur.Core, effMode); err != nil {
+			return err
 		}
 		if title != nil {
 			cur.Title = *title
@@ -745,13 +785,22 @@ func (s *Service) auditUpdate(ctx context.Context, owner actor.Actor, rec *Sessi
 }
 
 // applyMode reacts to a permission-mode change: switching to read_only withdraws
-// a pending write tool call (ADR-0010 §2.1, design §6).
+// a pending write tool call (ADR-0010 §2.1, design §6). When an external CLI
+// turn is still actively running inline while waiting on an approval, it cancels
+// the running turn so ApprovalRouter aborts and cancels the minted operation.
 func (s *Service) applyMode(ctx context.Context, rt *sessionRuntime, mode operations.PermissionMode) {
 	if mode != operations.PermissionReadOnly {
 		return
 	}
 	rt.mu.Lock()
 	if rt.pending == nil {
+		rt.mu.Unlock()
+		return
+	}
+	if rt.running {
+		if rt.cancel != nil {
+			rt.cancel(errUserCancel)
+		}
 		rt.mu.Unlock()
 		return
 	}
@@ -834,6 +883,9 @@ func (s *Service) Delete(ctx context.Context, owner actor.Actor, sessionID strin
 		delete(s.sessions, sessionID)
 	}
 	s.mu.Unlock()
+	if s.cliAuth != nil {
+		s.cliAuth.RemoveSessionState(sessionID)
+	}
 	return nil
 }
 
@@ -881,6 +933,9 @@ func (s *Service) Send(ctx context.Context, owner actor.Actor, sessionID string,
 	}
 	rec, err := s.loadFor(ctx, owner, sessionID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.enforceSecurityBoundary(ctx, owner, rec.Core, rec.PermissionMode); err != nil {
 		return nil, err
 	}
 	if !isDirectSlashCommand(content) {
@@ -1045,6 +1100,9 @@ func endTurn(rt *sessionRuntime) {
 	defer rt.mu.Unlock()
 	rt.running = false
 	rt.cancel = nil
+	if rt.session.Status != StatusWaitingApproval {
+		rt.pending = nil
+	}
 	if rt.turnDone != nil {
 		close(rt.turnDone)
 		rt.turnDone = nil
@@ -1061,6 +1119,12 @@ func (s *Service) runTurn(turnCtx context.Context, rt *sessionRuntime) {
 	defer endTurn(rt)
 
 	sess := rt.snapshot()
+	if err := s.enforceSecurityBoundary(turnCtx, rt.owner(), sess.Core, sess.PermissionMode); err != nil {
+		p := problem.From(err)
+		s.emit(context.WithoutCancel(turnCtx), rt, Event{Type: EventError, Code: string(p.Code), Detail: p.Detail})
+		s.emit(context.WithoutCancel(turnCtx), rt, Event{Type: EventTurnCompleted, Status: string(StatusFailed)})
+		return
+	}
 	core, ok := s.cores[string(sess.Core)]
 	if !ok {
 		s.emit(turnCtx, rt, Event{Type: EventError, Code: string(problem.Unavailable),
@@ -1084,6 +1148,7 @@ func (s *Service) runTurn(turnCtx context.Context, rt *sessionRuntime) {
 	}
 	turn := Turn{
 		SessionID:      sess.ID,
+		Owner:          rt.owner(),
 		PermissionMode: sess.PermissionMode,
 		Messages:       hist,
 		Tools:          tools,
@@ -1091,6 +1156,9 @@ func (s *Service) runTurn(turnCtx context.Context, rt *sessionRuntime) {
 		APIKeyRef:      sess.APIKeyRef,
 		Runner:         s.runnerFor(rt),
 		NextCallID:     func() string { return s.ids.New(callPrefix) },
+		PersistExternalID: func(pctx context.Context, key, externalID string) error {
+			return s.persistExternalResumeID(pctx, rt, key, externalID)
+		},
 	}
 	err = core.Run(ctx, turn, func(e Event) error { return s.emit(ctx, rt, e) })
 
@@ -1297,6 +1365,13 @@ func (s *Service) finishApproval(rt *sessionRuntime, p *pendingApproval, dec App
 	}
 	if decision != DecisionApprove {
 		s.publishLocked(ctx, rt, Event{Type: EventTurnCompleted, Status: string(StatusIdle)})
+		rt.mu.Unlock()
+		return
+	}
+	if err := s.enforceSecurityBoundary(ctx, rt.owner(), rt.session.Core, rt.session.PermissionMode); err != nil {
+		p := problem.From(err)
+		s.publishLocked(ctx, rt, Event{Type: EventError, Code: string(p.Code), Detail: p.Detail})
+		s.publishLocked(ctx, rt, Event{Type: EventTurnCompleted, Status: string(StatusFailed)})
 		rt.mu.Unlock()
 		return
 	}

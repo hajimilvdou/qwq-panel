@@ -74,7 +74,7 @@ func openStackStore(dataDir, schemaSQL string, nowFn func() time.Time) (*stackSt
 		return nil, err
 	}
 	dsn := "file:" + filepath.ToSlash(filepath.Join(dataDir, "docker.db")) +
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=cache_size(-2048)"
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=cache_size(-2048)&_pragma=journal_size_limit(8388608)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -95,6 +95,7 @@ func (s *stackStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	_, _ = s.db.Exec(`PRAGMA wal_checkpoint(PASSIVE)`)
 	return s.db.Close()
 }
 

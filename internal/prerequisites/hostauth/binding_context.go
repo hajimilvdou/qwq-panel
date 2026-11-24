@@ -56,7 +56,7 @@ func (a *Authority) BindingContext(ctx context.Context, certificateID, expectedR
 		if err != nil {
 			return nil, certificates.Caller{}, err
 		}
-		if facts.BindingRef != entry.ID || facts.PluginVersion != entry.PluginVersion {
+		if !bindingFactsMatch(entry, facts) {
 			return nil, certificates.Caller{}, fault.New("BINDING_DENIED", "真实配置未消费该预留或安装版本已经变化")
 		}
 	} else if entry.Phase != bindingConfirmed {

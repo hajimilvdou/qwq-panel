@@ -9,6 +9,12 @@
         "type": "object"
       }
     },
+    "service_monitors": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
     "settings": {
       "type": "object"
     },

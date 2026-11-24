@@ -10,7 +10,7 @@
 -->
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Icon, Orb, Spinner } from '$ui';
+  import { Icon, Orb, registerModalDialog, Spinner, unregisterModalDialog } from '$ui';
   import { actions as actionsApi } from '$api/endpoints';
   import type { ActionMeta } from '$api/additions';
   import { dock } from '$lib/ai/dock.svelte';
@@ -20,7 +20,15 @@
   import { session } from '$lib/session.svelte';
   import { APP_CENTER, PRIMARY, SETTINGS, pluginNav, pluginsResource } from '../../app/nav';
   import { SETTINGS_SECTIONS } from '../settings/sections';
-  import { buildGroups, loadRecent, moveCursor, pushRecent, saveRecent, type PaletteItem } from './items';
+  import {
+    OFFICIAL_PLUGIN_SEARCH_KEYWORDS,
+    buildGroups,
+    loadRecent,
+    moveCursor,
+    pushRecent,
+    saveRecent,
+    type PaletteItem,
+  } from './items';
 
   let runnerMod: Promise<typeof import('./ActionRunner.svelte')> | null = null;
   const loadRunner = () => (runnerMod ??= import('./ActionRunner.svelte'));
@@ -34,23 +42,67 @@
   let searching = $state(false);
   let searchFailed = $state(false);
   let running = $state<string | null>(null);
-  let recent = $state<PaletteItem[]>(loadRecent());
+  let recent = $state<PaletteItem[]>(loadRecent(session.user?.user_id));
   let returnFocus: HTMLElement | null = null;
 
+  $effect(() => {
+    recent = loadRecent(session.user?.user_id);
+  });
+
   /* ---------------------------------------------------------------- 页面目录 */
+  const BUILTIN_PAGE_KEYWORDS: Readonly<Record<string, string>> = {
+    '/': 'home dashboard overview 首页 概览 仪表盘',
+    '/activity': 'activity operations audit log 动态 操作 日志',
+    '/agent': 'agent ai chat assistant copilot 助手 对话',
+    '/apps': 'apps store market plugins 应用 商店 插件',
+  };
+  const SETTINGS_KEYWORDS: Readonly<Record<string, string>> = {
+    account: 'account profile password mfa totp 账户 资料 密码 两步验证',
+    appearance: 'appearance theme dark light density accent 外观 主题 深色 浅色 密度',
+    users: 'users rbac role admin operator viewer 用户 角色 权限',
+    delegations: 'delegations token mcp api key 令牌 委托',
+    ai: 'ai provider llm openai anthropic claude codex opencode 模型 渠道',
+    system: 'system backup restore port tls entry path support 系统 备份 恢复 端口 密道 诊断',
+  };
+
   type PageItem = Extract<PaletteItem, { kind: 'page' }>;
   const pages = $derived.by<PageItem[]>(() => {
     const nav = [...PRIMARY, APP_CENTER, ...pluginNav(plugins.data ?? [])].filter((n) => !n.perm || session.can(n.perm));
-    const out: PageItem[] = nav.map((n) => ({ kind: 'page', id: 'page:' + n.href, label: n.label, href: n.href, icon: n.icon }));
+    const out: PageItem[] = nav.map((n) => {
+      const kw = [
+        BUILTIN_PAGE_KEYWORDS[n.href],
+        n.pluginId,
+        n.pluginId ? OFFICIAL_PLUGIN_SEARCH_KEYWORDS[n.pluginId] : undefined,
+      ]
+        .filter(Boolean)
+        .join(' ');
+      return { kind: 'page', id: 'page:' + n.href, label: n.label, href: n.href, icon: n.icon, keywords: kw || undefined };
+    });
     if (session.can('host.plugins:install'))
-      out.push({ kind: 'page', id: 'page:/apps/install', label: '安装应用', href: '/apps/install', icon: 'upload', keywords: '上传 插件' });
+      out.push({ kind: 'page', id: 'page:/apps/install', label: '安装应用', href: '/apps/install', icon: 'upload', keywords: 'install upload pkg plugin 上传 插件 安装' });
     for (const s of SETTINGS_SECTIONS)
       if (!('perm' in s) || session.can(s.perm))
-        out.push({ kind: 'page', id: 'page:/settings/' + s.id, label: `设置 · ${s.title}`, href: `/settings/${s.id}`, icon: SETTINGS.icon });
+        out.push({
+          kind: 'page',
+          id: 'page:/settings/' + s.id,
+          label: `设置 · ${s.title}`,
+          href: `/settings/${s.id}`,
+          icon: SETTINGS.icon,
+          keywords: `settings ${s.id} ${SETTINGS_KEYWORDS[s.id] ?? ''}`.trim(),
+        });
     return out;
   });
 
-  const groups = $derived(buildGroups({ q: palette.query, pages, actions: found, recent }));
+  const canAsk = $derived(session.can('host.agent_sessions:write'));
+  const authorizedRecent = $derived.by(() => {
+    const allowedPages = new Set(pages.map((p) => p.id));
+    return recent.filter((item) => {
+      if (item.kind === 'page') return allowedPages.has(item.id);
+      if (item.kind === 'action') return !item.action.permission || session.can(item.action.permission);
+      return false;
+    });
+  });
+  const groups = $derived(buildGroups({ q: palette.query, pages, actions: found, recent: authorizedRecent, canAsk }));
   const flat = $derived(groups.flatMap((g) => g.items));
   const active = $derived(flat[Math.min(cursor, flat.length - 1)]);
 
@@ -87,20 +139,35 @@
 
   /* ---------------------------------------------------------------- 开关 */
   $effect(() => {
-    if (!dlg) return;
-    if (palette.opened && !dlg.open) {
+    const el = dlg;
+    if (!el) return;
+    if (palette.opened && !el.open) {
       returnFocus = document.activeElement as HTMLElement | null;
       running = null;
       cursor = 0;
-      dlg.showModal();
+      el.showModal();
+      registerModalDialog(el);
       void tick().then(() => input?.select());
-    } else if (!palette.opened && dlg.open) dlg.close();
+    } else if (!palette.opened && el.open) {
+      unregisterModalDialog(el);
+      el.close();
+    }
+  });
+
+  $effect(() => {
+    const el = dlg;
+    return () => {
+      if (el) unregisterModalDialog(el);
+    };
   });
 
   function onclose() {
+    unregisterModalDialog(dlg);
     palette.close();
     running = null;
-    returnFocus?.focus?.();
+    if (!dock.expanded) {
+      returnFocus?.focus?.();
+    }
     returnFocus = null;
   }
 
@@ -127,7 +194,7 @@
       return;
     }
     recent = pushRecent(recent, item);
-    saveRecent(recent);
+    saveRecent(recent, session.user?.user_id);
     if (item.kind === 'page') {
       palette.close();
       navigate(item.href);
@@ -183,7 +250,7 @@
           aria-controls="pal-list"
           aria-autocomplete="list"
           aria-activedescendant={optId(active)}
-          placeholder="搜索页面和操作，或直接问 AI…"
+          placeholder={canAsk ? '搜索页面和操作，或直接问 AI…' : '搜索页面和操作…'}
           autocomplete="off"
           spellcheck="false"
           {onkeydown}

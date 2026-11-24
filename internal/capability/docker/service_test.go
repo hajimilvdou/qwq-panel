@@ -273,6 +273,33 @@ func TestProxyAllowlistedRequestRejectsDisallowedEndpointsAndForwardsAllowed(t *
 		}
 		_, _ = w.Write([]byte(`{"Warnings":[]}`))
 	})
+	mux.HandleFunc("/v1.41/images/abc123", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"Deleted":"sha256:abc123"}]`))
+	})
+	mux.HandleFunc("/v1.41/images/create", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"Status: Downloaded newer image"}`))
+	})
+	mux.HandleFunc("/v1.41/volumes", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"Volumes":[{"Name":"app_data","Driver":"local"}]}`))
+	})
+	mux.HandleFunc("/v1.41/volumes/prune", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"VolumesDeleted":["old_vol"],"SpaceReclaimed":1048576}`))
+	})
+	mux.HandleFunc("/v1.41/volumes/app_data", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
 	defer func() { _ = srv.Close() }()
@@ -290,11 +317,19 @@ func TestProxyAllowlistedRequestRejectsDisallowedEndpointsAndForwardsAllowed(t *
 		{http.MethodPost, "/volumes/create"},
 		{http.MethodGet, "/containers/../info"},
 		{http.MethodGet, "/containers/a/b/json"},
-		{http.MethodDelete, "/images/abc123"},
+		{http.MethodDelete, "/images/../etc/passwd"},
 	} {
 		if _, _, err := runner.ProxyAllowlistedRequest(t.Context(), bad.method, bad.path, url.Values{}, nil); err == nil {
 			t.Fatalf("expected %s %s to be rejected", bad.method, bad.path)
 		}
+	}
+
+	// POST /images/create with fromSrc or missing fromImage MUST be rejected.
+	if _, _, err := runner.ProxyAllowlistedRequest(t.Context(), http.MethodPost, "/images/create", url.Values{"fromSrc": {"http://evil.invalid/tar"}}, nil); err == nil {
+		t.Fatal("expected POST /images/create with fromSrc to be rejected")
+	}
+	if _, _, err := runner.ProxyAllowlistedRequest(t.Context(), http.MethodPost, "/images/create", url.Values{}, nil); err == nil {
+		t.Fatal("expected POST /images/create without fromImage to be rejected")
 	}
 
 	// Allowed GET /info succeeds.
@@ -308,6 +343,23 @@ func TestProxyAllowlistedRequestRejectsDisallowedEndpointsAndForwardsAllowed(t *
 	code, _, err = runner.ProxyAllowlistedRequest(t.Context(), http.MethodPost, "/containers/abc123/update", url.Values{}, updateBody)
 	if err != nil || code != http.StatusOK {
 		t.Fatalf("POST update failed: code=%d err=%v", code, err)
+	}
+
+	// Allowed image pull/delete and volume read/prune/delete succeed.
+	if code, _, err := runner.ProxyAllowlistedRequest(t.Context(), http.MethodPost, "/images/create", url.Values{"fromImage": {"nginx:alpine"}}, nil); err != nil || code != http.StatusOK {
+		t.Fatalf("POST /images/create failed: code=%d err=%v", code, err)
+	}
+	if code, _, err := runner.ProxyAllowlistedRequest(t.Context(), http.MethodDelete, "/images/abc123", url.Values{}, nil); err != nil || code != http.StatusOK {
+		t.Fatalf("DELETE /images/abc123 failed: code=%d err=%v", code, err)
+	}
+	if code, _, err := runner.ProxyAllowlistedRequest(t.Context(), http.MethodGet, "/volumes", url.Values{}, nil); err != nil || code != http.StatusOK {
+		t.Fatalf("GET /volumes failed: code=%d err=%v", code, err)
+	}
+	if code, _, err := runner.ProxyAllowlistedRequest(t.Context(), http.MethodPost, "/volumes/prune", url.Values{}, nil); err != nil || code != http.StatusOK {
+		t.Fatalf("POST /volumes/prune failed: code=%d err=%v", code, err)
+	}
+	if code, _, err := runner.ProxyAllowlistedRequest(t.Context(), http.MethodDelete, "/volumes/app_data", url.Values{}, nil); err != nil || code != http.StatusNoContent {
+		t.Fatalf("DELETE /volumes/app_data failed: code=%d err=%v", code, err)
 	}
 }
 

@@ -56,6 +56,9 @@
           <p>本机已免装 Agent 自动复用 metrics.read:self；外部小鸡使用零入站、零远程执行安全上报。</p>
         </div>
       </div>
+      <div class="warn-box" id="loopback-origin-warn" hidden>
+        <strong>检测到当前面板访问地址为本机回环（127.0.0.1 / localhost）</strong>：外部服务器无法回连本机地址！请填写主控面板的公网访问地址（例如 <code>https://&lt;公网IP&gt;:&lt;端口&gt;</code> 或反代域名），或在「系统设置」开放监听。
+      </div>
       <div class="field-row">
         <input id="node-id" type="hidden" value="">
         <input id="node-name" type="text" placeholder="节点名称，如 东京软银 · 02">
@@ -68,6 +71,7 @@
         <input id="node-quota-gb" type="number" min="0" step="1" placeholder="月流量配额 (GB，0=不限)">
         <input id="node-reset-day" type="number" min="1" max="31" value="1" placeholder="流量重置日 (1-31)">
         <input id="node-expires-at" type="date" aria-label="账单到期日" title="账单到期日">
+        <input id="node-public-origin" type="url" placeholder="可选：覆盖主控公网基址（如 https://1.2.3.4:18443）">
       </div>
       <div class="btn-group">
         <button type="button" class="btn primary" id="add-node-btn">添加节点并生成安装命令</button>
@@ -78,6 +82,37 @@
       </div>
       <pre class="code" id="install-cmd-box" hidden></pre>
       <div class="grid" id="admin-nodes-grid"></div>
+    </article>
+
+    <article class="card">
+      <div class="head head-sm">
+        <div>
+          <strong>三网基准延迟与 TCP / HTTP(S) 服务拨测目标</strong>
+          <p>配置后，外部探针 Agent 将自动拉取三网目标并回报真实延迟，同步驱动首页「三网基准延迟」曲线。</p>
+        </div>
+        <div class="btn-group">
+          <button type="button" class="btn ghost" id="preset-carriers-btn">一键添加三网参考目标</button>
+        </div>
+      </div>
+      <div class="field-row">
+        <input id="mon-name" type="text" placeholder="目标名称，如 广州电信参考点">
+        <select id="mon-kind">
+          <option value="tcp">TCP 端口拨测 (host:port)</option>
+          <option value="https">HTTPS 健康检测</option>
+          <option value="http">HTTP 健康检测</option>
+        </select>
+        <select id="mon-carrier">
+          <option value="ct">电信 (CT)</option>
+          <option value="cu">联通 (CU)</option>
+          <option value="cm">移动 (CM)</option>
+          <option value="global">全球基准 (Global)</option>
+          <option value="custom">自定义服务 (Custom)</option>
+        </select>
+        <input id="mon-target" type="text" placeholder="目标地址，如 202.96.128.86:53 或 https://example.com">
+        <input id="mon-interval" type="number" min="10" max="600" value="30" placeholder="间隔秒 (10-600)">
+        <button type="button" class="btn primary" id="add-monitor-btn">添加拨测目标</button>
+      </div>
+      <div class="grid" id="admin-monitors-grid"></div>
     </article>
   </section>
 
@@ -107,7 +142,7 @@
       <div class="install-grid">
         <div id="panel-theme-dropzone" class="dropzone" tabindex="0" role="button" aria-label="上传主题压缩包">
           <strong>拖拽 .qwqtheme.zip 到此或点击选择</strong>
-          <span>上限 16 MiB · 仅允许静态前端资源 · 严格防穿越校验</span>
+          <span>面板内嵌上限 3 MiB（3–16 MiB 请用独立 /admin 或 HTTPS URL）· 仅允许静态前端资源</span>
           <input id="panel-theme-file" type="file" accept=".zip,.qwqtheme.zip" hidden>
         </div>
         <div class="url-box">

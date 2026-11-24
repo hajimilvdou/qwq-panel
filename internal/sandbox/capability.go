@@ -68,10 +68,21 @@ func (c *CapabilityClient) Call(ctx context.Context, request CapabilityRequest) 
 		return response, problem.New(problem.Unavailable, "The capability helper is not configured.")
 	}
 	client := c.HelperClient
-	if (request.Op == "docker.compose" || request.Op == "docker.recreate_ports") && client.Timeout == 0 {
-		copied := *client
-		copied.Timeout = 95 * time.Second
-		client = &copied
+	if client.Timeout == 0 {
+		isLongDockerOp := request.Op == "docker.compose" || request.Op == "docker.recreate_ports"
+		if !isLongDockerOp && request.Op == "docker.api.write" && len(request.ParamsJSON) > 0 {
+			var probe struct {
+				Path string `json:"path"`
+			}
+			if json.Unmarshal(request.ParamsJSON, &probe) == nil && probe.Path == "/images/create" {
+				isLongDockerOp = true
+			}
+		}
+		if isLongDockerOp {
+			copied := *client
+			copied.Timeout = 10*time.Minute + 15*time.Second
+			client = &copied
+		}
 	}
 	if err := client.exchange(ctx, request, &response); err != nil {
 		return response, err

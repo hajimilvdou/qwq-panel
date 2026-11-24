@@ -117,8 +117,8 @@ func TestAIRelayManifestAndPackageDigests(t *testing.T) {
 		parsed.Resources.DiskMaxMB != 256 || parsed.Resources.KVMaxKB != 512 {
 		t.Fatalf("1C1G 资源预算不符: %+v", parsed.Resources)
 	}
-	if len(parsed.Operations) != 12 {
-		t.Fatalf("管理操作数量=%d，期望=12", len(parsed.Operations))
+	if len(parsed.Operations) != 13 {
+		t.Fatalf("管理操作数量=%d，期望=13", len(parsed.Operations))
 	}
 
 	for relPath, wantDigest := range parsed.Files {

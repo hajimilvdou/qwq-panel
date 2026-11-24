@@ -19,6 +19,7 @@ service CertificatesService {
   rpc SubmitTestCertificate(SubmitTestCertificateRequest) returns (SubmitTestCertificateResponse);
   rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
   rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
+  rpc ReserveBinding(ReserveBindingRequest) returns (ReserveBindingResponse);
   rpc BindCertificate(BindCertificateRequest) returns (BindCertificateResponse);
   rpc UnbindCertificate(UnbindCertificateRequest) returns (UnbindCertificateResponse);
   rpc DeployBinding(DeployBindingRequest) returns (DeployBindingResponse);
@@ -149,6 +150,18 @@ message CancelTaskResponse {
 }
 
 // ======================== 稳定绑定、部署和引用保护 ========================
+message ReserveBindingRequest {
+  qwq.platform.v1.HostCallContext context = 1;
+  string certificate_id = 2;
+  string expected_revision = 3;
+}
+message ReserveBindingResponse {
+  string binding_ref = 1;
+  string certificate_id = 2;
+  string revision = 3;
+  string status = 4;
+  qwq.platform.v1.ErrorDetail error = 5;
+}
 message BindCertificateRequest {
   qwq.platform.v1.HostCallContext context = 1;
   string certificate_id = 2;

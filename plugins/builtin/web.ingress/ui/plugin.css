@@ -163,6 +163,10 @@ pre {
   color: var(--text);
   font-size: 13px;
 }
+select option {
+  background-color: var(--surface);
+  color: var(--text);
+}
 pre {
   overflow-x: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -212,6 +216,11 @@ pre {
 .badge.warn {
   background: var(--amber-soft);
   color: var(--amber);
+}
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 table {
   width: 100%;

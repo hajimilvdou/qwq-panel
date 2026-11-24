@@ -28,6 +28,7 @@ import {
   cleanToast,
   extractOversizedApiCallId,
   isEnsurePluginAllowed,
+  matchesSubscribedSubject,
   normalizePluginPath,
   parseHello,
   parsePluginMessage,
@@ -37,6 +38,7 @@ import {
   type EnsurePluginsParams,
   type EnsurePluginsResult,
   type HostSettings,
+  type HostViewport,
   type PluginToShell,
   type ShellToPlugin,
 } from './protocol';
@@ -129,6 +131,7 @@ export class PluginBridge {
   #connAbort: AbortController | null = null;
   #timer: unknown = null;
   #settings: HostSettings | null = null;
+  #viewport: HostViewport | null = null;
   #pendingRoute: string | null = null;
   #subjects = new Set<string>();
   #unsub: (() => void) | null = null;
@@ -190,6 +193,7 @@ export class PluginBridge {
     this.phase = 'connected';
     this.#win.postMessage({ t: 'plugin.port' }, '*', [ch.port2]);
     if (this.#settings) this.#send({ t: 'ui.settings', ...this.#settings });
+    if (this.#viewport) this.#send({ t: 'ui.viewport', ...this.#viewport });
     if (this.#pendingRoute) {
       const p = this.#pendingRoute;
       this.#pendingRoute = null;
@@ -202,6 +206,11 @@ export class PluginBridge {
   settings(s: HostSettings): void {
     this.#settings = s;
     this.#send({ t: 'ui.settings', ...s });
+  }
+
+  viewport(vp: HostViewport): void {
+    this.#viewport = vp;
+    this.#send({ t: 'ui.viewport', ...vp });
   }
 
   route(path: string): void {
@@ -432,7 +441,7 @@ export class PluginBridge {
     this.#unsub = this.deps.subscribe((e) => {
       if (!subjectAllowed(this.deps.pluginId, e.subject)) return;
       for (const s of this.#subjects) {
-        if (e.subject === s || e.subject.startsWith(s.endsWith('/') ? s : s + '/')) {
+        if (matchesSubscribedSubject(s, e.subject)) {
           this.#send({ t: 'api.event', event: e });
           return;
         }

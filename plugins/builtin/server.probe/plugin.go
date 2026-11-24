@@ -8,8 +8,12 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"io"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	metricsv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/metrics/v1"
@@ -75,6 +79,10 @@ type instance struct {
 	portal       *PortalGateway
 	publishAlert func(context.Context, pluginsdk.EventDraft) error
 }
+
+// 编译期断言 *instance 实现 pluginsdk.PublicHTTPStreamer，使 /p/server.probe/portal/bin/qwq-probe-agent-*
+// 与 16 MiB 主题包上传通过 public-stream.sock 零缓冲直通，彻底突破 4 MiB gRPC 帧上限。
+var _ pluginsdk.PublicHTTPStreamer = (*instance)(nil)
 
 func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pluginsdk.Instance, error) {
 	cfg := probeConfig{
@@ -183,6 +191,7 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 
 	aiCtrl := NewAINativeController(store, domains)
 	portal := NewPortalGateway(store, domains, aiCtrl, initialAdminPwd, time.Now)
+	domains.SetTLSHandler(portal)
 	if initialAdminPwd != "" && loadedSettings.StandaloneAdminVerifier == "" {
 		if verifier, vErr := EncodeAdminVerifier(initialAdminPwd); vErr == nil {
 			store.mu.Lock()
@@ -227,6 +236,7 @@ func (i *instance) Stop(ctx context.Context) error {
 }
 
 func (i *instance) Release(_ context.Context) error {
+	i.domains.CloseTLSListener()
 	_ = i.portal.Close()
 	return i.store.Close()
 }
@@ -272,6 +282,122 @@ func (i *instance) Health(context.Context) pluginsdk.Health {
 	return pluginsdk.Health{Message: "探针在线运行中"}
 }
 
+// ServeHTTP 实现 pluginsdk.PublicHTTPStreamer，对受控端二进制下载零缓冲磁盘直出，其余路由统一复用 ServePortalHTTP。
+func (i *instance) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	p := r.URL.Path
+	p = strings.TrimPrefix(p, "/p/server.probe")
+	route := "portal"
+	sub := p
+	switch {
+	case p == "/portal" || strings.HasPrefix(p, "/portal/"):
+		route = "portal"
+		sub = strings.TrimPrefix(p, "/portal")
+	case p == "/agent" || strings.HasPrefix(p, "/agent/"):
+		route = "agent"
+		sub = strings.TrimPrefix(p, "/agent")
+	}
+	cleanSub := "/" + strings.TrimPrefix(sub, "/")
+
+	// 零缓冲流式输出打包内置的 qwq-probe-agent 二进制（绕过 4 MiB gRPC 限制）
+	if route == "portal" && strings.HasPrefix(cleanSub, "/bin/") && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		fname := strings.TrimPrefix(cleanSub, "/bin/")
+		if isAllowedProbeAgentAsset(fname) {
+			dataDir := ""
+			if i.store != nil {
+				dataDir = i.store.dataDir
+			}
+			fullPath, ok := resolveAgentBinaryPath(dataDir, fname)
+			if !ok {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":"AGENT_BINARY_NOT_BUNDLED"}`))
+				return
+			}
+			f, err := os.Open(fullPath)
+			if err != nil {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":"AGENT_BINARY_UNAVAILABLE"}`))
+				return
+			}
+			defer f.Close()
+			st, err := f.Stat()
+			if err != nil {
+				http.Error(w, "stat failed", http.StatusInternalServerError)
+				return
+			}
+			if strings.HasSuffix(fname, ".sha256") {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				w.Header().Set("Cache-Control", "public, max-age=300")
+			} else {
+				w.Header().Set("Content-Type", "application/octet-stream")
+				w.Header().Set("Content-Disposition", `attachment; filename="`+fname+`"`)
+				w.Header().Set("Cache-Control", "public, max-age=300")
+			}
+			http.ServeContent(w, r, fname, st.ModTime(), f)
+			return
+		}
+	}
+
+	hdrs := make(map[string]string, len(r.Header)+1)
+	for k, vals := range r.Header {
+		if len(vals) > 0 {
+			hdrs[k] = vals[0]
+		}
+	}
+	if extractHeaderCI(hdrs, "Authorization") == "" {
+		if tok := extractHeaderCI(hdrs, "X-QWQ-Relay-Token"); tok != "" {
+			hdrs["Authorization"] = "Bearer " + tok
+		}
+	}
+	clientIP := extractHeaderCI(hdrs, "X-QWQ-Client-IP")
+	if clientIP == "" {
+		clientIP = extractHeaderCI(hdrs, "X-Forwarded-For")
+	}
+	if xfh := strings.TrimSpace(extractHeaderCI(hdrs, "X-Forwarded-Host")); xfh != "" {
+		hdrs["Host"] = xfh
+	}
+
+	if strings.HasPrefix(cleanSub, "/api/admin/") && cleanSub != "/api/admin/login" && cleanSub != "/api/admin/logout" {
+		if !i.portal.verifyAdminToken(extractHeaderCI(hdrs, "X-Probe-Admin-Token"), i.portal.now()) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"ADMIN_AUTH_REQUIRED"}`))
+			return
+		}
+	}
+
+	var body []byte
+	if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		maxBytes := int64(4 << 20)
+		if cleanSub == "/api/admin/themes/upload" {
+			maxBytes = 24 << 20
+		}
+		raw, err := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
+		if err != nil {
+			http.Error(w, `{"error":"READ_BODY_FAILED"}`, http.StatusBadRequest)
+			return
+		}
+		if int64(len(raw)) > maxBytes {
+			http.Error(w, `{"error":"PAYLOAD_TOO_LARGE"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
+		body = raw
+	}
+
+	code, respHdrs, respBody := i.portal.ServePortalHTTP(route, r.Method, cleanSub, clientIP, hdrs, body)
+	for k, v := range respHdrs {
+		w.Header().Set(k, v)
+	}
+	if code < 100 || code > 599 {
+		code = http.StatusOK
+	}
+	w.WriteHeader(code)
+	if r.Method != http.MethodHead && len(respBody) > 0 {
+		_, _ = w.Write(respBody)
+	}
+}
+
 // ServePublicRoute 实现 ADR-0024 公开无会话路由（同时支撑 /p/server.probe/portal/*、/p/server.probe/agent/* 及独立域名转发）。
 func (i *instance) ServePublicRoute(_ context.Context, req pluginsdk.PublicRouteRequest) (pluginsdk.PublicRouteResponse, error) {
 	hdrs := make(map[string]string, len(req.Headers)+1)
@@ -309,6 +435,8 @@ func (i *instance) backgroundLoop(ctx context.Context) {
 	defer flushTicker.Stop()
 
 	var prevSnap *metricsv1.MetricsSnapshot
+	lastLivenessAt := time.Now()
+	var checksRunning atomic.Bool
 	for {
 		select {
 		case <-ctx.Done():
@@ -318,14 +446,26 @@ func (i *instance) backgroundLoop(ctx context.Context) {
 			return
 		case <-sampleTicker.C:
 			now := time.Now()
+			elapsedSec := int64(now.Sub(lastLivenessAt).Round(time.Second) / time.Second)
+			if elapsedSec < 1 {
+				elapsedSec = 1
+			} else if elapsedSec > 60 {
+				elapsedSec = 60
+			}
+			lastLivenessAt = now
 			i.cfgMu.RLock()
 			collectLocal := i.cfg.CollectLocalHost
 			i.cfgMu.RUnlock()
 			if collectLocal {
 				prevSnap = i.sampleLocalHostOnce(ctx, prevSnap)
 			}
-			i.evaluateLivenessAndPublishAlerts(ctx, now, 2)
-			i.runDueServiceChecks(ctx, now)
+			i.evaluateLivenessAndPublishAlerts(ctx, now, elapsedSec)
+			if checksRunning.CompareAndSwap(false, true) {
+				go func(checkNow time.Time) {
+					defer checksRunning.Store(false)
+					i.runDueServiceChecks(ctx, checkNow)
+				}(now)
+			}
 		case <-flushTicker.C:
 			_ = i.store.FlushPeriodic(ctx, time.Now())
 		}
@@ -631,6 +771,7 @@ func (i *instance) registerOperations() {
 		}
 		b, _ := json.Marshal(map[string]any{
 			"public_nodes":     i.store.BuildPublicNodes(now),
+			"service_monitors": i.store.ListServiceMonitors(),
 			"settings":         cfg,
 			"active_theme_id":  activeTheme,
 			"appearance":       SanitizeAppearanceConfig(cfg.Appearance),
@@ -641,6 +782,56 @@ func (i *instance) registerOperations() {
 			"proxy_snippets":   BuildReverseProxySnippets(cfg.CustomDomain, cfg.BuiltinListenAddr),
 		})
 		return pluginsdk.Response{Payload: b}, nil
+	})
+
+	// 3.2 三网延迟与 TCP/HTTP(S) 服务拨测目标 CRUD
+	i.HandleInvoke("probe.monitors.list", func(_ context.Context, _ pluginsdk.Request) (pluginsdk.Response, error) {
+		b, _ := json.Marshal(map[string]any{
+			"items": i.store.ListServiceMonitors(),
+		})
+		return pluginsdk.Response{Payload: b}, nil
+	})
+
+	i.HandleJob("probe.monitors.upsert", func(_ context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
+		code, _, body := i.portal.handleStandaloneAdminAction(time.Now(), http.MethodPost, "/api/admin/monitors", nil, req.Payload)
+		if err := CheckStandaloneAdminStatus(code, body); err != nil {
+			if strings.HasPrefix(err.Error(), "VALIDATION_FAILED:") {
+				return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", strings.TrimSpace(strings.TrimPrefix(err.Error(), "VALIDATION_FAILED:")))
+			}
+			return pluginsdk.Result{}, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
+		}
+		var parsed struct {
+			Monitor ServiceMonitor `json:"monitor"`
+		}
+		_ = json.Unmarshal(body, &parsed)
+		subj := "monitors"
+		if parsed.Monitor.ID != "" {
+			subj = "monitors/" + parsed.Monitor.ID
+		}
+		return pluginsdk.Result{
+			Payload: body,
+			Changes: []pluginsdk.ResourceChange{{Subject: subj, Revision: time.Now().UTC().Format("20060102150405")}},
+		}, nil
+	})
+
+	i.HandleJob("probe.monitors.remove", func(_ context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(req.Payload, &p); err != nil || strings.TrimSpace(p.ID) == "" {
+			return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "缺少拨测目标 ID")
+		}
+		code, _, body := i.portal.handleStandaloneAdminAction(time.Now(), http.MethodDelete, "/api/admin/monitors/"+strings.TrimSpace(p.ID), nil, nil)
+		if err := CheckStandaloneAdminStatus(code, body); err != nil {
+			if strings.HasPrefix(err.Error(), "VALIDATION_FAILED:") {
+				return pluginsdk.Result{}, pluginsdk.Errorf("VALIDATION_FAILED", "%s", strings.TrimSpace(strings.TrimPrefix(err.Error(), "VALIDATION_FAILED:")))
+			}
+			return pluginsdk.Result{}, pluginsdk.Errorf("NOT_FOUND", "%s", err.Error())
+		}
+		return pluginsdk.Result{
+			Payload: body,
+			Changes: []pluginsdk.ResourceChange{{Subject: "monitors/" + strings.TrimSpace(p.ID), Deleted: true}},
+		}, nil
 	})
 
 	// 3.5 可插拔前台主题中心与动态水玻璃背景配置 RPC（供 qwq 面板内嵌 UI 调用）

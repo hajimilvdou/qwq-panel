@@ -706,3 +706,52 @@ func TestConcurrentAdjustUserQuotaAndEffectiveGroupRaceFree(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestSubKeyExtraSettlementCannotOverdraftParentBalance(t *testing.T) {
+	ctx := context.Background()
+	eng, cleanup := newTestLedger(t, nil)
+	defer cleanup()
+
+	// Parent has $100, sub-key hard limit is $0.10 (100_000 micros).
+	u, err := eng.CreateUserByAdmin(ctx, "subcap_owner", "SubCapPass123!", "", "default", 100_000_000, 0, "none")
+	if err != nil {
+		t.Fatalf("CreateUserByAdmin: %v", err)
+	}
+	subKey, err := eng.MintSubKey(ctx, u.ID, "capped-key", 100_000, nil, nil, 1000, 0)
+	if err != nil {
+		t.Fatalf("MintSubKey: %v", err)
+	}
+
+	// 10 concurrent reservations of 10_000 each (total reserved = 100_000),
+	// acquired first so all 10 are simultaneously in-flight, then settled concurrently at 500_000 actual!
+	resvs := make([]*QuotaReservation, 0, 10)
+	for i := 0; i < 10; i++ {
+		_, resv, err := eng.AuthorizeAndReserve(subKey, "gpt-4o", "198.51.100.1", 10_000)
+		if err != nil {
+			t.Fatalf("reserve %d: %v", i, err)
+		}
+		resvs = append(resvs, resv)
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var totalCharged atomic.Int64
+	for _, resv := range resvs {
+		wg.Add(1)
+		go func(r *QuotaReservation) {
+			defer wg.Done()
+			<-start
+			c := r.Settle(500_000, UsageLogRecord{UserID: u.ID, TokenID: r.token.TokenID, ModelName: "gpt-4o", ProtocolIn: "openai_chat"})
+			totalCharged.Add(c)
+		}(resv)
+	}
+	close(start)
+	wg.Wait()
+
+	if got := totalCharged.Load(); got > 100_000 {
+		t.Fatalf("sub-key overdrew parent balance past hard limit: charged=%d limit=100000", got)
+	}
+	memBal, _, _ := eng.MemoryBalance(u.ID)
+	if memBal < 100_000_000-100_000 {
+		t.Fatalf("parent balance dropped past sub-key hard limit: balance=%d", memBal)
+	}
+}

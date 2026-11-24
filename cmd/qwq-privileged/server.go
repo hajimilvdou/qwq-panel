@@ -58,6 +58,10 @@ const (
 	// controller must not be able to write a published version directory.
 	defaultStagingRoot = "/var/lib/qwq/staging"
 
+	// defaultBackupStageRoot is the root-owned, agent-group-readable staging
+	// root used by HelperOpBackupPluginData.
+	defaultBackupStageRoot = "/var/lib/qwq-privileged/backup-stage"
+
 	// maxTreeNameLen is the Linux NAME_MAX, the longest single path component
 	// accepted in a staged tree.
 	maxTreeNameLen = 255
@@ -96,6 +100,9 @@ type helperConfig struct {
 	// StagingRoot is the qwq-writable staging root (/var/lib/qwq/staging).
 	// The helper only reads it; publish never writes below it.
 	StagingRoot string
+	// BackupStageRoot is the root-owned, agent-group-readable backup staging
+	// root (/var/lib/qwq-privileged/backup-stage). Only the helper writes below it.
+	BackupStageRoot string
 	// AgentUser owns the plugin socket; it is the only agent user a request
 	// may name.
 	AgentUser string
@@ -120,6 +127,7 @@ func defaultHelperConfig() helperConfig {
 		DataRoot:        sandbox.DefaultPluginDataRoot,
 		PrivateDataRoot: sandbox.DefaultPrivatePluginDataRoot,
 		StagingRoot:     defaultStagingRoot,
+		BackupStageRoot: defaultBackupStageRoot,
 		AgentUser:       sandbox.DefaultAgentUser,
 		SocketGroup:     sandbox.DefaultAgentUser,
 		Version:         buildinfo.Read().Version, // one link-time variable for every binary (DEP-03)
@@ -169,6 +177,13 @@ func newHelperServer(cfg helperConfig, runner sandbox.Runner, logger *slog.Logge
 	if cfg.StagingRoot == "" {
 		cfg.StagingRoot = defaultStagingRoot
 	}
+	if cfg.BackupStageRoot == "" {
+		if cfg.CredDir != "" {
+			cfg.BackupStageRoot = filepath.Join(filepath.Dir(filepath.Clean(cfg.CredDir)), "backup-stage")
+		} else {
+			cfg.BackupStageRoot = defaultBackupStageRoot
+		}
+	}
 	if cfg.DataRoot == "" {
 		cfg.DataRoot = sandbox.DefaultPluginDataRoot
 	}
@@ -187,6 +202,7 @@ func newHelperServer(cfg helperConfig, runner sandbox.Runner, logger *slog.Logge
 		{"runtime base", cfg.RuntimeBase},
 		{"plugins root", cfg.PluginsRoot},
 		{"staging root", cfg.StagingRoot},
+		{"backup stage root", cfg.BackupStageRoot},
 		{"plugin data root", cfg.DataRoot},
 		{"private plugin data root", cfg.PrivateDataRoot},
 	} {
@@ -293,6 +309,17 @@ func (s *helperServer) serveConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	// --- 同一 reader 监听：预读第二帧已被拒绝，后续字节/断开取消原执行 ----------
+	if req.Legacy != nil && req.Legacy.Op == sandbox.HelperOpBackupPluginData {
+		cancel()
+		interrupt()
+		rctx, cancel = context.WithTimeout(ctx, pluginBackupTimeout)
+		defer cancel()
+		if dl, ok := rctx.Deadline(); ok {
+			_ = conn.SetDeadline(dl)
+		}
+		interrupt = context.AfterFunc(rctx, func() { _ = conn.SetDeadline(time.Now()) })
+		defer interrupt()
+	}
 	execution, finish := sandbox.WatchHelperReaderDisconnect(rctx, conn, reader)
 	defer finish()
 	var resp any
@@ -336,6 +363,10 @@ func (s *helperServer) handle(ctx context.Context, req sandbox.HelperRequest) (r
 		return s.publish(ctx, req)
 	case sandbox.HelperOpLogs:
 		return s.logs(ctx, req)
+	case sandbox.HelperOpBackupPluginData:
+		return s.backupPluginData(ctx, req)
+	case sandbox.HelperOpBackupPluginCleanup:
+		return s.cleanupPluginBackup(ctx, req)
 	case sandbox.HelperOpReload:
 		return s.reload(ctx)
 	case sandbox.HelperOpPing:
@@ -398,8 +429,16 @@ func (s *helperServer) remove(ctx context.Context, req sandbox.HelperRequest) sa
 		return helperFailure(problem.Unavailable,
 			fmt.Sprintf("The systemd state of plugin %s could not be read; nothing was removed.", req.ID))
 	case pid > 0:
-		return helperFailure(problem.PreconditionFailed,
-			fmt.Sprintf("Plugin %s is still running (main PID %d); its files cannot be removed.", req.ID, pid))
+		// Allow pruning an obsolete inactive version directory while the newer
+		// version is running only when KeepUnit=true, PurgeData=false, and we
+		// positively verify that neither the unit ExecStart nor the running
+		// process executable points into the target version tree.
+		canPruneInactive := req.KeepUnit && !req.PurgeData && len(paths) == 1 && req.Version != "" &&
+			!s.runningUsesVersionDir(ctx, req.ID, pid, paths[0])
+		if !canPruneInactive {
+			return helperFailure(problem.PreconditionFailed,
+				fmt.Sprintf("Plugin %s is still running (main PID %d); its files cannot be removed.", req.ID, pid))
+		}
 	}
 	res := sandbox.RemoveResult{ID: req.ID}
 	var warnings []string
@@ -441,10 +480,12 @@ func (s *helperServer) remove(ctx context.Context, req sandbox.HelperRequest) sa
 			return helperFailure(problem.Internal, fmt.Sprintf("The persistent data of plugin %s could not be removed.", req.ID))
 		}
 	}
-	if err := s.daemonReload(ctx); err != nil {
-		s.logger.Error("systemctl daemon-reload failed after remove", "id", req.ID, "err", err)
-		return helperFailure(problem.Internal,
-			"The files were removed, but systemd could not reload its unit definitions.")
+	if !req.KeepUnit {
+		if err := s.daemonReload(ctx); err != nil {
+			s.logger.Error("systemctl daemon-reload failed after remove", "id", req.ID, "err", err)
+			return helperFailure(problem.Internal,
+				"The files were removed, but systemd could not reload its unit definitions.")
+		}
 	}
 	return sandbox.HelperResponse{OK: true, Remove: &res, Warnings: warnings}
 }
@@ -1197,6 +1238,61 @@ func (s *helperServer) mainPID(ctx context.Context, id string) (int, error) {
 	return parseMainPID(out)
 }
 
+// runningUsesVersionDir conservatively checks whether the running plugin unit
+// or main process executes from versionDir. Returns true on any uncertainty so
+// an active version directory is never pruned out from under a live process.
+func (s *helperServer) runningUsesVersionDir(ctx context.Context, id string, pid int, versionDir string) bool {
+	service, _, err := sandbox.UnitNames(id)
+	if err != nil {
+		return true
+	}
+	cleanTarget := filepath.Clean(versionDir)
+	out, err := s.runSystemctl(ctx, "show", "-p", "ExecStart", "--value", service)
+	if err != nil {
+		return true
+	}
+	execText := strings.TrimSpace(string(out))
+	if execText == "" || matchesVersionPath(execText, cleanTarget) {
+		return true
+	}
+	if pid > 0 {
+		if exe, rerr := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); rerr == nil {
+			exe = strings.TrimSuffix(filepath.Clean(exe), " (deleted)")
+			if pathWithin(cleanTarget, exe) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchesVersionPath(execText, versionDir string) bool {
+	clean := filepath.Clean(versionDir)
+	if clean == "" || clean == "." || clean == "/" {
+		return true
+	}
+	start := 0
+	for {
+		idx := strings.Index(execText[start:], clean)
+		if idx < 0 {
+			return false
+		}
+		absIdx := start + idx
+		beforeOK := absIdx == 0 || !isPathTokenChar(execText[absIdx-1])
+		afterIdx := absIdx + len(clean)
+		afterOK := afterIdx == len(execText) || execText[afterIdx] == '/' || !isPathTokenChar(execText[afterIdx])
+		if beforeOK && afterOK {
+			return true
+		}
+		start = absIdx + len(clean)
+	}
+}
+
+func isPathTokenChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9') || b == '.' || b == '_' || b == '-' || b == '+' || b == '/'
+}
+
 // daemonReload asks systemd to re-read the unit directory.
 func (s *helperServer) daemonReload(ctx context.Context) error {
 	out, err := s.runSystemctl(ctx, "daemon-reload")
@@ -1267,10 +1363,13 @@ func checkSystemctlArgs(args []string) error {
 		}
 		return nil
 	case "show":
-		if len(args) != 4 || args[1] != "-p" || args[2] != "MainPID" {
-			return fmt.Errorf("sandbox: systemctl show is only allowed as show -p MainPID <unit>")
+		if len(args) == 4 && args[1] == "-p" && args[2] == "MainPID" {
+			return checkPluginUnit(args[3], ".service")
 		}
-		return checkPluginUnit(args[3], ".service")
+		if len(args) == 5 && args[1] == "-p" && args[2] == "ExecStart" && args[3] == "--value" {
+			return checkPluginUnit(args[4], ".service")
+		}
+		return fmt.Errorf("sandbox: systemctl show is only allowed as show -p MainPID <unit> or show -p ExecStart --value <unit>")
 	case "enable", "disable":
 		if len(args) != 3 || args[1] != "--now" {
 			return fmt.Errorf("sandbox: systemctl %s is only allowed as %s --now <socket>", args[0], args[0])

@@ -6,8 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
+	"github.com/qwq-panel/qwq/internal/actor"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 	"github.com/qwq-panel/qwq/internal/storage"
 )
@@ -477,7 +480,135 @@ func (u *Updater) stepCommit(ctx context.Context, p *plan) error {
 	if v, lerr := u.loadVersion(ctx, p.saga.PluginID, p.saga.ToVersion); lerr == nil {
 		u.setActiveVersion(v)
 	}
+	// Best-effort GC of obsolete inactive versions beyond the single retained
+	// rollback version so repeated upgrades never exhaust disk on small VPSs.
+	u.pruneObsoleteVersions(ctx, p.saga.PluginID, 1)
 	return nil
+}
+
+// RetainedPluginVersion describes an installed version row considered for
+// post-upgrade garbage collection.
+type RetainedPluginVersion struct {
+	Version       string
+	Active        bool
+	InstalledAt   time.Time
+	ActivatedAt   time.Time
+	Status        VersionStatus
+	InstallStatus InstallStatus
+}
+
+func isInProgressVersionStatus(st VersionStatus) bool {
+	switch st {
+	case VersionStaged, VersionStarting, VersionCandidate, VersionDraining:
+		return true
+	default:
+		return false
+	}
+}
+
+// SelectObsoletePluginVersionsToPrune keeps every Active version, every
+// in-progress saga version, plus the newest keepInactive (at least 1)
+// rollback-eligible inactive versions ordered by recency. Never-activated
+// terminal failed/rejected versions do not consume the rollback slot and are
+// pruned separately.
+func SelectObsoletePluginVersionsToPrune(versions []RetainedPluginVersion, keepInactive int) []string {
+	if keepInactive < 1 {
+		keepInactive = 1
+	}
+	rollbackEligible := make([]RetainedPluginVersion, 0, len(versions))
+	staleFailed := make([]RetainedPluginVersion, 0)
+	for _, v := range versions {
+		if v.Active || strings.TrimSpace(v.Version) == "" {
+			continue
+		}
+		if isInProgressVersionStatus(v.Status) {
+			continue
+		}
+		// Never-activated rejected/rolled-back rows are not rollback targets;
+		// prune them separately so failed upgrades never evict the real rollback version.
+		if (v.Status == VersionRejected || v.Status == VersionRolledBack) && v.ActivatedAt.IsZero() {
+			staleFailed = append(staleFailed, v)
+			continue
+		}
+		if v.InstallStatus != "" && v.InstallStatus != InstallInstalled {
+			continue
+		}
+		rollbackEligible = append(rollbackEligible, v)
+	}
+	sortByRecency := func(list []RetainedPluginVersion) {
+		sort.Slice(list, func(i, j int) bool {
+			ti := list[i].ActivatedAt
+			if ti.IsZero() {
+				ti = list[i].InstalledAt
+			}
+			tj := list[j].ActivatedAt
+			if tj.IsZero() {
+				tj = list[j].InstalledAt
+			}
+			if !ti.Equal(tj) {
+				return ti.After(tj)
+			}
+			return list[i].Version > list[j].Version
+		})
+	}
+	sortByRecency(rollbackEligible)
+	sortByRecency(staleFailed)
+
+	var toPrune []string
+	if len(rollbackEligible) > keepInactive {
+		for _, old := range rollbackEligible[keepInactive:] {
+			toPrune = append(toPrune, old.Version)
+		}
+	}
+	for _, bad := range staleFailed {
+		toPrune = append(toPrune, bad.Version)
+	}
+	return toPrune
+}
+
+func (u *Updater) pruneObsoleteVersions(ctx context.Context, pluginID string, keepInactive int) {
+	pruner, ok := u.install.(VersionPruner)
+	if !ok {
+		return
+	}
+	versions, err := u.listVersions(ctx, pluginID)
+	if err != nil {
+		u.log.WarnContext(ctx, "plugin version GC could not list versions", "plugin", pluginID, "err", err)
+		return
+	}
+	retained := make([]RetainedPluginVersion, 0, len(versions))
+	for _, v := range versions {
+		retained = append(retained, RetainedPluginVersion{
+			Version:       v.Version,
+			Active:        v.Active,
+			InstalledAt:   v.InstalledAt,
+			ActivatedAt:   v.ActivatedAt,
+			Status:        v.Status,
+			InstallStatus: v.InstallStatus,
+		})
+	}
+	obsolete := SelectObsoletePluginVersionsToPrune(retained, keepInactive)
+	if len(obsolete) == 0 {
+		return
+	}
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	for _, oldVer := range obsolete {
+		if err := pruner.PruneVersion(pctx, pluginID, oldVer); err != nil {
+			u.log.WarnContext(ctx, "plugin version GC failed to remove obsolete tree",
+				"plugin", pluginID, "version", oldVer, "err", err)
+			continue
+		}
+		if err := u.db.Update(pctx, func(tx *storage.Tx) error {
+			tx.SetOrigin(storage.Origin{Actor: actor.SystemActor("updater")})
+			return deleteInactiveVersionTx(pctx, tx, pluginID, oldVer)
+		}); err != nil {
+			u.log.WarnContext(ctx, "plugin version GC failed to delete obsolete DB row",
+				"plugin", pluginID, "version", oldVer, "err", err)
+			continue
+		}
+		u.log.InfoContext(ctx, "pruned obsolete plugin version", "plugin", pluginID, "version", oldVer)
+	}
 }
 
 // abort undoes a failed saga as far as it can, then records the terminal

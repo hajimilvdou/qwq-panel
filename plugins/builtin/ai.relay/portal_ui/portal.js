@@ -124,26 +124,33 @@ document.getElementById('btn-redeem').onclick = async () => {
   }
 };
 
-function renderClientSnippet(plainOrMaskedKey) {
+function renderClientSnippet(plainKey, tokenHint = '') {
   const box = document.getElementById('snippet-box');
   const pre = document.getElementById('snippet-code');
   box.hidden = false;
-  pre.textContent = [
+  const effectiveKey = plainKey || 'sk-qwq-YOUR_API_KEY';
+  const lines = [];
+  if (!plainKey && tokenHint) {
+    lines.push(`# 注意：出于安全原因旧令牌不再回传明文，请将下方 sk-qwq-YOUR_API_KEY 替换为创建 ${tokenHint} 时保存的完整密钥`);
+    lines.push('');
+  }
+  lines.push(
     '# 1. OpenAI / Cherry Studio / NextChat / Cursor 通用接入',
     `OPENAI_BASE_URL="${apiRootOrigin}/v1"`,
-    `OPENAI_API_KEY="${plainOrMaskedKey}"`,
+    `OPENAI_API_KEY="${effectiveKey}"`,
     '',
     '# 2. Claude Code 原生直连 (~/.claude/settings.json -> env)',
     '{',
     '  "env": {',
     `    "ANTHROPIC_BASE_URL": "${apiRootOrigin}",`,
-    `    "ANTHROPIC_AUTH_TOKEN": "${plainOrMaskedKey}"`,
+    `    "ANTHROPIC_AUTH_TOKEN": "${effectiveKey}"`,
     '  }',
     '}',
     '',
     '# 3. OpenAI Codex CLI (~/.codex/config.toml) Responses 接入',
     `base_url = "${apiRootOrigin}/v1"`,
-  ].join('\n');
+  );
+  pre.textContent = lines.join('\n');
 }
 
 document.getElementById('btn-create-tok').onclick = async () => {
@@ -195,7 +202,7 @@ async function loadDashboard() {
     cfgBtn.type = 'button';
     cfgBtn.className = 'btn outline';
     cfgBtn.textContent = '生成接入脚本';
-    cfgBtn.onclick = () => renderClientSnippet(t.key_masked);
+    cfgBtn.onclick = () => renderClientSnippet('', `「${t.name}」(${t.key_masked})`);
     actionWrap.appendChild(cfgBtn);
 
     const revokeBtn = document.createElement('button');
@@ -261,6 +268,35 @@ if (hashParams.get('relay_session')) {
   sessionStorage.setItem(SESSION_KEY, sessionToken);
   history.replaceState(null, '', window.location.pathname);
 }
+
+async function loadPublicMeta() {
+  try {
+    const res = await fetch(`${basePath}/api/public/meta`);
+    if (!res.ok) return;
+    const meta = await res.json();
+    if (meta.site_title) {
+      document.title = meta.site_title;
+      const el = document.getElementById('portal-title');
+      if (el) el.textContent = meta.site_title;
+    }
+    if (meta.site_announcement) {
+      const el = document.getElementById('portal-desc');
+      if (el) el.textContent = meta.site_announcement;
+    }
+    const inviteTab = document.querySelector('#auth-tabs button[data-mode="invite"]');
+    if (inviteTab) inviteTab.hidden = meta.allow_invite_signup === false;
+    const emailTab = document.querySelector('#auth-tabs button[data-mode="email"]');
+    if (emailTab) emailTab.hidden = meta.allow_email_signup === false;
+    const ldBtn = document.getElementById('btn-linuxdo-oauth');
+    if (ldBtn) ldBtn.hidden = meta.allow_linuxdo_signup === false;
+    const checkinBtn = document.getElementById('btn-checkin');
+    if (checkinBtn) checkinBtn.hidden = meta.checkin_enabled === false;
+  } catch (_) {
+    // 忽略元数据加载失败，保持默认文案。
+  }
+}
+
+void loadPublicMeta();
 
 if (sessionToken) {
   toggleViews(true);

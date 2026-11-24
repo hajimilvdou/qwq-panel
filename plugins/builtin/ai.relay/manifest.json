@@ -18,8 +18,8 @@
   "target": "linux/amd64",
   "entrypoint": "bin/plugin",
   "files": {
-    "attestations/sbom.spdx.json": "sha256:543c26aedc5150cfd58113d5ea7f5498a5f19649161c9de4b0e60525f631ef69",
     "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "attestations/sbom.spdx.json": "sha256:543c26aedc5150cfd58113d5ea7f5498a5f19649161c9de4b0e60525f631ef69",
     "schemas/config.schema.json": "sha256:8ba8f24a36443c97df95a135e878f46dba2ce43e2d36cebbe6141e6ab44457c3",
     "schemas/relay.channels.list.request.json": "sha256:b6cb0d78770a3a9a7bbc7177af4505accd98d5b0ef8f27332418a024e2449dd7",
     "schemas/relay.channels.list.response.json": "sha256:61db70fb4714c266d8b07c6ccff34153e9559cc87a91c8de15e83b98a3e48bd1",
@@ -33,6 +33,8 @@
     "schemas/relay.codes.generate.response.json": "sha256:cad92840031d1ae86ba5dbf4f3549bc4f2ead8baee73bc98852d835c4a373e1b",
     "schemas/relay.overview.request.json": "sha256:1a1552e71c83d586927488c5a6f7e54e29522fc0b8f0315b56cebc7af001f612",
     "schemas/relay.overview.response.json": "sha256:bb5c2b625dfbb7df2792cbb34d4e0b0b78de0986623d464c08db30a229e53d45",
+    "schemas/relay.pricings.list.request.json": "sha256:ca6660f2d9e1ad13dbf1925fe2f7d3c133bf81af7702cf4bce380b675da4fcb5",
+    "schemas/relay.pricings.list.response.json": "sha256:a921e1cfea228fc351ca23f82724cc629cfa1c1552b7dd371ea5700af380491f",
     "schemas/relay.pricings.upsert.request.json": "sha256:71bac3ae5d9c84452c8f2587227619f3ec9beb8fdfd8ad85a0a7cfeb402ceeb9",
     "schemas/relay.pricings.upsert.response.json": "sha256:79ac462a08f203199cd8deff7f5fff7242fc3f3f5250f46205663de862065949",
     "schemas/relay.settings.get.request.json": "sha256:7d08ea0622228e01ef39b70e39f09d2036d156c177546d179d85a8d2f754c6dd",
@@ -45,9 +47,9 @@
     "schemas/relay.users.create.response.json": "sha256:db791ddad6abd7d2f5de0109f5b24f128a93a41af5a8ae110532ee47f0ccd63b",
     "schemas/relay.users.list.request.json": "sha256:1c7603b39dccd443ebb27ada12c2e70ab4902abfab9a2a2a710d9aaf45a6d579",
     "schemas/relay.users.list.response.json": "sha256:8c02e068c4bd7ba3c171e24257d2ee4336194ac3490037b8ff89e57aa8665a18",
-    "ui/index.html": "sha256:57823f170af2e00a10f138bf74a7f1337a04923a232c31a2ad6cf4dbffe0d067",
-    "ui/plugin.css": "sha256:f98023b80f9659fce4abdde1d87d8e078d724322373eda64413cdad7e8d2291c",
-    "ui/plugin.js": "sha256:58c030becc99b7c67b872b042c8c8bde27d2e1660573b06459cdf907b77d533b"
+    "ui/index.html": "sha256:c28fb0a00518c1bc40a7b85019094355dcc6c469e986eb875ae22ddaadad9af4",
+    "ui/plugin.css": "sha256:9c1f27b2be24ce090ee05d39be5103b091650fe5acf613c84b3e8988425935ed",
+    "ui/plugin.js": "sha256:d1da11ef56a5d811dfa774fbd0576c88438a5f83b78b64ee9ab293bb5c725d60"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -64,7 +66,8 @@
     "schema_version": "1",
     "minimum_rollback_version": "0.1.0",
     "backup_paths": [
-      "relay.db"
+      "relay.db",
+      "relay.key"
     ]
   },
   "config": {
@@ -269,6 +272,25 @@
       ],
       "request_schema": "schemas/relay.channels.remove.request.json",
       "response_schema": "schemas/relay.channels.remove.response.json"
+    },
+    {
+      "name": "relay.pricings.list",
+      "api_version": "v1",
+      "permission": "ai.relay:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 8000,
+      "summary": "列出全部已持久化的模型统计计费倍率与缓存折扣",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/relay.pricings.list.request.json",
+      "response_schema": "schemas/relay.pricings.list.response.json"
     },
     {
       "name": "relay.pricings.upsert",

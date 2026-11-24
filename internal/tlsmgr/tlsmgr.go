@@ -87,13 +87,14 @@ type Manager struct {
 	mode    string
 	dataDir string
 	// dir is dataDir/tls for self_signed and dataDir/acme for acme.
-	dir    string
-	listen string
-	sans   sanSet
-	clock  clock.Clock
-	log    *slog.Logger
-	addrs  func() ([]net.Addr, error)
-	check  time.Duration
+	dir     string
+	listen  string
+	origins []string
+	sans    sanSet
+	clock   clock.Clock
+	log     *slog.Logger
+	addrs   func() ([]net.Addr, error)
+	check   time.Duration
 
 	// mu serializes generation, renewal and Reload; current publishes the
 	// certificate to concurrent handshakes.
@@ -136,6 +137,7 @@ func New(o Options) (*Manager, error) {
 		mode:    o.TLS.Mode,
 		dataDir: o.DataDir,
 		listen:  o.Listen,
+		origins: append([]string(nil), o.PublicOrigins...),
 		clock:   o.Clock,
 		log:     o.Logger,
 		addrs:   o.LocalAddrs,
@@ -227,6 +229,27 @@ func (m *Manager) Fingerprint() string {
 		return ""
 	}
 	return c.fp
+}
+
+// SetListen updates the listener host:port for self-signed certificate SAN
+// coverage (for example when the operator hot-switches from 127.0.0.1 to
+// 0.0.0.0 or ::, or on startup after reading SQLite panel_access_settings).
+// Existing certificates that already cover the required SANs and remain fresh
+// are kept unchanged so their fingerprint stays stable. It is a no-op outside
+// self_signed mode.
+func (m *Manager) SetListen(listen string) error {
+	if m == nil || m.mode != config.TLSSelfSigned {
+		return nil
+	}
+	nextSANs, err := requiredSANs(listen, m.origins, m.addrs)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listen = listen
+	m.sans = nextSANs
+	return m.ensureSelfSignedLocked()
 }
 
 // Reload re-reads the self-signed certificate from disk and swaps it in without

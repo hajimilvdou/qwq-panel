@@ -74,7 +74,11 @@
                 "A",
                 "AAAA",
                 "CNAME",
-                "TXT"
+                "TXT",
+                "MX",
+                "CAA",
+                "SRV",
+                "NS"
               ],
               "description": "受支持的记录类型"
             },

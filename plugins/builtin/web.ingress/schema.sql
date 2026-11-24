@@ -36,3 +36,13 @@ CREATE TABLE IF NOT EXISTS ingress_snapshots (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_ingress_snapshots_rev ON ingress_snapshots(revision DESC);
+
+CREATE TABLE IF NOT EXISTS ingress_sni_passthrough (
+    id            TEXT PRIMARY KEY,
+    sni_pattern   TEXT NOT NULL UNIQUE,
+    upstream_addr TEXT NOT NULL,
+    enabled       INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    notes         TEXT NOT NULL DEFAULT '',
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+) STRICT;

@@ -56,6 +56,8 @@ var BlockedLinuxCapabilities = []string{
 	"CAP_SYS_PTRACE",
 	"SYS_BOOT",
 	"CAP_SYS_BOOT",
+	"SYS_TIME",
+	"CAP_SYS_TIME",
 	"DAC_READ_SEARCH",
 	"CAP_DAC_READ_SEARCH",
 	"DAC_OVERRIDE",
@@ -64,6 +66,16 @@ var BlockedLinuxCapabilities = []string{
 	"CAP_BPF",
 	"PERFMON",
 	"CAP_PERFMON",
+	"CHECKPOINT_RESTORE",
+	"CAP_CHECKPOINT_RESTORE",
+	"MAC_ADMIN",
+	"CAP_MAC_ADMIN",
+	"MAC_OVERRIDE",
+	"CAP_MAC_OVERRIDE",
+	"AUDIT_CONTROL",
+	"CAP_AUDIT_CONTROL",
+	"LINUX_IMMUTABLE",
+	"CAP_LINUX_IMMUTABLE",
 }
 
 // ValidateComposeYAMLStrict 使用基于缩进栈的键值/列表令牌状态机（零外部依赖，且免疫冒号前后空格、多行值、YAML 布尔别名 yes/on/true、路径 // 与 .. 折叠、变量插值、转义序列、内联/跨行流式语法及高危指令绕过）
@@ -206,19 +218,20 @@ func checkComposeDirective(lineNo int, keyPath []string, key, rawVal string, war
 
 	switch key {
 	case "driver_opts", "build", "extends", "include", "secrets", "configs",
-		"env_file", "cgroup", "cgroup_parent", "uts", "userns_mode", "volumes_from":
+		"env_file", "cgroup", "cgroup_parent", "uts", "userns_mode", "volumes_from",
+		"device_cgroup_rules":
 		return fmt.Errorf("第 %d 行：出于安全限制，受管 Compose 禁止使用 %s 指令", lineNo, key)
 	case "privileged":
 		if isYAMLTruthy(lowVal) || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
 			return fmt.Errorf("第 %d 行：严禁部署 privileged 特权容器", lineNo)
 		}
 	case "pid":
-		if lowVal == "host" || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
-			return fmt.Errorf("第 %d 行：严禁使用 pid: host 共享宿主机进程命名空间", lineNo)
+		if lowVal == "host" || strings.HasPrefix(lowVal, "container:") || strings.HasPrefix(lowVal, "service:") || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
+			return fmt.Errorf("第 %d 行：严禁使用 pid: %s 共享宿主机或其他容器进程命名空间", lineNo, val)
 		}
 	case "ipc":
-		if lowVal == "host" || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
-			return fmt.Errorf("第 %d 行：严禁使用 ipc: host 共享宿主机 IPC 命名空间", lineNo)
+		if lowVal == "host" || strings.HasPrefix(lowVal, "container:") || strings.HasPrefix(lowVal, "service:") || isYAMLBlockScalar(rawVal) || strings.HasPrefix(val, "[") {
+			return fmt.Errorf("第 %d 行：严禁使用 ipc: %s 共享宿主机或其他容器 IPC 命名空间", lineNo, val)
 		}
 	case "devices":
 		if val != "" && val != "[]" {
@@ -301,8 +314,8 @@ func validateHostBindPath(lineNo int, src string) error {
 		return fmt.Errorf("第 %d 行：严禁将宿主机根目录 / 挂载进容器", lineNo)
 	}
 	for _, blocked := range ForbiddenHostMountPrefixes {
-		if cleaned == blocked || strings.HasPrefix(cleaned, blocked+"/") {
-			return fmt.Errorf("第 %d 行：严禁挂载受保护的宿主机敏感路径 %q", lineNo, cleaned)
+		if cleaned == blocked || strings.HasPrefix(cleaned, blocked+"/") || strings.HasPrefix(blocked, cleaned+"/") {
+			return fmt.Errorf("第 %d 行：严禁挂载受保护的宿主机敏感路径或其祖先目录 %q", lineNo, cleaned)
 		}
 	}
 	return nil
@@ -323,6 +336,34 @@ func isBlockedCap(capName string) bool {
 }
 
 func splitYAMLKeyValue(s string) (key, val string, ok bool) {
+	// YAML 1.2 允许带引号的键名紧跟冒号且后无空格（例如 "privileged":true 或 'pid':host）
+	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') {
+		q := s[0]
+		end := -1
+		for i := 1; i < len(s); i++ {
+			if s[i] == q {
+				if q == '\'' && i+1 < len(s) && s[i+1] == '\'' {
+					i++
+					continue
+				}
+				end = i
+				break
+			}
+		}
+		if end > 0 {
+			rest := strings.TrimLeft(s[end+1:], " \t")
+			if strings.HasPrefix(rest, ":") {
+				rawKey := s[1:end]
+				if q == '\'' {
+					rawKey = strings.ReplaceAll(rawKey, "''", "'")
+				}
+				k := strings.ToLower(strings.TrimSpace(rawKey))
+				if k != "" && !strings.ContainsAny(k, " \t") {
+					return k, strings.TrimSpace(rest[1:]), true
+				}
+			}
+		}
+	}
 	idx := strings.IndexByte(s, ':')
 	if idx <= 0 {
 		return "", "", false

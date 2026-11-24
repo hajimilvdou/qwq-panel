@@ -97,7 +97,9 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 		"docker.container.limits",
 		"docker.container.remove",
 		"docker.images.prune",
-		"docker.compose.deploy",
+		"docker.images.remove",
+		"docker.volumes.prune",
+		"docker.volumes.remove",
 		"docker.compose.remove",
 		"docker.network.list",
 		"docker.network.create",
@@ -110,6 +112,8 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 			return inst.Invoke(c, req)
 		})
 	}
+	inst.HandleJob("docker.compose.deploy", inst.handleComposeDeployJob)
+	inst.HandleJob("docker.images.pull", inst.handleImagesPullJob)
 	inst.HandleJob("docker.container.ports.apply", inst.handleContainerPortsApplyJob)
 	inst.HandleJob("docker.container.proxy.upsert", inst.handleContainerProxyUpsertJob)
 	inst.HandlePlan("docker.compose.deploy", inst.planComposeDeploy)
@@ -223,6 +227,12 @@ func (i *instance) Invoke(ctx context.Context, req pluginsdk.Request) (pluginsdk
 		return i.handleContainerRemove(ctx, req.Payload)
 	case "docker.images.prune":
 		return i.handleImagesPrune(ctx, req.Payload)
+	case "docker.images.remove":
+		return i.handleImagesRemove(ctx, req.Payload)
+	case "docker.volumes.prune":
+		return i.handleVolumesPrune(ctx)
+	case "docker.volumes.remove":
+		return i.handleVolumesRemove(ctx, req.Payload)
 	case "docker.compose.deploy":
 		return i.handleComposeDeploy(ctx, req.Payload)
 	case "docker.compose.remove":
@@ -309,12 +319,16 @@ func (i *instance) handleOverview(ctx context.Context) (pluginsdk.Response, erro
 	info := dk.probeInfo(ctx)
 	containers := make([]ContainerSummary, 0)
 	images := make([]ImageSummary, 0)
+	volumes := make([]VolumeSummary, 0)
 	if info.Available {
 		if list, err := dk.listContainers(ctx); err == nil {
 			containers = list
 		}
 		if imgs, err := dk.listImages(ctx); err == nil {
 			images = imgs
+		}
+		if vols, err := dk.listVolumes(ctx); err == nil {
+			volumes = vols
 		}
 	}
 	stacks, err := i.stacks.listStacks(ctx)
@@ -338,6 +352,7 @@ func (i *instance) handleOverview(ctx context.Context) (pluginsdk.Response, erro
 		"compose_available": composeAvail,
 		"containers":        containers,
 		"images":            images,
+		"volumes":           volumes,
 		"stacks":            stacks,
 		"ingress_links":     ingressLinks,
 		"proxy_links":       ingressLinks,
@@ -549,6 +564,88 @@ func (i *instance) handleImagesPrune(ctx context.Context, payload []byte) (plugi
 	return jsonResp(res)
 }
 
+func (i *instance) handleImagesPullJob(ctx context.Context, req pluginsdk.Request, progress pluginsdk.Progress) (pluginsdk.Result, error) {
+	var body struct {
+		Image string `json:"image"`
+	}
+	if err := json.Unmarshal(req.Payload, &body); err != nil || strings.TrimSpace(body.Image) == "" {
+		return pluginsdk.Result{}, pluginsdk.Errorf("INVALID_ARGUMENT", "缺少镜像名称 image")
+	}
+	ref, err := validateImagePullRef(body.Image)
+	if err != nil {
+		return pluginsdk.Result{}, pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
+	}
+	if progress != nil {
+		_ = progress(pluginsdk.ProgressUpdate{Percent: 15, Step: "pull", Message: "正在拉取镜像 " + ref + "（大镜像最长支持 10 分钟）"})
+	}
+	statusText, err := i.currentDocker().pullImage(ctx, ref)
+	if err != nil {
+		return pluginsdk.Result{}, pluginsdk.Errorf("FAILED_PRECONDITION", "拉取镜像失败: %s", err.Error())
+	}
+	if progress != nil {
+		_ = progress(pluginsdk.ProgressUpdate{Percent: 100, Step: "done", Message: "镜像拉取完成"})
+	}
+	raw, err := json.Marshal(map[string]any{"image": ref, "pulled": true, "status": statusText})
+	if err != nil {
+		return pluginsdk.Result{}, pluginsdk.Errorf("INTERNAL", "序列化响应失败")
+	}
+	return pluginsdk.Result{Payload: raw}, nil
+}
+
+func (i *instance) handleImagesRemove(ctx context.Context, payload []byte) (pluginsdk.Response, error) {
+	var req struct {
+		ID    string `json:"id"`
+		Force bool   `json:"force"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil || strings.TrimSpace(req.ID) == "" {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "缺少镜像 id")
+	}
+	ref, err := validateImageRef(req.ID)
+	if err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
+	}
+	if err := i.currentDocker().removeImage(ctx, ref, req.Force); err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("FAILED_PRECONDITION", "删除镜像失败: %s", err.Error())
+	}
+	return jsonResp(map[string]any{"removed": true, "id": ref})
+}
+
+func (i *instance) handleVolumesPrune(ctx context.Context) (pluginsdk.Response, error) {
+	res, err := i.currentDocker().pruneVolumes(ctx)
+	if err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("UNAVAILABLE", "%s", err.Error())
+	}
+	return jsonResp(res)
+}
+
+func (i *instance) handleVolumesRemove(ctx context.Context, payload []byte) (pluginsdk.Response, error) {
+	var req struct {
+		Name  string `json:"name"`
+		Force bool   `json:"force"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil || strings.TrimSpace(req.Name) == "" {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "缺少存储卷名称 name")
+	}
+	if err := i.currentDocker().removeVolume(ctx, req.Name, req.Force); err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("FAILED_PRECONDITION", "删除存储卷失败: %s", err.Error())
+	}
+	return jsonResp(map[string]any{"removed": true, "name": strings.TrimSpace(req.Name)})
+}
+
+func (i *instance) handleComposeDeployJob(ctx context.Context, req pluginsdk.Request, progress pluginsdk.Progress) (pluginsdk.Result, error) {
+	if progress != nil {
+		_ = progress(pluginsdk.ProgressUpdate{Percent: 10, Step: "validate", Message: "正在执行 Compose YAML 安全扫描并准备部署"})
+	}
+	resp, err := i.handleComposeDeploy(ctx, req.Payload)
+	if err != nil {
+		return pluginsdk.Result{}, err
+	}
+	if progress != nil {
+		_ = progress(pluginsdk.ProgressUpdate{Percent: 100, Step: "done", Message: "Compose 编排栈部署完成"})
+	}
+	return pluginsdk.Result(resp), nil
+}
+
 func (i *instance) handleComposeDeploy(ctx context.Context, payload []byte) (pluginsdk.Response, error) {
 	var req struct {
 		Name        string `json:"name"`
@@ -608,7 +705,7 @@ func (i *instance) handleComposeDeploy(ctx context.Context, payload []byte) (plu
 	if err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
 	}
-	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	args := append(append([]string{}, baseArgs...), "-f", filepath.Join(st.WorkDir, "compose.yml"), "-p", "qwq_"+st.Name, "up", "-d", "--remove-orphans")
 	cmd := exec.CommandContext(cctx, bin, args...)
@@ -1023,7 +1120,7 @@ func (i *instance) runComposeUp(ctx context.Context, stackName, yamlContent stri
 	if err != nil {
 		return pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
 	}
-	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	args := append(append([]string{}, baseArgs...), "-f", filepath.Join(st.WorkDir, "compose.yml"), "-p", "qwq_"+st.Name, "up", "-d", "--remove-orphans")
 	cmd := exec.CommandContext(cctx, bin, args...)

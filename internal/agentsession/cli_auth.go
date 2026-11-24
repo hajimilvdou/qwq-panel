@@ -215,6 +215,53 @@ func (m *CLIAuthManager) PersistentEnvFor(core CoreName) []string {
 	return env
 }
 
+// SessionStateEnvFor returns a persistent per-session isolated CLI config/state
+// directory under <DataDir>/agent-homes/_sessions/<sessionID>/<core> so external
+// CLIs running in global-provider mode can persist and resume multi-turn state
+// across turns without sharing host OAuth credentials.
+func (m *CLIAuthManager) SessionStateEnvFor(core CoreName, sessionID string) []string {
+	if m == nil || m.rootDir == "" {
+		return nil
+	}
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" || !externalSessionIDPattern.MatchString(sid) || strings.Contains(sid, "..") || strings.ContainsAny(sid, `/\`) {
+		return nil
+	}
+	if _, ok := authSpecFor(core); !ok {
+		return nil
+	}
+	homeDir := filepath.Join(m.rootDir, "_sessions", sid, string(core))
+	for _, sub := range []string{
+		"",
+		"data",
+		filepath.Join("data", "opencode"),
+		"cache",
+		filepath.Join("config", "codex"),
+		filepath.Join("config", "claude"),
+		filepath.Join("config", "opencode"),
+	} {
+		target := filepath.Join(homeDir, sub)
+		if err := os.MkdirAll(target, 0o700); err != nil {
+			return nil
+		}
+		_ = os.Chmod(target, 0o700)
+	}
+	return coreAuthEnv(homeDir, core)
+}
+
+// RemoveSessionState removes the isolated per-session CLI state directory when
+// a session is deleted.
+func (m *CLIAuthManager) RemoveSessionState(sessionID string) {
+	if m == nil || m.rootDir == "" {
+		return
+	}
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" || !externalSessionIDPattern.MatchString(sid) || strings.Contains(sid, "..") || strings.ContainsAny(sid, `/\`) {
+		return
+	}
+	_ = os.RemoveAll(filepath.Join(m.rootDir, "_sessions", sid))
+}
+
 func coreAuthEnv(homeDir string, core CoreName) []string {
 	switch core {
 	case CoreCodex:

@@ -11,6 +11,7 @@
   import { dock } from '$lib/ai/dock.svelte';
   import { sessionsResource } from '$lib/ai/agent-sessions.svelte';
   import { useResource } from '$lib/resource.svelte';
+  import { session } from '$lib/session.svelte';
   import Conversation from './Conversation.svelte';
   import NewSession from './NewSession.svelte';
   import SessionList from './SessionList.svelte';
@@ -21,15 +22,18 @@
 
   const list = useResource(sessionsResource);
   const id = $derived(params.sessionId);
+  const isAdmin = $derived(session.role === 'admin');
   let drawer = $state(false);
   let narrow = $state(false);
   let workspaceOpen = $state(false);
   let workspaceTab = $state<WorkspaceTab>('prompts');
 
   function openWorkspace(tab: WorkspaceTab = 'prompts') {
+    if (!isAdmin) return;
     workspaceTab = tab;
     workspaceOpen = true;
   }
+  const workspaceTrigger = $derived(isAdmin ? openWorkspace : undefined);
 
   $effect(() => {
     dock.chatSuppressed = true;
@@ -47,7 +51,7 @@
 
 <div class="agent">
   {#if !narrow}
-    <aside class="side"><SessionList {list} current={id} onopenworkspace={openWorkspace} /></aside>
+    <aside class="side"><SessionList {list} current={id} onopenworkspace={workspaceTrigger} /></aside>
   {/if}
   <div class="main">
     {#key id}
@@ -55,13 +59,15 @@
         <Conversation
           {id}
           onmenu={narrow ? () => (drawer = true) : undefined}
-          onopenworkspace={openWorkspace}
+          onopenworkspace={workspaceTrigger}
         />
       {:else}
         {#if narrow}
           <div class="mobile-bar">
             <button type="button" class="open-list" onclick={() => (drawer = true)}>历史对话</button>
-            <button type="button" class="open-list" onclick={() => openWorkspace('prompts')}>MCP · 技能 · 提示词</button>
+            {#if isAdmin}
+              <button type="button" class="open-list" onclick={() => openWorkspace('prompts')}>MCP · 技能 · 提示词</button>
+            {/if}
           </div>
         {/if}
         <NewSession />
@@ -76,12 +82,12 @@
       {list}
       current={id}
       onpick={() => (drawer = false)}
-      onopenworkspace={openWorkspace}
+      onopenworkspace={workspaceTrigger}
     />
   </Drawer>
 {/if}
 
-{#if workspaceOpen}
+{#if isAdmin && workspaceOpen}
   {#await import('./AgentWorkspaceModal.svelte') then mod}
     <mod.default bind:open={workspaceOpen} initialTab={workspaceTab} />
   {/await}

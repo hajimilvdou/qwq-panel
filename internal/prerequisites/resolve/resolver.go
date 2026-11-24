@@ -5,6 +5,7 @@ package resolve
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"slices"
@@ -123,6 +124,14 @@ func recordType(kind dns.RecordType) (dnsmessage.Type, error) {
 		return dnsmessage.TypeCNAME, nil
 	case dns.TXT:
 		return dnsmessage.TypeTXT, nil
+	case dns.MX:
+		return dnsmessage.TypeMX, nil
+	case dns.NS:
+		return dnsmessage.TypeNS, nil
+	case dns.SRV:
+		return dnsmessage.TypeSRV, nil
+	case dns.CAA:
+		return typeCAA, nil
 	default:
 		return 0, fault.New("VALIDATION_FAILED", "不支持该解析采样类型")
 	}
@@ -179,6 +188,25 @@ func values(response dnsmessage.Message, q dnsmessage.Question) ([]string, error
 			result = append(result, strings.TrimSuffix(strings.ToLower(body.CNAME.String()), "."))
 		case *dnsmessage.TXTResource:
 			result = append(result, strings.Join(body.TXT, ""))
+		case *dnsmessage.MXResource:
+			result = append(result, fmt.Sprintf("%d %s", body.Pref, strings.TrimSuffix(strings.ToLower(body.MX.String()), ".")))
+		case *dnsmessage.NSResource:
+			result = append(result, strings.TrimSuffix(strings.ToLower(body.NS.String()), "."))
+		case *dnsmessage.SRVResource:
+			target := strings.TrimSuffix(strings.ToLower(body.Target.String()), ".")
+			if target == "" {
+				target = "."
+			}
+			result = append(result, fmt.Sprintf("%d %d %d %s", body.Priority, body.Weight, body.Port, target))
+		case *dnsmessage.UnknownResource:
+			if body.Type != typeCAA {
+				return nil, fault.New("DNS_INVALID_RESPONSE", "DNS 响应记录类型不匹配")
+			}
+			rec, err := parseCAA(body.Data)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, fmt.Sprintf("%d %s %q", rec.flags, rec.tag, rec.value))
 		default:
 			return nil, fault.New("DNS_INVALID_RESPONSE", "DNS 响应记录类型不匹配")
 		}

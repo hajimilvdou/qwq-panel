@@ -2,34 +2,62 @@
 /* @qwq/kit v1 公共基础色板与插件工作台样式变量（引用宿主 adoptedStyleSheets 动态 Token） */
 
 :root {
-  --bg: #f6f4ef;
-  --surface: #ffffff;
-  --surface-2: #f1eee7;
-  --border: rgba(15, 23, 42, 0.12);
-  --text: #18181b;
-  --muted: #64748b;
-  --accent: #0f766e;
-  --accent-fg: #ffffff;
-  --ok: #15803d;
-  --warn: #b45309;
-  --danger: #b91c1c;
-  --radius: 10px;
+  color-scheme: light;
+  --bg: #f6f3ed;
+  --surface: #fdfbf8;
+  --surface-2: #f2ede4;
+  --line: #e4ddd1;
+  --border: var(--line, rgba(15, 23, 42, 0.12));
+  --text: #2a211b;
+  --text-2: #5d5147;
+  --muted: var(--text-2, #64748b);
+  --accent: #b83b6a;
+  --accent-strong: #6b4c3b;
+  --on-accent: #ffffff;
+  --accent-fg: var(--on-accent, #ffffff);
+  --ok: #1e9c8b;
+  --warn: #d4891a;
+  --bad: #cf4754;
+  --danger: var(--bad, #b91c1c);
+  --radius: var(--r-md, 10px);
   --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 :root[data-theme="dark"] {
-  --bg: #111315;
-  --surface: #181b1f;
-  --surface-2: #20242a;
-  --border: rgba(255, 255, 255, 0.12);
-  --text: #f4f4f5;
-  --muted: #9ca3af;
-  --accent: #2dd4bf;
-  --accent-fg: #0b1215;
-  --ok: #4ade80;
-  --warn: #fbbf24;
-  --danger: #f87171;
+  color-scheme: dark;
+  --bg: #171311;
+  --surface: #211c19;
+  --surface-2: #29221e;
+  --line: #382f2a;
+  --border: var(--line, rgba(255, 255, 255, 0.12));
+  --text: #f3ece4;
+  --text-2: #c4b7aa;
+  --muted: var(--text-2, #9ca3af);
+  --accent: #d66d94;
+  --accent-strong: #b83b6a;
+  --on-accent: #ffffff;
+  --accent-fg: var(--on-accent, #ffffff);
+  --ok: #3cc3b0;
+  --warn: #ebb049;
+  --bad: #e66b76;
+  --danger: var(--bad, #f87171);
+}
+
+:root[data-density="compact"] .qwq-card {
+  padding: 12px;
+}
+
+select,
+select option {
+  background-color: var(--surface);
+  color: var(--text);
+}
+
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 *,

@@ -20,6 +20,7 @@ import (
 const (
 	cloudflareEndpoint = "https://api.cloudflare.com/client/v4"
 	aliyunEndpoint     = "https://alidns.aliyuncs.com/"
+	dnspodEndpoint     = "https://dnspod.tencentcloudapi.com"
 	maxResponseBytes   = 1 << 20
 	maxProviderRecords = 4096
 	maxProviderZones   = 256
@@ -92,6 +93,11 @@ func (r *Registry) For(ctx context.Context, scope dns.Scope) (dns.Provider, erro
 			return nil, fault.New("SCOPE_INVALID", "阿里云 zone 标识无效")
 		}
 		return &aliyunProvider{scope: scope, client: r.client}, nil
+	case dns.DNSPod:
+		if !dnspodID(scope.ZoneID) {
+			return nil, fault.New("SCOPE_INVALID", "腾讯云 DNSPod zone 标识无效")
+		}
+		return &dnspodProvider{scope: scope, client: r.client}, nil
 	default:
 		return nil, fault.New("SCOPE_INVALID", "DNS 提供商不受支持")
 	}
@@ -114,6 +120,8 @@ func Discover(ctx context.Context, credentials Credentials, options Options) ([]
 		return cloudflareZones(ctx, client)
 	case dns.Aliyun:
 		return aliyunZones(ctx, client)
+	case dns.DNSPod:
+		return dnspodZones(ctx, client)
 	default:
 		return nil, fault.New("SCOPE_INVALID", "DNS 提供商不受支持")
 	}
@@ -155,6 +163,10 @@ func (c Credentials) Validate(kind dns.ProviderKind) error {
 	case dns.Aliyun:
 		if !names.ID(c.AccessKeyID) || !validSecret(c.AccessKeySecret) || len(c.Token) != 0 {
 			return fault.New("CREDENTIAL_REVOKED", "阿里云凭据格式无效")
+		}
+	case dns.DNSPod:
+		if !names.ID(c.AccessKeyID) || !validSecret(c.AccessKeySecret) || len(c.Token) != 0 {
+			return fault.New("CREDENTIAL_REVOKED", "腾讯云 DNSPod 凭据格式无效")
 		}
 	default:
 		return fault.New("CREDENTIAL_REVOKED", "提供商凭据类型无效")

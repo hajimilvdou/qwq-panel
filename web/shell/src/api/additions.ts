@@ -129,6 +129,8 @@ export type SystemInfo = S['SystemInfo'];
 export type DisguiseMode = S['PanelAccessSettings']['disguise'];
 export type PanelAccessSettings = S['PanelAccessSettings'];
 export type PanelAccessUpdateRequest = operations['putSystemAccess']['requestBody']['content']['application/json'];
+export type SystemBackupEntry = S['SystemBackupEntry'];
+export type SystemBackupList = S['SystemBackupList'];
 
 /* ------------------------------------------------------------------ 小组件结果形状（manifest 1.3，插件负责，宿主不校验） */
 

@@ -26,8 +26,8 @@
     "schemas/notify.ai.digest.response.json": "sha256:0d0eb839ee78e0b2f8d532ce3f174151b2d1420f53f876b26ed52691b434540e",
     "schemas/notify.channel.test.request.json": "sha256:9d745776dde074c0170758ae214e826aeec4136911a629daf4b0e1189fb67ea5",
     "schemas/notify.channel.test.response.json": "sha256:810f42cac2c49901b2ae0bbd4fb506fad8d690b48200002b1f35ed12d2033f18",
-    "schemas/notify.channel.upsert.request.json": "sha256:ecd20b5f4c63fc3a7ba8dab1be8b0b26680e7fc80ff77c93d6cdcd7d17ec1076",
-    "schemas/notify.channel.upsert.response.json": "sha256:0f4a36b0111be4fa53e08d9e1deae09f88abadaaec34095d3eed3c7e87e43102",
+    "schemas/notify.channel.upsert.request.json": "sha256:b8f1aca032453f2647dedd753b9c50bb4c769c3f875c7fe57c5eb4030249e5ea",
+    "schemas/notify.channel.upsert.response.json": "sha256:cf744bd5010e66229e03fbc68f9cf9419f834af29ac8caddc3314be28c5aa997",
     "schemas/notify.delete.response.json": "sha256:d6b9084de92a9a5640506e09e8395dbfafcee62232d781e1856b112b65f17d75",
     "schemas/notify.dispatch.request.json": "sha256:c809094ff2be4eb7cdb1a52eb88245c7d13b1c92a24c6aac0c807a7d3b7629ce",
     "schemas/notify.dispatch.response.json": "sha256:ac6905902e0eddcc0cb141fdbb6b34bc67bed0f4c399b580efedbf2d58f16650",
@@ -37,8 +37,8 @@
     "schemas/notify.rule.upsert.response.json": "sha256:81b9b6d31807b67ad8f4c2584b5b71b53668431bd73b0ed3cf7e98771775775f",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
     "ui/index.html": "sha256:8ab34bdccce7ba49d6779855ea3ed5f7345bb451f9702d0c92dee10fd6bba64c",
-    "ui/plugin.css": "sha256:7cdef9e489e7c31c8f33b27b7a20e5928da94867e7d5c84d302f866b74dcc259",
-    "ui/plugin.js": "sha256:d1e164c8b2833e23d15efcc890bb0dceb3a345ddc76073a61021902294e7c531"
+    "ui/plugin.css": "sha256:f47e3a3cff4f7a1f0f47ec7155b8f9e8321a41c48b9fdb201341c81dd60022f1",
+    "ui/plugin.js": "sha256:c565ed34e65965083cf4aaeed51f5e92ab36dcdb246650b84a3e96a0259d276c"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

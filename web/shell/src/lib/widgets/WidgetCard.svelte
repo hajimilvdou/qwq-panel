@@ -16,7 +16,20 @@
   import { describeError } from '$lib/errors';
   import { events } from '$lib/events.svelte';
   import { relativeTime } from '$lib/format';
-  import { Card, EmptyState, ErrorState, Icon, Ring, Segmented, Skeleton, Sparkline, CATEGORY_COLORS, type CategoryColor } from '$ui';
+  import {
+    Card,
+    EmptyState,
+    ErrorState,
+    Icon,
+    Ring,
+    Segmented,
+    Skeleton,
+    Sparkline,
+    CATEGORY_COLORS,
+    registerModalDialog,
+    unregisterModalDialog,
+    type CategoryColor,
+  } from '$ui';
   import { ICONS, type IconName } from '$ui/icons';
   import { levelOf, parseWidget, refreshMs, WidgetShapeError, type WidgetData, type WidgetSlot } from './index';
 
@@ -44,9 +57,22 @@
   let detailOpen = $state(false);
 
   $effect(() => {
-    if (!detailDlg) return;
-    if (detailOpen && !detailDlg.open) detailDlg.showModal();
-    else if (!detailOpen && detailDlg.open) detailDlg.close();
+    const el = detailDlg;
+    if (!el) return;
+    if (detailOpen && !el.open) {
+      el.showModal();
+      registerModalDialog(el);
+    } else if (!detailOpen && el.open) {
+      unregisterModalDialog(el);
+      el.close();
+    }
+  });
+
+  $effect(() => {
+    const el = detailDlg;
+    return () => {
+      if (el) unregisterModalDialog(el);
+    };
   });
 
   function toFailure(err: unknown) {
@@ -175,7 +201,10 @@
           bind:this={detailDlg}
           class="m-dlg"
           aria-label="{w.title} 占用详情"
-          onclose={() => (detailOpen = false)}
+          onclose={() => {
+            unregisterModalDialog(detailDlg);
+            detailOpen = false;
+          }}
           onclick={(e) => {
             if (e.target === detailDlg) detailOpen = false;
           }}

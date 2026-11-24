@@ -246,7 +246,8 @@
       const quotaText = `${fmtBytes(n.quota_used_bytes)} / ${n.quota_bytes ? fmtBytes(n.quota_bytes) : '不限'}`;
       const stateCls = n.online ? '' : ' offline';
       const stateText = n.online ? '● 在线' : '○ 离线';
-      const sla = Number(n.uptime_90d_pct ?? 100).toFixed(2);
+      const rawSla = Number(n.uptime_90d_pct);
+      const slaText = Number.isFinite(rawSla) && rawSla >= 0 ? `${rawSla.toFixed(2)}%` : '—';
       const bars = buildSLABars(n.sla_ribbon);
       return `<article class="card">
         <div class="card-head">
@@ -254,7 +255,7 @@
             <span class="region-tag">${esc(n.region_code || 'UN')}</span>
             <span>${esc(n.name)}</span>
           </div>
-          <span class="state-pill${stateCls}">${stateText} · ${sla}%</span>
+          <span class="state-pill${stateCls}">${stateText} · ${slaText}</span>
         </div>
         <div class="metric-grid">
           <div class="metric-chip">

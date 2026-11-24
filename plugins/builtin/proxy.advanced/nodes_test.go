@@ -558,3 +558,95 @@ func TestNormalizeRealityPrivateKeyFromXUIStandardBase64(t *testing.T) {
 		t.Fatal("expected derived Reality PublicKey")
 	}
 }
+
+func TestSingbox112AdaptiveSS2022HKDFWARPAndHeaders(t *testing.T) {
+	// 1. DetectSingboxAtLeast112
+	if DetectSingboxAtLeast112("SFA/1.11.4 (sing-box 1.11.4)", "") {
+		t.Fatal("sing-box 1.11 must be detected as <1.12")
+	}
+	if !DetectSingboxAtLeast112("sing-box 1.12.0", "") {
+		t.Fatal("sing-box 1.12 must be detected as >=1.12")
+	}
+	if DetectSingboxAtLeast112("sing-box 1.13.0", "1.11") {
+		t.Fatal("explicit sb_ver=1.11 query must override UA")
+	}
+
+	// 2. Hysteria2 single-port normalization
+	ports := NormalizeSingboxPortHopping("40000, 50000-50100")
+	if len(ports) != 2 || ports[0] != "40000:40000" || ports[1] != "50000:50100" {
+		t.Fatalf("NormalizeSingboxPortHopping got %+v", ports)
+	}
+
+	// 3. SS-2022 AES-256 deterministic HKDF-SHA256 derivation (16B -> 32B)
+	base16 := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
+	psk256A, err := DeriveSS2022UserPSKForCipher(base16, corev2.MethodAES256, "node-ss256")
+	if err != nil {
+		t.Fatalf("DeriveSS2022UserPSKForCipher: %v", err)
+	}
+	raw256, err := base64.StdEncoding.DecodeString(psk256A)
+	if err != nil || len(raw256) != 32 {
+		t.Fatalf("expected 32-byte derived PSK for AES-256, got len=%d err=%v", len(raw256), err)
+	}
+	psk256B, _ := DeriveSS2022UserPSKForCipher(base16, corev2.MethodAES256, "node-ss256")
+	if psk256A != psk256B {
+		t.Fatal("derived PSK must be deterministic")
+	}
+	psk128, err := DeriveSS2022UserPSKForCipher(base16, corev2.MethodAES128, "node-ss256")
+	if err != nil || psk128 != base16 {
+		t.Fatalf("AES-128 must keep 16B key unchanged, got %q err=%v", psk128, err)
+	}
+
+	// 4. SelectOptimalWARPEndpoint picks IPv6 endpoint when IPv4 outbound absent
+	v6Ep := SelectOptimalWARPEndpoint("engage.cloudflareclient.com:2408", "162.159.192.1:2408", "[2606:4700:d0::a29f:c001]:2408", false)
+	if v6Ep != "[2606:4700:d0::a29f:c001]:2408" {
+		t.Fatalf("expected IPv6 WARP endpoint on IPv6-only host, got %q", v6Ep)
+	}
+
+	// 5. Sing-box 1.11 filters out AnyTLS and XHTTP; 1.12+ emits typed DNS servers + route action sniff without legacy sniff
+	nodes := []subNode{
+		func() subNode {
+			sn, _ := buildSubNodeFromRecord(proxyNodeRecord{
+				ID: "n-xhttp", Source: "managed", Name: "vless-xhttp", Protocol: corev2.ProtocolVLESS,
+				Transport: "xhttp", SecurityMode: "reality", Server: "edge.example.com", Port: 443,
+				Config: nodeConfig{UUID: "11111111-1111-4111-8111-111111111111", SNI: "www.apple.com", PublicKey: "pbk"},
+			}, "edge.example.com", nil)
+			return sn
+		}(),
+		func() subNode {
+			sn, _ := buildSubNodeFromRecord(proxyNodeRecord{
+				ID: "n-anytls", Source: "managed", Name: "my-anytls", Protocol: corev2.ProtocolAnyTLS,
+				Transport: "raw", SecurityMode: "tls", Server: "edge.example.com", Port: 8443,
+				Config: nodeConfig{Password: "pw", SNI: "edge.example.com"},
+			}, "edge.example.com", nil)
+			return sn
+		}(),
+		func() subNode {
+			sn, _ := buildSubNodeFromRecord(proxyNodeRecord{
+				ID: "n-wg", Source: "external", Name: "my-wg", Protocol: "wireguard",
+				Transport: "udp", SecurityMode: "none", Server: "1.2.3.4", Port: 51820,
+				Config: nodeConfig{PrivateKey: "priv", PeerPublicKey: "pub", AddressV4: "172.16.0.2/32", AddressV6: "2606::2/128", Reserved: []int{1, 2, 3}, MTU: 1280},
+			}, "edge.example.com", nil)
+			return sn
+		}(),
+	}
+	sb111, err := renderSingboxSubscription(nodes, userRecord{}, nil, "edge.example.com", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(sb111), `"type": "anytls"`) || strings.Contains(string(sb111), "vless-xhttp") {
+		t.Fatalf("sing-box 1.11 must exclude anytls and xhttp:\n%s", string(sb111))
+	}
+	sb112, err := renderSingboxSubscription(nodes, userRecord{}, nil, "edge.example.com", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txt112 := string(sb112)
+	if !strings.Contains(txt112, `"type": "anytls"`) || strings.Contains(txt112, "vless-xhttp") ||
+		!strings.Contains(txt112, `"action": "sniff"`) || !strings.Contains(txt112, `"default_domain_resolver"`) {
+		t.Fatalf("sing-box 1.12+ output mismatch:\n%s", txt112)
+	}
+	clashYAML := renderClashSubscription(nodes)
+	if !strings.Contains(clashYAML, "reserved: [1, 2, 3]") || !strings.Contains(clashYAML, `ipv6: "2606::2"`) {
+		t.Fatalf("clash YAML must render WireGuard []int reserved and ipv6:\n%s", clashYAML)
+	}
+}

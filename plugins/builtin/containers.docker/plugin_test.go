@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"net"
@@ -16,10 +17,62 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	pb "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )
+
+type captureDockerJobStream struct {
+	ctx  context.Context
+	mu   sync.Mutex
+	msgs []*pb.RunJobResponse
+}
+
+func (s *captureDockerJobStream) Send(msg *pb.RunJobResponse) error {
+	s.mu.Lock()
+	s.msgs = append(s.msgs, msg)
+	s.mu.Unlock()
+	return nil
+}
+func (s *captureDockerJobStream) SetHeader(metadata.MD) error  { return nil }
+func (s *captureDockerJobStream) SendHeader(metadata.MD) error { return nil }
+func (s *captureDockerJobStream) SetTrailer(metadata.MD)       {}
+func (s *captureDockerJobStream) Context() context.Context     { return s.ctx }
+func (s *captureDockerJobStream) SendMsg(any) error            { return nil }
+func (s *captureDockerJobStream) RecvMsg(any) error            { return nil }
+
+func runDockerJobRaw(t *testing.T, srv *pluginsdk.Server, op string, req any) *pb.RunJobResponse {
+	t.Helper()
+	raw, _ := json.Marshal(req)
+	stream := &captureDockerJobStream{ctx: t.Context()}
+	if err := srv.RunJob(&pb.RunJobRequest{
+		Context:     &pb.RequestContext{InstanceId: "default", NodeId: "local", OperationId: "job-" + op, Locale: "zh-CN"},
+		Operation:   op,
+		ApiVersion:  "v1",
+		PayloadJson: raw,
+	}, stream); err != nil {
+		t.Fatalf("runJob %s transport error: %v", op, err)
+	}
+	if len(stream.msgs) == 0 {
+		t.Fatalf("runJob %s returned no stream messages", op)
+	}
+	return stream.msgs[len(stream.msgs)-1]
+}
+
+func runDockerJob(t *testing.T, srv *pluginsdk.Server, op string, req any) map[string]any {
+	t.Helper()
+	last := runDockerJobRaw(t, srv, op, req)
+	prog := last.GetProgress()
+	if prog.GetError() != nil {
+		t.Fatalf("runJob %s business error: %+v", op, prog.GetError())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(prog.GetResultJson(), &out); err != nil {
+		t.Fatalf("unmarshal job %s: %v", op, err)
+	}
+	return out
+}
 
 func makeDockerMuxFrame(stream byte, line string) []byte {
 	var hdr [8]byte
@@ -196,6 +249,38 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 			"SpaceReclaimed": int64(64 * 1024 * 1024),
 		})
 	})
+	mux.HandleFunc("/v1.41/images/create", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Query().Get("fromImage") == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte("{\"status\":\"Pulling from library/redis\"}\n{\"status\":\"Status: Downloaded newer image for redis:7-alpine\"}\n"))
+	})
+	mux.HandleFunc("/v1.41/images/112233445566", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"Deleted":"sha256:112233445566"}]`))
+	})
+	mux.HandleFunc("/v1.41/volumes", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Volumes": []map[string]any{{"Name": "app_data", "Driver": "local", "Mountpoint": "/var/lib/docker/volumes/app_data/_data"}},
+		})
+	})
+	mux.HandleFunc("/v1.41/volumes/prune", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"VolumesDeleted": []string{"unused_vol"},
+			"SpaceReclaimed": int64(32 * 1024 * 1024),
+		})
+	})
+	mux.HandleFunc("/v1.41/volumes/app_data", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	httpSrv := &http.Server{Handler: mux}
 	go func() { _ = httpSrv.Serve(ln) }()
@@ -212,7 +297,7 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 
 	// 2. 总览、详情 + 实时 CPU/Memory/OOMKilled 统计、多路复用日志解包
 	ov := invokeDocker(t, srv, "docker.overview", map[string]any{})
-	if ov["daemon"].(map[string]any)["available"] != true || len(ov["containers"].([]any)) != 2 {
+	if ov["daemon"].(map[string]any)["available"] != true || len(ov["containers"].([]any)) != 2 || len(ov["volumes"].([]any)) != 1 {
 		t.Fatalf("unexpected overview: %+v", ov)
 	}
 	ins := invokeDocker(t, srv, "docker.container.inspect", map[string]any{"id": "abc1234567890000"})
@@ -226,11 +311,27 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 		t.Fatalf("demuxed logs missing content: %q", logText)
 	}
 
-	// 3. 容器重启、动态内存限额、删除与镜像清理
+	// 3. 容器重启、动态内存限额、删除、镜像拉取/删除/清理与存储卷清理/删除
 	invokeDocker(t, srv, "docker.container.action", map[string]any{"id": "abc1234567890000", "action": "restart"})
 	invokeDocker(t, srv, "docker.container.limits", map[string]any{"id": "abc1234567890000", "memory_mb": 256, "cpus": 1.0})
 	invokeDocker(t, srv, "docker.container.remove", map[string]any{"id": "def9876543210000", "force": true})
 	pruned := invokeDocker(t, srv, "docker.images.prune", map[string]any{"all": false})
+	pulled := runDockerJob(t, srv, "docker.images.pull", map[string]any{"image": "redis:7-alpine"})
+	if pulled["pulled"] != true {
+		t.Fatalf("expected image pull success, got %+v", pulled)
+	}
+	rmImg := invokeDocker(t, srv, "docker.images.remove", map[string]any{"id": "112233445566", "force": false})
+	if rmImg["removed"] != true {
+		t.Fatalf("expected image remove success, got %+v", rmImg)
+	}
+	prunedVols := invokeDocker(t, srv, "docker.volumes.prune", map[string]any{})
+	if int(prunedVols["deleted_count"].(float64)) != 1 {
+		t.Fatalf("expected 1 pruned volume, got %+v", prunedVols)
+	}
+	rmVol := invokeDocker(t, srv, "docker.volumes.remove", map[string]any{"name": "app_data"})
+	if rmVol["removed"] != true {
+		t.Fatalf("expected volume remove success, got %+v", rmVol)
+	}
 
 	mu.Lock()
 	gotAction, gotMem, gotSwap, gotRem := lastAction, updatedMem, updatedMemSwap, removedID
@@ -239,7 +340,7 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 		t.Fatalf("docker mutations mismatch: action=%q mem=%d swap=%d rem=%q pruned=%+v", gotAction, gotMem, gotSwap, gotRem, pruned)
 	}
 
-	// 4. Compose YAML 深度 AST/缩进安全扫描：所有高危逃逸与绕过载荷必须 100% 被拒绝
+	// 4. Compose YAML 深度 AST/缩进安全扫描：所有高危逃逸与绕过载荷必须 100% 被拒绝（docker.compose.deploy 已升级为异步 job）
 	for _, blockedYAML := range []string{
 		"services:\n  app:\n    image: nginx:alpine\n    privileged: true\n",
 		"services:\n  app:\n    image: nginx:alpine\n    privileged : true\n",
@@ -255,11 +356,11 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 		"services:\n  app:\n    image: nginx:alpine\n    cap_add: [SYS_ADMIN]\n",
 		"services:\n  app:\n    image: nginx:alpine\n    pid: \"host\"\n",
 	} {
-		badCP := invokeDockerRaw(t, srv, "docker.compose.deploy", map[string]any{
+		badCP := runDockerJobRaw(t, srv, "docker.compose.deploy", map[string]any{
 			"name": "blocked-demo", "compose_yaml": blockedYAML, "dry_run": true,
 		})
-		if badCP.GetError() == nil || badCP.GetError().GetCode() != "INVALID_ARGUMENT" {
-			t.Fatalf("expected INVALID_ARGUMENT for blocked compose YAML %q, got %+v", blockedYAML, badCP.GetError())
+		if badCP.GetProgress().GetError() == nil || badCP.GetProgress().GetError().GetCode() != "INVALID_ARGUMENT" {
+			t.Fatalf("expected INVALID_ARGUMENT for blocked compose YAML %q, got %+v", blockedYAML, badCP.GetProgress().GetError())
 		}
 	}
 
@@ -275,7 +376,7 @@ func TestContainersDockerUnixSocketAPIAndComposeSecurity(t *testing.T) {
 	if err != nil || planResp.GetError() != nil || len(planResp.GetWarnings()) < 1 {
 		t.Fatalf("expected >=1 security warning in Plan response, got resp=%+v err=%v", planResp, err)
 	}
-	cpRes := invokeDocker(t, srv, "docker.compose.deploy", map[string]any{
+	cpRes := runDockerJob(t, srv, "docker.compose.deploy", map[string]any{
 		"name": "risky-demo", "compose_yaml": yamlDoc, "dry_run": true,
 	})
 	stack := cpRes["stack"].(map[string]any)

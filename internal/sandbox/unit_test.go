@@ -347,6 +347,38 @@ func TestRenderUnitDataDir(t *testing.T) {
 	}
 }
 
+func TestRenderUnitPublicStream(t *testing.T) {
+	base, err := RenderUnit(alphaSpec())
+	if err != nil {
+		t.Fatalf("RenderUnit(default): %v", err)
+	}
+	baseService := string(base["qwq-plugin@alpha.service"])
+	if strings.Contains(baseService, "QWQ_PUBLIC_STREAM_SOCKET=") {
+		t.Fatalf("default render must not inject public stream directives:\n%s", baseService)
+	}
+
+	spec := alphaSpec()
+	spec.PublicStream = true
+	files, err := RenderUnit(spec)
+	if err != nil {
+		t.Fatalf("RenderUnit(public stream): %v", err)
+	}
+	service := string(files["qwq-plugin@alpha.service"])
+	for _, want := range []string{
+		"RuntimeDirectory=qwq-plugin-stream-alpha\n",
+		"RuntimeDirectoryMode=0755\n",
+		"Environment=QWQ_PUBLIC_STREAM_SOCKET=/run/qwq-plugin-stream-alpha/public-stream.sock\n",
+	} {
+		if !strings.Contains(service, want) {
+			t.Errorf("public stream render is missing %q:\n%s", want, service)
+		}
+	}
+	normalized := strings.Replace(service, "RuntimeDirectory=qwq-plugin-stream-alpha\nRuntimeDirectoryMode=0755\nEnvironment=QWQ_PUBLIC_STREAM_SOCKET=/run/qwq-plugin-stream-alpha/public-stream.sock\n", "", 1)
+	if normalized != baseService {
+		t.Errorf("public stream changed more than expected lines:\n--- got ---\n%s\n--- want ---\n%s", normalized, baseService)
+	}
+}
+
 func TestRenderResourcesDefaults(t *testing.T) {
 	got, err := RenderResources(Limits{})
 	if err != nil {

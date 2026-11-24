@@ -20,7 +20,7 @@
 export const READY_TIMEOUT_MS = 6000;
 export const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 export const HEIGHT_MIN = 240;
-export const HEIGHT_MAX = 4000;
+export const HEIGHT_MAX = 16000;
 export const TOAST_MAX_CHARS = 120;
 export const TOAST_INTERVAL_MS = 2000;
 export const INVOKE_CONCURRENCY = 8;
@@ -84,10 +84,24 @@ export interface HostSettings {
   tokens: Record<string, string>;
   visible: boolean;
   public_origin?: string;
+  panel_tls_mode?: string;
+  panel_tls_sha256?: string;
+}
+
+export interface HostViewport {
+  offsetTopPx: number;
+  viewportHeightPx: number;
+  visibleTop: number;
+  visibleHeight: number;
+  visibleCenterY: number;
+  scroll_top: number;
+  visible_height: number;
+  viewport_width: number;
 }
 
 export type ShellToPlugin =
   | ({ t: 'ui.settings' } & HostSettings)
+  | ({ t: 'ui.viewport' } & HostViewport)
   | { t: 'ui.route'; path: string }
   | { t: 'api.result'; id: RpcId; ok: true; data: unknown }
   | { t: 'api.result'; id: RpcId; ok: false; problem: { code: string; detail?: string; status?: number } }
@@ -167,7 +181,8 @@ export function parsePluginMessage(data: unknown): PluginToShell | null {
       return isStr(data.path, 2048) ? { t: 'ui.navigate', path: data.path } : null;
     case 'ui.confirm': {
       if (!isRpcId(data.id) || !isStr(data.title, 200)) return null;
-      const body = data.body === undefined ? '' : typeof data.body === 'string' && data.body.length <= 2000 ? data.body : null;
+      const rawBody = data.body !== undefined ? data.body : data.message;
+      const body = rawBody === undefined ? '' : typeof rawBody === 'string' && rawBody.length <= 2000 ? rawBody : null;
       if (body === null) return null;
       if (data.confirm_label !== undefined && !isStr(data.confirm_label, 64)) return null;
       return {
@@ -176,7 +191,7 @@ export function parsePluginMessage(data: unknown): PluginToShell | null {
         title: data.title,
         body,
         confirm_label: data.confirm_label as string | undefined,
-        danger: Boolean(data.danger),
+        danger: Boolean(data.danger ?? data.destructive),
       };
     }
     case 'ui.copy': {
@@ -210,13 +225,27 @@ export function parsePluginMessage(data: unknown): PluginToShell | null {
       if (!isObj(payload)) return null;
       if (data.subject !== undefined && !isStr(data.subject, 512)) return null;
       if (data.expected_revision !== undefined && !isStr(data.expected_revision, 128)) return null;
+      let subject = data.subject as string | undefined;
+      let expectedRevision = data.expected_revision as string | undefined;
+      if ((subject === undefined || expectedRevision === undefined) && Array.isArray(data.preconditions) && data.preconditions.length > 0) {
+        const first = data.preconditions[0];
+        if (isObj(first)) {
+          if (subject === undefined && isStr(first.subject, 512)) {
+            subject = first.subject;
+          }
+          const preRev = first.revision !== undefined ? first.revision : first.expected_revision;
+          if (expectedRevision === undefined && isStr(preRev, 128)) {
+            expectedRevision = preRev;
+          }
+        }
+      }
       return {
         t: 'api.invoke',
         id: data.id,
         operation: opName,
         payload,
-        subject: data.subject as string | undefined,
-        expected_revision: data.expected_revision as string | undefined,
+        subject,
+        expected_revision: expectedRevision,
       };
     }
     case 'api.subscribe':
@@ -269,10 +298,11 @@ export function routeAllowed(routes: readonly { path: string }[], path: string):
 
 /** 本插件事件订阅：subject 必须落在 plugins/{id} 或 nodes/{nodeId}/plugins/{id} 名下 */
 export function subjectAllowed(pluginId: string, subject: string): boolean {
+  const clean = subject.replace(/\/\*+$/, '').replace(/\/+$/, '');
   const base = `plugins/${pluginId}`;
-  if (subject === base || subject.startsWith(base + '/')) return true;
-  if (subject.startsWith('nodes/')) {
-    const rest = subject.slice('nodes/'.length);
+  if (clean === base || clean.startsWith(base + '/')) return true;
+  if (clean.startsWith('nodes/')) {
+    const rest = clean.slice('nodes/'.length);
     const slash = rest.indexOf('/');
     if (slash > 0) {
       const sub = rest.slice(slash + 1);
@@ -280,6 +310,13 @@ export function subjectAllowed(pluginId: string, subject: string): boolean {
     }
   }
   return false;
+}
+
+/** 订阅前缀匹配：兼容精确主题、尾部斜杠及尾部通配 /* */
+export function matchesSubscribedSubject(pattern: string, incomingSubject: string): boolean {
+  const cleanPat = pattern.replace(/\/\*+$/, '').replace(/\/+$/, '');
+  if (!cleanPat) return false;
+  return incomingSubject === cleanPat || incomingSubject.startsWith(cleanPat + '/');
 }
 
 /* ------------------------------------------------------------------ 限流 */

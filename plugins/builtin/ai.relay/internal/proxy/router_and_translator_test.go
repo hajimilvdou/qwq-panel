@@ -512,3 +512,77 @@ func TestSafeHTTPClientBlocksRedirectsAndMetadataEvenWhenAllowPrivate(t *testing
 		}
 	}
 }
+
+func TestCrossProtocolToolCallTranslationStreamAndRequest(t *testing.T) {
+	// 1) OpenAI Chat request with tool_calls + role=tool -> Anthropic Messages blocks.
+	rawOpenAI := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"messages":[
+			{"role":"user","content":"weather in Tokyo?"},
+			{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Tokyo\"}"}}]},
+			{"role":"tool","tool_call_id":"call_1","content":"22C sunny"}
+		],
+		"stream":true
+	}`)
+	ir, err := ParseDownstreamRequest(ProtoOpenAIChat, "", rawOpenAI)
+	if err != nil {
+		t.Fatalf("ParseDownstreamRequest: %v", err)
+	}
+	if len(ir.Messages) != 3 || len(ir.Messages[1].ToolCalls) != 1 || len(ir.Messages[2].ToolResults) != 1 {
+		t.Fatalf("expected tool_calls & tool_results parsed, got: %+v", ir.Messages)
+	}
+	chAnt := &UpstreamChannel{ID: "ant", Kind: ChanAnthropicNative, BaseURL: "https://api.anthropic.com"}
+	chAnt.SetCredential("sk-ant")
+	_, _, antBody, err := EncodeUpstreamRequest(chAnt, ProtoOpenAIChat, rawOpenAI, ir)
+	if err != nil {
+		t.Fatalf("EncodeUpstreamRequest(Anthropic): %v", err)
+	}
+	for _, want := range []string{`"type":"tool_use"`, `"id":"call_1"`, `"name":"get_weather"`, `"type":"tool_result"`, `"tool_use_id":"call_1"`} {
+		if !strings.Contains(string(antBody), want) {
+			t.Fatalf("Anthropic encoded body missing %q: %s", want, antBody)
+		}
+	}
+
+	// 2) OpenAI Chat SSE tool_calls -> Anthropic Messages SSE EmitToolUseBlock + stop_reason=tool_use.
+	openAISSE := strings.Join([]string{
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":"{\"city\":"}}]}}]}`,
+		``,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Tokyo\"}"}}]}}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	recAnt := httptest.NewRecorder()
+	if _, err := RelayStreamBridge(time.Now(), strings.NewReader(openAISSE), ProtoOpenAIChat, ProtoAnthropicMessages, "gpt-4o", recAnt); err != nil {
+		t.Fatalf("RelayStreamBridge OpenAI->Anthropic tool_use: %v", err)
+	}
+	bodyAnt := recAnt.Body.String()
+	for _, want := range []string{`"type":"tool_use"`, `"id":"call_abc"`, `"name":"get_weather"`, `"type":"input_json_delta"`, `"stop_reason":"tool_use"`} {
+		if !strings.Contains(bodyAnt, want) {
+			t.Fatalf("Anthropic tool_use SSE missing %q:\n%s", want, bodyAnt)
+		}
+	}
+
+	// 3) Anthropic SSE tool_use -> OpenAI Chat SSE tool_calls + finish_reason=tool_calls.
+	antSSE := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":50}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"run_diag","input":{}}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"host\":\"a\"}"}}`,
+		``,
+	}, "\n")
+	recOAI := httptest.NewRecorder()
+	if _, err := RelayStreamBridge(time.Now(), strings.NewReader(antSSE), ProtoAnthropicMessages, ProtoOpenAIChat, "claude-sonnet-4-5", recOAI); err != nil {
+		t.Fatalf("RelayStreamBridge Anthropic->OpenAI tool_calls: %v", err)
+	}
+	bodyOAI := recOAI.Body.String()
+	for _, want := range []string{`"id":"toolu_1"`, `"name":"run_diag"`, `"finish_reason":"tool_calls"`, `data: [DONE]`} {
+		if !strings.Contains(bodyOAI, want) {
+			t.Fatalf("OpenAI tool_calls SSE missing %q:\n%s", want, bodyOAI)
+		}
+	}
+}

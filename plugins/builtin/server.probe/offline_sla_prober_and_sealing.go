@@ -33,8 +33,15 @@ func LoadOrCreateProbeSealingSecret(dataDir string) ([]byte, error) {
 		return nil, fmt.Errorf("prepare probe sealing dir: %w", err)
 	}
 	sealPath := filepath.Join(dataDir, "probe_domain.seal")
-	if raw, err := os.ReadFile(sealPath); err == nil && len(raw) == 32 {
-		return raw, nil
+	raw, err := os.ReadFile(sealPath)
+	if err == nil {
+		if len(raw) == 32 {
+			return raw, nil
+		}
+		return nil, fmt.Errorf("probe sealing secret %s is corrupted (len=%d, want 32)", sealPath, len(raw))
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read probe sealing secret: %w", err)
 	}
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
@@ -264,9 +271,75 @@ type probeTLSBindingObservation struct {
 	Running         bool   `json:"running"`
 	Generation      uint64 `json:"generation"`
 	PolicyRevision  string `json:"policy_revision,omitempty"`
+	FullchainSHA256 string `json:"fullchain_sha256,omitempty"`
 	LeafFingerprint string `json:"leaf_fingerprint,omitempty"`
 	Endpoint        string `json:"endpoint,omitempty"`
 	SNI             string `json:"sni,omitempty"`
+}
+
+type consumerBindingProofPointer struct {
+	Binding struct {
+		ID         string `json:"id"`
+		Generation uint64 `json:"generation"`
+	} `json:"binding"`
+}
+
+type consumerBindingCurrentPointer struct {
+	Version int                          `json:"version"`
+	Active  *consumerBindingProofPointer `json:"active,omitempty"`
+	Binding struct {
+		ID         string `json:"id"`
+		Generation uint64 `json:"generation"`
+	} `json:"binding"`
+}
+
+func (p *consumerBindingCurrentPointer) activeGeneration() uint64 {
+	if p == nil {
+		return 0
+	}
+	if p.Active != nil && p.Active.Binding.Generation > 0 {
+		return p.Active.Binding.Generation
+	}
+	return p.Binding.Generation
+}
+
+// readMaterializedConsumerPEM 优先按宿主 consumerfiles.Store 标准落盘结构
+// (`current.json` -> `generations/g<N>/{fullchain.pem,privkey.pem}`) 读取证书，
+// 缺失时回退兼容单测/旧目录的 `active_{fullchain,privkey}.pem`。
+func readMaterializedConsumerPEM(dataDir, bindingRef string, explicitGen uint64) ([]byte, []byte, error) {
+	cleanRef := filepath.Base(strings.TrimSpace(bindingRef))
+	if cleanRef == "" || cleanRef == "." || cleanRef == ".." || cleanRef != strings.TrimSpace(bindingRef) {
+		return nil, nil, errors.New("INVALID_BINDING_REF")
+	}
+	baseDir := filepath.Join(dataDir, "tls", "bindings", cleanRef)
+	gen := explicitGen
+	if gen == 0 {
+		if curRaw, err := os.ReadFile(filepath.Join(baseDir, "current.json")); err == nil {
+			var ptr consumerBindingCurrentPointer
+			if json.Unmarshal(curRaw, &ptr) == nil {
+				if g := ptr.activeGeneration(); g > 0 {
+					gen = g
+				}
+			}
+		}
+	}
+	if gen > 0 {
+		genDir := filepath.Join(baseDir, "generations", fmt.Sprintf("g%d", gen))
+		c, err1 := os.ReadFile(filepath.Join(genDir, "fullchain.pem"))
+		k, err2 := os.ReadFile(filepath.Join(genDir, "privkey.pem"))
+		if err1 == nil && err2 == nil {
+			return c, k, nil
+		}
+	}
+	c, err1 := os.ReadFile(filepath.Join(baseDir, "active_fullchain.pem"))
+	if err1 != nil {
+		return nil, nil, fmt.Errorf("MATERIALIZED_CERT_MISSING: 尚未找到宿主物化证书 (%w)", err1)
+	}
+	k, err2 := os.ReadFile(filepath.Join(baseDir, "active_privkey.pem"))
+	if err2 != nil {
+		return nil, nil, fmt.Errorf("MATERIALIZED_KEY_MISSING: %w", err2)
+	}
+	return c, k, nil
 }
 
 func (c *DomainBindingCoordinator) ReloadMaterializedTLS(
@@ -279,31 +352,26 @@ func (c *DomainBindingCoordinator) ReloadMaterializedTLS(
 		return probeTLSBindingObservation{}, errors.New("DATA_DIR_UNSET")
 	}
 	cleanRef := filepath.Base(strings.TrimSpace(bindingRef))
-	if cleanRef == "" || cleanRef == "." || cleanRef == ".." {
+	if cleanRef == "" || cleanRef == "." || cleanRef == ".." || cleanRef != strings.TrimSpace(bindingRef) {
 		return probeTLSBindingObservation{}, errors.New("INVALID_BINDING_REF")
 	}
-	baseDir := filepath.Join(c.dataDir, "tls", "bindings", cleanRef)
-	chainBytes, err := os.ReadFile(filepath.Join(baseDir, "active_fullchain.pem"))
+	chainBytes, keyBytes, err := readMaterializedConsumerPEM(c.dataDir, cleanRef, generation)
 	if err != nil {
-		return probeTLSBindingObservation{}, fmt.Errorf("MATERIALIZED_CERT_MISSING: %w", err)
-	}
-	keyBytes, err := os.ReadFile(filepath.Join(baseDir, "active_privkey.pem"))
-	if err != nil {
-		return probeTLSBindingObservation{}, fmt.Errorf("MATERIALIZED_KEY_MISSING: %w", err)
+		return probeTLSBindingObservation{}, err
 	}
 	defer clear(keyBytes)
 
+	chainSum := sha256.Sum256(chainBytes)
+	fullchainHex := hex.EncodeToString(chainSum[:])
 	if wantFullchainSHA != "" {
-		sum := sha256.Sum256(chainBytes)
-		got := hex.EncodeToString(sum[:])
-		if subtle.ConstantTimeCompare([]byte(strings.ToLower(wantFullchainSHA)), []byte(got)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(strings.ToLower(strings.TrimSpace(wantFullchainSHA))), []byte(fullchainHex)) != 1 {
 			return probeTLSBindingObservation{}, errors.New("TLS_PROOF_MISMATCH: fullchain digest mismatch")
 		}
 	}
 	if wantKeySHA != "" {
 		sum := sha256.Sum256(keyBytes)
 		got := hex.EncodeToString(sum[:])
-		if subtle.ConstantTimeCompare([]byte(strings.ToLower(wantKeySHA)), []byte(got)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(strings.ToLower(strings.TrimSpace(wantKeySHA))), []byte(got)) != 1 {
 			return probeTLSBindingObservation{}, errors.New("TLS_PROOF_MISMATCH: private key digest mismatch")
 		}
 	}
@@ -314,6 +382,17 @@ func (c *DomainBindingCoordinator) ReloadMaterializedTLS(
 		return probeTLSBindingObservation{}, err
 	}
 	c.activeCert.Store(pair)
+
+	// 启动或复用探针本机独立回环 TLS 监听（默认 127.0.0.1:0 绝不与面板 :8443 抢端口），
+	// 使宿主 VerifyRuntimeHealth 能够真实完成 SNI TLS 握手并校验证书指纹。
+	boundEndpoint, lerr := c.EnsureTLSListener()
+	if lerr != nil {
+		return probeTLSBindingObservation{}, fmt.Errorf("TLS_LISTENER_FAILED: %w", lerr)
+	}
+	if boundEndpoint != "" {
+		endpoint = boundEndpoint
+	}
+
 	summary := BoundCertSummary{
 		Track:         TrackPanelDNC,
 		Domain:        dom,
@@ -327,9 +406,10 @@ func (c *DomainBindingCoordinator) ReloadMaterializedTLS(
 	c.activeMeta.Store(&summary)
 	obs := probeTLSBindingObservation{
 		BindingRef:      cleanRef,
-		Running:         true,
+		Running:         c.tlsActive.Load(),
 		Generation:      generation,
 		PolicyRevision:  policyRev,
+		FullchainSHA256: fullchainHex,
 		LeafFingerprint: fp,
 		Endpoint:        endpoint,
 		SNI:             dom,
@@ -342,7 +422,12 @@ func (c *DomainBindingCoordinator) InspectMaterializedTLS(bindingRef, fallbackEn
 	cleanRef := filepath.Base(strings.TrimSpace(bindingRef))
 	if c != nil {
 		if obs := c.tlsObs.Load(); obs != nil && (cleanRef == "" || obs.BindingRef == cleanRef) {
-			return *obs
+			cp := *obs
+			cp.Running = c.tlsActive.Load()
+			if ep := c.TLSBoundAddr(); ep != "" {
+				cp.Endpoint = ep
+			}
+			return cp
 		}
 	}
 	return probeTLSBindingObservation{

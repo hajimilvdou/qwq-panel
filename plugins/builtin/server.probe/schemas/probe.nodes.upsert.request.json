@@ -51,6 +51,10 @@
     "public_origin": {
       "type": "string",
       "maxLength": 256
+    },
+    "ca_sha256": {
+      "type": "string",
+      "maxLength": 128
     }
   }
 }

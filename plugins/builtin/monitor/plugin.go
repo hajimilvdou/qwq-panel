@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"encoding/json"
 	"time"
 
 	metricsv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/metrics/v1"
@@ -57,6 +58,7 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 		return err
 	}
 	instance.restoreCoarseHistory(ctx)
+	instance.restoreThresholds(ctx)
 	instance.register()
 	return instance, nil
 }
@@ -68,12 +70,14 @@ type instance struct {
 
 func (i *instance) Start(ctx context.Context) error {
 	i.restoreCoarseHistory(ctx)
+	i.restoreThresholds(ctx)
 	return nil
 }
 
 func (i *instance) Activate(ctx context.Context) error {
 	i.samples.reset()
 	i.restoreCoarseHistory(ctx)
+	i.restoreThresholds(ctx)
 	return i.Go(i.samples.loop)
 }
 
@@ -116,10 +120,56 @@ func (i *instance) restoreCoarseHistory(ctx context.Context) {
 	}
 	_ = i.samples.restoreCoarseSnapshot(snap, i.samples.now())
 }
+
+func (i *instance) persistThresholds(ctx context.Context, t thresholds) error {
+	host := i.Host()
+	if host == nil || host.Conn() == nil {
+		return nil
+	}
+	pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err := host.KV().PutJSON(pctx, thresholdsKVKey, t, pluginsdk.PutOption{})
+	return err
+}
+
+func (i *instance) restoreThresholds(ctx context.Context) {
+	host := i.Host()
+	if host == nil || host.Conn() == nil || i.samples == nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var saved thresholds
+	_, found, err := host.KV().GetJSON(rctx, thresholdsKVKey, &saved)
+	if err != nil || !found {
+		return
+	}
+	for _, level := range []threshold{saved.CPU, saved.Memory, saved.Disk} {
+		if level.Warn < 0 || level.Warn >= level.Crit || level.Crit > 100 {
+			return
+		}
+	}
+	i.samples.setThresholds(saved)
+}
 func (i *instance) ApplyConfig(_ context.Context, candidate pluginsdk.Config) error {
 	next, err := parseConfig(candidate.JSON)
 	if err != nil {
 		return err
+	}
+	hasExplicitThresholds := false
+	if len(bytes.TrimSpace(candidate.JSON)) > 0 {
+		var rawObj map[string]json.RawMessage
+		if json.Unmarshal(candidate.JSON, &rawObj) == nil {
+			if rawT, ok := rawObj["thresholds"]; ok && len(bytes.TrimSpace(rawT)) > 0 && !bytes.Equal(bytes.TrimSpace(rawT), []byte("null")) {
+				hasExplicitThresholds = true
+			}
+		}
+	}
+	if !hasExplicitThresholds && i.samples != nil {
+		i.samples.mu.Lock()
+		curThresholds := i.samples.cfg.Thresholds
+		i.samples.mu.Unlock()
+		next.Thresholds = curThresholds
 	}
 	i.samples.configure(next)
 	return nil

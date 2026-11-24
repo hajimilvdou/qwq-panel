@@ -190,7 +190,7 @@ func (m *Manager) PresentChallenge(ctx context.Context, request ChallengeRequest
 	}
 	name := "_acme-challenge." + strings.TrimPrefix(san, "*.")
 	ttl := uint32(60)
-	if request.Scope.Kind == Aliyun {
+	if request.Scope.Kind == Aliyun || request.Scope.Kind == DNSPod {
 		ttl = 600
 	}
 	ctx, err = m.challengeContext(ctx, ChallengeIntent{Caller: request.Caller, Scope: request.Scope, CertificateID: request.CertificateID,

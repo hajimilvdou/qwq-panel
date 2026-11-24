@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -25,16 +26,19 @@ var (
 	ErrSSRFTargetBlocked   = errors.New("probe target resolves to loopback, link-local, metadata, special IPv6, or private network")
 )
 
-// specialBlockedPrefixes 完整对齐原仓库 P1-PLG-09 出站安全边界（含 CGNAT、基准测试段、NAT64、Teredo、6to4 与丢弃路由段）。
+// specialBlockedPrefixes 完整对齐原仓库 P1-PLG-09 出站安全边界（含 0.0.0.0/8、IMDS、CGNAT、基准测试段、NAT64、Teredo、6to4 与丢弃路由段）。
 var specialBlockedPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("100.64.0.0/10"),  // Carrier-Grade NAT & 阿里云元数据 100.100.100.200
-	netip.MustParsePrefix("198.18.0.0/15"),  // RFC 2544 基准测试网段
-	netip.MustParsePrefix("0000::/8"),       // IPv6 保留段
-	netip.MustParsePrefix("64:ff9b::/96"),   // NAT64 Well-Known Prefix
-	netip.MustParsePrefix("64:ff9b:1::/48"), // NAT64 Local-Use Prefix
-	netip.MustParsePrefix("100::/64"),       // RFC 6666 Discard-Only Prefix
-	netip.MustParsePrefix("2001::/32"),      // Teredo 隧道段
-	netip.MustParsePrefix("2002::/16"),      // 6to4 映射段
+	netip.MustParsePrefix("0.0.0.0/8"),         // RFC 1122 本网络保留段
+	netip.MustParsePrefix("169.254.0.0/16"),    // AWS/GCP/Azure IMDS & IPv4 Link-Local
+	netip.MustParsePrefix("100.64.0.0/10"),     // Carrier-Grade NAT & 阿里云元数据 100.100.100.200
+	netip.MustParsePrefix("198.18.0.0/15"),     // RFC 2544 基准测试网段
+	netip.MustParsePrefix("0000::/8"),          // IPv6 保留段
+	netip.MustParsePrefix("fd00:ec2::254/128"), // AWS IMDSv2 IPv6
+	netip.MustParsePrefix("64:ff9b::/96"),      // NAT64 Well-Known Prefix
+	netip.MustParsePrefix("64:ff9b:1::/48"),    // NAT64 Local-Use Prefix
+	netip.MustParsePrefix("100::/64"),          // RFC 6666 Discard-Only Prefix
+	netip.MustParsePrefix("2001::/32"),         // Teredo 隧道段
+	netip.MustParsePrefix("2002::/16"),         // 6to4 映射段
 }
 
 var allowedCarrierKeys = map[string]struct{}{
@@ -178,6 +182,7 @@ func (s *ProbeStore) IngestAgentReport(now time.Time, clientIP, bearerToken stri
 	if clientIP != "" {
 		node.PrivateIP = truncateSafe(clientIP, 64)
 	}
+	prevSeen := node.LastSeenAt
 	node.HasIPv4 = rep.HasIPv4
 	node.HasIPv6 = rep.HasIPv6
 	node.LastSeenAt = nowUnix
@@ -203,7 +208,19 @@ func (s *ProbeStore) IngestAgentReport(now time.Time, clientIP, bearerToken stri
 		CarrierPingMs: cleanPings,
 	}
 
-	recordDailyCheckLocked(s.sla90d, node.ID, now.UTC().Format("2006-01-02"), true, pickAvgPing(cleanPings))
+	maxCredit := int64(max(1, node.ReportInterval))
+	slaDelta := maxCredit
+	if prevSeen > 0 {
+		elapsed := nowUnix - prevSeen
+		if elapsed <= 0 {
+			slaDelta = 0
+		} else if elapsed < maxCredit {
+			slaDelta = elapsed
+		}
+	}
+	if slaDelta > 0 {
+		recordDailyCheckWithDeltaLocked(s.sla90d, node.ID, now.UTC().Format("2006-01-02"), true, uint32(slaDelta), pickAvgPing(cleanPings))
+	}
 
 	return AgentDesiredPullConfig{
 		Accepted:          true,
@@ -214,9 +231,17 @@ func (s *ProbeStore) IngestAgentReport(now time.Time, clientIP, bearerToken stri
 }
 
 func (s *ProbeStore) activeCarrierTargetsLocked() map[string]string {
-	out := make(map[string]string)
-	for _, m := range s.monitors {
-		if m.Enabled && (m.CarrierTag == "ct" || m.CarrierTag == "cu" || m.CarrierTag == "cm" || m.CarrierTag == "global") {
+	ids := make([]string, 0, len(s.monitors))
+	for id, m := range s.monitors {
+		if m != nil && m.Enabled && m.Kind == "tcp" && (m.CarrierTag == "ct" || m.CarrierTag == "cu" || m.CarrierTag == "cm" || m.CarrierTag == "global") {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		m := s.monitors[id]
+		if _, exists := out[m.CarrierTag]; !exists {
 			out[m.CarrierTag] = m.TargetAddr
 		}
 	}
@@ -234,9 +259,9 @@ func recordDailyCheckWithDeltaLocked(store map[string][]DailySLABucket, id, dayU
 	buckets := store[id]
 	if len(buckets) > 0 && buckets[len(buckets)-1].DayUTC == dayUTC {
 		b := &buckets[len(buckets)-1]
-		b.TotalChecks++
+		b.TotalChecks += deltaSec
 		if up {
-			b.UpChecks++
+			b.UpChecks += deltaSec
 		} else {
 			b.DowntimeSeconds += deltaSec
 		}
@@ -247,22 +272,20 @@ func recordDailyCheckWithDeltaLocked(store map[string][]DailySLABucket, id, dayU
 				b.AvgLatencyMs = (b.AvgLatencyMs*7 + latencyMs) / 8
 			}
 		}
-		b.UptimePercent = float64(uint64(b.UpChecks)*10000/uint64(b.TotalChecks)) / 100.0
+		b.UptimePercent = ComputeTimeWeightedSLA(int64(b.TotalChecks), int64(b.DowntimeSeconds))
 		return
 	}
-	upCount := uint32(0)
+	upSec := uint32(0)
 	downSec := deltaSec
-	pct := 0.0
 	if up {
-		upCount = 1
+		upSec = deltaSec
 		downSec = 0
-		pct = 100.0
 	}
 	buckets = append(buckets, DailySLABucket{
 		DayUTC:          dayUTC,
-		TotalChecks:     1,
-		UpChecks:        upCount,
-		UptimePercent:   pct,
+		TotalChecks:     deltaSec,
+		UpChecks:        upSec,
+		UptimePercent:   ComputeTimeWeightedSLA(int64(deltaSec), int64(downSec)),
 		DowntimeSeconds: downSec,
 		AvgLatencyMs:    max(0, latencyMs),
 	})

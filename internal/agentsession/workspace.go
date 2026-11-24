@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -138,6 +139,7 @@ type mcpServersFile struct {
 type WorkspaceManager struct {
 	rootDir string
 	cliAuth *CLIAuthManager
+	mcpMu   sync.Mutex
 }
 
 // NewWorkspaceManager creates a workspace manager under <dataDir>/agent-workspace.
@@ -549,6 +551,8 @@ func (w *WorkspaceManager) ListMCPServers() ([]MCPServerEntry, error) {
 
 // UpsertMCPServer adds or updates one MCP server inside mcp/servers.json.
 func (w *WorkspaceManager) UpsertMCPServer(entry MCPServerEntry) ([]MCPServerEntry, error) {
+	w.mcpMu.Lock()
+	defer w.mcpMu.Unlock()
 	list, err := w.ListMCPServers()
 	if err != nil {
 		return nil, err

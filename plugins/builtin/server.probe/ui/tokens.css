@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 :root, [data-theme="light"] {
+  color-scheme: light;
   --bg: #f6f3ed;
   --surface: #fdfbf8;
   --surface-2: #f1ece3;
@@ -21,6 +22,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg: #151210;
   --surface: #1e1a17;
   --surface-2: #28221e;

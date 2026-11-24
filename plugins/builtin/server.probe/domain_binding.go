@@ -19,11 +19,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -84,6 +84,12 @@ type DomainBindingCoordinator struct {
 	activeMeta  atomic.Pointer[BoundCertSummary]
 	tlsObs      atomic.Pointer[probeTLSBindingObservation]
 	dncDetector func() HostDNCCapabilities
+
+	tlsMu        sync.Mutex
+	tlsHandler   http.Handler
+	tlsServer    *http.Server
+	tlsBoundAddr string
+	tlsActive    atomic.Bool
 }
 
 type BoundCertSummary struct {
@@ -110,6 +116,89 @@ func NewDomainBindingCoordinator(dataDir string, sealingSecret []byte, panelHost
 		sealingKey:  sum,
 		panelHosts:  ph,
 		dncDetector: detector,
+	}
+}
+
+// SetTLSHandler 绑定本机 TLS 监听器使用的 HTTP 处理器（如 PortalGateway）。
+func (c *DomainBindingCoordinator) SetTLSHandler(h http.Handler) {
+	if c == nil {
+		return
+	}
+	c.tlsMu.Lock()
+	c.tlsHandler = h
+	c.tlsMu.Unlock()
+}
+
+// EnsureTLSListener 启动或复用探针本机回环 TLS 监听（127.0.0.1:0），绝不抢占面板 :8443 端口，
+// 供宿主 VerifyRuntimeHealth 发起真实 SNI TLS 握手验证并承载独立 TLS 访问。
+func (c *DomainBindingCoordinator) EnsureTLSListener() (string, error) {
+	if c == nil {
+		return "", errors.New("COORDINATOR_UNSET")
+	}
+	c.tlsMu.Lock()
+	defer c.tlsMu.Unlock()
+	if c.tlsServer != nil && c.tlsBoundAddr != "" && c.tlsActive.Load() {
+		return c.tlsBoundAddr, nil
+	}
+	rawLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			cert := c.activeCert.Load()
+			if cert == nil {
+				return nil, errors.New("probe: no active TLS certificate loaded")
+			}
+			return cert, nil
+		},
+	}
+	tlsLn := tls.NewListener(rawLn, tlsCfg)
+	handler := c.tlsHandler
+	if handler == nil {
+		handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+	}
+	srv := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	c.tlsServer = srv
+	c.tlsBoundAddr = rawLn.Addr().String()
+	c.tlsActive.Store(true)
+	go func() {
+		_ = srv.Serve(tlsLn)
+		c.tlsActive.Store(false)
+	}()
+	return c.tlsBoundAddr, nil
+}
+
+// TLSBoundAddr 返回当前探针本机回环 TLS 监听器的实际绑定地址。
+func (c *DomainBindingCoordinator) TLSBoundAddr() string {
+	if c == nil {
+		return ""
+	}
+	c.tlsMu.Lock()
+	defer c.tlsMu.Unlock()
+	return c.tlsBoundAddr
+}
+
+// CloseTLSListener 在插件退出时关闭探针本机回环 TLS 监听器。
+func (c *DomainBindingCoordinator) CloseTLSListener() {
+	if c == nil {
+		return
+	}
+	c.tlsMu.Lock()
+	srv := c.tlsServer
+	c.tlsServer = nil
+	c.tlsBoundAddr = ""
+	c.tlsMu.Unlock()
+	c.tlsActive.Store(false)
+	if srv != nil {
+		_ = srv.Close()
 	}
 }
 
@@ -242,14 +331,9 @@ func (c *DomainBindingCoordinator) loadMaterializedPanelCert(now time.Time, dom,
 	if c.dataDir == "" {
 		return BoundCertSummary{}, errors.New("DATA_DIR_UNSET")
 	}
-	baseDir := filepath.Join(c.dataDir, "tls", "bindings", filepath.Base(bindingRef))
-	chainBytes, err := os.ReadFile(filepath.Join(baseDir, "active_fullchain.pem"))
+	chainBytes, keyBytes, err := readMaterializedConsumerPEM(c.dataDir, bindingRef, 0)
 	if err != nil {
-		return BoundCertSummary{}, fmt.Errorf("MATERIALIZED_CERT_MISSING: 尚未找到宿主物化证书 (%w)", err)
-	}
-	keyBytes, err := os.ReadFile(filepath.Join(baseDir, "active_privkey.pem"))
-	if err != nil {
-		return BoundCertSummary{}, fmt.Errorf("MATERIALIZED_KEY_MISSING: %w", err)
+		return BoundCertSummary{}, err
 	}
 	defer clear(keyBytes)
 
@@ -314,7 +398,7 @@ func ValidateStrictProbePEM(now time.Time, expectedDomain string, chainPEM, keyP
 
 	pair.Leaf = leaf
 	rawSum := sha256.Sum256(leaf.Raw)
-	fp := strings.ToUpper(hex.EncodeToString(rawSum[:8]))
+	fp := hex.EncodeToString(rawSum[:])
 	return &pair, leaf.Issuer.CommonName, fp, leaf.NotAfter.UTC(), nil
 }
 

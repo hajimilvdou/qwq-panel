@@ -78,7 +78,7 @@ func (a *Authority) ValidateConsumerConfiguration(ctx context.Context, who actor
 			if err != nil {
 				return err
 			}
-			if facts.BindingRef != entry.ID || facts.PluginVersion != entry.PluginVersion {
+			if !bindingFactsMatch(entry, facts) {
 				return fault.New("BINDING_REVOKED", "当前配置已换用绑定或实际安装版本")
 			}
 			if facts.ConfigRevision != expectedConfigRevision {
@@ -113,6 +113,19 @@ func (a *Authority) ValidateConsumerConfiguration(ctx context.Context, who actor
 		}
 	}
 	return a.authorizeConsumerConfiguration(bounded, who, nodeID, pluginID)
+}
+
+// bindingFactsMatch 校验真实消费者配置事实与私有绑定预留是否一致：
+// core.xray 严格要求配置内显式引用 entry.ID；web.ingress / server.probe 无 corev2 配置槽，
+// 只要消费者身份、安装版本与预留 profile 一致即可确认。
+func bindingFactsMatch(entry bindingRegistration, facts ConsumerFacts) bool {
+	if facts.PluginVersion != entry.PluginVersion {
+		return false
+	}
+	if entry.Consumer.PluginID == "core.xray" {
+		return facts.BindingRef == entry.ID
+	}
+	return facts.BindingRef == entry.ID || facts.BindingRef == entry.Consumer.ProfileID
 }
 
 // 这里只读取真实当次配置事实；origin是受检存档，不是RUNNING证明。

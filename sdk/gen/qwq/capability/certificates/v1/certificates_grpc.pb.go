@@ -28,6 +28,7 @@ const (
 	CertificatesService_SubmitTestCertificate_FullMethodName = "/qwq.capability.certificates.v1.CertificatesService/SubmitTestCertificate"
 	CertificatesService_GetTask_FullMethodName               = "/qwq.capability.certificates.v1.CertificatesService/GetTask"
 	CertificatesService_CancelTask_FullMethodName            = "/qwq.capability.certificates.v1.CertificatesService/CancelTask"
+	CertificatesService_ReserveBinding_FullMethodName        = "/qwq.capability.certificates.v1.CertificatesService/ReserveBinding"
 	CertificatesService_BindCertificate_FullMethodName       = "/qwq.capability.certificates.v1.CertificatesService/BindCertificate"
 	CertificatesService_UnbindCertificate_FullMethodName     = "/qwq.capability.certificates.v1.CertificatesService/UnbindCertificate"
 	CertificatesService_DeployBinding_FullMethodName         = "/qwq.capability.certificates.v1.CertificatesService/DeployBinding"
@@ -56,6 +57,7 @@ type CertificatesServiceClient interface {
 	SubmitTestCertificate(ctx context.Context, in *SubmitTestCertificateRequest, opts ...grpc.CallOption) (*SubmitTestCertificateResponse, error)
 	GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*GetTaskResponse, error)
 	CancelTask(ctx context.Context, in *CancelTaskRequest, opts ...grpc.CallOption) (*CancelTaskResponse, error)
+	ReserveBinding(ctx context.Context, in *ReserveBindingRequest, opts ...grpc.CallOption) (*ReserveBindingResponse, error)
 	BindCertificate(ctx context.Context, in *BindCertificateRequest, opts ...grpc.CallOption) (*BindCertificateResponse, error)
 	UnbindCertificate(ctx context.Context, in *UnbindCertificateRequest, opts ...grpc.CallOption) (*UnbindCertificateResponse, error)
 	DeployBinding(ctx context.Context, in *DeployBindingRequest, opts ...grpc.CallOption) (*DeployBindingResponse, error)
@@ -139,6 +141,16 @@ func (c *certificatesServiceClient) CancelTask(ctx context.Context, in *CancelTa
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CancelTaskResponse)
 	err := c.cc.Invoke(ctx, CertificatesService_CancelTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *certificatesServiceClient) ReserveBinding(ctx context.Context, in *ReserveBindingRequest, opts ...grpc.CallOption) (*ReserveBindingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReserveBindingResponse)
+	err := c.cc.Invoke(ctx, CertificatesService_ReserveBinding_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -252,6 +264,7 @@ type CertificatesServiceServer interface {
 	SubmitTestCertificate(context.Context, *SubmitTestCertificateRequest) (*SubmitTestCertificateResponse, error)
 	GetTask(context.Context, *GetTaskRequest) (*GetTaskResponse, error)
 	CancelTask(context.Context, *CancelTaskRequest) (*CancelTaskResponse, error)
+	ReserveBinding(context.Context, *ReserveBindingRequest) (*ReserveBindingResponse, error)
 	BindCertificate(context.Context, *BindCertificateRequest) (*BindCertificateResponse, error)
 	UnbindCertificate(context.Context, *UnbindCertificateRequest) (*UnbindCertificateResponse, error)
 	DeployBinding(context.Context, *DeployBindingRequest) (*DeployBindingResponse, error)
@@ -291,6 +304,9 @@ func (UnimplementedCertificatesServiceServer) GetTask(context.Context, *GetTaskR
 }
 func (UnimplementedCertificatesServiceServer) CancelTask(context.Context, *CancelTaskRequest) (*CancelTaskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CancelTask not implemented")
+}
+func (UnimplementedCertificatesServiceServer) ReserveBinding(context.Context, *ReserveBindingRequest) (*ReserveBindingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReserveBinding not implemented")
 }
 func (UnimplementedCertificatesServiceServer) BindCertificate(context.Context, *BindCertificateRequest) (*BindCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BindCertificate not implemented")
@@ -462,6 +478,24 @@ func _CertificatesService_CancelTask_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CertificatesServiceServer).CancelTask(ctx, req.(*CancelTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CertificatesService_ReserveBinding_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReserveBindingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CertificatesServiceServer).ReserveBinding(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CertificatesService_ReserveBinding_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CertificatesServiceServer).ReserveBinding(ctx, req.(*ReserveBindingRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -662,6 +696,10 @@ var CertificatesService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CancelTask",
 			Handler:    _CertificatesService_CancelTask_Handler,
+		},
+		{
+			MethodName: "ReserveBinding",
+			Handler:    _CertificatesService_ReserveBinding_Handler,
 		},
 		{
 			MethodName: "BindCertificate",

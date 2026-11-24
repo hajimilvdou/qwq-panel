@@ -18,8 +18,9 @@ import (
 type RenewalPolicyArgs struct {
 	PolicyID      string          `json:"policy_id"`
 	CertificateID string          `json:"certificate_id"`
-	ProviderID    string          `json:"provider_id"`
-	ZoneID        string          `json:"zone_id"`
+	ProviderID    string          `json:"provider_id,omitempty"`
+	ZoneID        string          `json:"zone_id,omitempty"`
+	ChallengeType string          `json:"challenge_type,omitempty"`
 	CA            certificates.CA `json:"ca"`
 	BindingRefs   []string        `json:"binding_refs"`
 	ExpiresAt     time.Time       `json:"expires_at"`
@@ -59,7 +60,7 @@ func (a *Authority) RegisterRenewalPolicy(ctx context.Context, policyID, expecte
 	if err != nil {
 		return RenewalPolicyView{}, err
 	}
-	dependencies, err := a.readRenewalScope(bounded, input.CertificateID, input.ProviderID, input.ZoneID, input.CA, input.BindingRefs)
+	dependencies, err := a.readRenewalScope(bounded, input.CertificateID, input.ProviderID, input.ZoneID, input.ChallengeType, input.CA, input.BindingRefs)
 	if err != nil {
 		return RenewalPolicyView{}, err
 	}

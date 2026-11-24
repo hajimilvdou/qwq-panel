@@ -179,7 +179,9 @@
     }
   }
 
+  let destroyed = false;
   onDestroy(() => {
+    destroyed = true;
     ctrl?.abort();
     releaseStagedUpload();
   });
@@ -255,17 +257,19 @@
         off = null;
       }
     });
+    const uploadId = ins.upload_id;
+    if (stagedUploadId === uploadId) stagedUploadId = null;
     try {
-      const body = { upload_id: ins.upload_id, accepted_capabilities: acceptedList(caps, accepted) };
+      const body = { upload_id: uploadId, accepted_capabilities: acceptedList(caps, accepted) };
       if (ins.installed) await plugins.update(m.id, { ...body, expected_revision: ins.installed.revision }, intent.key);
       else await plugins.install(body, intent.key);
-      stagedUploadId = null;
       current = ROLLOUT_STEPS.length - 1;
       finished = true;
       off?.();
       off = null;
       resources.invalidate('plugins');
     } catch (err) {
+      if (!destroyed) stagedUploadId = uploadId;
       off?.();
       off = null;
       installErr = describeError(err);
@@ -322,7 +326,17 @@
           <p class="small muted">.qwqpkg 文件，不超过 64 MiB</p>
           <Button variant="soft" onclick={() => picker?.click()}>选择文件</Button>
         {/if}
-        <input bind:this={picker} type="file" accept=".qwqpkg,application/octet-stream" hidden onchange={(e) => take(e.currentTarget.files?.[0])} />
+        <input
+          bind:this={picker}
+          type="file"
+          accept=".qwqpkg,application/octet-stream"
+          hidden
+          onchange={(e) => {
+            const f = e.currentTarget.files?.[0];
+            e.currentTarget.value = '';
+            void take(f);
+          }}
+        />
       </div>
       {#if uploadErr}<Alert>{uploadErr}</Alert>{/if}
     {:else}
@@ -339,7 +353,7 @@
           mono
           required
           placeholder="https://github.com/org/repo/releases/download/v1.0.0/plugin.qwqpkg"
-          hint="仅允许公开 HTTPS 地址（自动拦截内网/回环/元数据地址），上限 64 MiB、超时 60 秒。"
+          hint="仅允许公开 HTTPS 地址（自动拦截内网/回环/元数据地址），上限 64 MiB、超时 5 分钟。"
           bind:value={remoteUrl}
         />
         <Input

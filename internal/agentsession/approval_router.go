@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/qwq-panel/qwq/internal/operations"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 )
+
+const maxExternalApprovalsPerTurn = 16
 
 // ExternalApprovalKind classifies a permission prompt emitted by an external
 // agent subprocess (Codex, OpenCode, DSH / ACP).
@@ -69,6 +72,9 @@ type ApprovalRouter struct {
 	emit     Emit
 	minter   HostApprovalMinter
 	bridge   ApprovalBridge
+
+	mu          sync.Mutex
+	mintedCount int
 }
 
 // NewApprovalRouter creates one router bound to a session turn.
@@ -91,7 +97,9 @@ func NewApprovalRouter(turn Turn, planMode bool, emit Emit, minter HostApprovalM
 //  3. safe / custom ALWAYS asks a human through HostApprovalMinter + ApprovalBridge.
 //  4. Missing minter or bridge fails closed (VerdictDecline), never self-approves.
 func (r *ApprovalRouter) Decide(ctx context.Context, req ExternalApprovalRequest) ExternalApprovalOutcome {
-	if req.CallID == "" && r.turn.NextCallID != nil {
+	// Always mint a host-unique call ID when supplied by Service so untrusted
+	// child CLIs cannot trigger PK collisions in agent_tool_calls.
+	if r.turn.NextCallID != nil {
 		req.CallID = r.turn.NextCallID()
 	}
 	if req.Action == "" {
@@ -110,8 +118,15 @@ func (r *ApprovalRouter) Decide(ctx context.Context, req ExternalApprovalRequest
 		}
 	}
 
-	// Hard ceiling #2: destructive or high-risk operations can NEVER skip human approval.
-	highRisk := req.Destructive || strings.EqualFold(req.Risk, "high") || isDangerousShellRequest(req)
+	// Hard ceiling #2: destructive or high-risk operations can NEVER skip human
+	// approval, and dangerous shell/patch mutations are promoted to Destructive
+	// so MintExternalApproval enforces MFA.
+	dangerous := isDangerousShellRequest(req) || isDangerousPatchRequest(req)
+	if dangerous {
+		req.Destructive = true
+		req.Risk = "high"
+	}
+	highRisk := req.Destructive || strings.EqualFold(req.Risk, "high")
 	if r.turn.PermissionMode == operations.PermissionFull && !highRisk {
 		return ExternalApprovalOutcome{
 			Verdict: VerdictAccept,
@@ -128,6 +143,18 @@ func (r *ApprovalRouter) Decide(ctx context.Context, req ExternalApprovalRequest
 		}
 	}
 
+	r.mu.Lock()
+	if r.mintedCount >= maxExternalApprovalsPerTurn {
+		r.mu.Unlock()
+		r.emitDenied(req, "Per-turn external approval limit reached; further permission prompts are declined.")
+		return ExternalApprovalOutcome{
+			Verdict: VerdictDecline,
+			Comment: "Per-turn external approval limit reached.",
+		}
+	}
+	r.mintedCount++
+	r.mu.Unlock()
+
 	aprID, opID, err := r.minter.MintApproval(ctx, r.turn.SessionID, req)
 	if err != nil || aprID == "" {
 		r.emitDenied(req, fmt.Sprintf("Failed to create host approval: %v", err))
@@ -137,8 +164,17 @@ func (r *ApprovalRouter) Decide(ctx context.Context, req ExternalApprovalRequest
 		}
 	}
 
+	cancelMinted := func(reason string) {
+		if opID == "" {
+			return
+		}
+		if canceller, ok := r.bridge.(ApprovalCanceller); ok {
+			_ = canceller.CancelApproval(context.WithoutCancel(ctx), r.turn.Owner, r.turn.SessionID, opID, reason)
+		}
+	}
+
 	if r.emit != nil {
-		_ = r.emit(Event{
+		if emitErr := r.emit(Event{
 			Type:        EventApprovalRequired,
 			SessionID:   r.turn.SessionID,
 			CallID:      req.CallID,
@@ -150,11 +186,19 @@ func (r *ApprovalRouter) Decide(ctx context.Context, req ExternalApprovalRequest
 			Approval:    "confirm",
 			Summary:     req.Summary,
 			Description: req.Description,
-		})
+		}); emitErr != nil {
+			cancelMinted("Failed to publish external approval prompt to session stream.")
+			return ExternalApprovalOutcome{
+				Verdict:    VerdictDecline,
+				ApprovalID: aprID,
+				Comment:    "Failed to publish approval prompt (fail-closed).",
+			}
+		}
 	}
 
 	dec, err := r.bridge.Wait(ctx, aprID)
 	if err != nil {
+		cancelMinted("External agent turn ended before approval decision.")
 		if r.emit != nil {
 			_ = r.emit(Event{
 				Type:        EventToolResult,
@@ -201,23 +245,52 @@ func (r *ApprovalRouter) emitDenied(req ExternalApprovalRequest, reason string) 
 }
 
 // isDangerousShellRequest catches obvious lockout/destructive shell commands
-// (SSH lockout, firewall flush, rm -rf /) so even full mode forces confirmation.
+// (SSH lockout, firewall flush, rm -rf /) so even full mode forces confirmation + MFA.
 func isDangerousShellRequest(req ExternalApprovalRequest) bool {
-	if req.Kind != ApprovalKindShell {
+	if req.Kind != ApprovalKindShell && req.Kind != ApprovalKindPermission {
 		return false
 	}
-	body := strings.ToLower(req.Summary + " " + string(req.Args))
+	body := strings.ToLower(req.Summary + " " + req.Description + " " + string(req.Args))
 	for _, pat := range []string{
 		"rm -rf /",
+		"rm -fr /",
 		"iptables -f",
 		"nft flush ruleset",
 		"ufw reset",
 		"sshd_config",
 		"authorized_keys",
+		"/etc/passwd",
+		"/etc/shadow",
+		"/etc/sudoers",
+		"/var/lib/qwq",
 		"passwd",
 		"shutdown",
 		"reboot",
 		"mkfs",
+	} {
+		if strings.Contains(body, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDangerousPatchRequest catches file edits targeting SSH/auth/qwq host state
+// so MintExternalApproval promotes them to Destructive (MFA required).
+func isDangerousPatchRequest(req ExternalApprovalRequest) bool {
+	if req.Kind != ApprovalKindPatch && req.Kind != ApprovalKindPermission {
+		return false
+	}
+	body := strings.ToLower(req.Summary + " " + req.Description + " " + string(req.Args))
+	for _, pat := range []string{
+		"/etc/ssh/",
+		"sshd_config",
+		"authorized_keys",
+		"/etc/passwd",
+		"/etc/shadow",
+		"/etc/sudoers",
+		"/var/lib/qwq",
+		"/etc/qwq",
 	} {
 		if strings.Contains(body, pat) {
 			return true

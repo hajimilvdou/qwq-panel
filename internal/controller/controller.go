@@ -4,12 +4,14 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"github.com/qwq-panel/qwq/internal/platform/clock"
 	"github.com/qwq-panel/qwq/internal/platform/config"
 	"github.com/qwq-panel/qwq/internal/platform/ids"
+	"github.com/qwq-panel/qwq/internal/platform/problem"
 	"github.com/qwq-panel/qwq/internal/pluginhost/updater"
 	"github.com/qwq-panel/qwq/internal/privateexport"
 	"github.com/qwq-panel/qwq/internal/secrets"
@@ -97,6 +100,10 @@ type Controller struct {
 	// built by NewAgentSessions when serve.go mounts the public API and is
 	// owned by the controller so Close stops its turns before storage closes.
 	agentSessions atomic.Pointer[agentsession.Service]
+	// Optional host callbacks registered by serve.go / api for AI read tools.
+	hostFnMu        sync.RWMutex
+	listenAddrFn    func() string
+	pluginCatalogFn func(ctx context.Context, refresh bool) (any, error)
 	// 续期事实源只由宿主装配；账号创建器绑定当前同步宿主事务。
 	renewalPolicies atomic.Pointer[renewalPolicyHolder]
 	renewalServices *renewalServiceSource
@@ -272,6 +279,9 @@ func New(ctx context.Context, opts Options) (*Controller, error) {
 	}
 	c.renewalServices = &renewalServiceSource{controller: c, nodeID: "local"}
 	c.registerRenewalBootstrap()
+	ops.RegisterHostAction(operations.ExternalApprovalAction, func(context.Context, *storage.Tx, operations.HostRequest) (json.RawMessage, error) {
+		return json.RawMessage(`{"approved":true}`), nil
+	}, nil)
 	if err := ops.Start(ctx); err != nil {
 		hub.Close()
 		db.Close()
@@ -345,6 +355,42 @@ func (c *Controller) Updater() *updater.Updater { return c.updater.Load() }
 // are served. Passing nil disables the updater.
 func (c *Controller) SetUpdater(u *updater.Updater) { c.updater.Store(u) }
 
+// SetListenAddrFn installs a live callback returning the current panel listen
+// address (host:port) for host.system.info AI read tools.
+func (c *Controller) SetListenAddrFn(fn func() string) {
+	c.hostFnMu.Lock()
+	c.listenAddrFn = fn
+	c.hostFnMu.Unlock()
+}
+
+func (c *Controller) listenAddr() string {
+	c.hostFnMu.RLock()
+	fn := c.listenAddrFn
+	c.hostFnMu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return strings.TrimSpace(fn())
+}
+
+// SetPluginCatalogFn installs a callback returning the live official plugin
+// catalog for host.plugins.catalog AI read tools.
+func (c *Controller) SetPluginCatalogFn(fn func(ctx context.Context, refresh bool) (any, error)) {
+	c.hostFnMu.Lock()
+	c.pluginCatalogFn = fn
+	c.hostFnMu.Unlock()
+}
+
+func (c *Controller) pluginCatalog(ctx context.Context, refresh bool) (any, error) {
+	c.hostFnMu.RLock()
+	fn := c.pluginCatalogFn
+	c.hostFnMu.RUnlock()
+	if fn == nil {
+		return nil, nil
+	}
+	return fn(ctx, refresh)
+}
+
 // NewAgentSessions builds the native agent session backend and wires it to the
 // operation path: the catalog offers the tools, AgentRunner executes them and
 // AgentApprovals learns the human decision (ADR-0010 §5). The service is built
@@ -368,6 +414,43 @@ func (c *Controller) NewAgentSessions(ctx context.Context) (*agentsession.Servic
 	if err != nil {
 		return nil, fmt.Errorf("controller: agent.model_egress_allow: %w", err)
 	}
+	approvals := &AgentApprovals{
+		Ops:    c.ops,
+		Clock:  c.clk,
+		Logger: logger,
+		OwnerLookup: func(lookupCtx context.Context, sessionID string) (actor.Actor, bool) {
+			if svc := c.AgentSessions(); svc != nil {
+				return svc.OwnerOf(lookupCtx, sessionID)
+			}
+			return actor.Actor{}, false
+		},
+	}
+	roleResolver := func(rctx context.Context, owner actor.Actor) (string, error) {
+		switch owner.Kind {
+		case actor.System:
+			return string(authz.RoleAdmin), nil
+		case actor.Human:
+			role, disabled, err := c.id.PrincipalRole(rctx, owner.ID)
+			if err != nil {
+				return "", err
+			}
+			if disabled {
+				return "", problem.New(problem.PermissionDenied, "The user account is disabled.")
+			}
+			return role, nil
+		case actor.Service:
+			sa, err := c.auth.ServiceAccount(rctx, owner.ID)
+			if err != nil {
+				return "", err
+			}
+			if sa.Disabled {
+				return "", problem.New(problem.PermissionDenied, "The service account is disabled.")
+			}
+			return string(sa.Role), nil
+		default:
+			return "", problem.New(problem.PermissionDenied, "Unsupported session owner.")
+		}
+	}
 	svc, err := agentsession.New(agentsession.Options{
 		DB:      c.db,
 		Clock:   c.clk,
@@ -377,10 +460,12 @@ func (c *Controller) NewAgentSessions(ctx context.Context) (*agentsession.Servic
 		DataDir: c.cfg.DataDir,
 		Catalog: AgentToolCatalog{Catalog: c.cat, HostAction: c.ops.HasHostAction},
 		Runner: &AgentRunner{
-			Ops: c.ops, Catalog: c.cat, NodeID: "local",
+			Ops: c.ops, Catalog: c.cat, Controller: c, Authz: c.auth, NodeID: "local",
 			Clock: c.clk, IDs: c.ids, Logger: logger,
 		},
-		Approvals: &AgentApprovals{Ops: c.ops, Clock: c.clk, Logger: logger},
+		Approvals:      approvals,
+		ApprovalMinter: approvals,
+		RoleResolver:   roleResolver,
 		Native: agentsession.NativeOptions{
 			EgressAllowPrefixes: egressPrefixes,
 			EgressAllowAddrs:    egressAddrs,

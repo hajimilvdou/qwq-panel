@@ -144,6 +144,13 @@ type CredentialLifecycle interface {
 	FinishCredentialRotationTx(ctx context.Context, tx *storage.Tx, pluginID string) error
 }
 
+// VersionPruner is an optional Installer extension that removes obsolete
+// inactive plugin version directories while the active version continues
+// running (KeepUnit=true), preventing unbounded disk growth across upgrades.
+type VersionPruner interface {
+	PruneVersion(ctx context.Context, pluginID, version string) error
+}
+
 // InspectionVerdict is the install-time verdict of one package, reported for
 // the pre-install inspection. A signature- or trust-class refusal comes back
 // as a verdict with Valid=false, never as an error, so the caller can explain

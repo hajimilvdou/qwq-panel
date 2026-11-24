@@ -118,7 +118,7 @@ func openStore(dataDir, schemaSQL string, nowFn func() time.Time) (*store, error
 		return nil, err
 	}
 	dsn := "file:" + filepath.ToSlash(filepath.Join(dataDir, "notify.db")) +
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=cache_size(-2048)"
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=cache_size(-2048)&_pragma=journal_size_limit(8388608)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -136,10 +136,18 @@ func openStore(dataDir, schemaSQL string, nowFn func() time.Time) (*store, error
 }
 
 func (s *store) Close() error {
-	if s == nil || s.db == nil {
+	if s == nil {
 		return nil
 	}
-	return s.db.Close()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil
+	}
+	_, _ = s.db.Exec(`PRAGMA wal_checkpoint(PASSIVE)`)
+	err := s.db.Close()
+	s.db = nil
+	return err
 }
 
 func loadOrCreateKey(path string) ([]byte, error) {
@@ -261,9 +269,14 @@ func boolInt(b bool) int {
 	return 0
 }
 
-func (s *store) upsertChannel(ctx context.Context, id, name, kind string, enabled bool, cfg ChannelConfig) (ChannelRecord, error) {
+var errNotifyStoreClosed = errors.New("notify store closed")
+
+func (s *store) upsertChannelWithAutoRule(ctx context.Context, id, name, kind string, enabled bool, cfg ChannelConfig, autoRule bool) (ChannelRecord, *RuleRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return ChannelRecord{}, nil, errNotifyStoreClosed
+	}
 
 	now := s.now().Unix()
 	var existingID string
@@ -324,39 +337,88 @@ func (s *store) upsertChannel(ctx context.Context, id, name, kind string, enable
 	} else {
 		var count int
 		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notify_channels`).Scan(&count); err == nil && count >= maxChannelsStored {
-			return ChannelRecord{}, fmt.Errorf("channel limit reached (%d)", maxChannelsStored)
+			return ChannelRecord{}, nil, fmt.Errorf("channel limit reached (%d)", maxChannelsStored)
 		}
 	}
 
 	if err := validateChannelConfig(kind, cfg); err != nil {
-		return ChannelRecord{}, err
+		return ChannelRecord{}, nil, err
 	}
 	enc, err := s.encryptConfig(cfg)
 	if err != nil {
-		return ChannelRecord{}, err
+		return ChannelRecord{}, nil, err
 	}
 	masked := maskChannelConfig(kind, cfg)
 	maskedJSON, _ := json.Marshal(masked)
 
-	if existingID == "" {
+	created := existingID == ""
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ChannelRecord{}, nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if created {
 		existingID = newID("nch")
-		_, err = s.db.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			`INSERT INTO notify_channels (id, name, kind, enabled, config_enc, config_masked_json, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			existingID, name, kind, boolInt(enabled), enc, string(maskedJSON), now, now)
 	} else {
-		_, err = s.db.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			`UPDATE notify_channels SET name = ?, kind = ?, enabled = ?, config_enc = ?, config_masked_json = ?, updated_at = ?
 			 WHERE id = ?`,
 			name, kind, boolInt(enabled), enc, string(maskedJSON), now, existingID)
 	}
 	if err != nil {
-		return ChannelRecord{}, err
+		return ChannelRecord{}, nil, err
 	}
-	return s.getChannelLocked(ctx, existingID)
+
+	var autoCreated *RuleRecord
+	if created && autoRule && enabled {
+		var channelCount, ruleCount int
+		if cerr := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM notify_channels`).Scan(&channelCount); cerr == nil && channelCount == 1 {
+			if rerr := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM notify_rules`).Scan(&ruleCount); rerr == nil && ruleCount == 0 {
+				if seed := BuildAutoCatchAllNotifyRuleIfEmpty(ruleCount, existingID); seed != nil {
+					chJSON, _ := json.Marshal(seed.ChannelIDs)
+					res, ierr := tx.ExecContext(ctx,
+						`INSERT OR IGNORE INTO notify_rules (id, name, enabled, source_pattern, min_severity, channel_ids_json, cooldown_sec, quiet_start, quiet_end, quiet_tz, allow_critical_bypass, created_at, updated_at)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, '', '', 'UTC', 1, ?, ?)`,
+						seed.ID, seed.Name, boolInt(seed.Enabled), seed.SourcePattern, seed.MinSeverity, string(chJSON),
+						seed.CooldownSec, now, now)
+					if ierr == nil {
+						if n, _ := res.RowsAffected(); n > 0 {
+							autoCreated = &RuleRecord{
+								ID:                  seed.ID,
+								Name:                seed.Name,
+								Enabled:             seed.Enabled,
+								SourcePattern:       seed.SourcePattern,
+								MinSeverity:         seed.MinSeverity,
+								ChannelIDs:          append([]string(nil), seed.ChannelIDs...),
+								CooldownSec:         seed.CooldownSec,
+								QuietTZ:             "UTC",
+								AllowCriticalBypass: true,
+								CreatedAt:           now,
+								UpdatedAt:           now,
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return ChannelRecord{}, nil, err
+	}
+	rec, err := s.getChannelLocked(ctx, existingID)
+	return rec, autoCreated, err
 }
 
 func (s *store) getChannelLocked(ctx context.Context, id string) (ChannelRecord, error) {
+	if s.db == nil {
+		return ChannelRecord{}, errNotifyStoreClosed
+	}
 	var rec ChannelRecord
 	var enabled int
 	var maskedRaw string
@@ -379,6 +441,9 @@ func (s *store) getChannelLocked(ctx context.Context, id string) (ChannelRecord,
 func (s *store) getChannelWithSecret(ctx context.Context, id string) (channelWithSecret, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return channelWithSecret{}, errNotifyStoreClosed
+	}
 	var out channelWithSecret
 	var enabled int
 	var enc []byte
@@ -404,6 +469,9 @@ func (s *store) getChannelWithSecret(ctx context.Context, id string) (channelWit
 func (s *store) listChannels(ctx context.Context) ([]ChannelRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil, errNotifyStoreClosed
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, kind, enabled, config_masked_json, last_status, last_error, last_sent_at, created_at, updated_at
 		 FROM notify_channels ORDER BY created_at DESC`)
@@ -433,6 +501,9 @@ func (s *store) listChannels(ctx context.Context) ([]ChannelRecord, error) {
 func (s *store) deleteChannel(ctx context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return false, errNotifyStoreClosed
+	}
 	res, err := s.db.ExecContext(ctx, `DELETE FROM notify_channels WHERE id = ?`, id)
 	if err != nil {
 		return false, err
@@ -444,6 +515,9 @@ func (s *store) deleteChannel(ctx context.Context, id string) (bool, error) {
 func (s *store) markChannelStatus(ctx context.Context, id, status, errMsg string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return
+	}
 	if len(errMsg) > 240 {
 		errMsg = errMsg[:240]
 	}
@@ -455,6 +529,9 @@ func (s *store) markChannelStatus(ctx context.Context, id, status, errMsg string
 func (s *store) upsertRule(ctx context.Context, rec RuleRecord) (RuleRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return RuleRecord{}, errNotifyStoreClosed
+	}
 	now := s.now().Unix()
 	var existingID string
 	if rec.ID != "" {
@@ -477,8 +554,9 @@ func (s *store) upsertRule(ctx context.Context, rec RuleRecord) (RuleRecord, err
 	}
 	var err error
 	if existingID == "" {
-		existingID = newID("nrl")
-		rec.ID = existingID
+		if rec.ID == "" {
+			rec.ID = newID("nrl")
+		}
 		rec.CreatedAt = now
 		rec.UpdatedAt = now
 		_, err = s.db.ExecContext(ctx,
@@ -505,6 +583,9 @@ func (s *store) upsertRule(ctx context.Context, rec RuleRecord) (RuleRecord, err
 func (s *store) listRules(ctx context.Context) ([]RuleRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil, errNotifyStoreClosed
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, enabled, source_pattern, min_severity, channel_ids_json, cooldown_sec,
 		        quiet_start, quiet_end, quiet_tz, allow_critical_bypass, created_at, updated_at
@@ -536,6 +617,9 @@ func (s *store) listRules(ctx context.Context) ([]RuleRecord, error) {
 func (s *store) deleteRule(ctx context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return false, errNotifyStoreClosed
+	}
 	res, err := s.db.ExecContext(ctx, `DELETE FROM notify_rules WHERE id = ?`, id)
 	if err != nil {
 		return false, err
@@ -547,6 +631,9 @@ func (s *store) deleteRule(ctx context.Context, id string) (bool, error) {
 func (s *store) recordDelivery(ctx context.Context, d DeliveryRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return errNotifyStoreClosed
+	}
 	if d.ID == "" {
 		d.ID = newID("ndl")
 	}
@@ -573,6 +660,9 @@ func (s *store) recordDelivery(ctx context.Context, d DeliveryRecord) error {
 func (s *store) listDeliveries(ctx context.Context, limit int) ([]DeliveryRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil, errNotifyStoreClosed
+	}
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -598,6 +688,9 @@ func (s *store) listDeliveries(ctx context.Context, limit int) ([]DeliveryRecord
 func (s *store) stats24h(ctx context.Context) (sent, failed, suppressed int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return 0, 0, 0
+	}
 	since := s.now().Add(-24 * time.Hour).Unix()
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT status, COUNT(*) FROM notify_deliveries WHERE created_at >= ? GROUP BY status`, since)
@@ -625,6 +718,9 @@ func (s *store) stats24h(ctx context.Context) (sent, failed, suppressed int) {
 func (s *store) getCooldown(ctx context.Context, key string) (int64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return 0, false, errNotifyStoreClosed
+	}
 	var firedAt int64
 	err := s.db.QueryRowContext(ctx, `SELECT fired_at FROM notify_cooldowns WHERE cool_key = ?`, key).Scan(&firedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -639,6 +735,9 @@ func (s *store) getCooldown(ctx context.Context, key string) (int64, bool, error
 func (s *store) setCooldown(ctx context.Context, key string, firedAt int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db == nil {
+		return errNotifyStoreClosed
+	}
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO notify_cooldowns (cool_key, fired_at) VALUES (?, ?)
 		 ON CONFLICT(cool_key) DO UPDATE SET fired_at = excluded.fired_at`,

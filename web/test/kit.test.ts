@@ -385,7 +385,7 @@ describe('@qwq/kit v1 ↔ PluginBridge 端到端握手与调用', () => {
     expect(copied).toEqual([{ text: 'vless://abc', label: '已复制节点链接' }]);
 
     const received: string[] = [];
-    const off = bridge.subscribe('plugins/proxy.advanced', (e) => received.push(e.subject));
+    const off = bridge.subscribe('plugins/proxy.advanced/*', (e) => received.push(e.subject));
     await new Promise((r) => setTimeout(r, 20));
     hostEvents.emit?.({ subject: 'plugins/proxy.advanced/users', type: 'resource.changed' });
     await new Promise((r) => setTimeout(r, 20));

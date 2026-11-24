@@ -38,6 +38,15 @@ export { default as Switch } from './Switch.svelte';
 export { default as Tabs } from './Tabs.svelte';
 export { default as Tile } from './Tile.svelte';
 export { default as Toaster } from './Toaster.svelte';
+export {
+  getTopModalDialog,
+  notifyTopLayerOpened,
+  onTopLayerChanged,
+  onTopLayerOpened,
+  promoteToasterToTopLayer,
+  registerModalDialog,
+  unregisterModalDialog,
+} from './toplayer';
 
 export type { IconName } from './icons';
 export type { CategoryColor, Mood as MoodKind, Option, Tone } from './types';

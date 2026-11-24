@@ -26,9 +26,7 @@ type Forwarder struct {
 
 func (f Forwarder) hostPorts() []uint32 {
 	if f.HostPortsFunc != nil {
-		if dynamic := f.HostPortsFunc(); len(dynamic) > 0 {
-			return mergePorts(f.HostPorts, dynamic)
-		}
+		return f.HostPortsFunc()
 	}
 	return f.HostPorts
 }
@@ -59,7 +57,11 @@ func (f Forwarder) Forward(ctx context.Context, call hostsvc.CapabilityCall) (ho
 			return invalidCall()
 		}
 		hostPorts := f.hostPorts()
-		if _, err := preservedPorts(hostPorts, hostPorts); err != nil {
+		if len(hostPorts) > 0 {
+			if _, err := preservedPorts(hostPorts, hostPorts); err != nil {
+				return hostsvc.CapabilityResult{}, status.Error(codes.Unavailable, "宿主管理端口配置无效")
+			}
+		} else if f.HostPortsFunc == nil {
 			return hostsvc.CapabilityResult{}, status.Error(codes.Unavailable, "宿主管理端口未配置")
 		}
 		observed := new(firewallv1.GetRulesetResponse)
@@ -79,8 +81,19 @@ func (f Forwarder) Forward(ctx context.Context, call hostsvc.CapabilityCall) (ho
 			return invalidCall()
 		}
 		hostPorts := f.hostPorts()
-		if _, err := preservedPorts(hostPorts, hostPorts); err != nil {
+		if len(hostPorts) > 0 {
+			if _, err := preservedPorts(hostPorts, hostPorts); err != nil {
+				return hostsvc.CapabilityResult{}, status.Error(codes.Unavailable, "宿主管理端口配置无效")
+			}
+		} else if f.HostPortsFunc == nil {
 			return hostsvc.CapabilityResult{}, status.Error(codes.Unavailable, "宿主管理端口未配置")
+		} else {
+			observed := new(firewallv1.GetRulesetResponse)
+			result, err := f.invoke(ctx, call.PluginID, "firewall.get", struct{}{}, observed)
+			if err != nil || result.Error != nil {
+				return result, err
+			}
+			hostPorts = observed.PreservedPorts
 		}
 		return f.invoke(ctx, call.PluginID, "firewall.reset", Mutation{ExpectedRevision: req.ExpectedRevision, HostPorts: append([]uint32(nil), hostPorts...)}, new(firewallv1.ResetRulesetResponse))
 	default:

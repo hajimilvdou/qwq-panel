@@ -204,6 +204,12 @@ func RenderV2(intent *corev2.Intent, materials V2Materials, options V2Options) (
 			{Tag: "blocked-private", Protocol: "blackhole", Settings: struct{}{}},
 		}
 		cfg.Routing.DomainStrategy = "AsIs"
+	}
+	// WARP 解锁/绑端口路由规则必须优先于 OutboundPolicy.Overrides，防止通用域后缀覆盖 WARP 解锁
+	if intent.WARP != nil && intent.WARP.Enabled && materials.WARP != nil {
+		appendWARPOutboundAndRules(&cfg, intent.WARP, materials.WARP.PrivateKey, enabledTagsByProfile, allEnabledTags)
+	}
+	if options.OutboundPolicy != nil {
 		for _, ov := range options.OutboundPolicy.Overrides {
 			sfx := strings.TrimSpace(strings.TrimPrefix(ov.DomainSuffix, "."))
 			if sfx == "" {
@@ -221,9 +227,6 @@ func RenderV2(intent *corev2.Intent, materials V2Materials, options V2Options) (
 				OutboundTag: targetTag,
 			})
 		}
-	}
-	if intent.WARP != nil && intent.WARP.Enabled && materials.WARP != nil {
-		appendWARPOutboundAndRules(&cfg, intent.WARP, materials.WARP.PrivateKey, enabledTagsByProfile, allEnabledTags)
 	}
 	BuildDeduplicatedMarkedOutbounds(&cfg, markedUsers, defaultStrategy, primarySendThrough)
 	EnsurePrivateBlackholeProtection(&cfg)

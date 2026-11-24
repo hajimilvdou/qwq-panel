@@ -78,6 +78,8 @@ var roleGrants = map[Role]roleGrant{
 			"host.ai_providers:create",
 			"host.ai_providers:update",
 			"host.ai_providers:delete",
+			// External CLI shell/patch/permission approvals are strictly admin-only.
+			"host.agent_external_approval:*",
 		},
 	},
 	RoleViewer: {

@@ -6,7 +6,31 @@
   const root = document.documentElement;
   const pick = (v, list, fb) => (list.includes(v) ? v : fb);
   const hash = new URLSearchParams(location.hash.slice(1));
-  root.dataset.theme = pick(hash.get('theme'), ['light', 'dark'], 'light');
+  const initialTheme = pick(hash.get('theme'), ['light', 'dark'], 'light');
+  root.dataset.theme = initialTheme;
+  root.style.colorScheme = initialTheme;
+  root.dataset.density = pick(hash.get('density'), ['comfortable', 'compact'], 'comfortable');
+
+  function applyHostVisualSettings(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.theme === 'light' || msg.theme === 'dark') {
+      root.dataset.theme = msg.theme;
+      root.style.colorScheme = msg.theme;
+    }
+    if (msg.density === 'comfortable' || msg.density === 'compact') {
+      root.dataset.density = msg.density;
+    }
+    if (msg.tokens && typeof msg.tokens === 'object') {
+      for (const [k, v] of Object.entries(msg.tokens)) {
+        if (k.startsWith('--') && typeof v === 'string' && !/[;{}<>]/.test(v)) {
+          root.style.setProperty(k, v.trim());
+        }
+      }
+      if (msg.tokens['--accent-strong']) root.style.setProperty('--cocoa', msg.tokens['--accent-strong'].trim());
+      else if (msg.tokens['--accent']) root.style.setProperty('--cocoa', msg.tokens['--accent'].trim());
+      if (msg.tokens['--on-accent']) root.style.setProperty('--on-cocoa', msg.tokens['--on-accent'].trim());
+    }
+  }
 
   const $ = (id) => document.getElementById(id);
   let port = null;
@@ -1196,8 +1220,8 @@
       else req.reject(new Error(extractErrorMessage(data.problem || data.error, '复制失败')));
       return;
     }
-    if (data.t === 'ui.settings' && data.theme) {
-      root.dataset.theme = pick(data.theme, ['light', 'dark'], root.dataset.theme);
+    if (data.t === 'ui.settings') {
+      applyHostVisualSettings(data);
     }
   }
 

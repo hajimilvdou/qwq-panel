@@ -170,8 +170,12 @@ func BuildUnifiedProfileUsers(n *proxyNodeRecord, protocol string, activeUsers [
 			}
 		case corev2.ProtocolShadowsocks2022:
 			if n.Config.UserKey != "" {
-				entry["psk"] = n.Config.UserKey
-				seenSecret[n.Config.UserKey] = true
+				effectiveKey := n.Config.UserKey
+				if derived, derr := DeriveSS2022UserPSKForCipher(n.Config.UserKey, n.Config.Method, n.ID); derr == nil {
+					effectiveKey = derived
+				}
+				entry["psk"] = effectiveKey
+				seenSecret[effectiveKey] = true
 				valid = true
 			} else if slots["psk"] {
 				entry["psk"] = map[string]any{"$keep_secret": true}
@@ -204,6 +208,13 @@ func BuildUnifiedProfileUsers(n *proxyNodeRecord, protocol string, activeUsers [
 		}
 	}
 
+	ss2022Method := ""
+	nodeID := ""
+	if n != nil {
+		ss2022Method = n.Config.Method
+		nodeID = n.ID
+	}
+
 	// 2. 追加所有多租户活跃订阅用户（避免与节点自带凭据重复触发 core.xray ErrV2Materials 去重报错）
 	for _, u := range activeUsers {
 		if n != nil && u.ID == "u-"+n.ID {
@@ -216,10 +227,14 @@ func BuildUnifiedProfileUsers(n *proxyNodeRecord, protocol string, activeUsers [
 			}
 			seenSecret[strings.ToLower(u.VLESSUUID)] = true
 		case corev2.ProtocolShadowsocks2022:
-			if seenSecret[u.SS2022UserKey] {
+			effPSK := u.SS2022UserKey
+			if derived, derr := DeriveSS2022UserPSKForCipher(u.SS2022UserKey, ss2022Method, nodeID); derr == nil {
+				effPSK = derived
+			}
+			if seenSecret[effPSK] {
 				continue
 			}
-			seenSecret[u.SS2022UserKey] = true
+			seenSecret[effPSK] = true
 		case corev2.ProtocolSOCKS5, corev2.ProtocolHTTP:
 			if seenSecret["acct:"+u.ID] {
 				continue
@@ -231,7 +246,7 @@ func BuildUnifiedProfileUsers(n *proxyNodeRecord, protocol string, activeUsers [
 			}
 			seenSecret[u.Hy2Password] = true
 		}
-		sub := buildProfileUsers(protocol, []userRecord{u}, existing)
+		sub := buildProfileUsersForCipher(protocol, ss2022Method, nodeID, []userRecord{u}, existing)
 		out = append(out, sub...)
 	}
 	return out

@@ -38,6 +38,7 @@
   const risk = $derived(RISK_META[f.effective_risk] ?? RISK_META.medium);
   const node = $derived(f.node_name ?? f.target.node_id);
   const expired = $derived(isExpired(a));
+  const canDecide = $derived(session.can('host.approvals:approve') && (!action.permission || session.can(action.permission)));
   const needsTotpSetup = $derived(a.requires_mfa && session.user?.mfa_enabled === false);
 
   /* 一张卡一个意图：网络重试复用同一个幂等键 */
@@ -65,7 +66,7 @@
   }
 
   async function decide(decision: 'approve' | 'reject') {
-    if (busy) return;
+    if (busy || !canDecide) return;
     if (decision === 'approve' && a.requires_mfa && mfa.length !== 6) {
       mfaError = '请输入 6 位验证码';
       return;
@@ -193,6 +194,11 @@
     <p class="state">这条已被处理过了</p>
   {:else if expired}
     <p class="state">已过期，没有执行。需要的话请重新发起。</p>
+  {:else if !canDecide}
+    <footer class="actions">
+      <p class="state">当前角色仅可查看，无权批准或拒绝此操作</p>
+      <span class="valid">{validityText(a)}</span>
+    </footer>
   {:else}
     <!-- 8 验证码 -->
     {#if a.requires_mfa}

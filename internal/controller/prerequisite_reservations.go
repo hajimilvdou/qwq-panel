@@ -53,17 +53,24 @@ func (s prerequisiteConsumerSource) AuthorizeReservation(ctx context.Context, or
 		origin.Subject != "plugins/tls.certificates/resources/certificates/"+args.CertificateID {
 		return hostauth.ConsumerReservationFacts{}, prerequisiteConsumerDenied()
 	}
-	snapshot, err := c.readPrerequisiteConfiguration(ctx, want.PluginID)
+	var snapshot prerequisiteConfiguration
+	if want.PluginID == "core.xray" {
+		snapshot, err = c.readPrerequisiteConfiguration(ctx, want.PluginID)
+	} else {
+		snapshot, err = c.readPluginConfiguration(ctx, want.PluginID, false)
+	}
 	if err != nil {
 		return hostauth.ConsumerReservationFacts{}, err
 	}
 	defer clear(snapshot.config.Config)
 	revision := "0"
 	if snapshot.found {
-		// 新安装 v2 驱动可以显式迁移旧 v1 快照；这只核对已有配置前置条件，
-		// 不把旧 VLESS 或待建立 H2 profile 当成 CurrentConsumer 的事实。
-		if !validPrerequisiteConfiguration(snapshot.config.Config) {
-			return hostauth.ConsumerReservationFacts{}, prerequisiteConsumerDenied()
+		if want.PluginID == "core.xray" {
+			// 新安装 v2 驱动可以显式迁移旧 v1 快照；这只核对已有配置前置条件，
+			// 不把旧 VLESS 或待建立 H2 profile 当成 CurrentConsumer 的事实。
+			if !validPrerequisiteConfiguration(snapshot.config.Config) {
+				return hostauth.ConsumerReservationFacts{}, prerequisiteConsumerDenied()
+			}
 		}
 		revision = strconv.FormatInt(snapshot.config.Revision, 10)
 	}

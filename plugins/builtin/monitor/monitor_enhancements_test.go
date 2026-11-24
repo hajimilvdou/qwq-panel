@@ -216,3 +216,50 @@ func TestCoarseRingKVSaveAndRestoreAcrossRestart(t *testing.T) {
 		t.Fatal("expected interval-mismatched coarse snapshot to be rejected")
 	}
 }
+
+func TestThreeSampleWarnEdgeAlertAndDebounce(t *testing.T) {
+	warm := func(at int64, memAvail uint64) *metricsv1.MetricsSnapshot {
+		return &metricsv1.MetricsSnapshot{
+			CollectedAtUnixMs: at,
+			Cpu:               &metricsv1.Cpu{User: uint64(at), Idle: 0, CoreCount: 1},
+			Memory:            &metricsv1.Memory{TotalBytes: 1000, AvailableBytes: memAvail},
+		}
+	}
+	// Default mem thresholds: warn=75%, crit=90%. 80% sits in warn band.
+	source := &sequenceSource{values: []*metricsv1.MetricsSnapshot{
+		warm(1000, 200), // 80% (#1)
+		warm(2000, 200), // 80% (#2)
+		warm(3000, 200), // 80% (#3 -> fires warn!)
+		warm(4000, 200), // 80% (#4 -> debounced)
+		warm(5000, 50),  // 95% (crit #1)
+		warm(6000, 50),  // 95% (crit #2)
+		warm(7000, 50),  // 95% (crit #3 -> escalates and fires critical!)
+	}}
+	s := mustSampler(t, defaultConfig(), source)
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { now = now.Add(time.Second); return now }
+	var memAlerts []map[string]any
+	s.publishAlert = func(_ context.Context, draft pluginsdk.EventDraft) error {
+		if draft.Subject == "metrics/mem" {
+			var m map[string]any
+			if json.Unmarshal(draft.Payload, &m) == nil {
+				memAlerts = append(memAlerts, m)
+			}
+		}
+		return nil
+	}
+	for i := range 7 {
+		if err := s.collect(t.Context()); err != nil {
+			t.Fatalf("collect #%d: %v", i, err)
+		}
+	}
+	if len(memAlerts) != 2 {
+		t.Fatalf("expected 1 warn + 1 escalated critical alert, got %d: %+v", len(memAlerts), memAlerts)
+	}
+	if memAlerts[0]["severity"] != "warn" || memAlerts[0]["dedup_key"] != "monitor.warn.mem" {
+		t.Fatalf("expected first alert to be warn, got %+v", memAlerts[0])
+	}
+	if memAlerts[1]["severity"] != "critical" || memAlerts[1]["dedup_key"] != "monitor.crit.mem" {
+		t.Fatalf("expected second alert to be critical, got %+v", memAlerts[1])
+	}
+}

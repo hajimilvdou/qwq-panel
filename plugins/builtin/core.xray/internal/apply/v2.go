@@ -122,7 +122,7 @@ func (e *Engine) TLSBindingInfo(bindingRef string) (TLSBindingStatus, bool) {
 		Generation:      proof.Binding.Generation,
 		PolicyRevision:  proof.Binding.PolicyRevision,
 		FullchainSHA256: proof.FullchainSHA256,
-		LeafFingerprint: meta.Fingerprint,
+		LeafFingerprint: canonicalLeafFingerprint64(meta.Fingerprint),
 		SNI:             proof.Binding.Consumer.SNI,
 	}
 	e.mu.Lock()
@@ -247,7 +247,7 @@ func (l *consumerDirTLSLoader) LoadTLS(ctx context.Context, profileID, bindingRe
 			Generation:      proof.Binding.Generation,
 			PolicyRevision:  proof.Binding.PolicyRevision,
 			FullchainSHA256: proof.FullchainSHA256,
-			LeafFingerprint: meta.Fingerprint,
+			LeafFingerprint: canonicalLeafFingerprint64(meta.Fingerprint),
 			SNI:             serverName,
 		}
 	}
@@ -261,6 +261,10 @@ func (l *consumerDirTLSLoader) LoadTLS(ctx context.Context, profileID, bindingRe
 		Trust:          trust,
 		Roots:          roots,
 	}, nil
+}
+
+func canonicalLeafFingerprint64(fp string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(fp), ":", ""))
 }
 
 func validateConsumerMaterial(mat tlsmgr.Material, serverName string, now time.Time, roots *x509.CertPool, permitTest bool) (tlsmgr.TrustClass, tlsmgr.MaterialPurpose, tlsmgr.CertificateMetadata, error) {
@@ -553,7 +557,7 @@ func (e *Engine) ReloadTLS(parent context.Context, req TLSReloadRequest) (TLSBin
 		Generation:      req.Generation,
 		PolicyRevision:  req.PolicyRevision,
 		FullchainSHA256: req.FullchainSHA256,
-		LeafFingerprint: meta.Fingerprint,
+		LeafFingerprint: canonicalLeafFingerprint64(meta.Fingerprint),
 		SNI:             req.SNI,
 	}
 
@@ -790,7 +794,7 @@ func (e *Engine) InspectTLS(ctx context.Context, bindingRef, profileID string) (
 					roots, _ := e.roots()
 					if trust, _, meta, verr := validateConsumerMaterial(mat, proof.Binding.Consumer.SNI, e.now(), roots, e.options.PermitTestCertificates); verr == nil {
 						result.PublicTrusted = trust == tlsmgr.PublicTrust
-						result.LeafFingerprint = meta.Fingerprint
+						result.LeafFingerprint = canonicalLeafFingerprint64(meta.Fingerprint)
 					}
 					mat.Clear()
 				}

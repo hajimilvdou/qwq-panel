@@ -443,12 +443,37 @@ type PluginRuntime struct {
 
 	// managementPortsFn 返回宿主当前活跃管理端口，未绑定时回退静态 ManagementPorts。
 	managementPortsFn atomic.Pointer[func() []uint32]
+	// firewallPortsFn 返回需要在公网防火墙放行的权威面板端口（回环模式可为空）。
+	firewallPortsFn atomic.Pointer[func() []uint32]
 
 	// pluginEnabledFn 查询插件持久启停状态，用于公开路由表过滤与按需 attach 守卫。
 	pluginEnabledFn atomic.Pointer[func(pluginID string) bool]
+	// certRevisionFn 查询宿主加密仓库中指定证书资源的当前版本（用于跨插件调用自动对齐 ExpectedRevision）。
+	certRevisionFn atomic.Pointer[func(ctx context.Context, certID string) (string, bool, error)]
 
 	// publicGateway 负责 ADR-0024 /p/{plugin_id}/{route}/ 公开 HTTP 路由转发。
 	publicGateway *pluginpublic.Gateway
+
+	// streamTransports 按插件复用 UDS HTTP Transport，避免每请求新建连接池；
+	// streamActive* 按全局、单插件与单源 IP 限制同时活跃的公开流式代理并发数，保护 1C1G 内存与 FD 预算。
+	streamMu             sync.Mutex
+	streamTransports     map[string]*cachedStreamTransport
+	streamActiveTotal    int
+	streamActiveByPlugin map[string]int
+	streamActiveByIP     map[string]int
+}
+
+// SetCertRevisionLookup binds the host certificate revision reader used by
+// plugin-to-plugin calls targeting tls.certificates.
+func (rt *PluginRuntime) SetCertRevisionLookup(fn func(ctx context.Context, certID string) (string, bool, error)) {
+	if rt == nil {
+		return
+	}
+	if fn == nil {
+		rt.certRevisionFn.Store(nil)
+		return
+	}
+	rt.certRevisionFn.Store(&fn)
 }
 
 // SetPluginEnabled binds the persistent enablement predicate used by public
@@ -528,7 +553,7 @@ func NewPluginRuntime(opts PluginRuntimeOptions) (*PluginRuntime, error) {
 		router.Services["firewall"] = firewall.Forwarder{
 			Helper:        capClient,
 			HostPorts:     append([]uint32(nil), opts.ManagementPorts...),
-			HostPortsFunc: rt.liveManagementPorts,
+			HostPortsFunc: rt.liveFirewallPorts,
 		}
 		router.Services["sshd"] = sshd.Forwarder{
 			Helper:        capClient,
@@ -560,9 +585,12 @@ func NewPluginRuntime(opts PluginRuntimeOptions) (*PluginRuntime, error) {
 		Logger:    opts.Logger,
 		NodeID:    opts.NodeID,
 		RunDir:    opts.RunDir,
-		// A crashed plugin that systemd restarted has no instance; restore it
-		// before the supervisor adopts the new generation.
-		OnNewGeneration: rt.runRestore,
+		// A crashed plugin that systemd restarted has no instance; evict any
+		// stale cached UDS stream transport and restore before adopting.
+		OnNewGeneration: func(ctx context.Context, pluginID string) error {
+			rt.EvictStreamTransport(pluginID)
+			return rt.runRestore(ctx, pluginID)
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("controller: plugin supervisor: %w", err)
@@ -584,6 +612,18 @@ func (rt *PluginRuntime) SetManagementPortsFunc(fn func() []uint32) {
 	rt.managementPortsFn.Store(&fn)
 }
 
+// SetFirewallManagementPortsFunc 绑定公网防火墙权威面板端口查询器（回环模式可返回空切片）。
+func (rt *PluginRuntime) SetFirewallManagementPortsFunc(fn func() []uint32) {
+	if rt == nil {
+		return
+	}
+	if fn == nil {
+		rt.firewallPortsFn.Store(nil)
+		return
+	}
+	rt.firewallPortsFn.Store(&fn)
+}
+
 func (rt *PluginRuntime) liveManagementPorts() []uint32 {
 	if rt == nil {
 		return nil
@@ -594,6 +634,16 @@ func (rt *PluginRuntime) liveManagementPorts() []uint32 {
 		}
 	}
 	return append([]uint32(nil), rt.opts.ManagementPorts...)
+}
+
+func (rt *PluginRuntime) liveFirewallPorts() []uint32 {
+	if rt == nil {
+		return nil
+	}
+	if ptr := rt.firewallPortsFn.Load(); ptr != nil && *ptr != nil {
+		return (*ptr)()
+	}
+	return rt.liveManagementPorts()
 }
 
 // RenewalJobHandler 处理宿主内部发起的 tls.certificates/renew_existing 作业。
@@ -748,6 +798,7 @@ func (rt *PluginRuntime) Stop() {
 	for _, stop := range hosts {
 		stop()
 	}
+	rt.closeStreamTransports()
 }
 
 // Dispatcher returns the operations.Dispatcher of this runtime, nil when the
@@ -911,6 +962,7 @@ func (rt *PluginRuntime) releaseHostChannelLocked(pluginID string) {
 	rt.hostCapabilitiesMu.Lock()
 	delete(rt.hostCapabilities, pluginID)
 	rt.hostCapabilitiesMu.Unlock()
+	rt.EvictStreamTransport(pluginID)
 }
 
 // ---------------------------------------------------------------------------
@@ -1160,6 +1212,9 @@ func (rt *PluginRuntime) newHostInvoker(deps HostDeps, pluginID string) *hostInv
 			_, err := clients.live(targetPluginID)
 			return err == nil
 		}
+	}
+	if p := rt.certRevisionFn.Load(); p != nil && *p != nil {
+		h.certRevision = *p
 	}
 	if deps.Catalog != nil {
 		h.grants = deps.Catalog
@@ -1588,15 +1643,16 @@ type operationCanceler interface {
 // and CancelOperation go through the operation manager and only ever touch an
 // operation this instance created.
 type hostInvoker struct {
-	reader   operationReader
-	waiter   operationWaiter
-	canceler operationCanceler
-	runner   operationRunner
-	grants   pluginGrantSource
-	db       *storage.DB // audit rows of refused calls; nil refuses every call
-	clock    clock.Clock // rate limit clock for ADR-0023 H3 background reads
-	isLive   func(string) bool
-	logger   *slog.Logger // nil discards; records storage failures of the ownership check
+	reader       operationReader
+	waiter       operationWaiter
+	canceler     operationCanceler
+	runner       operationRunner
+	grants       pluginGrantSource
+	db           *storage.DB // audit rows of refused calls; nil refuses every call
+	clock        clock.Clock // rate limit clock for ADR-0023 H3 background reads
+	isLive       func(string) bool
+	certRevision func(ctx context.Context, certID string) (string, bool, error)
+	logger       *slog.Logger // nil discards; records storage failures of the ownership check
 
 	pluginID   string
 	instanceID string

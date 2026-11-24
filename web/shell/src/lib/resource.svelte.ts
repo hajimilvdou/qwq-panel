@@ -123,6 +123,10 @@ class ResourceCache {
     return r;
   }
 
+  peek<T = unknown>(key: string): T | undefined {
+    return this.#map.get(key)?.data as T | undefined;
+  }
+
   acquire<T>(r: Resource<T>): void {
     r.refs++;
     if (r.gcTimer) clearTimeout(r.gcTimer);

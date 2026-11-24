@@ -5,7 +5,9 @@
   const pick = (v, list, fb) => (list.includes(v) ? v : fb);
   const initial = new URLSearchParams(location.hash.slice(1));
   root.dataset.theme = pick(initial.get('theme'), ['light', 'dark'], 'light');
+  root.style.colorScheme = root.dataset.theme;
   root.dataset.motion = pick(initial.get('motion'), ['full', 'reduced', 'off'], 'reduced');
+  root.dataset.density = pick(initial.get('density'), ['comfortable', 'compact'], 'comfortable');
 
   const $ = (id) => document.getElementById(id);
   let port = null;
@@ -13,9 +15,36 @@
   let mode = 'admin';
   let latest = null;
   let publicOrigin = '';
+  let panelTlsMode = '';
+  let panelTlsSha256 = '';
   const pending = new Map();
   const pendingConfirm = new Map();
   const pendingCopy = new Map();
+
+  function isLoopbackOrigin(origin) {
+    if (!origin) return false;
+    try {
+      const host = new URL(origin).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+      return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+    } catch {
+      return false;
+    }
+  }
+
+  function updateLoopbackOriginWarning() {
+    const el = $('loopback-origin-warn');
+    if (!el) return;
+    const customDomain = latest?.settings?.custom_domain;
+    const override = normalizeOrigin($('node-public-origin')?.value || '');
+    const effective = override || publicOrigin;
+    el.hidden = Boolean(customDomain) || !isLoopbackOrigin(effective);
+  }
+
+  function formatSlaPercent(val) {
+    const num = Number(val);
+    if (!Number.isFinite(num) || num < 0) return '— (待接入)';
+    return `${num.toFixed(2)}%`;
+  }
 
   function send(msg) {
     if (port) port.postMessage(msg);
@@ -298,7 +327,7 @@
           <span class="badge ${n.online ? '' : 'warn'}">${n.online ? '在线' : '离线'}</span>
         </div>
         <div class="node-card-metrics">
-          CPU ${cpu}% · ↓ ${rxMbps} Mbps / ↑ ${txMbps} Mbps · 90天在线 ${Number(n.uptime_90d_pct || 100).toFixed(2)}%
+          CPU ${cpu}% · ↓ ${rxMbps} Mbps / ↑ ${txMbps} Mbps · 90天在线 ${esc(formatSlaPercent(n.uptime_90d_pct))}
         </div>
         <div class="node-card-metrics">
           配额 ${esc(quotaGB)} (${esc(n.quota_mode || 'both')}) · 每月 ${Number(n.reset_day || 1)} 日重置${esc(expText)}
@@ -308,6 +337,8 @@
     };
     $('admin-nodes-grid').innerHTML = nodes.map((n) => renderNodeCard(n, true)).join('');
     $('visitor-nodes-grid').innerHTML = nodes.map((n) => renderNodeCard(n, false)).join('');
+    renderMonitors(data.service_monitors);
+    updateLoopbackOriginWarning();
     if (data.settings?.site_title) {
       $('preview-title').textContent = data.settings.site_title;
     }
@@ -701,7 +732,7 @@
     const id = `cf_${++seq}`;
     return new Promise((resolve) => {
       pendingConfirm.set(id, { resolve });
-      send({ t: 'ui.confirm', id, title, message, destructive: true });
+      send({ t: 'ui.confirm', id, title, body: message, danger: true });
     });
   }
 
@@ -747,6 +778,95 @@
     }
   });
 
+  function renderMonitors(monitors) {
+    const grid = $('admin-monitors-grid');
+    if (!grid) return;
+    const list = Array.isArray(monitors) ? monitors : [];
+    if (list.length === 0) {
+      grid.innerHTML = '<div class="node-card"><div class="node-card-metrics">暂未配置三网或服务拨测目标，可点击右上角「一键添加三网参考目标」。</div></div>';
+      return;
+    }
+    const carrierLabel = { ct: '电信 CT', cu: '联通 CU', cm: '移动 CM', global: '全球 Global', custom: '自定义' };
+    grid.innerHTML = list.map((m) => {
+      const st = m.last_status || 'unknown';
+      const badgeCls = st === 'up' ? '' : 'warn';
+      const stTxt = st === 'up' ? `正常 · ${Number(m.last_latency_ms || 0)}ms` : (st === 'degraded' ? `慢速 · ${Number(m.last_latency_ms || 0)}ms` : (st === 'down' ? '不可达' : '待检测'));
+      return `<div class="node-card">
+        <div class="node-card-head">
+          <strong>[${esc(carrierLabel[m.carrier_tag] || m.carrier_tag || 'global')}] ${esc(m.name)}</strong>
+          <span class="badge ${badgeCls}">${esc(stTxt)}</span>
+        </div>
+        <div class="node-card-metrics">${esc(String(m.kind || 'tcp').toUpperCase())} · <code>${esc(m.target_addr)}</code> · 每 ${Number(m.interval_sec || 30)}s</div>
+        <div class="theme-item-actions">
+          <button type="button" class="btn danger" data-remove-monitor="${esc(m.id)}">删除</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  $('node-public-origin')?.addEventListener('input', updateLoopbackOriginWarning);
+
+  $('add-monitor-btn')?.addEventListener('click', async () => {
+    const name = $('mon-name').value.trim();
+    const kind = $('mon-kind').value;
+    const carrier_tag = $('mon-carrier').value;
+    const target_addr = $('mon-target').value.trim();
+    const interval_sec = Math.min(600, Math.max(10, Math.floor(Number($('mon-interval').value || 30))));
+    if (!name || !target_addr) {
+      toast('请填写拨测目标名称与地址');
+      return;
+    }
+    try {
+      await invoke('probe.monitors.upsert', { name, kind, carrier_tag, target_addr, interval_sec, public_visible: true, enabled: true });
+      $('mon-name').value = '';
+      $('mon-target').value = '';
+      toast(`拨测目标「${name}」已保存`);
+      void refresh();
+    } catch (err) {
+      if (err && err.awaitingApproval) toast('拨测目标已提交，等待审批确认');
+      else toast('添加拨测目标失败：' + (err.message || '未知错误'));
+    }
+  });
+
+  $('preset-carriers-btn')?.addEventListener('click', async () => {
+    const presets = [
+      { id: 'carrier-ct', name: '电信骨干参考 (CT)', kind: 'tcp', carrier_tag: 'ct', target_addr: '202.96.128.86:53', interval_sec: 30, public_visible: true, enabled: true },
+      { id: 'carrier-cu', name: '联通骨干参考 (CU)', kind: 'tcp', carrier_tag: 'cu', target_addr: '221.5.88.88:53', interval_sec: 30, public_visible: true, enabled: true },
+      { id: 'carrier-cm', name: '移动骨干参考 (CM)', kind: 'tcp', carrier_tag: 'cm', target_addr: '211.136.192.6:53', interval_sec: 30, public_visible: true, enabled: true },
+      { id: 'carrier-global', name: 'Cloudflare 全球参考', kind: 'tcp', carrier_tag: 'global', target_addr: '1.1.1.1:443', interval_sec: 30, public_visible: true, enabled: true }
+    ];
+    let okCount = 0;
+    for (const p of presets) {
+      try {
+        await invoke('probe.monitors.upsert', p);
+        okCount++;
+      } catch (err) {
+        if (err && err.awaitingApproval) {
+          toast('三网参考目标已提交审批');
+          return;
+        }
+      }
+    }
+    toast(`已配置 ${okCount} 个三网参考拨测目标`);
+    void refresh();
+  });
+
+  $('admin-monitors-grid')?.addEventListener('click', async (e) => {
+    const delBtn = e.target.closest('[data-remove-monitor]');
+    if (!delBtn) return;
+    const monId = delBtn.dataset.removeMonitor;
+    const ok = await hostConfirm('删除拨测目标', `确认删除拨测目标 ${monId}？`);
+    if (!ok) return;
+    try {
+      await invoke('probe.monitors.remove', { id: monId });
+      toast(`已删除拨测目标 ${monId}`);
+      void refresh();
+    } catch (err) {
+      if (err && err.awaitingApproval) toast('删除拨测目标已提交审批');
+      else toast('删除失败：' + (err.message || '未知错误'));
+    }
+  });
+
   $('add-node-btn').addEventListener('click', async () => {
     const id = $('node-id').value.trim();
     const name = $('node-name').value.trim();
@@ -756,6 +876,8 @@
     const resetDay = Math.min(31, Math.max(1, Math.floor(Number($('node-reset-day').value || 1))));
     const expDateStr = $('node-expires-at').value.trim();
     const expiresAt = expDateStr ? Math.floor(new Date(expDateStr + 'T00:00:00Z').getTime() / 1000) : 0;
+    const overrideOrigin = normalizeOrigin($('node-public-origin')?.value || '');
+    const effectiveOrigin = overrideOrigin || publicOrigin;
     if (!name) return;
     const payload = {
       name,
@@ -766,7 +888,15 @@
       expires_at: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : 0
     };
     if (id) payload.id = id;
-    if (publicOrigin) payload.public_origin = publicOrigin;
+    if (effectiveOrigin) payload.public_origin = effectiveOrigin;
+    if (
+      panelTlsMode === 'self_signed' &&
+      panelTlsSha256 &&
+      !latest?.settings?.custom_domain &&
+      (!effectiveOrigin || effectiveOrigin === publicOrigin)
+    ) {
+      payload.ca_sha256 = panelTlsSha256;
+    }
     try {
       const res = await invoke('probe.nodes.upsert', payload);
       if (res.linux_install) {
@@ -872,12 +1002,26 @@
         if (d.t === 'ui.settings') {
           if (d.theme === 'light' || d.theme === 'dark') {
             root.dataset.theme = d.theme;
+            root.style.colorScheme = d.theme;
           }
           if (d.motion === 'full' || d.motion === 'reduced' || d.motion === 'off') {
             root.dataset.motion = d.motion;
           }
+          if (d.density === 'comfortable' || d.density === 'compact') {
+            root.dataset.density = d.density;
+          }
+          if (d.tokens && typeof d.tokens === 'object') {
+            if (d.tokens['--accent']) {
+              root.style.setProperty('--cocoa', d.tokens['--accent']);
+              root.style.setProperty('--berry', d.tokens['--accent']);
+            }
+            if (d.tokens['--on-accent']) root.style.setProperty('--on-cocoa', d.tokens['--on-accent']);
+          }
           const nextOrigin = normalizeOrigin(d.public_origin);
           if (nextOrigin) publicOrigin = nextOrigin;
+          if (typeof d.panel_tls_mode === 'string') panelTlsMode = d.panel_tls_mode;
+          if (typeof d.panel_tls_sha256 === 'string') panelTlsSha256 = d.panel_tls_sha256;
+          updateLoopbackOriginWarning();
         }
       };
       send({ t: 'ui.ready' });

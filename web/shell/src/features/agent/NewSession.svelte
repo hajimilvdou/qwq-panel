@@ -41,18 +41,28 @@
   let planMode = $state(false);
   let text = $state(untrack(() => prompt));
 
+  const isAdmin = $derived(session.role === 'admin');
+  const canWriteAgent = $derived(session.can('host.agent_sessions:write'));
   const isExternalCli = $derived(core !== 'native');
   const activeCoreAuth = $derived(coreAuth.data?.find((c) => c.core === core) ?? null);
   const activeProvider = $derived(providers.data?.find((p) => p.provider_id === providerId) ?? null);
 
   const coreOptions = $derived<Option<AgentCore>[]>(
-    (cores.data ?? [{ core: 'native' as const, available: true }]).map((c) => ({
-      value: c.core,
-      label: coreLabel(c.core),
-      disabled: !c.available,
-      hint: c.available ? undefined : (c.reason ?? '暂不可用'),
-    })),
+    (cores.data ?? [{ core: 'native' as const, available: true }]).map((c) => {
+      const restricted = c.core !== 'native' && !isAdmin;
+      return {
+        value: c.core,
+        label: coreLabel(c.core),
+        disabled: !c.available || restricted,
+        hint: restricted ? '外部 CLI 核心仅限管理员使用' : c.available ? undefined : (c.reason ?? '暂不可用'),
+      };
+    }),
   );
+
+  $effect(() => {
+    if (!isAdmin && core !== 'native') core = 'native';
+    if (!isAdmin && mode === 'full') mode = 'safe';
+  });
   const providerOptions = $derived<Option[]>(
     (providers.data ?? []).map((p) => ({
       value: p.provider_id,
@@ -201,13 +211,18 @@
       <div class="modes" role="radiogroup" aria-labelledby="new-mode-l">
         {#each MODES as m (m)}
           {@const meta = MODE_META[m]}
-          <label class="mode" class:on={mode === m} class:off={m === 'custom'}>
-            <input type="radio" name="mode" value={m} bind:group={mode} disabled={m === 'custom'} />
+          {@const restricted = m === 'full' && !isAdmin}
+          <label class="mode" class:on={mode === m} class:off={m === 'custom' || restricted}>
+            <input type="radio" name="mode" value={m} bind:group={mode} disabled={m === 'custom' || restricted} />
             <span class="mt">
               {meta.label}
               {#if m === 'safe'}<span class="rec">推荐</span>{/if}
             </span>
-            {#if meta.note}<span class="mn" class:danger={meta.danger}>{meta.note}</span>{/if}
+            {#if restricted}
+              <span class="mn">仅管理员可开启完全授权模式</span>
+            {:else if meta.note}
+              <span class="mn" class:danger={meta.danger}>{meta.note}</span>
+            {/if}
             {#if mode === m}<span class="tick"><Icon name="check" size={16} /></span>{/if}
           </label>
         {/each}
@@ -219,8 +234,8 @@
     <Composer
       bind:value={text}
       onsend={start}
-      disabled={(needsProvider && noProvider) || !!unavailableReason}
-      disabledReason="先选一个可用的核心或 AI 服务"
+      disabled={!canWriteAgent || (needsProvider && noProvider) || !!unavailableReason}
+      disabledReason={!canWriteAgent ? '当前角色仅支持只读查看，无法发起 AI 会话' : '先选一个可用的核心或 AI 服务'}
     />
   </div>
 </div>

@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "cpu",
+    "mem",
+    "disk"
+  ],
+  "properties": {
+    "cpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warn", "crit"],
+      "properties": {
+        "warn": { "type": "number", "minimum": 0, "maximum": 100 },
+        "crit": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "mem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warn", "crit"],
+      "properties": {
+        "warn": { "type": "number", "minimum": 0, "maximum": 100 },
+        "crit": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warn", "crit"],
+      "properties": {
+        "warn": { "type": "number", "minimum": 0, "maximum": 100 },
+        "crit": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    }
+  }
+}

@@ -339,20 +339,34 @@ func TestProxyReadinessRealIngressStateAndBindCertificateToWebIngress(t *testing
 	}
 	defer func() { _ = st.Close() }()
 
+	reserveCalled := false
 	bindCalled := false
 	inv := &fakePluginInvoker{
 		handler: func(plugin, op string, payload map[string]any) ([]byte, error) {
 			switch plugin + "/" + op {
 			case "web.ingress/ingress.overview":
-				return []byte(`{"running":true,"bound_addr":":80","https_bound_addr":":443"}`), nil
+				return []byte(`{"running":true,"node_id":"node-edge-1","config_revision":"7","bound_addr":":80","https_bound_addr":":443"}`), nil
 			case "tls.certificates/certificates.list":
-				return []byte(`{"certificates":[{"id":"cert_fresh01","sans":["app.example.com"],"latest_generation":1}]}`), nil
+				return []byte(`{"certificates":[{"id":"cert_fresh01","sans":["app.example.com"],"latest_generation":3}]}`), nil
 			case "domain.dns/providers.status":
 				return []byte(`{"total":0}`), nil
+			case "tls.certificates/bindings.reserve":
+				reserveCalled = true
+				if payload["certificate_id"] != "cert_fresh01" || payload["expected_config_revision"] != "7" {
+					t.Fatalf("expected reserve certificate_id=cert_fresh01 expected_config_revision=7, got %+v", payload)
+				}
+				consumer, _ := payload["consumer"].(map[string]any)
+				if consumer["plugin_id"] != "web.ingress" || consumer["node_id"] != "node-edge-1" || consumer["sni"] != "app.example.com" || consumer["purpose"] != "ingress.https" {
+					t.Fatalf("unexpected reserve consumer payload: %+v", consumer)
+				}
+				return []byte(`{"binding_ref":"certbind_web01","certificate_id":"cert_fresh01","revision":"1","status":"reserved"}`), nil
 			case "tls.certificates/bindings.bind":
+				if !reserveCalled {
+					t.Fatal("bindings.bind called before bindings.reserve")
+				}
 				bindCalled = true
-				if payload["certificate_id"] != "cert_fresh01" {
-					t.Fatalf("expected certificate_id=cert_fresh01, got %v", payload["certificate_id"])
+				if payload["certificate_id"] != "cert_fresh01" || payload["binding_ref"] != "certbind_web01" || int(payload["generation"].(float64)) != 3 {
+					t.Fatalf("expected certificate_id=cert_fresh01 binding_ref=certbind_web01 generation=3, got %+v", payload)
 				}
 				return []byte(`{"certificate":{"id":"cert_fresh01","bindings":[{"binding_ref":"certbind_web01","plugin_id":"web.ingress"}]}}`), nil
 			case "web.ingress/ingress.site.upsert":
@@ -384,8 +398,8 @@ func TestProxyReadinessRealIngressStateAndBindCertificateToWebIngress(t *testing
 	if err != nil {
 		t.Fatalf("UpsertContainerProxyAndCert: %v (warns=%v)", err, warns)
 	}
-	if !bindCalled {
-		t.Fatal("expected tls.certificates/bindings.bind to be called for unbound certificate_id")
+	if !reserveCalled || !bindCalled {
+		t.Fatalf("expected both bindings.reserve and bindings.bind to be called, reserve=%v bind=%v", reserveCalled, bindCalled)
 	}
 	if link.CertID != "certbind_web01" {
 		t.Fatalf("expected saved link CertID=certbind_web01, got %+v", link)

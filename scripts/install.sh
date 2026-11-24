@@ -295,6 +295,7 @@ if [[ -d $R ]]; then
   log "发布树 $R 已存在且一致"
 else
   install -d -m0755 "$PREFIX" "$PREFIX/releases"
+  rm -rf -- "$R.tmp"
   cp -a "$P" "$R.tmp"
   chown -R root:root "$R.tmp"
   chmod -R go-w "$R.tmp"
@@ -405,6 +406,7 @@ if command -v getenforce >/dev/null && [[ $(getenforce) == Enforcing ]]; then
 fi
 
 # ── 切换版本 ─────────────────────────────────────────────────────────────────
+prev_release=$(readlink -f "$PREFIX/current" 2>/dev/null || readlink "$PREFIX/current" 2>/dev/null || true)
 if [[ $(readlink "$PREFIX/current" 2>/dev/null) != "$R" ]]; then
   ln -sfn "$R" "$PREFIX/current.new"
   mv -T "$PREFIX/current.new" "$PREFIX/current"
@@ -554,6 +556,48 @@ if command -v curl >/dev/null; then
   done || true
   curl -skf --connect-timeout 2 --max-time 3 "$LISTEN_CHECK" >/dev/null || echo "提示：$LISTEN_CHECK 暂无响应（若已在面板内修改过端口或密道可忽略）" >&2
 fi
+
+# ── 自动清理宿主历史发行版（仅保留当前激活版 + 1 个上一回滚版，防小盘 VPS 爆盘）──
+prune_old_releases() {
+  local releases_dir
+  releases_dir=$(readlink -f "$PREFIX/releases" 2>/dev/null || printf '%s' "$PREFIX/releases")
+  [[ -d $releases_dir ]] || return 0
+  local cur_real prev_real keep_other=""
+  cur_real=$(readlink -f "$R" 2>/dev/null || printf '%s' "$R")
+  if [[ -n ${prev_release:-} && -d $prev_release ]]; then
+    prev_real=$(readlink -f "$prev_release" 2>/dev/null || printf '%s' "$prev_release")
+    if [[ $prev_real != "$cur_real" && $prev_real == "$releases_dir/"* ]]; then
+      keep_other=$prev_real
+    fi
+  fi
+  local pruned=0
+  local -a candidates=()
+  local entry real_entry
+  while IFS= read -r entry; do
+    [[ -n $entry && -d $entry ]] || continue
+    [[ $entry == *.tmp ]] && continue
+    real_entry=$(readlink -f "$entry" 2>/dev/null || printf '%s' "$entry")
+    [[ $real_entry == "$cur_real" ]] && continue
+    [[ -n $keep_other && $real_entry == "$keep_other" ]] && continue
+    candidates+=("$real_entry")
+  done < <(ls -1dt "$releases_dir"/* 2>/dev/null || true)
+  local start_idx=0
+  if [[ -z $keep_other && ${#candidates[@]} -gt 0 ]]; then
+    start_idx=1
+  fi
+  local idx
+  for ((idx = start_idx; idx < ${#candidates[@]}; idx++)); do
+    local old_dir="${candidates[$idx]}"
+    [[ $old_dir == "$releases_dir/"* ]] || continue
+    if rm -rf -- "$old_dir"; then
+      pruned=$((pruned + 1))
+    fi
+  done
+  if ((pruned > 0)); then
+    log "已自动清理 $pruned 个旧版发行目录（保留当前版本与最近 1 个回滚版本）"
+  fi
+}
+prune_old_releases
 
 # ── 激活默认必装安全插件（security.basic）与用户按需选装的官方插件 ──────────
 bootstrap_pkgs=()

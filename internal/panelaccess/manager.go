@@ -232,25 +232,28 @@ type RebindFunc func(newListenAddr string) error
 
 // Manager owns the live panel access Snapshot backed by SQLite.
 type Manager struct {
-	db           *storage.DB
-	clock        clock.Clock
-	mu           sync.Mutex
-	snap         atomic.Pointer[Snapshot]
-	prepareBind  PrepareBindFunc
-	rebind       RebindFunc
-	onAllow      func(domain string)
-	onPortChange func(port int)
+	db             *storage.DB
+	clock          clock.Clock
+	seed           Snapshot
+	mu             sync.Mutex
+	snap           atomic.Pointer[Snapshot]
+	prepareBind    PrepareBindFunc
+	rebind         RebindFunc
+	onAllow        func(domain string)
+	onPortChange   func(port int)
+	onAccessChange func(snap Snapshot)
 }
 
 // Options configure a Manager.
 type Options struct {
-	DB           *storage.DB
-	Clock        clock.Clock
-	Bootstrap    config.HTTP
-	PrepareBind  PrepareBindFunc
-	Rebind       RebindFunc
-	OnAllowHost  func(domain string)
-	OnPortChange func(port int)
+	DB             *storage.DB
+	Clock          clock.Clock
+	Bootstrap      config.HTTP
+	PrepareBind    PrepareBindFunc
+	Rebind         RebindFunc
+	OnAllowHost    func(domain string)
+	OnPortChange   func(port int)
+	OnAccessChange func(snap Snapshot)
 }
 
 // NewManager loads or seeds panel_access_settings from DB and cfg.HTTP.
@@ -278,12 +281,13 @@ func NewManager(ctx context.Context, opts Options) (*Manager, error) {
 	}
 
 	m := &Manager{
-		db:           opts.DB,
-		clock:        clk,
-		prepareBind:  opts.PrepareBind,
-		rebind:       opts.Rebind,
-		onAllow:      opts.OnAllowHost,
-		onPortChange: opts.OnPortChange,
+		db:             opts.DB,
+		clock:          clk,
+		prepareBind:    opts.PrepareBind,
+		rebind:         opts.Rebind,
+		onAllow:        opts.OnAllowHost,
+		onPortChange:   opts.OnPortChange,
+		onAccessChange: opts.OnAccessChange,
 	}
 
 	seed := Snapshot{
@@ -299,6 +303,7 @@ func NewManager(ctx context.Context, opts Options) (*Manager, error) {
 		Revision:            1,
 		UpdatedAt:           clk.Now().UTC(),
 	}
+	m.seed = seed
 
 	if opts.DB == nil {
 		sec, err := randomHex(32)
@@ -307,6 +312,9 @@ func NewManager(ctx context.Context, opts Options) (*Manager, error) {
 		}
 		seed.GateSecret = sec
 		m.snap.Store(&seed)
+		if m.onAccessChange != nil {
+			m.onAccessChange(seed)
+		}
 		if seed.Port > 0 && m.onPortChange != nil {
 			m.onPortChange(seed.Port)
 		}
@@ -320,6 +328,9 @@ func NewManager(ctx context.Context, opts Options) (*Manager, error) {
 	m.snap.Store(&loaded)
 	if loaded.PanelDomain != "" && m.onAllow != nil {
 		m.onAllow(loaded.PanelDomain)
+	}
+	if m.onAccessChange != nil {
+		m.onAccessChange(loaded)
 	}
 	if loaded.Port > 0 && m.onPortChange != nil {
 		m.onPortChange(loaded.Port)
@@ -405,12 +416,66 @@ func (m *Manager) Snapshot() Snapshot {
 }
 
 // ValidateUpdate validates UpdateInput and expected_revision against the live
-// snapshot without mutating state, rebinding sockets, or consuming MFA codes.
+// snapshot (and latest SQLite revision when backed by DB) without mutating
+// state, rebinding sockets, or consuming MFA codes.
 func (m *Manager) ValidateUpdate(in UpdateInput) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, err := m.validateNext(m.Snapshot(), in, false)
+	cur := m.Snapshot()
+	if m.db != nil {
+		if fresh, ok, err := readFromDB(context.Background(), m.db, m.seed); err == nil && ok {
+			cur = fresh
+		}
+	}
+	_, err := m.validateNext(cur, in, false)
 	return err
+}
+
+// Reload re-reads panel_access_settings from SQLite (for example after an
+// operator runs `qwq access reset` via SSH and sends SIGHUP), hot-rebinds the
+// listener when listen_host or port changed, and atomically publishes the new
+// live snapshot.
+func (m *Manager) Reload(ctx context.Context) (Snapshot, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur := m.Snapshot()
+	if m.db == nil {
+		return cur, false, nil
+	}
+	loaded, err := loadOrSeed(ctx, m.db, m.seed)
+	if err != nil {
+		return cur, false, err
+	}
+	addrChanged := loaded.Port != cur.Port || loaded.ListenHost != cur.ListenHost
+	if addrChanged {
+		if m.prepareBind != nil {
+			h, berr := m.prepareBind(loaded.ListenAddr())
+			if berr != nil {
+				return cur, false, fmt.Errorf("panelaccess: reload bind %s: %w", loaded.ListenAddr(), berr)
+			}
+			m.snap.Store(&loaded)
+			h.Commit()
+		} else if m.rebind != nil {
+			if berr := m.rebind(loaded.ListenAddr()); berr != nil {
+				return cur, false, fmt.Errorf("panelaccess: reload rebind %s: %w", loaded.ListenAddr(), berr)
+			}
+			m.snap.Store(&loaded)
+		} else {
+			m.snap.Store(&loaded)
+		}
+	} else {
+		m.snap.Store(&loaded)
+	}
+	if m.onAllow != nil {
+		m.onAllow(loaded.PanelDomain)
+	}
+	if m.onAccessChange != nil {
+		m.onAccessChange(loaded)
+	}
+	if addrChanged && m.onPortChange != nil {
+		m.onPortChange(loaded.Port)
+	}
+	return loaded, addrChanged, nil
 }
 
 func (m *Manager) validateNext(cur Snapshot, in UpdateInput, generateRandom bool) (Snapshot, error) {
@@ -496,12 +561,21 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 	defer m.mu.Unlock()
 
 	cur := m.Snapshot()
+	if m.db != nil {
+		fresh, ok, rerr := readFromDB(ctx, m.db, m.seed)
+		if rerr != nil {
+			return cur, false, problem.Wrap(rerr)
+		}
+		if ok {
+			cur = fresh
+		}
+	}
 	next, err := m.validateNext(cur, in, true)
 	if err != nil {
 		return cur, false, err
 	}
 
-	addrChanged := next.Port != cur.Port || next.ListenHost != cur.ListenHost
+	addrChanged := next.Port != m.Snapshot().Port || next.ListenHost != m.Snapshot().ListenHost
 	var stagedBind BindHandle
 	if addrChanged {
 		if m.prepareBind != nil {
@@ -524,6 +598,18 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 
 	if m.db != nil {
 		err := m.db.Update(ctx, func(tx *storage.Tx) error {
+			var dbRev int64
+			if qerr := tx.QueryRowContext(ctx, `SELECT revision FROM panel_access_settings WHERE id = 1`).Scan(&dbRev); qerr == nil {
+				if in.ExpectedRevision != nil && *in.ExpectedRevision != dbRev {
+					return problem.New(problem.RevisionConflict,
+						"Access settings revision mismatch: expected %d, current %d.", *in.ExpectedRevision, dbRev)
+				}
+				if dbRev != cur.Revision {
+					return problem.New(problem.RevisionConflict,
+						"Access settings were modified concurrently (expected revision %d, current %d); retry.", cur.Revision, dbRev)
+				}
+				next.Revision = dbRev + 1
+			}
 			autoInt := 0
 			if next.AutoDisableOnDomain {
 				autoInt = 1
@@ -553,11 +639,16 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 	}
 
 	m.snap.Store(&next)
-	if stagedBind != nil {
-		stagedBind.Commit()
-	}
+	// Update TLS SANs / allowed hostnames before activating the new listener so
+	// the very first TLS handshake on the newly bound socket sees the right SANs.
 	if m.onAllow != nil {
 		m.onAllow(next.PanelDomain)
+	}
+	if addrChanged && m.onAccessChange != nil {
+		m.onAccessChange(next)
+	}
+	if stagedBind != nil {
+		stagedBind.Commit()
 	}
 	if addrChanged && m.onPortChange != nil {
 		m.onPortChange(next.Port)
@@ -568,12 +659,26 @@ func (m *Manager) Update(ctx context.Context, in UpdateInput) (Snapshot, bool, e
 // WriteCapabilityPanelPort atomically writes {"port": <n>} to targetPath so
 // qwq-capability's SystemGuard.ManagementPorts() preserves the live panel port.
 func WriteCapabilityPanelPort(targetPath string, port int) error {
+	return WriteCapabilityPanelPortWithHost(targetPath, port, "")
+}
+
+// WriteCapabilityPanelPortWithHost atomically writes the authoritative panel
+// port and listen host to targetPath so qwq-capability's firewall/sshd guards
+// replace the static bootstrap port and avoid opening loopback-only ports on
+// external interfaces.
+func WriteCapabilityPanelPortWithHost(targetPath string, port int, listenHost string) error {
 	if targetPath == "" || port < 1 || port > 65535 {
 		return fmt.Errorf("panelaccess: invalid capability panel port target")
 	}
 	raw, err := json.Marshal(struct {
-		Port int `json:"port"`
-	}{Port: port})
+		Port       int    `json:"port"`
+		ListenHost string `json:"listen_host,omitempty"`
+		UpdatedAt  string `json:"updated_at"`
+	}{
+		Port:       port,
+		ListenHost: strings.TrimSpace(listenHost),
+		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
+	})
 	if err != nil {
 		return err
 	}
@@ -609,6 +714,58 @@ func WriteCapabilityPanelPort(targetPath string, port int) error {
 		return err
 	}
 	return nil
+}
+
+func readFromDB(ctx context.Context, db *storage.DB, seed Snapshot) (Snapshot, bool, error) {
+	var out Snapshot
+	var found bool
+	err := db.View(ctx, func(tx *sql.Tx) error {
+		var (
+			dbHost      string
+			port        int
+			ep          string
+			disguise    string
+			html        string
+			dom         string
+			autoDisable int
+			secret      string
+			rev         int64
+			updatedAt   string
+		)
+		rerr := tx.QueryRowContext(ctx, `
+			SELECT listen_host, listen_port, entry_path, disguise, disguise_html, panel_domain,
+			       auto_disable_on_domain, gate_secret, revision, updated_at
+			FROM panel_access_settings WHERE id = 1`,
+		).Scan(&dbHost, &port, &ep, &disguise, &html, &dom, &autoDisable, &secret, &rev, &updatedAt)
+		if errors.Is(rerr, sql.ErrNoRows) {
+			return nil
+		}
+		if rerr != nil {
+			return rerr
+		}
+		found = true
+		out = seed
+		if h := strings.TrimSpace(dbHost); h != "" {
+			out.ListenHost = h
+		}
+		if port > 0 {
+			out.Port = port
+		}
+		out.EntryPath = config.NormalizeEntryPath(ep)
+		if d, derr := config.NormalizeDisguise(disguise); derr == nil {
+			out.Disguise = d
+		}
+		out.DisguiseHTML = html
+		out.PanelDomain = dom
+		out.AutoDisableOnDomain = autoDisable != 0
+		out.GateSecret = secret
+		out.Revision = rev
+		if ts, terr := time.Parse(time.RFC3339Nano, updatedAt); terr == nil {
+			out.UpdatedAt = ts
+		}
+		return nil
+	})
+	return out, found, err
 }
 
 func loadOrSeed(ctx context.Context, db *storage.DB, seed Snapshot) (Snapshot, error) {

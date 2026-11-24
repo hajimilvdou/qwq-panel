@@ -426,10 +426,15 @@ th {
   inset: 0;
   background: rgba(15, 23, 42, 0.55);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 16px;
+  padding: var(--host-modal-top, 24px) 16px 24px;
+  overflow-y: auto;
   z-index: 40;
+}
+select option {
+  background-color: var(--surface);
+  color: var(--text);
 }
 
 .modal-backdrop[hidden] {

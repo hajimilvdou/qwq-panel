@@ -32,6 +32,8 @@
     void list.refresh();
   });
   const canCreate = $derived(session.can('host.delegations:create'));
+  const canUpdate = $derived(session.can('host.delegations:update'));
+  const canRevoke = $derived(session.can('host.delegations:delete'));
   const mine = (d: Delegation) => d.owner_id === session.user?.user_id;
 
   const STATUS: Record<Delegation['status'], [string, 'ok' | 'warn' | 'neutral']> = {
@@ -175,20 +177,24 @@
           <span class="small muted">{d.last_used_at ? relativeTime(d.last_used_at) : '从未'}</span>
         {:else if key === 'expires'}
           <span class="small muted" title={dateTime(d.expires_at)}>{dateTime(d.expires_at).slice(0, 10)}</span>
-        {:else if key === 'more' && mine(d) && d.status !== 'expired'}
-          <Menu
-            label="{d.label} 的操作"
-            items={[
-              { label: d.status === 'active' ? '暂停' : '恢复', icon: d.status === 'active' ? 'pause' : 'play', onselect: () => toggle(d) },
-              { label: '撤销', icon: 'trash', tone: 'danger', onselect: () => openRevoke(d) },
-            ]}
-          >
+        {:else if key === 'more' && mine(d) && d.status !== 'expired' && (canUpdate || canRevoke)}
+          {@const rowItems = [
+            ...(canUpdate
+              ? [{ label: d.status === 'active' ? '暂停' : '恢复', icon: (d.status === 'active' ? 'pause' : 'play') as 'pause' | 'play', onselect: () => toggle(d) }]
+              : []),
+            ...(canRevoke ? [{ label: '撤销', icon: 'trash' as const, tone: 'danger' as const, onselect: () => openRevoke(d) }] : []),
+          ]}
+          <Menu label="{d.label} 的操作" items={rowItems}>
             {#snippet trigger(p)}<IconButton icon="more" label="{d.label} 的操作" size="sm" {...p} />{/snippet}
           </Menu>
         {/if}
       {/snippet}
       {#snippet empty()}
-        <EmptyState compact title="还没有 AI 令牌" description="签发一个令牌，把它填进外部 AI 工具的 MCP 配置里。" />
+        <EmptyState
+          compact
+          title="还没有 AI 令牌"
+          description={canCreate ? '签发一个令牌，把它填进外部 AI 工具的 MCP 配置里。' : '当前账号无权签发 AI 委托令牌。'}
+        />
       {/snippet}
     </DataTable>
   {/if}

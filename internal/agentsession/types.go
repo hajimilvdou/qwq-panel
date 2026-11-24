@@ -161,11 +161,12 @@ type MessageToolCall struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-// assistantContent is the content_json of an assistant message with tool calls
-// or persisted reasoning content.
+// assistantContent is the content_json of an assistant message with tool calls,
+// persisted reasoning content, or Anthropic signed thinking blocks.
 type assistantContent struct {
-	ReasoningContent string            `json:"reasoning_content,omitempty"`
-	ToolCalls        []MessageToolCall `json:"tool_calls,omitempty"`
+	ReasoningContent string                   `json:"reasoning_content,omitempty"`
+	ThinkingBlocks   []AnthropicThinkingBlock `json:"thinking_blocks,omitempty"`
+	ToolCalls        []MessageToolCall        `json:"tool_calls,omitempty"`
 }
 
 // persistedErrorMeta is stored in agent_messages.content_json (role="system",
@@ -382,6 +383,7 @@ type ApprovalCanceller interface {
 // the catalog filtered by the permission mode.
 type Turn struct {
 	SessionID      string
+	Owner          actor.Actor
 	PermissionMode operations.PermissionMode
 	Messages       []Message
 	Tools          []ToolSpec
@@ -396,6 +398,10 @@ type Turn struct {
 	// NextCallID mints the identifier of a proposed call. The service supplies
 	// it so calls are unique within the host.
 	NextCallID func() string
+	// PersistExternalID atomically writes an external CLI session/thread ID
+	// ("resume_session_id" or "external_thread_id") into agent_sessions.config_json
+	// so subsequent turns automatically resume multi-turn memory.
+	PersistExternalID func(ctx context.Context, key, externalID string) error
 }
 
 // Emit publishes one event. The service persists what the event implies and
@@ -455,8 +461,11 @@ type Event struct {
 	ToolCalls []MessageToolCall `json:"tool_calls,omitempty"`
 	// ReasoningContent carries internal reasoning text to persist on
 	// message.completed without changing the public SSE wire shape.
-	ReasoningContent string    `json:"-"`
-	At               time.Time `json:"at,omitempty"`
+	ReasoningContent string `json:"-"`
+	// ThinkingBlocks carries signed Anthropic thinking/redacted_thinking blocks
+	// to persist on message.completed without changing the public SSE wire shape.
+	ThinkingBlocks []AnthropicThinkingBlock `json:"-"`
+	At             time.Time                `json:"at,omitempty"`
 }
 
 // SessionPage is one page of the session list (OpenAPI AgentSessionList).

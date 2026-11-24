@@ -27,11 +27,38 @@ type AnthropicSSEStateMachine struct {
 	activeKind  anthropicBlockKind
 	nextIndex   int
 	activeIndex int
+	err         error
 }
 
 // NewAnthropicSSEStateMachine 构造 Anthropic Messages SSE 状态机。
 func NewAnthropicSSEStateMachine(w io.Writer, model string) *AnthropicSSEStateMachine {
 	return &AnthropicSSEStateMachine{w: w, model: model}
+}
+
+// Err 返回流写出过程中捕获到的首个下游 I/O 错误。
+func (m *AnthropicSSEStateMachine) Err() error {
+	if m == nil {
+		return nil
+	}
+	return m.err
+}
+
+func (m *AnthropicSSEStateMachine) printf(format string, args ...any) {
+	if m.err != nil {
+		return
+	}
+	if _, err := fmt.Fprintf(m.w, format, args...); err != nil {
+		m.err = err
+	}
+}
+
+func (m *AnthropicSSEStateMachine) writeString(s string) {
+	if m.err != nil {
+		return
+	}
+	if _, err := io.WriteString(m.w, s); err != nil {
+		m.err = err
+	}
 }
 
 // Started 返回是否已发射过 message_start。
@@ -40,12 +67,11 @@ func (m *AnthropicSSEStateMachine) Started() bool {
 }
 
 func (m *AnthropicSSEStateMachine) ensureMessageStart(inputTokens int) {
-	if m.startedMsg {
+	if m.startedMsg || m.err != nil {
 		return
 	}
 	m.startedMsg = true
-	_, _ = fmt.Fprintf(
-		m.w,
+	m.printf(
 		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_qwq\",\"type\":\"message\",\"role\":\"assistant\",\"model\":%q,\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":%d,\"output_tokens\":0}}}\n\n",
 		m.model,
 		max(inputTokens, 0),
@@ -53,11 +79,11 @@ func (m *AnthropicSSEStateMachine) ensureMessageStart(inputTokens int) {
 }
 
 func (m *AnthropicSSEStateMachine) switchBlock(target anthropicBlockKind) {
-	if m.activeKind == target {
+	if m.activeKind == target || m.err != nil {
 		return
 	}
 	if m.activeKind != blockNone {
-		_, _ = fmt.Fprintf(m.w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":%d}\n\n", m.activeIndex)
+		m.printf("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":%d}\n\n", m.activeIndex)
 	}
 	if target == blockNone {
 		m.activeKind = blockNone
@@ -70,15 +96,15 @@ func (m *AnthropicSSEStateMachine) switchBlock(target anthropicBlockKind) {
 
 	switch target {
 	case blockThinking:
-		_, _ = fmt.Fprintf(m.w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":%d,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n", idx)
+		m.printf("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":%d,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n", idx)
 	case blockText:
-		_, _ = fmt.Fprintf(m.w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":%d,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n", idx)
+		m.printf("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":%d,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n", idx)
 	}
 }
 
 // EmitDelta 按顺序安全发射思考流与正文流，自动完成块切换与索引递增。
 func (m *AnthropicSSEStateMachine) EmitDelta(inputTokens int, reasoningDelta, textDelta string) {
-	if reasoningDelta == "" && textDelta == "" {
+	if (reasoningDelta == "" && textDelta == "") || m.err != nil {
 		return
 	}
 	m.ensureMessageStart(inputTokens)
@@ -89,7 +115,7 @@ func (m *AnthropicSSEStateMachine) EmitDelta(inputTokens int, reasoningDelta, te
 			"index": m.activeIndex,
 			"delta": map[string]string{"type": "thinking_delta", "thinking": reasoningDelta},
 		})
-		_, _ = fmt.Fprintf(m.w, "event: content_block_delta\ndata: %s\n\n", chunk)
+		m.printf("event: content_block_delta\ndata: %s\n\n", chunk)
 	}
 	if textDelta != "" {
 		m.switchBlock(blockText)
@@ -98,13 +124,13 @@ func (m *AnthropicSSEStateMachine) EmitDelta(inputTokens int, reasoningDelta, te
 			"index": m.activeIndex,
 			"delta": map[string]string{"type": "text_delta", "text": textDelta},
 		})
-		_, _ = fmt.Fprintf(m.w, "event: content_block_delta\ndata: %s\n\n", chunk)
+		m.printf("event: content_block_delta\ndata: %s\n\n", chunk)
 	}
 }
 
 // EmitToolUseBlock 完整转发跨协议工具调用块。
 func (m *AnthropicSSEStateMachine) EmitToolUseBlock(inputTokens int, toolCallID, toolName, argsJSON string) {
-	if toolName == "" {
+	if toolName == "" || m.err != nil {
 		return
 	}
 	m.ensureMessageStart(inputTokens)
@@ -124,20 +150,23 @@ func (m *AnthropicSSEStateMachine) EmitToolUseBlock(inputTokens int, toolCallID,
 			"input": map[string]any{},
 		},
 	})
-	_, _ = fmt.Fprintf(m.w, "event: content_block_start\ndata: %s\n\n", startPayload)
+	m.printf("event: content_block_start\ndata: %s\n\n", startPayload)
 	if strings.TrimSpace(argsJSON) != "" {
 		deltaPayload, _ := json.Marshal(map[string]any{
 			"type":  "content_block_delta",
 			"index": idx,
 			"delta": map[string]string{"type": "input_json_delta", "partial_json": argsJSON},
 		})
-		_, _ = fmt.Fprintf(m.w, "event: content_block_delta\ndata: %s\n\n", deltaPayload)
+		m.printf("event: content_block_delta\ndata: %s\n\n", deltaPayload)
 	}
-	_, _ = fmt.Fprintf(m.w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":%d}\n\n", idx)
+	m.printf("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":%d}\n\n", idx)
 }
 
 // Finish 关闭活动块并输出 message_delta / message_stop 终止事件。
 func (m *AnthropicSSEStateMachine) Finish(inputTokens, outputTokens int, stopReason string) {
+	if m.err != nil {
+		return
+	}
 	m.ensureMessageStart(inputTokens)
 	if m.activeKind == blockNone && m.nextIndex == 0 {
 		m.switchBlock(blockText)
@@ -151,6 +180,6 @@ func (m *AnthropicSSEStateMachine) Finish(inputTokens, outputTokens int, stopRea
 		"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
 		"usage": map[string]int{"output_tokens": max(outputTokens, 0)},
 	})
-	_, _ = fmt.Fprintf(m.w, "event: message_delta\ndata: %s\n\n", msgDelta)
-	_, _ = io.WriteString(m.w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	m.printf("event: message_delta\ndata: %s\n\n", msgDelta)
+	m.writeString("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 }

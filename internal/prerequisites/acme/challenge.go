@@ -103,7 +103,7 @@ func (a *Authority) authorizations(ctx context.Context, caller certificates.Call
 			return err
 		}
 		ttl := uint32(60)
-		if state.Scope.Provider.Kind == dns.Aliyun {
+		if state.Scope.Provider.Kind == dns.Aliyun || state.Scope.Provider.Kind == dns.DNSPod {
 			ttl = 600
 		}
 		request := dns.PropagationRequest{Caller: dns.Caller{OwnerID: caller.OwnerID, OperationID: caller.OperationID}, Scope: state.Scope.Provider, Record: dns.Record{Type: dns.TXT, Name: "_acme-challenge." + strings.TrimPrefix(item.SAN, "*."), Value: item.Value, TTL: ttl}}

@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "binding_ref",
+    "certificate_id",
+    "revision",
+    "status"
+  ],
+  "properties": {
+    "binding_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "certificate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "revision": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "status": {
+      "type": "string",
+      "maxLength": 64
+    }
+  }
+}

@@ -5,7 +5,6 @@ package panelaccess
 import (
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/hex"
 	"net"
 	"net/http"
@@ -412,15 +411,15 @@ func dropConnection(w http.ResponseWriter) {
 }
 
 func unwrapTCPConn(c net.Conn) *net.TCPConn {
-	switch v := c.(type) {
-	case *net.TCPConn:
-		return v
-	case *tls.Conn:
-		if nc := v.NetConn(); nc != nil {
-			if tcp, ok := nc.(*net.TCPConn); ok {
-				return tcp
-			}
+	for i := 0; i < 8 && c != nil; i++ {
+		if tcp, ok := c.(*net.TCPConn); ok {
+			return tcp
 		}
+		if wrapper, ok := c.(interface{ NetConn() net.Conn }); ok {
+			c = wrapper.NetConn()
+			continue
+		}
+		break
 	}
 	return nil
 }

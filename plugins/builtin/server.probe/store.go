@@ -377,6 +377,7 @@ type PortalSettings struct {
 type ProbeStore struct {
 	mu        sync.RWMutex
 	persistMu sync.Mutex
+	closeOnce sync.Once
 	dataDir   string
 	db        *sqlitedb.DualPool
 	nodes     map[string]*NodeRecord
@@ -449,15 +450,25 @@ func OpenProbeStore(stateDir string) (*ProbeStore, error) {
 	return s, nil
 }
 
-// Close 在进程退出前将内存周期流量与当前分钟归档刷盘，再优雅关闭 SQLite 双连接池。
+// Close 在进程退出前将内存周期流量与当前分钟归档刷盘，再优雅关闭 SQLite 双连接池（幂等且与写库互斥）。
 func (s *ProbeStore) Close() error {
-	if s == nil || s.db == nil {
+	if s == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_ = s.FlushPeriodic(ctx, time.Now())
-	cancel()
-	return s.db.Close()
+	var closeErr error
+	s.closeOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = s.FlushPeriodic(ctx, time.Now())
+		cancel()
+		s.persistMu.Lock()
+		db := s.db
+		s.db = nil
+		s.persistMu.Unlock()
+		if db != nil {
+			closeErr = db.Close()
+		}
+	})
+	return closeErr
 }
 
 // LoadFromDB 启动时从 probe.db 加载节点、令牌哈希、当月流量、设置与近 90 天 SLA。
@@ -595,10 +606,7 @@ func (s *ProbeStore) LoadFromDB(ctx context.Context) error {
 			if err := slaRows.Scan(&tid, &day, &tot, &up, &down, &avgMs, &inc); err != nil {
 				continue
 			}
-			pct := 100.0
-			if tot > 0 {
-				pct = float64(up*10000/tot) / 100.0
-			}
+			pct := ComputeTimeWeightedSLA(tot, down)
 			b := append(loadedSLA[tid], DailySLABucket{
 				DayUTC:          day,
 				TotalChecks:     uint32(max(0, tot)),
@@ -700,6 +708,132 @@ func (s *ProbeStore) PersistServiceMonitorResult(ctx context.Context, m ServiceM
 		m.ID, dayUTC, upInc, downSec, int64(max(0, m.LastLatencyMs)),
 	)
 	return err
+}
+
+// ListServiceMonitors 返回按 ID 稳定排序的服务/三网拨测项列表。
+func (s *ProbeStore) ListServiceMonitors() []ServiceMonitor {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]ServiceMonitor, 0, len(s.monitors))
+	for _, m := range s.monitors {
+		if m != nil {
+			out = append(out, *m)
+		}
+	}
+	slices.SortFunc(out, func(a, b ServiceMonitor) int {
+		if a.CarrierTag != b.CarrierTag {
+			return strings.Compare(a.CarrierTag, b.CarrierTag)
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return out
+}
+
+// UpsertServiceMonitor 新增或更新三网/服务拨测监控项并立即落盘 SQLite。
+func (s *ProbeStore) UpsertServiceMonitor(ctx context.Context, m ServiceMonitor) (ServiceMonitor, error) {
+	m.ID = strings.TrimSpace(m.ID)
+	if m.ID == "" {
+		buf := make([]byte, 6)
+		_, _ = rand.Read(buf)
+		m.ID = "mon_" + hex.EncodeToString(buf)
+	}
+	if !isValidNodeID(m.ID) {
+		return ServiceMonitor{}, errors.New("INVALID_MONITOR_ID")
+	}
+	m.Name = truncateSafe(m.Name, 64)
+	if m.Name == "" {
+		return ServiceMonitor{}, errors.New("MONITOR_NAME_REQUIRED")
+	}
+	switch m.Kind {
+	case "tcp", "http", "https":
+	default:
+		return ServiceMonitor{}, errors.New("UNSUPPORTED_MONITOR_KIND")
+	}
+	switch m.CarrierTag {
+	case "ct", "cu", "cm", "global", "custom":
+	default:
+		m.CarrierTag = "global"
+	}
+	if m.IntervalSec < 10 {
+		m.IntervalSec = 30
+	}
+	if m.IntervalSec > 600 {
+		m.IntervalSec = 600
+	}
+	if m.ExpectedStatusMin <= 0 {
+		m.ExpectedStatusMin = 200
+	}
+	if m.ExpectedStatusMax <= 0 {
+		m.ExpectedStatusMax = 399
+	}
+	if m.LastStatus == "" {
+		m.LastStatus = "unknown"
+	}
+
+	s.mu.Lock()
+	if _, exists := s.monitors[m.ID]; !exists && len(s.monitors) >= 128 {
+		s.mu.Unlock()
+		return ServiceMonitor{}, errors.New("MONITOR_LIMIT_EXCEEDED")
+	}
+	if prev, ok := s.monitors[m.ID]; ok && prev != nil {
+		m.LastStatus = prev.LastStatus
+		m.LastLatencyMs = prev.LastLatencyMs
+		m.LastCheckedAt = prev.LastCheckedAt
+	}
+	cp := m
+	s.monitors[m.ID] = &cp
+	s.mu.Unlock()
+
+	if s.db != nil {
+		s.persistMu.Lock()
+		defer s.persistMu.Unlock()
+		_, err := s.db.Writer.ExecContext(ctx, `
+			INSERT INTO probe_service_monitors (
+				id, name, kind, carrier_tag, target_addr, interval_sec,
+				expected_status_min, expected_status_max, public_visible, enabled,
+				last_status, last_latency_ms, last_checked_at, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				name=excluded.name,
+				kind=excluded.kind,
+				carrier_tag=excluded.carrier_tag,
+				target_addr=excluded.target_addr,
+				interval_sec=excluded.interval_sec,
+				expected_status_min=excluded.expected_status_min,
+				expected_status_max=excluded.expected_status_max,
+				public_visible=excluded.public_visible,
+				enabled=excluded.enabled`,
+			m.ID, m.Name, m.Kind, m.CarrierTag, m.TargetAddr, m.IntervalSec,
+			m.ExpectedStatusMin, m.ExpectedStatusMax, boolToInt(m.PublicVisible), boolToInt(m.Enabled),
+			m.LastStatus, int64(m.LastLatencyMs), m.LastCheckedAt, time.Now().Unix(),
+		)
+		if err != nil {
+			return ServiceMonitor{}, err
+		}
+	}
+	return m, nil
+}
+
+// DeleteServiceMonitor 移除指定三网/服务拨测监控项并清理关联 SLA。
+func (s *ProbeStore) DeleteServiceMonitor(ctx context.Context, id string) (bool, error) {
+	id = strings.TrimSpace(id)
+	if id == "" || !isValidNodeID(id) {
+		return false, errors.New("INVALID_MONITOR_ID")
+	}
+	s.mu.Lock()
+	_, existed := s.monitors[id]
+	delete(s.monitors, id)
+	s.mu.Unlock()
+	if !existed {
+		return false, nil
+	}
+	if s.db != nil {
+		s.persistMu.Lock()
+		defer s.persistMu.Unlock()
+		_, _ = s.db.Writer.ExecContext(ctx, `DELETE FROM probe_service_monitors WHERE id = ?`, id)
+		_, _ = s.db.Writer.ExecContext(ctx, `DELETE FROM probe_daily_sla WHERE target_kind = 'service' AND target_id = ?`, id)
+	}
+	return true, nil
 }
 
 func boolToInt(b bool) int {
@@ -996,11 +1130,11 @@ func (s *ProbeStore) PersistSettings(ctx context.Context, cfg PortalSettings) er
 
 // FlushPeriodic 每 60 秒或优雅停机时在单事务内批量归档当月流量、分钟级指标与日度 SLA，避免秒级高频写放大。
 func (s *ProbeStore) FlushPeriodic(ctx context.Context, now time.Time) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	if s.db == nil {
 		return nil
 	}
-	s.persistMu.Lock()
-	defer s.persistMu.Unlock()
 	s.mu.RLock()
 	nodes := make([]NodeRecord, 0, len(s.nodes))
 	for _, n := range s.nodes {
@@ -1012,10 +1146,13 @@ func (s *ProbeStore) FlushPeriodic(ctx context.Context, now time.Time) error {
 	for id, lv := range s.live {
 		lives[id] = lv
 	}
-	latestSLA := make(map[string]DailySLABucket, len(s.sla90d))
+	// Flush up to the last 2 day buckets per node so UTC midnight rollover never
+	// loses the final seconds of yesterday's SLA.
+	recentSLA := make(map[string][]DailySLABucket, len(s.sla90d))
 	for id, buckets := range s.sla90d {
 		if len(buckets) > 0 {
-			latestSLA[id] = buckets[len(buckets)-1]
+			start := max(0, len(buckets)-2)
+			recentSLA[id] = slices.Clone(buckets[start:])
 		}
 	}
 	s.mu.RUnlock()
@@ -1075,7 +1212,10 @@ func (s *ProbeStore) FlushPeriodic(ctx context.Context, now time.Time) error {
 				return err
 			}
 		}
-		if b, ok := latestSLA[n.ID]; ok && b.DayUTC != "" {
+		for _, b := range recentSLA[n.ID] {
+			if b.DayUTC == "" {
+				continue
+			}
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO probe_daily_sla (
 					target_kind, target_id, day_utc, total_checks, up_checks, downtime_seconds, avg_latency_ms, incident_summary
@@ -1099,7 +1239,11 @@ func (s *ProbeStore) FlushPeriodic(ctx context.Context, now time.Time) error {
 	cutoffDay := now.UTC().AddDate(0, 0, -90).Format("2006-01-02")
 	_, _ = tx.ExecContext(ctx, `DELETE FROM probe_daily_sla WHERE day_utc < ?`, cutoffDay)
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	_ = s.db.CheckpointPassive(ctx)
+	return nil
 }
 
 // GenerateAgentToken 签发高熵单向节点上报令牌（明文仅在创建/轮换时返回一次）。
@@ -1159,14 +1303,21 @@ func VerifyProbeReportSequence(
 	if diff < -maxSkewNano || diff > maxSkewNano {
 		return ErrProbeReplay
 	}
+	if repSessionEpoch != 0 && lastSessionEpoch != 0 && repSessionEpoch < lastSessionEpoch {
+		return ErrProbeReplay
+	}
 	if repSessionEpoch != 0 && repSessionEpoch == lastSessionEpoch {
 		if repSeq <= lastSeq {
 			return ErrProbeReplay
 		}
 		return nil
 	}
-	// Agent 进程重启生成了新 SessionEpoch（或旧版未传 SessionEpoch）：要求纳秒时间戳严格单调前进
+	// Agent 进程重启生成了新 SessionEpoch（或旧版未传 SessionEpoch）：要求纳秒时间戳严格单调前进，
+	// 且未携带 SessionEpoch 的旧版探针序号必须单调递增或从 1 重新起步。
 	if repTimestampNano <= lastTimestampNano {
+		return ErrProbeReplay
+	}
+	if repSessionEpoch == 0 && lastSeq > 0 && repSeq <= lastSeq && repSeq != 1 {
 		return ErrProbeReplay
 	}
 	return nil
@@ -1342,19 +1493,33 @@ func (s *ProbeStore) BuildPublicNodes(now time.Time) []PublicNodeDTO {
 	return out
 }
 
+// ComputeTimeWeightedSLA 按真实观测秒数扣除累计离线秒数计算 SLA：
+//   - 若节点从未上报过任何心跳（totalObservedSeconds <= 0），返回 -1（前端渲染为 "—" 待接入，绝不虚标 100.00%）；
+//   - 消除“上报 30s 记 1 次在线 vs 巡检 2s 记 15 次离线”导致的 15 倍权重失真。
+func ComputeTimeWeightedSLA(totalObservedSeconds, downtimeSeconds int64) float64 {
+	if totalObservedSeconds <= 0 {
+		return -1
+	}
+	if downtimeSeconds <= 0 {
+		return 100.0
+	}
+	if downtimeSeconds >= totalObservedSeconds {
+		return 0.0
+	}
+	up := float64(totalObservedSeconds-downtimeSeconds) * 100.0 / float64(totalObservedSeconds)
+	return math.Round(up*100) / 100
+}
+
 func computeOverallUptime(buckets []DailySLABucket) float64 {
 	if len(buckets) == 0 {
-		return 100.0
+		return -1
 	}
-	var total, up uint64
+	var totalObserved, totalDowntime int64
 	for _, b := range buckets {
-		total += uint64(b.TotalChecks)
-		up += uint64(b.UpChecks)
+		totalObserved += int64(b.TotalChecks)
+		totalDowntime += int64(b.DowntimeSeconds)
 	}
-	if total == 0 {
-		return 100.0
-	}
-	return float64(up*10000/total) / 100.0
+	return ComputeTimeWeightedSLA(totalObserved, totalDowntime)
 }
 
 func formatBillingBadge(cents int64, currency, cycle string) string {

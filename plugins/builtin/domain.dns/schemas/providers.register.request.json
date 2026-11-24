@@ -20,9 +20,10 @@
       "type": "string",
       "enum": [
         "cloudflare",
-        "aliyun"
+        "aliyun",
+        "dnspod"
       ],
-      "description": "受控 DNS 提供商类型"
+      "description": "受控 DNS 提供商类型（cloudflare / aliyun / dnspod）"
     },
     "name": {
       "type": "string",
@@ -35,7 +36,7 @@
       "x-secret": true,
       "writeOnly": true,
       "additionalProperties": true,
-      "description": "提供商 API 凭据对象（Cloudflare 填 token；阿里云填 access_key_id 与 access_key_secret），提交后由宿主加密托管"
+      "description": "提供商 API 凭据对象（Cloudflare 填 token；阿里云填 access_key_id 与 access_key_secret；腾讯云 DNSPod 填 secret_id 与 secret_key），提交后由宿主加密托管"
     }
   }
 }

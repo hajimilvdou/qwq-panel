@@ -227,6 +227,7 @@ func (i *instance) register() {
 	i.HandleJob("certificates.issue", i.certificatesIssue)
 	i.HandleJob("certificates.import", i.certificatesImport)
 	i.HandleJob("certificates.test", i.certificatesTest)
+	i.HandleJob("bindings.reserve", i.bindingsReserve)
 	i.HandleJob("bindings.bind", i.bindingsBind)
 	i.HandleJob("bindings.deploy", i.bindingsDeploy)
 	i.HandleJob("bindings.rollback", i.bindingsRollback)
@@ -431,6 +432,42 @@ func (i *instance) certificatesTest(ctx context.Context, req pluginsdk.Request, 
 		return pluginsdk.Result{}, err
 	}
 	return marshalResult(out)
+}
+
+func (i *instance) bindingsReserve(ctx context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
+	var in certificateIDInput
+	if err := req.Decode(&in); err != nil {
+		return pluginsdk.Result{}, err
+	}
+	if in.CertificateID == "" {
+		return pluginsdk.Result{}, missingFieldError("/certificate_id", "缺少证书资源 ID")
+	}
+	client, meta, err := certsClientWrite(ctx, req)
+	if err != nil {
+		return pluginsdk.Result{}, err
+	}
+	resp, err := client.ReserveBinding(ctx, &certificatesv1.ReserveBindingRequest{
+		Context:          meta,
+		CertificateId:    in.CertificateID,
+		ExpectedRevision: expectedRevision(req, "certificates/"+in.CertificateID),
+	})
+	if err != nil {
+		return pluginsdk.Result{}, err
+	}
+	if err := protoError(resp.GetError()); err != nil {
+		return pluginsdk.Result{}, err
+	}
+	return marshalResult(struct {
+		BindingRef    string `json:"binding_ref"`
+		CertificateID string `json:"certificate_id"`
+		Revision      string `json:"revision"`
+		Status        string `json:"status"`
+	}{
+		BindingRef:    resp.GetBindingRef(),
+		CertificateID: resp.GetCertificateId(),
+		Revision:      resp.GetRevision(),
+		Status:        resp.GetStatus(),
+	})
 }
 
 func (i *instance) bindingsBind(ctx context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {

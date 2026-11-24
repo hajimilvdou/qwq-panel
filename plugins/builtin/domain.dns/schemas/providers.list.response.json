@@ -27,7 +27,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "提供商类型（cloudflare 或 aliyun）"
+            "description": "提供商类型（cloudflare、aliyun 或 dnspod）"
           },
           "name": {
             "type": "string",

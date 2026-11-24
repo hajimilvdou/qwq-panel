@@ -15,6 +15,7 @@ type ProviderKind string
 const (
 	Cloudflare ProviderKind = "cloudflare"
 	Aliyun     ProviderKind = "aliyun"
+	DNSPod     ProviderKind = "dnspod"
 )
 
 type RecordType string
@@ -24,10 +25,21 @@ const (
 	AAAA  RecordType = "AAAA"
 	CNAME RecordType = "CNAME"
 	TXT   RecordType = "TXT"
+	MX    RecordType = "MX"
+	CAA   RecordType = "CAA"
+	SRV   RecordType = "SRV"
+	NS    RecordType = "NS"
 )
 
-// Supported 明确限制首期允许修改的记录类型。
-func (t RecordType) Supported() bool { return t == A || t == AAAA || t == CNAME || t == TXT }
+// Supported 明确限制允许受控修改的记录类型。
+func (t RecordType) Supported() bool {
+	switch t {
+	case A, AAAA, CNAME, TXT, MX, CAA, SRV, NS:
+		return true
+	default:
+		return false
+	}
+}
 
 // Scope 来自宿主确认的资源注册表，不信任插件自报的 zone 名称或凭据版本。
 type Scope struct {

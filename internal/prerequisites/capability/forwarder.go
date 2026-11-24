@@ -92,6 +92,7 @@ var methodRoutes = map[string]methodRoute{
 	"certificates/SubmitTestCertificate": {"tls.certificates", "certificates.test", "system.certificates.manage", true},
 	"certificates/GetTask":               {"tls.certificates", "tasks.get", "certificates.read", false},
 	"certificates/CancelTask":            {"tls.certificates", "tasks.cancel", "system.certificates.manage", true},
+	"certificates/ReserveBinding":        {"tls.certificates", "bindings.reserve", "system.certificates.manage", true},
 	"certificates/BindCertificate":       {"tls.certificates", "bindings.bind", "system.certificates.manage", true},
 	"certificates/UnbindCertificate":     {"tls.certificates", "bindings.unbind", "system.certificates.manage", true},
 	"certificates/DeployBinding":         {"tls.certificates", "bindings.deploy", "system.certificates.manage", true},

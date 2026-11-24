@@ -554,3 +554,81 @@ func TestTokenBucketShaperAndEpochAligner(t *testing.T) {
 		t.Fatalf("shaped conn echo mismatch: err=%v got=%q", err, string(buf))
 	}
 }
+
+func TestAnyTLSHotUpdateEvictsRevokedUserConnections(t *testing.T) {
+	certPEM, keyPEM := generateTestCertPEM(t)
+	srv, err := NewServer(ProfileSpec{
+		ProfileID:          "anytls-evict",
+		ServerName:         "anytls.local",
+		Listen:             "127.0.0.1",
+		Port:               1,
+		CertPEM:            certPEM,
+		KeyPEM:             keyPEM,
+		Users:              map[string][]byte{"alice": []byte("alice-pass"), "bob": []byte("bob-pass")},
+		AllowPrivateTarget: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.listenAddr = "127.0.0.1:0"
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := srv.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop(2 * time.Second)
+
+	dialAndAuth := func(pass string) *tls.Conn {
+		c, derr := tls.Dial("tcp", srv.Addr().String(), &tls.Config{ServerName: "anytls.local", InsecureSkipVerify: true})
+		if derr != nil {
+			t.Fatal(derr)
+		}
+		h := sha256.Sum256([]byte(pass))
+		var buf bytes.Buffer
+		buf.Write(h[:])
+		_ = binary.Write(&buf, binary.BigEndian, uint16(0))
+		if _, werr := c.Write(buf.Bytes()); werr != nil {
+			t.Fatal(werr)
+		}
+		// Heartbeat confirms authentication finished and conn is bound to user digest
+		writeTestFrame(t, c, cmdHeartRequest, 0, nil)
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		hb, _, _ := readTestFrame(t, c)
+		if hb != cmdHeartResponse {
+			t.Fatalf("expected heartbeat response, got %d", hb)
+		}
+		return c
+	}
+
+	aliceConn := dialAndAuth("alice-pass")
+	defer aliceConn.Close()
+	bobConn := dialAndAuth("bob-pass")
+	defer bobConn.Close()
+
+	// HotUpdate removing alice while keeping bob: alice's live conn MUST be evicted immediately; bob stays alive
+	if err := srv.HotUpdate(ProfileSpec{
+		ProfileID:          "anytls-evict",
+		ServerName:         "anytls.local",
+		Listen:             "127.0.0.1",
+		Port:               1,
+		CertPEM:            certPEM,
+		KeyPEM:             keyPEM,
+		Users:              map[string][]byte{"bob": []byte("bob-pass")},
+		AllowPrivateTarget: true,
+	}); err != nil {
+		t.Fatalf("HotUpdate: %v", err)
+	}
+
+	_ = aliceConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var one [1]byte
+	if _, rerr := aliceConn.Read(one[:]); rerr == nil {
+		t.Fatal("expected revoked user alice connection to be closed immediately after HotUpdate")
+	}
+
+	// Bob must still respond to heartbeat cleanly
+	writeTestFrame(t, bobConn, cmdHeartRequest, 0, nil)
+	_ = bobConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if hb, _, _ := readTestFrame(t, bobConn); hb != cmdHeartResponse {
+		t.Fatalf("expected active user bob to remain connected, got %d", hb)
+	}
+}

@@ -18,6 +18,8 @@ export {
   type HostProblem,
   type InvokeOutcome,
   type KitConfirmOptions,
+  type KitEnsurePluginsFailure,
+  type KitEnsurePluginsResult,
   type KitEvent,
   type KitHostSettings,
   type KitInvokeOptions,

@@ -226,7 +226,7 @@ func (c *OpenCodeCore) runServeHTTP(ctx context.Context, cfg OpenCodeConfig, tur
 	router := NewApprovalRouter(turn, cfg.PlanMode, emit, c.minter, c.bridge)
 
 	// 1. Ensure remote OpenCode session exists
-	extSessionID := cfg.SessionID
+	extSessionID := strings.TrimSpace(cfg.SessionID)
 	if extSessionID == "" {
 		var created struct {
 			ID string `json:"id"`
@@ -236,7 +236,10 @@ func (c *OpenCodeCore) runServeHTTP(ctx context.Context, cfg OpenCodeConfig, tur
 		}, &created); err != nil {
 			return err
 		}
-		extSessionID = created.ID
+		extSessionID = strings.TrimSpace(created.ID)
+		if extSessionID != "" && turn.PersistExternalID != nil {
+			_ = turn.PersistExternalID(context.WithoutCancel(ctx), "external_thread_id", extSessionID)
+		}
 	}
 
 	// 2. Open SSE event stream BEFORE posting prompt so no early delta is lost
@@ -469,30 +472,29 @@ func (c *OpenCodeCore) effectiveLauncher() ProcessLauncher {
 
 // runCLIJSON runs `opencode run --format json` as a zero-daemon fallback.
 func (c *OpenCodeCore) runCLIJSON(ctx context.Context, cfg OpenCodeConfig, turn Turn, emit Emit) error {
-	var extraEnv []string
-	var cleanupEnv = func() {}
-	useProvider := cfg.AuthMode != "oauth" && cfg.ProviderID != ""
-	if useProvider {
-		pEnv, ep, found, cl, pErr := ResolveProviderForCLI(ctx, c.providers, cfg.ProviderID, CoreOpencode)
-		if pErr != nil {
-			return pErr
-		}
-		cleanupEnv = cl
-		extraEnv = append(extraEnv, pEnv...)
-		if found {
-			if cfg.Model == "" {
-				cfg.Model = ep.Model
-			}
-			if cfg.ReasoningEffort == "" {
-				cfg.ReasoningEffort = ep.ReasoningEffort
-			}
-		}
-	} else if c.auth != nil {
-		extraEnv = append(extraEnv, c.auth.PersistentEnvFor(CoreOpencode)...)
+	if turn.PermissionMode != operations.PermissionReadOnly && !cfg.PlanMode {
+		return problem.New(problem.PermissionDenied,
+			"非交互式回退传输 (run-json) 无法桥接宿主人工审批，仅允许在只读或计划模式下使用。")
+	}
+	pEnv, ep, found, cleanupEnv, pErr := resolveCLIAuthEnvForSession(ctx, c.providers, c.auth, CoreOpencode, cfg.AuthMode, cfg.ProviderID, turn.SessionID)
+	if pErr != nil {
+		return pErr
 	}
 	defer cleanupEnv()
+	extraEnv := append([]string(nil), pEnv...)
+	if found {
+		if cfg.Model == "" {
+			cfg.Model = ep.Model
+		}
+		if cfg.ReasoningEffort == "" {
+			cfg.ReasoningEffort = ep.ReasoningEffort
+		}
+	}
 
-	args := []string{"run", "--format", "json", "--agent", MapOpenCodeAgent(turn.PermissionMode, cfg.PlanMode)}
+	args := []string{"run", "--format", "json", "--agent", "plan"}
+	if strings.TrimSpace(cfg.SessionID) != "" {
+		args = append(args, "--session", strings.TrimSpace(cfg.SessionID))
+	}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
@@ -509,20 +511,29 @@ func (c *OpenCodeCore) runCLIJSON(ctx context.Context, cfg OpenCodeConfig, turn 
 	sc := bufio.NewScanner(proc.Stdout())
 	sc.Buffer(make([]byte, 0, 64<<10), maxCLILine)
 	emittedText := false
+	savedSessionID := ""
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 {
 			continue
 		}
 		var ev struct {
-			Type string `json:"type"`
-			Part struct {
-				Text string `json:"text"`
-				Tool string `json:"tool"`
+			Type      string `json:"type"`
+			SessionID string `json:"sessionID"`
+			Part      struct {
+				SessionID string `json:"sessionID"`
+				Text      string `json:"text"`
+				Tool      string `json:"tool"`
 			} `json:"part"`
 		}
 		if json.Unmarshal(line, &ev) != nil {
 			continue
+		}
+		if sid := firstNonEmpty(strings.TrimSpace(ev.SessionID), strings.TrimSpace(ev.Part.SessionID)); sid != "" && sid != savedSessionID {
+			savedSessionID = sid
+			if turn.PersistExternalID != nil {
+				_ = turn.PersistExternalID(context.WithoutCancel(ctx), "external_thread_id", sid)
+			}
 		}
 		if ev.Type == "text" && ev.Part.Text != "" {
 			emittedText = true

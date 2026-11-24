@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -145,6 +146,8 @@ func AggregateCanonicalNonStreamResponse(
 		usage     StreamUsage
 		textBuf   strings.Builder
 		reasonBuf strings.Builder
+		toolAccum = make(map[int]*CanonicalToolCall)
+		toolOrder []int
 	)
 	for sc.Scan() {
 		line := sc.Bytes()
@@ -156,8 +159,8 @@ func AggregateCanonicalNonStreamResponse(
 		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
 			continue
 		}
-		textD, reasonD := parseUpstreamDeltaAndUsage(payload, upProto, &usage)
-		if (textD != "" || reasonD != "") && usage.TTFTMs == 0 {
+		textD, reasonD, toolDeltas := parseUpstreamEvent(payload, upProto, &usage)
+		if (textD != "" || reasonD != "" || len(toolDeltas) > 0) && usage.TTFTMs == 0 {
 			usage.TTFTMs = time.Since(startedAt).Milliseconds()
 		}
 		if textD != "" && textBuf.Len() < maxNonStreamResponseBytes {
@@ -165,6 +168,21 @@ func AggregateCanonicalNonStreamResponse(
 		}
 		if reasonD != "" && reasonBuf.Len() < maxNonStreamResponseBytes {
 			reasonBuf.WriteString(reasonD)
+		}
+		for _, td := range toolDeltas {
+			acc, exists := toolAccum[td.Index]
+			if !exists {
+				acc = &CanonicalToolCall{ID: td.ID, Name: td.Name}
+				toolAccum[td.Index] = acc
+				toolOrder = append(toolOrder, td.Index)
+			}
+			if td.ID != "" && acc.ID == "" {
+				acc.ID = td.ID
+			}
+			if td.Name != "" && acc.Name == "" {
+				acc.Name = td.Name
+			}
+			acc.Arguments += td.ArgsDelta
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -182,22 +200,50 @@ func AggregateCanonicalNonStreamResponse(
 
 	text := textBuf.String()
 	reasoning := reasonBuf.String()
+	collectedTools := make([]CanonicalToolCall, 0, len(toolOrder))
+	for _, idx := range toolOrder {
+		if tc := toolAccum[idx]; tc != nil && tc.Name != "" {
+			collectedTools = append(collectedTools, *tc)
+		}
+	}
 
 	var doc any
 	switch downProto {
 	case ProtoAnthropicMessages:
-		blocks := make([]map[string]any, 0, 2)
+		blocks := make([]map[string]any, 0, 2+len(collectedTools))
 		if reasoning != "" {
 			blocks = append(blocks, map[string]any{"type": "thinking", "thinking": reasoning})
 		}
-		blocks = append(blocks, map[string]any{"type": "text", "text": text})
+		if text != "" || len(collectedTools) == 0 {
+			blocks = append(blocks, map[string]any{"type": "text", "text": text})
+		}
+		for idx, tc := range collectedTools {
+			id := tc.ID
+			if id == "" {
+				id = "toolu_qwq_" + strconv.Itoa(idx)
+			}
+			var inp map[string]any
+			if err := json.Unmarshal([]byte(tc.Arguments), &inp); err != nil || inp == nil {
+				inp = map[string]any{}
+			}
+			blocks = append(blocks, map[string]any{
+				"type":  "tool_use",
+				"id":    id,
+				"name":  tc.Name,
+				"input": inp,
+			})
+		}
+		stopReason := "end_turn"
+		if len(collectedTools) > 0 {
+			stopReason = "tool_use"
+		}
 		doc = map[string]any{
 			"id":          "msg_qwq",
 			"type":        "message",
 			"role":        "assistant",
 			"model":       reqModel,
 			"content":     blocks,
-			"stop_reason": "end_turn",
+			"stop_reason": stopReason,
 			"usage": map[string]any{
 				"input_tokens":  usage.InputTokens,
 				"output_tokens": usage.OutputTokens,
@@ -249,6 +295,30 @@ func AggregateCanonicalNonStreamResponse(
 		if reasoning != "" {
 			msg["reasoning_content"] = reasoning
 		}
+		finishReason := "stop"
+		if len(collectedTools) > 0 {
+			tcs := make([]map[string]any, 0, len(collectedTools))
+			for idx, tc := range collectedTools {
+				id := tc.ID
+				if id == "" {
+					id = "call_qwq_" + strconv.Itoa(idx)
+				}
+				args := tc.Arguments
+				if strings.TrimSpace(args) == "" {
+					args = "{}"
+				}
+				tcs = append(tcs, map[string]any{
+					"id":   id,
+					"type": "function",
+					"function": map[string]any{
+						"name":      tc.Name,
+						"arguments": args,
+					},
+				})
+			}
+			msg["tool_calls"] = tcs
+			finishReason = "tool_calls"
+		}
 		doc = map[string]any{
 			"id":      "chatcmpl-qwq",
 			"object":  "chat.completion",
@@ -257,7 +327,7 @@ func AggregateCanonicalNonStreamResponse(
 			"choices": []map[string]any{{
 				"index":         0,
 				"message":       msg,
-				"finish_reason": "stop",
+				"finish_reason": finishReason,
 			}},
 			"usage": map[string]any{
 				"prompt_tokens":     usage.InputTokens,

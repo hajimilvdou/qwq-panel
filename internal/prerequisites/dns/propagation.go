@@ -147,7 +147,8 @@ func (c *Checker) Check(ctx context.Context, request PropagationRequest) (Propag
 		slices.Sort(values)
 		values = slices.Compact(values)
 		sample.Values = values
-		sample.Matches = slices.Contains(values, record.Value) && (record.Type == TXT || len(values) == 1)
+		multiValueType := record.Type == TXT || record.Type == MX || record.Type == NS || record.Type == SRV || record.Type == CAA
+		sample.Matches = slices.Contains(values, record.Value) && (multiValueType || len(values) == 1)
 		result.Ready = result.Ready && sample.Matches
 		result.Observations = append(result.Observations, sample)
 	}

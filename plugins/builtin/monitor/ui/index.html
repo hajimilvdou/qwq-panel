@@ -112,6 +112,42 @@
     </article>
   </section>
 
+  <section class="threshold-card" aria-label="告警阈值配置">
+    <header class="threshold-head">
+      <div>
+        <h2>告警阈值配置</h2>
+        <p>连续 3 次采样超过阈值将触发 <code>monitor.alert</code> 事件并由 <code>notify.hub</code> 转发（15 分钟防抖），需满足 0 ≤ 警告 &lt; 严重 ≤ 100。</p>
+      </div>
+      <div class="controls">
+        <span id="th-status" role="status"></span>
+        <button id="btn-save-thresholds" type="button">保存告警阈值</button>
+      </div>
+    </header>
+    <div class="threshold-grid">
+      <div class="th-group">
+        <strong>CPU (%)</strong>
+        <div class="th-inputs">
+          <label>警告 <input id="th-cpu-warn" type="number" min="1" max="99" step="1" value="70"></label>
+          <label>严重 <input id="th-cpu-crit" type="number" min="2" max="100" step="1" value="90"></label>
+        </div>
+      </div>
+      <div class="th-group">
+        <strong>内存 &amp; Swap (%)</strong>
+        <div class="th-inputs">
+          <label>警告 <input id="th-mem-warn" type="number" min="1" max="99" step="1" value="75"></label>
+          <label>严重 <input id="th-mem-crit" type="number" min="2" max="100" step="1" value="90"></label>
+        </div>
+      </div>
+      <div class="th-group">
+        <strong>磁盘 (%)</strong>
+        <div class="th-inputs">
+          <label>警告 <input id="th-disk-warn" type="number" min="1" max="99" step="1" value="80"></label>
+          <label>严重 <input id="th-disk-crit" type="number" min="2" max="100" step="1" value="92"></label>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <p class="history-note">最近 1 小时粗粒度历史环会在停机时自动快照到宿主 KV，1 小时内重启自动恢复。</p>
 </main>
 </body>

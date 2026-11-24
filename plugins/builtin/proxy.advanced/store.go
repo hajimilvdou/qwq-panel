@@ -293,6 +293,15 @@ func openStore(dataDir string, now func() time.Time) (*proxyStore, error) {
 	return st, nil
 }
 
+// CheckpointPassive performs a non-blocking SQLite WAL checkpoint to keep WAL bounded.
+func (s *proxyStore) CheckpointPassive(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`)
+	return err
+}
+
 func (s *proxyStore) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
@@ -303,6 +312,7 @@ func (s *proxyStore) Close() error {
 			}
 		}
 		_ = s.FlushSubscriptionAccessLogs(context.Background())
+		_ = s.CheckpointPassive(context.Background())
 		var errR, errW error
 		if s.reader != nil && s.reader != s.db {
 			errR = s.reader.Close()

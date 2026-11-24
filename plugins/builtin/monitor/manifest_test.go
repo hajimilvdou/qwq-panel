@@ -16,7 +16,7 @@ func TestMonitorManifestAndPackageFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.ID != "monitor.basic" || len(parsed.Operations) != 7 || parsed.Resources.MemoryMaxMB != 24 || len(parsed.Capabilities) != 4 {
+	if parsed.ID != "monitor.basic" || len(parsed.Operations) != 8 || parsed.Resources.MemoryMaxMB != 24 || len(parsed.Capabilities) != 4 {
 		t.Fatal("monitor manifest does not match approved capabilities")
 	}
 	wantCaps := map[string]string{

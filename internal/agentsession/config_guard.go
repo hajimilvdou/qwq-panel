@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
-	"unicode"
 
+	"github.com/qwq-panel/qwq/internal/actor"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 )
 
@@ -68,15 +68,28 @@ func ValidateExternalSessionConfig(raw json.RawMessage) (json.RawMessage, error)
 	}
 	if rawModel, ok := obj["model"]; ok {
 		var m string
-		if err := json.Unmarshal(rawModel, &m); err != nil || strings.HasPrefix(strings.TrimSpace(m), "-") || len(m) > 128 {
+		if err := json.Unmarshal(rawModel, &m); err != nil {
 			return nil, problem.Validation(problem.Violation{
 				Pointer: "/config/model", Code: "INVALID", Message: "invalid model name in session config.",
 			})
 		}
+		trimmedModel := strings.TrimSpace(m)
+		if trimmedModel != "" {
+			if strings.HasPrefix(trimmedModel, "-") {
+				return nil, problem.Validation(problem.Violation{
+					Pointer: "/config/model", Code: "INVALID", Message: "invalid model name in session config.",
+				})
+			}
+			if _, merr := ValidateProviderModel(trimmedModel); merr != nil {
+				return nil, problem.Validation(problem.Violation{
+					Pointer: "/config/model", Code: "INVALID", Message: "invalid model name in session config.",
+				})
+			}
+		}
 	}
 	if rawEffort, ok := obj["reasoning_effort"]; ok {
 		var eff string
-		if err := json.Unmarshal(rawEffort, &eff); err != nil || len(eff) > 64 {
+		if err := json.Unmarshal(rawEffort, &eff); err != nil {
 			return nil, problem.Validation(problem.Violation{
 				Pointer: "/config/reasoning_effort", Code: "INVALID", Message: "invalid reasoning_effort in session config.",
 			})
@@ -87,12 +100,16 @@ func ValidateExternalSessionConfig(raw json.RawMessage) (json.RawMessage, error)
 				Pointer: "/config/reasoning_effort", Code: "INVALID", Message: "reasoning_effort must not start with '-'.",
 			})
 		}
-		for _, r := range trimmed {
-			if unicode.IsControl(r) || unicode.IsSpace(r) {
-				return nil, problem.Validation(problem.Violation{
-					Pointer: "/config/reasoning_effort", Code: "INVALID", Message: "reasoning_effort contains invalid characters.",
-				})
-			}
+		if _, err := ValidateReasoningEffort(trimmed, "/config/reasoning_effort"); err != nil {
+			return nil, err
+		}
+	}
+	if rawMaxTurns, ok := obj["max_turns"]; ok {
+		var mt int
+		if err := json.Unmarshal(rawMaxTurns, &mt); err != nil || mt < 0 || mt > 64 {
+			return nil, problem.Validation(problem.Violation{
+				Pointer: "/config/max_turns", Code: "OUT_OF_RANGE", Message: "max_turns must be an integer between 0 and 64.",
+			})
 		}
 	}
 	if rawTransport, ok := obj["transport"]; ok {
@@ -191,4 +208,97 @@ func AppendPosixPromptArg(baseArgs []string, userPrompt string) []string {
 	out = append(out, baseArgs...)
 	out = append(out, "--", userPrompt)
 	return out
+}
+
+// ValidateAgentSessionSecurityBoundary enforces strict role separation on AI
+// agent sessions (SEC-01 / P0-SEC-01):
+//  1. Viewers may never create, update, or send turns in agent sessions;
+//  2. Non-native external CLI cores (which spawn host subprocesses) are strictly
+//     restricted to system administrators (admin);
+//  3. permission_mode == "full" (auto-skipping plugin approvals) is strictly
+//     restricted to system administrators (admin).
+func ValidateAgentSessionSecurityBoundary(callerRole, coreID, permissionMode string) error {
+	role := strings.ToLower(strings.TrimSpace(callerRole))
+	if role == "viewer" || role == "" {
+		return problem.New(problem.PermissionDenied, "只读观察员无权启动或操作 AI 运维会话。")
+	}
+	normCore := strings.ToLower(strings.TrimSpace(coreID))
+	if normCore == "" {
+		normCore = string(CoreNative)
+	}
+	if normCore != string(CoreNative) && role != "admin" {
+		return problem.New(problem.PermissionDenied, "外部 CLI 引擎 (%s) 具备宿主机子进程访问能力，仅限系统管理员 (admin) 使用。", normCore)
+	}
+	if strings.EqualFold(strings.TrimSpace(permissionMode), "full") && role != "admin" {
+		return problem.New(problem.PermissionDenied, "全自动免审批模式 (full) 仅限系统管理员 (admin) 开启。")
+	}
+	return nil
+}
+
+// ValidateAgentSessionActorBoundary enforces both role separation and human-only
+// restrictions: service accounts may never launch host external CLI subprocesses
+// or enable full auto-approval mode.
+func ValidateAgentSessionActorBoundary(owner actor.Actor, callerRole, coreID, permissionMode string) error {
+	if err := ValidateAgentSessionSecurityBoundary(callerRole, coreID, permissionMode); err != nil {
+		return err
+	}
+	normCore := strings.ToLower(strings.TrimSpace(coreID))
+	if normCore == "" {
+		normCore = string(CoreNative)
+	}
+	isExternalCore := normCore != string(CoreNative)
+	isFullMode := strings.EqualFold(strings.TrimSpace(permissionMode), "full")
+	if (isExternalCore || isFullMode) && owner.Kind != actor.Human && owner.Kind != actor.System {
+		return problem.New(problem.PermissionDenied, "外部 CLI 引擎与全自动免审批模式 (full) 仅限人类管理员会话使用，服务账号无权开启。")
+	}
+	return nil
+}
+
+// BuildSafeClaudeDisallowedTools blocks Claude Code's built-in shell, edit,
+// network, subagent, and raw host file-reading tools whenever the session is
+// not in administrator full mode so prompt injection cannot read /var/lib/qwq
+// secrets or pivot via subagents/web fetches outside the controlled qwq MCP bridge.
+func BuildSafeClaudeDisallowedTools(permissionMode string) string {
+	if strings.EqualFold(strings.TrimSpace(permissionMode), "full") {
+		return ""
+	}
+	return "Bash,Write,Edit,MultiEdit,NotebookEdit,Read,Grep,Glob,WebFetch,WebSearch,LS,NotebookRead,Task,Agent"
+}
+
+// MergeExternalResumeConfig atomically merges an external CLI session/thread
+// identifier into agent_sessions.config_json after validating the identifier
+// against the strict allowlist pattern.
+func MergeExternalResumeConfig(existingConfigJSON []byte, key, externalID string) ([]byte, bool, error) {
+	externalID = strings.TrimSpace(externalID)
+	if externalID == "" || key == "" {
+		return existingConfigJSON, false, nil
+	}
+	if key != "resume_session_id" && key != "external_thread_id" {
+		return existingConfigJSON, false, problem.Validation(problem.Violation{
+			Pointer: "/config/" + key, Code: "INVALID", Message: "unsupported external resume key.",
+		})
+	}
+	if !externalSessionIDPattern.MatchString(externalID) || strings.Contains(externalID, "..") {
+		return existingConfigJSON, false, problem.Validation(problem.Violation{
+			Pointer: "/config/" + key, Code: "INVALID", Message: "invalid external session identifier.",
+		})
+	}
+	cfgMap := make(map[string]any)
+	if len(existingConfigJSON) > 0 {
+		_ = json.Unmarshal(existingConfigJSON, &cfgMap)
+	}
+	if prev, _ := cfgMap[key].(string); prev == externalID {
+		return existingConfigJSON, false, nil
+	}
+	cfgMap[key] = externalID
+	updated, err := json.Marshal(cfgMap)
+	if err != nil {
+		return existingConfigJSON, false, err
+	}
+	if len(updated) > MaxSessionConfigBytes {
+		return existingConfigJSON, false, problem.Validation(problem.Violation{
+			Pointer: "/config", Code: "INVALID", Message: "session config exceeds 32 KiB limit.",
+		})
+	}
+	return updated, true, nil
 }

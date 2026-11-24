@@ -50,7 +50,7 @@
     "schemas/sshd.status.response.json": "sha256:514d8c4c63524c8c02b51ebcf2395b2b9ec1f0f1d994d6148b4b74360e328c19",
     "ui/index.html": "sha256:cbec98b6aad8862ecbc1a14d115eb990285c70ce20163abcd1baee3d6ade945c",
     "ui/plugin.css": "sha256:09f66168c7d39e2ffbc7c8b875a7877498ab3fc8318506c175284e2c2a6d8bd9",
-    "ui/security.js": "sha256:d1644750240bbdd9b9a69d40e8d4a71fb97ce04d9b351ed7f0a0b09015a76d48"
+    "ui/security.js": "sha256:49394f26e283434a49355e1a7342077ae3c8b29fd4a73abc686d12172a725d7d"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

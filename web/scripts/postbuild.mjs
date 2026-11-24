@@ -27,6 +27,7 @@ const fail = (msg) => {
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
+    if (name.startsWith('.')) continue;
     const p = join(dir, name);
     if (statSync(p).isDirectory()) walk(p, out);
     else out.push(p);

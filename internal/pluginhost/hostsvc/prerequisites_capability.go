@@ -90,6 +90,10 @@ func (x *certificatesCapabilityService) CancelTask(ctx context.Context, req *cer
 	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "certificates", method: "CancelTask", verb: "certificates.CancelTask", name: "system.certificates.manage", write: true}, new(certificatesv1.CancelTaskResponse))
 }
 
+func (x *certificatesCapabilityService) ReserveBinding(ctx context.Context, req *certificatesv1.ReserveBindingRequest) (*certificatesv1.ReserveBindingResponse, error) {
+	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "certificates", method: "ReserveBinding", verb: "certificates.ReserveBinding", name: "system.certificates.manage", write: true}, new(certificatesv1.ReserveBindingResponse))
+}
+
 func (x *certificatesCapabilityService) BindCertificate(ctx context.Context, req *certificatesv1.BindCertificateRequest) (*certificatesv1.BindCertificateResponse, error) {
 	return forwardCapability(x.s, ctx, req, capabilityPolicy{service: "certificates", method: "BindCertificate", verb: "certificates.BindCertificate", name: "system.certificates.manage", write: true}, new(certificatesv1.BindCertificateResponse))
 }

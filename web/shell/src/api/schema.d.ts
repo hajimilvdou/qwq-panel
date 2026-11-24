@@ -1506,6 +1506,70 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List consistent system backup archives
+         * @description Lists available host backup archives stored in the data directory backups folder. Administrators only.
+         */
+        get: operations["listSystemBackups"];
+        put?: never;
+        /**
+         * Create a consistent system backup archive
+         * @description Creates a new consistent tar.gz backup containing the database snapshot, master key, TLS material, agent workspace, configuration, and plugin state. Administrators only.
+         */
+        post: operations["createSystemBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/backups/{filename}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download a system backup archive
+         * @description Streams a validated backup tar.gz archive from the backups directory with Cache-Control no-store. Administrators only.
+         */
+        get: operations["downloadSystemBackup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/support-bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Export a redacted diagnostic support bundle
+         * @description Generates and streams a redacted tar.gz diagnostic bundle containing build info, system status, scrubbed configuration, and recent logs. Administrators only.
+         */
+        post: operations["createSystemSupportBundle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/facts": {
         parameters: {
             query?: never;
@@ -3740,6 +3804,22 @@ export type components = {
              */
             revision: number;
             updated_at: components["schemas"]["Timestamp"];
+        };
+        /** @description Metadata of one consistent host backup archive. */
+        SystemBackupEntry: {
+            /** @description Backup archive filename. */
+            filename: string;
+            /**
+             * Format: int64
+             * @description Archive size in bytes.
+             */
+            size_bytes: number;
+            created_at: components["schemas"]["Timestamp"];
+        };
+        /** @description Collection of available system backup archives. */
+        SystemBackupList: {
+            /** @description Backup archives ordered newest first. */
+            items: components["schemas"]["SystemBackupEntry"][];
         };
         /** @description A page of nodes. */
         NodeList: components["schemas"]["ListMeta"] & {
@@ -8120,6 +8200,110 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listSystemBackups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available system backup archives ordered newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemBackupList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    createSystemBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Metadata of the newly created backup archive. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemBackupEntry"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    downloadSystemBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Exact backup archive filename matching qwq-<timestamp>.tar.gz. */
+                filename: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The backup tar.gz archive; Cache-Control is no-store. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/gzip": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    createSystemSupportBundle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The redacted support bundle tar.gz stream; Cache-Control is no-store. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/gzip": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             429: components["responses"]["RateLimited"];
             default: components["responses"]["Error"];
         };

@@ -201,23 +201,48 @@ func (r *AlertEventRelay) allowPluginAlertLocked(pluginID string, now time.Time)
 	return true
 }
 
+func truncateAlertField(s string, maxRunes int) string {
+	if maxRunes <= 0 || len(s) <= maxRunes {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes])
+}
+
 func (r *AlertEventRelay) deliverOne(parent context.Context, ev AlertEventPayload) {
 	if r.invoker == nil {
 		return
 	}
+	var boundedTags map[string]string
+	if len(ev.Tags) > 0 {
+		boundedTags = make(map[string]string, min(len(ev.Tags), 16))
+		for k, v := range ev.Tags {
+			if len(boundedTags) >= 16 {
+				break
+			}
+			ck := truncateAlertField(strings.TrimSpace(k), 64)
+			if ck == "" {
+				continue
+			}
+			boundedTags[ck] = truncateAlertField(v, 128)
+		}
+	}
 	args := notifyDispatchArgs{
-		Source:   ev.Source,
+		Source:   truncateAlertField(strings.TrimSpace(ev.Source), 64),
 		Severity: ev.Severity,
-		Title:    ev.Title,
-		Message:  ev.Message,
-		DedupKey: ev.DedupKey,
-		Tags:     ev.Tags,
+		Title:    truncateAlertField(strings.TrimSpace(ev.Title), 200),
+		Message:  truncateAlertField(strings.TrimSpace(ev.Message), 4000),
+		DedupKey: truncateAlertField(strings.TrimSpace(ev.DedupKey), 128),
+		Tags:     boundedTags,
 	}
 	raw, err := json.Marshal(args)
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 35*time.Second)
 	defer cancel()
 	if err := r.invoker.DispatchInternalAlert(ctx, raw); err != nil {
 		if !strings.Contains(err.Error(), "not installed") && !strings.Contains(err.Error(), "not found") {

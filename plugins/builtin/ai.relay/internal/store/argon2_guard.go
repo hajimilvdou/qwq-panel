@@ -111,17 +111,9 @@ func VerifyPasswordBounded(ctx context.Context, password, encoded string) (bool,
 	return subtle.ConstantTimeCompare(actual, expected) == 1, nil
 }
 
-// ApplyAtomicBalanceDelta atomically adjusts an in-memory balance by deltaMicros
-// using CAS, clamping at zero so concurrent in-flight reservations are never clobbered.
+// ApplyAtomicBalanceDelta atomically adjusts an in-memory balance by deltaMicros.
+// Negative values are allowed temporarily while in-flight reservations are open
+// so settling/refunding those reservations cannot inflate the balance above DB.
 func ApplyAtomicBalanceDelta(balanceMicros *atomic.Int64, deltaMicros int64) int64 {
-	for {
-		cur := balanceMicros.Load()
-		next := cur + deltaMicros
-		if next < 0 {
-			next = 0
-		}
-		if balanceMicros.CompareAndSwap(cur, next) {
-			return next
-		}
-	}
+	return balanceMicros.Add(deltaMicros)
 }

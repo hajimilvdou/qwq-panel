@@ -236,17 +236,17 @@ func NewAnthropicThinkingKeeper() *AnthropicThinkingKeeper {
 	}
 }
 
-// RecordAssistantTurn 在解析完 Anthropic 响应后记录该轮的 thinking / redacted_thinking 块。
-func (k *AnthropicThinkingKeeper) RecordAssistantTurn(blocks []AnthropicResponseContentBlock) {
-	if k == nil || len(blocks) == 0 {
-		return
+func extractAnthropicThinkingBlocks(blocks []AnthropicResponseContentBlock) []AnthropicThinkingBlock {
+	if len(blocks) == 0 {
+		return nil
 	}
 	var preserved []AnthropicThinkingBlock
-	firstToolID := ""
 	for _, blk := range blocks {
 		switch blk.Type {
 		case "thinking":
-			if blk.Signature != "" || blk.Thinking != "" {
+			// Anthropic Messages API strictly requires a cryptographic signature on
+			// every replayed thinking block; never persist or replay unsigned blocks.
+			if blk.Signature != "" {
 				preserved = append(preserved, AnthropicThinkingBlock{
 					Type:      "thinking",
 					Thinking:  blk.Thinking,
@@ -260,10 +260,22 @@ func (k *AnthropicThinkingKeeper) RecordAssistantTurn(blocks []AnthropicResponse
 					Data: blk.Data,
 				})
 			}
-		case "tool_use":
-			if firstToolID == "" && blk.ID != "" {
-				firstToolID = blk.ID
-			}
+		}
+	}
+	return preserved
+}
+
+// RecordAssistantTurn 在解析完 Anthropic 响应后记录该轮的 thinking / redacted_thinking 块。
+func (k *AnthropicThinkingKeeper) RecordAssistantTurn(blocks []AnthropicResponseContentBlock) {
+	if k == nil || len(blocks) == 0 {
+		return
+	}
+	preserved := extractAnthropicThinkingBlocks(blocks)
+	firstToolID := ""
+	for _, blk := range blocks {
+		if blk.Type == "tool_use" && blk.ID != "" {
+			firstToolID = blk.ID
+			break
 		}
 	}
 	if firstToolID != "" && len(preserved) > 0 {
@@ -325,22 +337,30 @@ func CapAnthropicMaxTokens(model string, requestedMaxTokens int, thinkingBudget 
 // 返回 hasThinking 供上层判断是否所有历史 tool_use 轮均具备完整 thinking 签名；
 // 若遇到恢复自旧会话且无缓存签名的历史消息，上层可自动降级本轮省略 thinking 参数以避免 400。
 func (k *AnthropicThinkingKeeper) BuildAssistantMessageBlocks(m ModelMessage) (blocks []map[string]any, hasThinking bool) {
+	var saved []AnthropicThinkingBlock
 	if len(m.ToolCalls) > 0 && k != nil {
-		if saved, ok := k.byFirstToolCallID[m.ToolCalls[0].CallID]; ok && len(saved) > 0 {
-			hasThinking = true
-			for _, tb := range saved {
-				if tb.Type == "redacted_thinking" {
-					blocks = append(blocks, map[string]any{
-						"type": "redacted_thinking",
-						"data": tb.Data,
-					})
-				} else {
-					blocks = append(blocks, map[string]any{
-						"type":      "thinking",
-						"thinking":  tb.Thinking,
-						"signature": tb.Signature,
-					})
-				}
+		if mem, ok := k.byFirstToolCallID[m.ToolCalls[0].CallID]; ok && len(mem) > 0 {
+			saved = mem
+		}
+	}
+	if len(saved) == 0 && len(m.ThinkingBlocks) > 0 {
+		saved = m.ThinkingBlocks
+	}
+	if len(saved) > 0 {
+		for _, tb := range saved {
+			if tb.Type == "redacted_thinking" && tb.Data != "" {
+				hasThinking = true
+				blocks = append(blocks, map[string]any{
+					"type": "redacted_thinking",
+					"data": tb.Data,
+				})
+			} else if tb.Type == "thinking" && tb.Signature != "" {
+				hasThinking = true
+				blocks = append(blocks, map[string]any{
+					"type":      "thinking",
+					"thinking":  tb.Thinking,
+					"signature": tb.Signature,
+				})
 			}
 		}
 	}
@@ -348,9 +368,12 @@ func (k *AnthropicThinkingKeeper) BuildAssistantMessageBlocks(m ModelMessage) (b
 		blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
 	}
 	for _, tc := range m.ToolCalls {
-		var inp any = map[string]any{}
+		inp := map[string]any{}
 		if len(tc.Arguments) > 0 {
-			_ = json.Unmarshal(tc.Arguments, &inp)
+			var decoded map[string]any
+			if err := json.Unmarshal(tc.Arguments, &decoded); err == nil && decoded != nil {
+				inp = decoded
+			}
 		}
 		blocks = append(blocks, map[string]any{
 			"type":  "tool_use",

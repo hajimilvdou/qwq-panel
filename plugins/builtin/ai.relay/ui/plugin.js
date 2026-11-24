@@ -4,7 +4,30 @@
   const root = document.documentElement;
   const pick = (v, list, fb) => (list.includes(v) ? v : fb);
   const hash = new URLSearchParams(location.hash.slice(1));
-  root.dataset.theme = pick(hash.get('theme'), ['light', 'dark'], 'light');
+  const initialTheme = pick(hash.get('theme'), ['light', 'dark'], 'light');
+  root.dataset.theme = initialTheme;
+  root.style.colorScheme = initialTheme;
+  const initialDensity = pick(hash.get('density'), ['comfortable', 'compact'], 'comfortable');
+  root.dataset.density = initialDensity;
+
+  let hostViewport = null;
+  function applyHostVisualSettings(settings) {
+    if (!settings || typeof settings !== 'object') return;
+    if (settings.theme) {
+      const theme = pick(settings.theme, ['light', 'dark'], root.dataset.theme || 'light');
+      root.dataset.theme = theme;
+      root.style.colorScheme = theme;
+    }
+    if (settings.density) {
+      root.dataset.density = pick(settings.density, ['comfortable', 'compact'], root.dataset.density || 'comfortable');
+    }
+    if (settings.tokens && typeof settings.tokens === 'object') {
+      const accent = settings.tokens['--accent'] || settings.tokens.accent;
+      if (typeof accent === 'string' && accent.trim()) {
+        root.style.setProperty('--accent', accent.trim());
+      }
+    }
+  }
 
   for (const btn of document.querySelectorAll('#nav-tabs button')) {
     btn.addEventListener('click', () => {
@@ -152,12 +175,19 @@
     document.getElementById('adj-refill-usd').value = String((Number(u.auto_refill_cap_micros) || 0) / 1e6);
     document.getElementById('adj-refill-cycle').value = u.auto_refill_cycle || 'none';
     document.getElementById('adj-note').value = '';
-    document.getElementById('user-adjust-modal').hidden = false;
+    const modal = document.getElementById('user-adjust-modal');
+    if (hostViewport && hostViewport.visibleHeight > 0) {
+      modal.style.alignItems = 'flex-start';
+      modal.style.paddingTop = `${Math.max(16, Math.round(hostViewport.scrollTop + Math.min(80, hostViewport.visibleHeight * 0.12)))}px`;
+    }
+    modal.hidden = false;
+    requestAnimationFrame(notifyResize);
   }
 
   function closeUserAdjustModal() {
     adjustingUser = null;
     document.getElementById('user-adjust-modal').hidden = true;
+    notifyResize();
   }
 
   function renderSavedPricings() {
@@ -223,24 +253,45 @@
       return;
     }
     if (data.t === 'ui.settings') {
-      if (data.theme) {
-        root.dataset.theme = pick(data.theme, ['light', 'dark'], root.dataset.theme);
-      }
+      applyHostVisualSettings(data);
       const nextOrigin = normalizeOrigin(data.public_origin);
       if (nextOrigin !== publicOrigin) {
         publicOrigin = nextOrigin;
         updatePublicUrls();
+      }
+      return;
+    }
+    if (data.t === 'ui.viewport') {
+      const vpTop = Math.max(0, Math.round(Number(data.offsetTopPx ?? data.visibleTop ?? data.scroll_top) || 0));
+      const vpH = Math.max(280, Math.round(Number(data.viewportHeightPx ?? data.visibleHeight ?? data.visible_height) || 720));
+      root.style.setProperty('--qwq-vp-top', `${vpTop}px`);
+      root.style.setProperty('--qwq-vp-h', `${vpH}px`);
+      hostViewport = {
+        scrollTop: vpTop,
+        visibleHeight: vpH,
+        viewportWidth: Math.max(0, Number(data.viewport_width) || 0),
+      };
+      const modal = document.getElementById('user-adjust-modal');
+      if (modal && !modal.hidden) {
+        modal.style.paddingTop = `${Math.max(16, Math.round(vpTop + Math.min(80, vpH * 0.12)))}px`;
+        notifyResize();
       }
     }
   }
 
   async function loadInitialData() {
     try {
-      const [chData, uData, sData] = await Promise.all([
+      const [chData, uData, sData, prData] = await Promise.all([
         invoke('relay.channels.list', { limit: 100 }),
         invoke('relay.users.list', { limit: 100 }),
         invoke('relay.settings.get', {}),
+        invoke('relay.pricings.list', {}).catch(() => ({ pricings: [] })),
       ]);
+      savedPricings.clear();
+      for (const p of prData?.pricings || []) {
+        if (p && p.model_name) savedPricings.set(p.model_name, p);
+      }
+      renderSavedPricings();
       if (sData && typeof sData === 'object') {
         const setVal = (id, val) => {
           const el = document.getElementById(id);
@@ -521,9 +572,21 @@
     }, `已更新成员 ${target.username}`);
   });
 
-  const observer = new ResizeObserver(() => {
-    send({ t: 'ui.resize', height: Math.ceil(document.getElementById('ai-relay-root').getBoundingClientRect().height) + 24 });
-  });
+  function notifyResize() {
+    const rootEl = document.getElementById('ai-relay-root');
+    if (!rootEl) return;
+    let height = Math.ceil(rootEl.getBoundingClientRect().height) + 24;
+    const modal = document.getElementById('user-adjust-modal');
+    if (modal && !modal.hidden) {
+      const card = modal.querySelector('.modal-card');
+      const cardH = card ? Math.ceil(card.getBoundingClientRect().height) : 420;
+      const vpTop = Math.max(0, Number(hostViewport?.scrollTop) || 0);
+      height = Math.max(height, vpTop + cardH + 64);
+    }
+    send({ t: 'ui.resize', height });
+  }
+
+  const observer = new ResizeObserver(() => notifyResize());
   observer.observe(document.getElementById('ai-relay-root'));
 
   window.addEventListener('message', (event) => {

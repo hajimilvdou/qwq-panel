@@ -64,6 +64,7 @@ input, select { padding: 9px 12px; border-radius: 9px; border: 1px solid var(--b
 .mb-6 { margin-bottom: 6px; }
 .mt-14 { margin-top: 14px; }
 .auth-msg { margin-top: 12px; text-align: center; }
+.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--primary-soft); padding: 2px 6px; border-radius: 5px; }

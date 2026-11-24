@@ -200,7 +200,7 @@ func stageAndActivateConsumerCert(t *testing.T, dataDir string, now time.Time, b
 	if _, err := store.Activate(t.Context(), prev, proof); err != nil {
 		t.Fatal(err)
 	}
-	return proof, meta.Fingerprint
+	return proof, strings.ToLower(strings.ReplaceAll(strings.TrimSpace(meta.Fingerprint), ":", ""))
 }
 
 type v2TestBinary struct{ err error }

@@ -133,7 +133,7 @@ func parseVMessURI(line string) (proxyNodeRecord, error) {
 		SNI:      firstNonEmpty(strField("sni"), strField("host")),
 		Host:     strField("host"),
 		Path:     strField("path"),
-		Insecure: boolPtr(strField("skip-cert-verify") == "true"),
+		Insecure: boolPtr(strField("skip-cert-verify") == "true" || strField("allowInsecure") == "true" || strField("allowInsecure") == "1"),
 	}
 	if netType == "grpc" {
 		cfg.ServiceName = strField("path")
@@ -639,6 +639,10 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 	switch rec.Protocol {
 	case corev2.ProtocolVLESS:
 		enc := firstNonEmpty(rec.Config.Encryption, "none")
+		tlsSNI := rec.Config.SNI
+		if secMode == "tls" && tlsSNI == "" && rec.Config.isInsecure() {
+			tlsSNI = "internal.qwq.local"
+		}
 		q := url.Values{}
 		q.Set("encryption", enc)
 		if rec.Config.Flow != "" {
@@ -653,8 +657,8 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 				q.Set("sid", rec.Config.ShortID)
 			}
 		} else if secMode == "tls" {
-			if rec.Config.SNI != "" {
-				q.Set("sni", rec.Config.SNI)
+			if tlsSNI != "" {
+				q.Set("sni", tlsSNI)
 			}
 			if rec.Config.isInsecure() {
 				q.Set("allowInsecure", "1")
@@ -687,18 +691,24 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 			"tls":     secMode == "reality" || secMode == "tls",
 			"udp":     true,
 		}
+		if enc != "" && !strings.EqualFold(enc, "none") {
+			cn["encryption"] = enc
+		}
 		if rec.Config.Flow != "" {
 			cn["flow"] = rec.Config.Flow
 		}
-		sb := map[string]any{
-			"type":        "vless",
-			"tag":         name,
-			"server":      server,
-			"server_port": rec.Port,
-			"uuid":        uuidVal,
-		}
-		if rec.Config.Flow != "" {
-			sb["flow"] = rec.Config.Flow
+		var sb map[string]any
+		if IsSingboxOutboundSupported(corev2.ProtocolVLESS, transport, enc, true) {
+			sb = map[string]any{
+				"type":        "vless",
+				"tag":         name,
+				"server":      server,
+				"server_port": rec.Port,
+				"uuid":        uuidVal,
+			}
+			if rec.Config.Flow != "" {
+				sb["flow"] = rec.Config.Flow
+			}
 		}
 		if secMode == "reality" {
 			ro := map[string]any{"public-key": rec.Config.PublicKey}
@@ -710,29 +720,45 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 			cn["servername"] = rec.Config.SNI
 			cn["client-fingerprint"] = firstNonEmpty(rec.Config.Fingerprint, "chrome")
 			cn["reality-opts"] = ro
-			sb["tls"] = map[string]any{
-				"enabled":     true,
-				"server_name": rec.Config.SNI,
-				"utls":        map[string]any{"enabled": true, "fingerprint": firstNonEmpty(rec.Config.Fingerprint, "chrome")},
-				"reality":     sbr,
+			if sb != nil {
+				sb["tls"] = map[string]any{
+					"enabled":     true,
+					"server_name": rec.Config.SNI,
+					"utls":        map[string]any{"enabled": true, "fingerprint": firstNonEmpty(rec.Config.Fingerprint, "chrome")},
+					"reality":     sbr,
+				}
 			}
 		} else if secMode == "tls" {
-			cn["servername"] = rec.Config.SNI
+			cn["servername"] = tlsSNI
 			cn["skip-cert-verify"] = rec.Config.isInsecure()
-			sb["tls"] = map[string]any{
-				"enabled":     true,
-				"server_name": rec.Config.SNI,
-				"insecure":    rec.Config.isInsecure(),
+			if sb != nil {
+				sb["tls"] = map[string]any{
+					"enabled":     true,
+					"server_name": tlsSNI,
+					"insecure":    rec.Config.isInsecure(),
+				}
 			}
 		}
 		attachSubTransport(cn, sb, transport, rec.Config)
-		return subNode{Name: name, ShareURI: uri, ClashNode: cn, SingboxOutbound: sb}, true
+		return subNode{
+			Name:            name,
+			Protocol:        corev2.ProtocolVLESS,
+			Transport:       transport,
+			VLESSEncryption: enc,
+			ShareURI:        uri,
+			ClashNode:       cn,
+			SingboxOutbound: sb,
+		}, true
 
 	case corev2.ProtocolVMess:
 		isTLS := secMode == "tls"
 		tlsStr := ""
+		tlsSNI := rec.Config.SNI
 		if isTLS {
 			tlsStr = "tls"
+			if tlsSNI == "" && rec.Config.isInsecure() {
+				tlsSNI = "internal.qwq.local"
+			}
 		}
 		pVal := rec.Config.Path
 		if transport == "grpc" && rec.Config.ServiceName != "" {
@@ -741,7 +767,11 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		v2n := map[string]any{
 			"v": "2", "ps": name, "add": server, "port": strconv.Itoa(rec.Port),
 			"id": uuidVal, "aid": "0", "scy": "auto", "net": transport, "type": "none",
-			"host": rec.Config.Host, "path": pVal, "tls": tlsStr, "sni": rec.Config.SNI,
+			"host": rec.Config.Host, "path": pVal, "tls": tlsStr, "sni": tlsSNI,
+		}
+		if isTLS && rec.Config.isInsecure() {
+			v2n["allowInsecure"] = true
+			v2n["skip-cert-verify"] = true
 		}
 		raw, _ := json.Marshal(v2n)
 		uri := "vmess://" + base64.StdEncoding.EncodeToString(raw)
@@ -756,18 +786,29 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 			"uuid": uuidVal, "security": "auto", "alter_id": 0,
 		}
 		if isTLS {
-			cn["servername"] = rec.Config.SNI
+			cn["servername"] = tlsSNI
 			cn["skip-cert-verify"] = rec.Config.isInsecure()
-			sb["tls"] = map[string]any{"enabled": true, "server_name": rec.Config.SNI, "insecure": rec.Config.isInsecure()}
+			sb["tls"] = map[string]any{"enabled": true, "server_name": tlsSNI, "insecure": rec.Config.isInsecure()}
 		}
 		attachSubTransport(cn, sb, transport, rec.Config)
-		return subNode{Name: name, ShareURI: uri, ClashNode: cn, SingboxOutbound: sb}, true
+		return subNode{
+			Name:            name,
+			Protocol:        corev2.ProtocolVMess,
+			Transport:       transport,
+			ShareURI:        uri,
+			ClashNode:       cn,
+			SingboxOutbound: sb,
+		}, true
 
 	case corev2.ProtocolTrojan:
+		tlsSNI := rec.Config.SNI
+		if secMode != "reality" && tlsSNI == "" && rec.Config.isInsecure() {
+			tlsSNI = "internal.qwq.local"
+		}
 		q := url.Values{}
 		q.Set("security", firstNonEmpty(secMode, "tls"))
-		if rec.Config.SNI != "" {
-			q.Set("sni", rec.Config.SNI)
+		if tlsSNI != "" {
+			q.Set("sni", tlsSNI)
 		}
 		if secMode == "reality" {
 			q.Set("fp", firstNonEmpty(rec.Config.Fingerprint, "chrome"))
@@ -792,7 +833,7 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 
 		cn := map[string]any{
 			"name": name, "type": "trojan", "server": server, "port": rec.Port,
-			"password": passVal, "network": transport, "sni": rec.Config.SNI, "udp": true,
+			"password": passVal, "network": transport, "sni": tlsSNI, "udp": true,
 		}
 		sb := map[string]any{
 			"type": "trojan", "tag": name, "server": server, "server_port": rec.Port,
@@ -808,16 +849,23 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 			cn["client-fingerprint"] = firstNonEmpty(rec.Config.Fingerprint, "chrome")
 			cn["reality-opts"] = ro
 			sb["tls"] = map[string]any{
-				"enabled": true, "server_name": rec.Config.SNI,
+				"enabled": true, "server_name": tlsSNI,
 				"utls":    map[string]any{"enabled": true, "fingerprint": firstNonEmpty(rec.Config.Fingerprint, "chrome")},
 				"reality": sbr,
 			}
 		} else {
 			cn["skip-cert-verify"] = rec.Config.isInsecure()
-			sb["tls"] = map[string]any{"enabled": true, "server_name": rec.Config.SNI, "insecure": rec.Config.isInsecure()}
+			sb["tls"] = map[string]any{"enabled": true, "server_name": tlsSNI, "insecure": rec.Config.isInsecure()}
 		}
 		attachSubTransport(cn, sb, transport, rec.Config)
-		return subNode{Name: name, ShareURI: uri, ClashNode: cn, SingboxOutbound: sb}, true
+		return subNode{
+			Name:            name,
+			Protocol:        corev2.ProtocolTrojan,
+			Transport:       transport,
+			ShareURI:        uri,
+			ClashNode:       cn,
+			SingboxOutbound: sb,
+		}, true
 
 	case corev2.ProtocolShadowsocks, corev2.ProtocolShadowsocks2022:
 		method := firstNonEmpty(rec.Config.Method, corev2.MethodAEADAES256GCM)
@@ -825,10 +873,16 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		if rec.Protocol == corev2.ProtocolShadowsocks2022 {
 			if method == corev2.MethodChaCha20 || userKey == "" {
 				pwd = firstNonEmpty(rec.Config.ServerKey, passVal)
-			} else if rec.Config.ServerKey != "" {
-				pwd = rec.Config.ServerKey + ":" + userKey
 			} else {
-				pwd = userKey
+				effectiveUserKey := userKey
+				if derived, derr := DeriveSS2022UserPSKForCipher(userKey, method, rec.ID); derr == nil {
+					effectiveUserKey = derived
+				}
+				if rec.Config.ServerKey != "" {
+					pwd = rec.Config.ServerKey + ":" + effectiveUserKey
+				} else {
+					pwd = effectiveUserKey
+				}
 			}
 		}
 		ui := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + pwd))
@@ -862,7 +916,11 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		return subNode{Name: name, ShareURI: uri, ClashNode: cn, SingboxOutbound: sb}, true
 
 	case corev2.ProtocolHysteria2:
-		sni := firstNonEmpty(rec.Config.SNI, server)
+		fallbackSNI := server
+		if rec.Config.isInsecure() && net.ParseIP(server) != nil {
+			fallbackSNI = "internal.qwq.local"
+		}
+		sni := firstNonEmpty(rec.Config.SNI, fallbackSNI)
 		q := url.Values{}
 		q.Set("sni", sni)
 		if rec.Config.isInsecure() {
@@ -894,21 +952,19 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		}
 		if rec.Config.PortHopping != "" {
 			cn["ports"] = rec.Config.PortHopping
-			var sbPorts []string
-			for _, seg := range strings.Split(rec.Config.PortHopping, ",") {
-				seg = strings.TrimSpace(seg)
-				if seg != "" {
-					sbPorts = append(sbPorts, strings.ReplaceAll(seg, "-", ":"))
-				}
-			}
-			if len(sbPorts) > 0 {
+			if sbPorts := NormalizeSingboxPortHopping(rec.Config.PortHopping); len(sbPorts) > 0 {
+				delete(sb, "server_port")
 				sb["server_ports"] = sbPorts
 			}
 		}
-		return subNode{Name: name, ShareURI: uri, ClashNode: cn, SingboxOutbound: sb}, true
+		return subNode{Name: name, Protocol: corev2.ProtocolHysteria2, Transport: "udp", ShareURI: uri, ClashNode: cn, SingboxOutbound: sb}, true
 
 	case corev2.ProtocolAnyTLS:
-		sni := firstNonEmpty(rec.Config.SNI, server)
+		fallbackSNI := server
+		if rec.Config.isInsecure() && net.ParseIP(server) != nil {
+			fallbackSNI = "internal.qwq.local"
+		}
+		sni := firstNonEmpty(rec.Config.SNI, fallbackSNI)
 		q := url.Values{}
 		q.Set("sni", sni)
 		if rec.Config.isInsecure() {
@@ -926,7 +982,7 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 			"password": passVal,
 			"tls":      map[string]any{"enabled": true, "server_name": sni, "insecure": rec.Config.isInsecure()},
 		}
-		return subNode{Name: name, ShareURI: uri, ClashNode: cn, SingboxOutbound: sb}, true
+		return subNode{Name: name, Protocol: corev2.ProtocolAnyTLS, Transport: "raw", ShareURI: uri, ClashNode: cn, SingboxOutbound: sb}, true
 
 	case corev2.ProtocolSOCKS5:
 		uname := firstNonEmpty(rec.Config.Username, "user")
@@ -1013,6 +1069,9 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		if rec.Config.AddressV6 != "" {
 			cn["ipv6"] = strings.Split(rec.Config.AddressV6, "/")[0]
 		}
+		if len(rec.Config.Reserved) > 0 {
+			cn["reserved"] = rec.Config.Reserved
+		}
 		sb := map[string]any{
 			"type": "wireguard", "tag": name, "server": server, "server_port": rec.Port,
 			"local_address": addrs, "private_key": rec.Config.PrivateKey,
@@ -1021,7 +1080,7 @@ func buildSubNodeFromRecord(rec proxyNodeRecord, defaultHost string, user *userR
 		if len(rec.Config.Reserved) > 0 {
 			sb["reserved"] = rec.Config.Reserved
 		}
-		return subNode{Name: name, ShareURI: uri, ClashNode: cn, SingboxOutbound: sb}, true
+		return subNode{Name: name, Protocol: "wireguard", Transport: "udp", ShareURI: uri, ClashNode: cn, SingboxOutbound: sb}, true
 	}
 
 	return subNode{}, false
@@ -1038,24 +1097,25 @@ func attachSubTransport(cn, sb map[string]any, transport string, cfg nodeConfig)
 			sbTr["headers"] = map[string]any{"Host": cfg.Host}
 		}
 		cn["ws-opts"] = wsOpts
-		sb["transport"] = sbTr
+		if sb != nil {
+			sb["transport"] = sbTr
+		}
 	case "grpc":
 		sn := firstNonEmpty(cfg.ServiceName, "grpc")
 		cn["grpc-opts"] = map[string]any{"grpc-service-name": sn}
-		sb["transport"] = map[string]any{"type": "grpc", "service_name": sn}
+		if sb != nil {
+			sb["transport"] = map[string]any{"type": "grpc", "service_name": sn}
+		}
 	case "xhttp":
 		p := firstNonEmpty(cfg.Path, "/")
 		xOpts := map[string]any{"path": p}
-		sbTr := map[string]any{"type": "http", "path": p}
 		if cfg.Host != "" {
 			xOpts["host"] = cfg.Host
-			sbTr["host"] = []string{cfg.Host}
 		}
 		if cfg.XHTTPMode != "" {
 			xOpts["mode"] = cfg.XHTTPMode
 		}
 		cn["xhttp-opts"] = xOpts
-		sb["transport"] = sbTr
 	}
 }
 

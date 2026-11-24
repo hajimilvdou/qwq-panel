@@ -9,10 +9,12 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
   import { Button, ConfirmDialog, ErrorState, Skeleton } from '$ui';
+  import { system } from '$api/endpoints';
   import type { Plugin } from '$api/types';
-  import { PluginBridge, HEIGHT_MIN, type BridgeConfirmRequest } from '$lib/plugin-host';
+  import { PluginBridge, HEIGHT_MIN, type BridgeConfirmRequest, type HostViewport } from '$lib/plugin-host';
   import { bridgeDeps, hostSettings, pluginFrameSrc } from '$lib/plugin-host/wiring';
   import { prefs } from '$lib/prefs.svelte';
+  import { useResource } from '$lib/resource.svelte';
   import { navigate } from '$lib/router.svelte';
   import { toasts } from '$lib/toast.svelte';
 
@@ -26,6 +28,10 @@
   const SANDBOX = 'allow-scripts allow-forms allow-downloads';
 
   const p = untrack(() => plugin);
+  const sysInfo = useResource({
+    key: 'system.info',
+    load: () => system.info(),
+  });
   let phase = $state<'loading' | 'ready' | 'timeout'>('loading');
   let height = $state(Math.max(HEIGHT_MIN, 560));
   let attempt = $state(0);
@@ -97,6 +103,7 @@
     void prefs.density;
     void prefs.accent;
     void visible;
+    void sysInfo.data;
     untrack(() => bridge.settings({ ...hostSettings(), visible }));
   });
 
@@ -108,12 +115,68 @@
     bridge.route(path);
   });
 
+  /* 跨 iframe 视口同步：让长自适应 iframe（2000~16000px）内弹窗/抽屉始终停在用户可视区 */
+  function computeViewport(el: HTMLIFrameElement): HostViewport {
+    const rect = el.getBoundingClientRect();
+    const winH = window.innerHeight || document.documentElement.clientHeight || 720;
+    const winW = window.innerWidth || document.documentElement.clientWidth || 1024;
+    const offsetTopPx = Math.max(0, Math.round(-rect.top));
+    const visTop = Math.max(0, rect.top);
+    const visBot = Math.min(winH, rect.bottom);
+    const visibleTop = offsetTopPx;
+    const visibleHeight = Math.max(
+      0,
+      Math.min(Math.round(visBot - visTop), Math.max(0, Math.round(rect.height - offsetTopPx))),
+    );
+    const visibleCenterY = visibleTop + Math.round(visibleHeight / 2);
+    return {
+      offsetTopPx,
+      viewportHeightPx: visibleHeight,
+      visibleTop,
+      visibleHeight,
+      visibleCenterY,
+      scroll_top: offsetTopPx,
+      visible_height: visibleHeight,
+      viewport_width: Math.round(winW),
+    };
+  }
+
+  let vpRaf = 0;
+  let lastVpKey = '';
+  function syncViewport(force = false) {
+    if (!frame) return;
+    const vp = computeViewport(frame);
+    const key = `${vp.offsetTopPx}:${vp.viewportHeightPx}:${vp.viewport_width}`;
+    if (!force && key === lastVpKey) return;
+    lastVpKey = key;
+    bridge.viewport(vp);
+  }
+  function scheduleViewportSync() {
+    if (vpRaf) return;
+    vpRaf = requestAnimationFrame(() => {
+      vpRaf = 0;
+      syncViewport(false);
+    });
+  }
+
+  $effect(() => {
+    void height;
+    if (phase === 'ready' && frame) {
+      untrack(() => syncViewport(true));
+    }
+  });
+
   const onVisibility = () => (visible = document.visibilityState === 'visible');
   window.addEventListener('message', bridge.onWindowMessage);
+  window.addEventListener('scroll', scheduleViewportSync, { passive: true });
+  window.addEventListener('resize', scheduleViewportSync, { passive: true });
   document.addEventListener('visibilitychange', onVisibility);
   onDestroy(() => {
+    if (vpRaf) cancelAnimationFrame(vpRaf);
     settleConfirm(false);
     window.removeEventListener('message', bridge.onWindowMessage);
+    window.removeEventListener('scroll', scheduleViewportSync);
+    window.removeEventListener('resize', scheduleViewportSync);
     document.removeEventListener('visibilitychange', onVisibility);
     bridge.dispose();
   });

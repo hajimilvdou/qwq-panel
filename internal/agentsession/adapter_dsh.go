@@ -28,13 +28,17 @@ import (
 //  2. Fallback: `dsh --profile headless` NDJSON stream.
 
 type DSHConfig struct {
-	Binary       string   `json:"-"`                   // host-controlled only; default "dsh"
-	Transport    string   `json:"transport,omitempty"` // acp (default) | headless
-	Profile      string   `json:"profile,omitempty"`   // code | standard | headless
-	Model        string   `json:"model,omitempty"`
-	WorkDir      string   `json:"-"` // host-controlled only; isolated workspace used
-	PlanMode     bool     `json:"plan_mode,omitempty"`
-	ActiveSkills []string `json:"active_skills,omitempty"`
+	Binary           string   `json:"-"`                     // host-controlled only; default "dsh"
+	Transport        string   `json:"transport,omitempty"`   // acp (default) | headless
+	Profile          string   `json:"profile,omitempty"`     // code | standard | headless
+	AuthMode         string   `json:"auth_mode,omitempty"`   // oauth | provider | "" (auto)
+	ProviderID       string   `json:"provider_id,omitempty"` // optional global AIProvider key bridge
+	Model            string   `json:"model,omitempty"`
+	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`   // none | low | medium | high | xhigh
+	MaxContextTokens int64    `json:"max_context_tokens,omitempty"` // optional context budget override
+	WorkDir          string   `json:"-"`                            // host-controlled only; isolated workspace used
+	PlanMode         bool     `json:"plan_mode,omitempty"`
+	ActiveSkills     []string `json:"active_skills,omitempty"`
 }
 
 // DSHOptions configures DSHCore.
@@ -44,6 +48,7 @@ type DSHOptions struct {
 	Bridge    ApprovalBridge
 	Providers ProviderResolver
 	Skills    *SkillRegistry
+	Auth      *CLIAuthManager
 	Binary    string
 }
 
@@ -54,6 +59,7 @@ type DSHCore struct {
 	bridge    ApprovalBridge
 	providers ProviderResolver
 	skills    *SkillRegistry
+	auth      *CLIAuthManager
 	bin       string
 }
 
@@ -73,7 +79,7 @@ func NewDSHCore(opts DSHOptions) *DSHCore {
 	}
 	return &DSHCore{
 		launcher: launcher, minter: opts.Minter, bridge: opts.Bridge,
-		providers: opts.Providers, skills: skills, bin: bin,
+		providers: opts.Providers, skills: skills, auth: opts.Auth, bin: bin,
 	}
 }
 
@@ -166,6 +172,7 @@ func (c *DSHCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 		Bridge:      c.bridge,
 		Providers:   c.providers,
 		Skills:      c.skills,
+		Auth:        c.auth,
 	})
 	return acp.Run(ctx, turn, emit)
 }
@@ -178,13 +185,27 @@ func (c *DSHCore) Compact(ctx context.Context, req CompactRequest) (CompactionRe
 
 // runHeadless drives `dsh --profile headless` as a non-ACP fallback.
 func (c *DSHCore) runHeadless(ctx context.Context, cfg DSHConfig, turn Turn, emit Emit) error {
-	args := []string{"--profile", "headless", "--format", "jsonl"}
+	if turn.PermissionMode != operations.PermissionReadOnly && !cfg.PlanMode {
+		return problem.New(problem.PermissionDenied,
+			"非交互式回退传输 (headless) 无法桥接宿主人工审批，仅允许在只读或计划模式下使用。")
+	}
+	pEnv, ep, found, cleanupEnv, pErr := resolveCLIAuthEnvForSession(ctx, c.providers, c.auth, CoreDSH, cfg.AuthMode, cfg.ProviderID, turn.SessionID)
+	if pErr != nil {
+		return pErr
+	}
+	defer cleanupEnv()
+	extraEnv := append([]string(nil), pEnv...)
+	if found && cfg.Model == "" {
+		cfg.Model = ep.Model
+	}
+
+	args := []string{"--profile", "headless", "--mode", "plan", "--format", "jsonl"}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}
 	args = AppendPosixPromptArg(args, latestUserMessage(turn.Messages))
 
-	proc, err := c.launcher.Start(ctx, cfg.Binary, args, nil, "")
+	proc, err := c.launcher.Start(ctx, cfg.Binary, args, extraEnv, "")
 	if err != nil {
 		return err
 	}

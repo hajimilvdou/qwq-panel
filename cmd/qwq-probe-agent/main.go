@@ -13,9 +13,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -76,26 +82,105 @@ type cpuSample struct {
 	idle  uint64
 }
 
+// BuildPinnedProbeTLSConfig 构造探针 TLS 客户端配置：
+//   - 未传 pinnedCertSHA256 且 !allowInsecure：使用操作系统标准根证书库；
+//   - 传入 pinnedCertSHA256（64 位 hex，自动兼容冒号与 sha256: 前缀）：通过 VerifyConnection 在握手完成后
+//     强制校验有效期与证书链：要么叶证书 DER SHA-256 与指纹常量时间匹配（已由 TLS 握手证明私钥持有），
+//     要么链中匹配指纹的 CA 证书能够用 x509.Verify 验证叶证书与目标主机名，彻底阻断拼接虚假附带证书的 MITM。
+func BuildPinnedProbeTLSConfig(pinnedCertSHA256 string, allowInsecure bool) (*tls.Config, error) {
+	normPin := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(pinnedCertSHA256), ":", ""))
+	normPin = strings.TrimPrefix(normPin, "sha256")
+	if normPin == "" && !allowInsecure {
+		return &tls.Config{MinVersion: tls.VersionTLS12}, nil
+	}
+	var wantPinBytes []byte
+	if normPin != "" {
+		if len(normPin) != 64 {
+			return nil, fmt.Errorf("invalid --ca-sha256 fingerprint length (want 64 hex chars)")
+		}
+		dec, err := hex.DecodeString(normPin)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --ca-sha256 hex fingerprint: %w", err)
+		}
+		wantPinBytes = dec
+	}
+	return &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, // 仅通过下方 VerifyConnection 的加密指纹校验或显式 allowInsecure 放行
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if allowInsecure && len(wantPinBytes) == 0 {
+				return nil
+			}
+			if len(cs.PeerCertificates) == 0 {
+				return errors.New("probe tls pin mismatch: server presented no certificates")
+			}
+			now := time.Now()
+			leaf := cs.PeerCertificates[0]
+			if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
+				return errors.New("probe tls pin rejected: server leaf certificate is expired or not yet valid")
+			}
+			leafSum := sha256.Sum256(leaf.Raw)
+			if subtle.ConstantTimeCompare(leafSum[:], wantPinBytes) == 1 {
+				return nil
+			}
+			for _, candidate := range cs.PeerCertificates[1:] {
+				cSum := sha256.Sum256(candidate.Raw)
+				if subtle.ConstantTimeCompare(cSum[:], wantPinBytes) != 1 {
+					continue
+				}
+				roots := x509.NewCertPool()
+				roots.AddCert(candidate)
+				inter := x509.NewCertPool()
+				for _, ic := range cs.PeerCertificates[1:] {
+					inter.AddCert(ic)
+				}
+				if _, err := leaf.Verify(x509.VerifyOptions{
+					DNSName:       cs.ServerName,
+					Roots:         roots,
+					Intermediates: inter,
+					CurrentTime:   now,
+					KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+				}); err == nil {
+					return nil
+				}
+			}
+			return errors.New("probe tls pin mismatch: server certificate SHA-256 does not match --ca-sha256")
+		},
+	}, nil
+}
+
 func main() {
 	var (
-		endpoint = flag.String("endpoint", os.Getenv("QWQ_PROBE_ENDPOINT"), "主控上报 HTTPS 地址，如 https://status.example.com/api/probe/v1/report")
-		nodeID   = flag.String("node", os.Getenv("QWQ_PROBE_NODE"), "主控分配的节点 ID")
-		token    = flag.String("token", os.Getenv("QWQ_PROBE_TOKEN"), "主控签发的单向节点令牌 prb_agt_*（优先从环境变量或 0600 凭据文件读取）")
+		endpoint      = flag.String("endpoint", os.Getenv("QWQ_PROBE_ENDPOINT"), "主控上报 HTTPS 地址，如 https://status.example.com/api/probe/v1/report")
+		nodeID        = flag.String("node", os.Getenv("QWQ_PROBE_NODE"), "主控分配的节点 ID")
+		token         = flag.String("token", os.Getenv("QWQ_PROBE_TOKEN"), "主控签发的单向节点令牌 prb_agt_*（优先从环境变量或 0600 凭据文件读取）")
+		caSHA256      = flag.String("ca-sha256", os.Getenv("QWQ_PROBE_CA_SHA256"), "可选：固定主控服务端证书 SHA-256 指纹（用于自签证书面板免 MITM 接入）")
+		allowInsecure = flag.Bool("insecure", os.Getenv("QWQ_PROBE_INSECURE") == "1", "可选：跳过 TLS 证书校验（仅限内网排障，推荐改用 --ca-sha256）")
+		checkOnce     = flag.Bool("check", false, "执行一次首包上报自检并输出诊断结果后立即退出")
 	)
 	flag.Parse()
 
 	if *endpoint == "" || *nodeID == "" || !strings.HasPrefix(*token, "prb_agt_") {
+		fmt.Fprintln(os.Stderr, "[qwq-probe-agent] 缺少必需参数 --endpoint / --node / --token (prb_agt_*)")
+		os.Exit(2)
+	}
+	tlsCfg, err := BuildPinnedProbeTLSConfig(*caSHA256, *allowInsecure)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[qwq-probe-agent] TLS 参数无效: %v\n", err)
 		os.Exit(2)
 	}
 	debug.SetMemoryLimit(16 << 20) // 16 MiB 软内存上限，适配 128M/256M 超小 NAT 机器
 
 	client := &http.Client{
-		Timeout: 6 * time.Second,
+		Timeout: 8 * time.Second,
 		Transport: &http.Transport{
 			MaxIdleConns:       2,
 			IdleConnTimeout:    60 * time.Second,
-			TLSClientConfig:    &tls.Config{MinVersion: tls.VersionTLS12},
+			TLSClientConfig:    tlsCfg,
 			DisableCompression: false,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
 		},
 	}
 
@@ -113,15 +198,28 @@ func main() {
 		interval     = 2 * time.Second
 		pingTargets  = map[string]string{}
 		pingTickStep uint64
+		lastErrLogAt time.Time
+		hadError     bool
 	)
 	prevCPU = readProcStat()
 	prevRx, prevTx = readProcNetDev()
 
+	logReportError := func(msg string) {
+		nowLog := time.Now()
+		if !hadError || nowLog.Sub(lastErrLogAt) >= 60*time.Second {
+			fmt.Fprintf(os.Stderr, "[qwq-probe-agent] 上报失败: %s\n", msg)
+			lastErrLogAt = nowLog
+		}
+		hadError = true
+	}
+
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(interval):
+		if !*checkOnce {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(interval):
+			}
 		}
 
 		now := time.Now()
@@ -201,6 +299,10 @@ func main() {
 		body, _ := json.Marshal(frame)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, *endpoint, bytes.NewReader(body))
 		if err != nil {
+			logReportError(err.Error())
+			if *checkOnce {
+				os.Exit(1)
+			}
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -208,27 +310,50 @@ func main() {
 
 		resp, err := client.Do(req)
 		if err != nil {
+			logReportError(err.Error())
+			if *checkOnce {
+				os.Exit(1)
+			}
 			continue
 		}
-		var reply pullReply
-		_ = json.NewDecoder(io.LimitReader(resp.Body, 16<<10)).Decode(&reply)
+		rawReply, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
 		_ = resp.Body.Close()
 
-		if reply.Accepted {
-			if reply.ReportIntervalSec >= 1 && reply.ReportIntervalSec <= 60 {
-				interval = time.Duration(reply.ReportIntervalSec) * time.Second
+		var reply pullReply
+		_ = json.Unmarshal(rawReply, &reply)
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 || !reply.Accepted {
+			logReportError(fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(rawReply))))
+			if *checkOnce {
+				os.Exit(1)
 			}
-			if len(reply.CarrierTargets) <= 8 {
-				pingTargets = reply.CarrierTargets
-			}
+			continue
+		}
+
+		if hadError {
+			fmt.Fprintln(os.Stderr, "[qwq-probe-agent] 遥测上报已恢复正常")
+			hadError = false
+		}
+		if *checkOnce {
+			fmt.Fprintf(os.Stderr, "[qwq-probe-agent] 首包上报验收通过 (node=%s, interval=%ds)\n", *nodeID, max(1, reply.ReportIntervalSec))
+			return
+		}
+		if reply.ReportIntervalSec >= 1 && reply.ReportIntervalSec <= 60 {
+			interval = time.Duration(reply.ReportIntervalSec) * time.Second
+		}
+		if len(reply.CarrierTargets) <= 8 {
+			pingTargets = reply.CarrierTargets
 		}
 	}
 }
 
 var blockedAgentPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
 	netip.MustParsePrefix("100.64.0.0/10"),
 	netip.MustParsePrefix("198.18.0.0/15"),
 	netip.MustParsePrefix("0000::/8"),
+	netip.MustParsePrefix("fd00:ec2::254/128"),
 	netip.MustParsePrefix("64:ff9b::/96"),
 	netip.MustParsePrefix("64:ff9b:1::/48"),
 	netip.MustParsePrefix("100::/64"),
@@ -262,12 +387,12 @@ func measureCarrierTCP(ctx context.Context, targets map[string]string) map[strin
 			continue
 		}
 		host = strings.Trim(host, "[]")
-		var dialAddr netip.Addr
+		var dialAddrs []netip.Addr
 		if ip, err := netip.ParseAddr(host); err == nil {
 			if isBlockedTargetAddr(ip) {
 				continue
 			}
-			dialAddr = ip.Unmap()
+			dialAddrs = []netip.Addr{ip.Unmap()}
 		} else {
 			rctx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
 			ips, err := net.DefaultResolver.LookupNetIP(rctx, "ip", host)
@@ -281,19 +406,27 @@ func measureCarrierTCP(ctx context.Context, targets map[string]string) map[strin
 					blocked = true
 					break
 				}
+				dialAddrs = append(dialAddrs, cand.Unmap())
 			}
-			if blocked {
+			if blocked || len(dialAddrs) == 0 {
 				continue
 			}
-			dialAddr = ips[0].Unmap()
 		}
 
-		start := time.Now()
 		d := net.Dialer{Timeout: 1500 * time.Millisecond}
-		conn, err := d.DialContext(ctx, "tcp", netip.AddrPortFrom(dialAddr, uint16(portNum)).String())
-		if err == nil {
-			_ = conn.Close()
-			out[tag] = int32(time.Since(start).Milliseconds())
+		for _, dialAddr := range dialAddrs {
+			start := time.Now()
+			dctx, dcancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			conn, derr := d.DialContext(dctx, "tcp", netip.AddrPortFrom(dialAddr, uint16(portNum)).String())
+			dcancel()
+			if derr == nil {
+				_ = conn.Close()
+				out[tag] = int32(time.Since(start).Milliseconds())
+				break
+			}
+			if ctx.Err() != nil {
+				break
+			}
 		}
 	}
 	return out

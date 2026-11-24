@@ -18,12 +18,13 @@ export interface NavItem {
   icon: IconName;
   color: CategoryColor | 'ai';
   perm?: string;
+  pluginId?: string;
 }
 
 export const PRIMARY: readonly NavItem[] = [
   { href: '/', label: '主页', icon: 'home', color: 'blue' },
   { href: '/activity', label: '动态', icon: 'activity', color: 'teal', perm: 'host.operations:read' },
-  { href: '/agent', label: 'AI 助手', icon: 'ai', color: 'ai' },
+  { href: '/agent', label: 'AI 助手', icon: 'ai', color: 'ai', perm: 'host.agent_sessions:write' },
 ];
 export const APP_CENTER: NavItem = { href: '/apps', label: '应用中心', icon: 'apps', color: 'violet', perm: 'host.plugins:read' };
 export const SETTINGS: NavItem = { href: '/settings', label: '设置', icon: 'settings', color: 'slate' };
@@ -73,6 +74,7 @@ export function pluginNav(list: readonly Plugin[]): NavItem[] {
         icon,
         color,
         perm: r.permission || undefined,
+        pluginId: p.plugin_id,
       });
     }
   }

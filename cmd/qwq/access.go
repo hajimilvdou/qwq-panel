@@ -4,17 +4,21 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/panelaccess"
 	"github.com/qwq-panel/qwq/internal/platform/config"
+	"github.com/qwq-panel/qwq/internal/sandbox"
 )
 
 // runAccess implements `qwq access show` and `qwq access reset` so an operator
@@ -170,9 +174,67 @@ func runAccessReset(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "qwq access reset: %v\n", err)
 		return 1
 	}
+	syncAccessResetRuntime(ctx, snap, stdout)
 	fmt.Fprint(stdout, formatAccessHelp(snap.ListenHost, snap.Port, snap.EntryPath, snap.PanelDomain, snap.TLSMode))
-	fmt.Fprintln(stdout, "提示：配置已写入数据库，如面板正在运行请执行 `sudo systemctl restart qwq-controller` 使新配置立即生效。")
 	return 0
+}
+
+func syncAccessResetRuntime(ctx context.Context, snap panelaccess.Snapshot, stdout io.Writer) {
+	signaled := false
+	if _, err := exec.LookPath("systemctl"); err == nil {
+		actCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		active := exec.CommandContext(actCtx, "systemctl", "is-active", "--quiet", "qwq-controller.service").Run() == nil
+		cancel()
+		if active {
+			pidCtx, pcancel := context.WithTimeout(ctx, 5*time.Second)
+			out, perr := exec.CommandContext(pidCtx, "systemctl", "show", "-p", "MainPID", "--value", "qwq-controller.service").Output()
+			pcancel()
+			if perr == nil {
+				if pid, aerr := strconv.Atoi(strings.TrimSpace(string(out))); aerr == nil && pid > 1 {
+					// Both qwq access reset (after dropToOwner) and qwq-controller run as
+					// the same qwq user, so signaling MainPID directly succeeds without polkit.
+					// Signaling BEFORE firewall sync lets Reload() rebind first and update
+					// nftables in the safe non-lockout order.
+					if kerr := syscall.Kill(pid, syscall.SIGHUP); kerr == nil {
+						signaled = true
+					}
+				}
+			}
+			if !signaled {
+				hupCtx, hcancel := context.WithTimeout(ctx, 5*time.Second)
+				if kerr := exec.CommandContext(hupCtx, "systemctl", "kill", "-s", "HUP", "--kill-who=main", "qwq-controller.service").Run(); kerr == nil {
+					signaled = true
+				}
+				hcancel()
+			}
+		}
+	}
+	if signaled {
+		fmt.Fprintln(stdout, "提示：配置已写入数据库并向运行中的 qwq-controller 发送 SIGHUP 热重载生效。")
+		return
+	}
+	// Controller is not running (or SIGHUP did not reach it): sync firewall port
+	// hint directly so the next start / firewall restore reflects the new port.
+	if snap.Port > 0 && snap.Port <= 65535 {
+		payload, _ := json.Marshal(struct {
+			Port       int    `json:"port"`
+			ListenHost string `json:"listen_host,omitempty"`
+		}{
+			Port:       snap.Port,
+			ListenHost: snap.ListenHost,
+		})
+		capCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		resp, cerr := sandbox.NewCapabilityClient(sandbox.DefaultCapabilitySocket).Call(capCtx, sandbox.CapabilityRequest{
+			Op:         "firewall.sync-panel-port",
+			ID:         "controller",
+			ParamsJSON: payload,
+		})
+		cancel()
+		if cerr != nil || !resp.OK {
+			_ = panelaccess.WriteCapabilityPanelPortWithHost(panelaccess.DefaultCapabilityPanelPortFile, snap.Port, snap.ListenHost)
+		}
+	}
+	fmt.Fprintln(stdout, "提示：配置已写入数据库，如面板正在运行请执行 `sudo systemctl restart qwq-controller` 使新配置立即生效。")
 }
 
 func formatAccessHelp(listenHost string, port int, entryPath, panelDomain, tlsMode string) string {

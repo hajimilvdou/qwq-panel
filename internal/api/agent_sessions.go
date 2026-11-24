@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -223,6 +224,35 @@ func agentSessionID(r *http.Request) (string, error) {
 	return id, nil
 }
 
+// callerRole resolves the RBAC role ("admin", "operator", "viewer") of a human
+// or service-account actor for session security-boundary enforcement.
+func (a *api) callerRole(ctx context.Context, act actor.Actor) (string, error) {
+	switch act.Kind {
+	case actor.System:
+		return "admin", nil
+	case actor.Human:
+		role, disabled, err := a.d.Identity.PrincipalRole(ctx, act.ID)
+		if err != nil {
+			return "", problem.From(err)
+		}
+		if disabled {
+			return "", problem.New(problem.PermissionDenied, "The user account is disabled.")
+		}
+		return role, nil
+	case actor.Service:
+		sa, err := a.d.Authz.ServiceAccount(ctx, act.ID)
+		if err != nil {
+			return "", problem.From(err)
+		}
+		if sa.Disabled {
+			return "", problem.New(problem.PermissionDenied, "The service account is disabled.")
+		}
+		return string(sa.Role), nil
+	default:
+		return "", problem.New(problem.PermissionDenied, "Unsupported actor kind.")
+	}
+}
+
 // createAgentSession creates a session owned by the caller.
 func (a *api) createAgentSession(w http.ResponseWriter, r *http.Request) {
 	svc, err := a.agentSessions()
@@ -242,6 +272,15 @@ func (a *api) createAgentSession(w http.ResponseWriter, r *http.Request) {
 	}
 	mode, err := permissionMode(req.PermissionMode)
 	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	role, err := a.callerRole(r.Context(), act)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	if err := agentsession.ValidateAgentSessionActorBoundary(act, role, req.Core, string(mode)); err != nil {
 		a.fail(w, r, err)
 		return
 	}
@@ -432,6 +471,24 @@ func (a *api) updateAgentSession(w http.ResponseWriter, r *http.Request) {
 	}
 	mode, err := permissionMode(req.PermissionMode)
 	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	cur, err := svc.Get(r.Context(), act, id)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	role, err := a.callerRole(r.Context(), act)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	effectiveMode := mode
+	if effectiveMode == "" {
+		effectiveMode = cur.PermissionMode
+	}
+	if err := agentsession.ValidateAgentSessionActorBoundary(act, role, string(cur.Core), string(effectiveMode)); err != nil {
 		a.fail(w, r, err)
 		return
 	}

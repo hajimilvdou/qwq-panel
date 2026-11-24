@@ -191,6 +191,18 @@ func (s *fakeCertsService) CancelTask(_ context.Context, req *certificatesv1.Can
 	}, nil
 }
 
+func (s *fakeCertsService) ReserveBinding(_ context.Context, req *certificatesv1.ReserveBindingRequest) (*certificatesv1.ReserveBindingResponse, error) {
+	s.mu.Lock()
+	s.lastRev = req.GetExpectedRevision()
+	s.mu.Unlock()
+	return &certificatesv1.ReserveBindingResponse{
+		BindingRef:    "certbind_reserved_1",
+		CertificateId: req.GetCertificateId(),
+		Revision:      "1",
+		Status:        "reserved",
+	}, nil
+}
+
 func (s *fakeCertsService) BindCertificate(_ context.Context, req *certificatesv1.BindCertificateRequest) (*certificatesv1.BindCertificateResponse, error) {
 	s.mu.Lock()
 	s.lastRev = req.GetExpectedRevision()
@@ -364,8 +376,8 @@ func TestCertificatesManifestAndPackageDigests(t *testing.T) {
 	if parsed.Resources.MemoryMaxMB != 32 || parsed.Resources.PIDsMax != 16 || parsed.Resources.FDsMax != 128 {
 		t.Fatalf("资源上限不符：%+v", parsed.Resources)
 	}
-	if len(parsed.Operations) != 16 {
-		t.Fatalf("操作数量=%d，期望=16", len(parsed.Operations))
+	if len(parsed.Operations) != 17 {
+		t.Fatalf("操作数量=%d，期望=17", len(parsed.Operations))
 	}
 	for name, digest := range parsed.Files {
 		if name == parsed.Entrypoint {
@@ -457,7 +469,23 @@ func TestCertificatesAllOperationsAndSummaryCache(t *testing.T) {
 		t.Fatalf("certificates.test 失败")
 	}
 
-	// 7-10. bindings.{bind,deploy,rollback,unbind}
+	// 7. bindings.reserve
+	reserveMsgs := runCertJob(t, t.Context(), srv, "bindings.reserve", map[string]any{
+		"certificate_id":           "cert-1",
+		"expected_config_revision": "0",
+		"consumer": map[string]any{
+			"node_id":     "local",
+			"plugin_id":   "web.ingress",
+			"profile_id":  "site-app",
+			"server_name": "app.example.com",
+			"purpose":     "ingress.https",
+		},
+	}, []*pb.Precondition{{Subject: "certificates/cert-1", Revision: "rev-1"}})
+	if len(reserveMsgs) == 0 || !reserveMsgs[len(reserveMsgs)-1].GetCompleted() || certsSvc.getLastRev() != "rev-1" {
+		t.Fatalf("bindings.reserve 失败：%+v", reserveMsgs)
+	}
+
+	// 8-11. bindings.{bind,deploy,rollback,unbind}
 	for _, op := range []string{"bindings.bind", "bindings.deploy", "bindings.rollback", "bindings.unbind"} {
 		msgs := runCertJob(t, t.Context(), srv, op, map[string]any{
 			"certificate_id": "cert-1", "binding_ref": "bind-1", "attempt_id": "att-" + op, "generation": 1,

@@ -6,8 +6,27 @@
   const root = document.documentElement;
   const pick = (v, opts, fb) => (opts.includes(v) ? v : fb);
   const initial = new URLSearchParams(location.hash.slice(1));
-  root.dataset.theme = pick(initial.get('theme'), ['light', 'dark'], 'light');
-  root.dataset.motion = pick(initial.get('motion'), ['full', 'reduced', 'off'], 'reduced');
+  const applyVisualSettings = (s) => {
+    if (!s) return;
+    const theme = pick(s.theme, ['light', 'dark'], root.dataset.theme || 'light');
+    root.dataset.theme = theme;
+    root.style.colorScheme = theme;
+    if (s.motion) root.dataset.motion = pick(s.motion, ['full', 'reduced', 'off'], 'reduced');
+    if (s.density) root.dataset.density = pick(s.density, ['comfortable', 'compact'], 'comfortable');
+    if (s.tokens && typeof s.tokens === 'object') {
+      for (const [k, v] of Object.entries(s.tokens)) {
+        if (k.startsWith('--') && typeof v === 'string') {
+          root.style.setProperty(k, v);
+          if (k === '--accent') root.style.setProperty('--cocoa', v);
+        }
+      }
+    }
+  };
+  applyVisualSettings({
+    theme: initial.get('theme') || 'light',
+    motion: initial.get('motion') || 'reduced',
+    density: initial.get('density') || 'comfortable',
+  });
 
   const $ = (id) => document.getElementById(id);
 
@@ -122,8 +141,14 @@
       return;
     }
     if (msg.t === 'ui.settings') {
-      root.dataset.theme = pick(msg.theme, ['light', 'dark'], root.dataset.theme);
-      root.dataset.motion = pick(msg.motion, ['full', 'reduced', 'off'], 'reduced');
+      applyVisualSettings(msg);
+      return;
+    }
+    if (msg.t === 'ui.viewport') {
+      const vpTop = Math.max(0, Math.round(Number(msg.offsetTopPx ?? msg.visibleTop ?? msg.scroll_top) || 0));
+      state.viewportTop = vpTop;
+      root.style.setProperty('--host-modal-top', `${Math.max(16, vpTop + 24)}px`);
+      notifyResize();
     }
   }
 
@@ -587,7 +612,7 @@
     try {
       const [summaryRes, listRes] = await Promise.allSettled([
         invoke('certificates.summary', {}, 10000),
-        invoke('certificates.list', {}, 20000),
+        invoke('certificates.list', {}, 20000, { subject: 'plugins/tls.certificates/resources/certificates' }),
       ]);
       if (listRes.status === 'fulfilled') {
         state.certificates = Array.isArray(listRes.value.certificates) ? listRes.value.certificates : [];
@@ -623,7 +648,9 @@
   async function loadCertificateDetail(certId) {
     setStatus(`正在查询证书 ${certId} 详情...`);
     try {
-      const res = await invoke('certificates.get', { certificate_id: certId }, 20000);
+      const res = await invoke('certificates.get', { certificate_id: certId }, 20000, {
+        subject: `plugins/tls.certificates/resources/certificates/${certId}`,
+      });
       renderDetailCard(res.certificate || null);
       setStatus(`已加载证书 ${certId} 详情`);
     } catch (err) {
@@ -838,11 +865,31 @@
     }
   }
 
+  function policyInvokeOpts(policyId, allowCreate = false) {
+    const rev = state.lastRenewal && state.lastRenewal.id === policyId && state.lastRenewal.revision
+      ? state.lastRenewal.revision
+      : (allowCreate ? 'absent' : '');
+    const opts = { subject: `plugins/tls.certificates/resources/policies/${policyId}` };
+    if (rev) opts.expected_revision = rev;
+    return opts;
+  }
+
+  function syncRenewChallengeMode() {
+    const mode = $('renew-challenge-type')?.value || 'http-01';
+    const isHTTP01 = mode === 'http-01';
+    if ($('renew-provider-field')) $('renew-provider-field').hidden = isHTTP01;
+    if ($('renew-zone-field')) $('renew-zone-field').hidden = isHTTP01;
+    if ($('renew-provider-id')) $('renew-provider-id').required = !isHTTP01;
+    if ($('renew-zone-id')) $('renew-zone-id').required = !isHTTP01;
+    notifyResize();
+  }
+
   async function saveRenewalPolicy(event) {
     event.preventDefault();
     clearBanner();
     const policyId = $('renew-policy-id').value.trim();
     const certId = $('renew-cert-id').value.trim();
+    const challengeType = $('renew-challenge-type')?.value || 'http-01';
     const providerId = $('renew-provider-id').value.trim();
     const zoneId = $('renew-zone-id').value.trim();
     const ca = $('renew-ca').value;
@@ -852,17 +899,25 @@
       showBanner('请选择关联证书并至少填写一个 binding_ref', 'warn');
       return;
     }
+    if (challengeType === 'dns-01' && (!providerId || !zoneId)) {
+      showBanner('DNS-01 自动续期必须填写 DNS 服务商 ID 与 Zone ID', 'warn');
+      return;
+    }
     setStatus(`正在保存自动续期策略 ${policyId}...`);
     try {
-      const res = await invoke('renewal.configure', {
+      const payload = {
         policy_id: policyId,
         certificate_id: certId,
-        provider_id: providerId,
-        zone_id: zoneId,
+        challenge_type: challengeType,
         ca,
         binding_refs: bindingRefs,
         expires_at: expiresAt,
-      }, 35000);
+      };
+      if (challengeType === 'dns-01') {
+        payload.provider_id = providerId;
+        payload.zone_id = zoneId;
+      }
+      const res = await invoke('renewal.configure', payload, 35000, policyInvokeOpts(policyId, true));
       renderRenewalStatus(res.renewal || null);
       showBanner(`自动续期策略 ${policyId} 已保存`, 'ok');
     } catch (err) {
@@ -883,7 +938,7 @@
       const res = await invoke('renewal.get', {
         policy_id: policyId,
         certificate_id: certId,
-      }, 20000);
+      }, 20000, { subject: `plugins/tls.certificates/resources/policies/${policyId}` });
       renderRenewalStatus(res.renewal || null);
       showBanner(`已加载续期策略 ${policyId} 状态`, 'ok');
     } catch (err) {
@@ -904,7 +959,7 @@
       const res = await invoke('renewal.revoke', {
         policy_id: policyId,
         certificate_id: certId,
-      }, 35000);
+      }, 35000, policyInvokeOpts(policyId, false));
       renderRenewalStatus(res.renewal || null);
       showBanner(`已撤销续期策略 ${policyId}`, 'ok');
     } catch (err) {
@@ -920,7 +975,7 @@
       const info = await invoke('renewal.get', {
         policy_id: policyId,
         certificate_id: certId,
-      }, 20000);
+      }, 20000, { subject: `plugins/tls.certificates/resources/policies/${policyId}` });
       if (info && info.renewal) {
         renderRenewalStatus(info.renewal);
         rev = info.renewal.revision || '';
@@ -936,7 +991,7 @@
       certificate_id: certId,
       run_attempt_id: makeAttemptId('run'),
       attempt_id: makeAttemptId('renew'),
-    }, 300000);
+    }, 300000, { subject: `plugins/tls.certificates/resources/certificates/${certId}`, expected_revision: rev });
     if (res.certificate && state.selectedCertId === certId) {
       renderDetailCard(res.certificate);
     }
@@ -949,11 +1004,13 @@
     $('confirm-title').textContent = title;
     $('confirm-message').textContent = message;
     $('confirm-backdrop').hidden = false;
+    requestAnimationFrame(notifyResize);
   }
 
   function closeConfirm() {
     state.confirmAction = null;
     $('confirm-backdrop').hidden = true;
+    notifyResize();
   }
 
   function openRenewModal(certId) {
@@ -966,17 +1023,28 @@
       ? (state.lastRenewal.revision || '')
       : '';
     $('renew-modal-backdrop').hidden = false;
+    requestAnimationFrame(notifyResize);
   }
 
   function closeRenewModal() {
     $('renew-modal-backdrop').hidden = true;
+    notifyResize();
   }
 
   function notifyResize() {
     const app = $('certs-app');
-    if (app) {
-      send({ t: 'ui.resize', height: Math.ceil(app.getBoundingClientRect().height) + 16 });
+    if (!app) return;
+    let height = Math.ceil(app.getBoundingClientRect().height) + 16;
+    const vpTop = Number(state.viewportTop) || 0;
+    for (const id of ['renew-modal-backdrop', 'confirm-backdrop']) {
+      const backdrop = $(id);
+      if (backdrop && !backdrop.hidden) {
+        const box = backdrop.querySelector('.modal');
+        const boxH = box ? Math.ceil(box.getBoundingClientRect().height) : 320;
+        height = Math.max(height, vpTop + boxH + 64);
+      }
     }
+    send({ t: 'ui.resize', height });
   }
 
   function bindEvents() {
@@ -1001,6 +1069,8 @@
 
     $('acme-challenge-type')?.addEventListener('change', syncAcmeChallengeMode);
     syncAcmeChallengeMode();
+    $('renew-challenge-type')?.addEventListener('change', syncRenewChallengeMode);
+    syncRenewChallengeMode();
     $('acme-form').addEventListener('submit', (e) => { void submitAcmeForm(e); });
     $('import-form').addEventListener('submit', (e) => { void submitImportForm(e); });
     $('test-cert-form').addEventListener('submit', (e) => { void submitTestCertForm(e); });

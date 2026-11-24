@@ -117,13 +117,17 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 		syncSiteBindingsToSNI(sni, sites)
 	}
 	inst := &instance{
-		InstanceBase: pluginsdk.NewInstanceBase(info),
-		cfg:          cfg,
-		dataDir:      info.DataDir,
-		store:        st,
-		proxy:        proxy,
-		sni:          sni,
-		now:          nowFn,
+		InstanceBase:   pluginsdk.NewInstanceBase(info),
+		cfg:            cfg,
+		configRevision: strings.TrimSpace(info.ConfigRevision),
+		dataDir:        info.DataDir,
+		store:          st,
+		proxy:          proxy,
+		sni:            sni,
+		now:            nowFn,
+	}
+	if inst.configRevision == "" {
+		inst.configRevision = "0"
 	}
 	if addr := strings.TrimSpace(cfg.ListenAddr); addr != "" {
 		ln, lerr := net.Listen("tcp", addr)
@@ -145,12 +149,23 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 		if lerr != nil {
 			inst.httpsListenErr = fmt.Sprintf("HTTPS 监听 %s 失败: %s", httpsAddr, lerr.Error())
 		} else {
-			tlsLn := tls.NewListener(rawLn, sni.TLSConfig())
+			var initRoutes map[string]L4PassthroughTarget
+			if rules, rerr := st.listSNIPassthroughs(ctx); rerr == nil && len(rules) > 0 {
+				initRoutes = make(map[string]L4PassthroughTarget, len(rules))
+				for _, r := range rules {
+					if r.Enabled {
+						initRoutes[r.SNIPattern] = L4PassthroughTarget{UpstreamAddr: r.UpstreamAddr}
+					}
+				}
+			}
+			muxLn := NewL4SNIMuxListenerWithRoutes(rawLn, initRoutes)
+			tlsLn := tls.NewListener(muxLn, sni.TLSConfig())
 			httpsSrv := &http.Server{
 				Handler:           proxy,
 				ReadHeaderTimeout: 10 * time.Second,
 				IdleTimeout:       60 * time.Second,
 			}
+			inst.sniMux = muxLn
 			inst.httpsServer = httpsSrv
 			inst.httpsBoundAddr = rawLn.Addr().String()
 			sni.SetHTTPSListenerActive(true)
@@ -172,6 +187,8 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 		"ingress.tls.inspect",
 		"ingress.acme.present",
 		"ingress.acme.cleanup",
+		"ingress.sni_passthrough.upsert",
+		"ingress.sni_passthrough.delete",
 	} {
 		opName := op
 		inst.HandleInvoke(opName, func(c context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
@@ -236,6 +253,7 @@ type instance struct {
 	cfgMu          sync.RWMutex
 	applyMu        sync.Mutex
 	cfg            pluginConfig
+	configRevision string
 	dataDir        string
 	store          *ingressStore
 	proxy          *BuiltinProxy
@@ -243,6 +261,7 @@ type instance struct {
 	server         *http.Server
 	boundAddr      string
 	httpListenErr  string
+	sniMux         *L4SNIMuxListener
 	httpsServer    *http.Server
 	httpsBoundAddr string
 	httpsListenErr string
@@ -253,6 +272,15 @@ func (i *instance) currentConfig() pluginConfig {
 	i.cfgMu.RLock()
 	defer i.cfgMu.RUnlock()
 	return i.cfg
+}
+
+func (i *instance) currentConfigRevision() string {
+	i.cfgMu.RLock()
+	defer i.cfgMu.RUnlock()
+	if i.configRevision == "" {
+		return "0"
+	}
+	return i.configRevision
 }
 
 func (i *instance) currentBoundAddr() string {
@@ -277,9 +305,11 @@ func (i *instance) Deactivate(ctx context.Context) error {
 	i.cfgMu.Lock()
 	srv := i.server
 	httpsSrv := i.httpsServer
+	mux := i.sniMux
 	i.server = nil
 	i.boundAddr = ""
 	i.httpsServer = nil
+	i.sniMux = nil
 	i.httpsBoundAddr = ""
 	i.cfgMu.Unlock()
 	if i.sni != nil {
@@ -294,6 +324,9 @@ func (i *instance) Deactivate(ctx context.Context) error {
 		sctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		_ = httpsSrv.Shutdown(sctx)
 		cancel()
+	}
+	if mux != nil {
+		_ = mux.Close()
 	}
 	i.proxy.Close()
 	return i.store.Close()
@@ -318,6 +351,7 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 	oldAddr := strings.TrimSpace(i.cfg.ListenAddr)
 	oldHTTPSAddr := strings.TrimSpace(i.cfg.HTTPSListenAddr)
 	var oldSrv, oldHTTPSSrv *http.Server
+	var oldMux, newMux *L4SNIMuxListener
 	var newSrv, newHTTPSSrv *http.Server
 	var ln, httpsLn net.Listener
 	var newBound, newHTTPSBound string
@@ -361,7 +395,17 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 			nextHTTPSErr = lerr.Error()
 			needHTTPSChange = false
 		} else {
-			httpsLn = tls.NewListener(rawLn, i.sni.TLSConfig())
+			var initRoutes map[string]L4PassthroughTarget
+			if rules, rerr := i.store.listSNIPassthroughs(ctx); rerr == nil && len(rules) > 0 {
+				initRoutes = make(map[string]L4PassthroughTarget, len(rules))
+				for _, r := range rules {
+					if r.Enabled {
+						initRoutes[r.SNIPattern] = L4PassthroughTarget{UpstreamAddr: r.UpstreamAddr}
+					}
+				}
+			}
+			newMux = NewL4SNIMuxListenerWithRoutes(rawLn, initRoutes)
+			httpsLn = tls.NewListener(newMux, i.sni.TLSConfig())
 			newHTTPSSrv = &http.Server{
 				Handler:           i.proxy,
 				ReadHeaderTimeout: 10 * time.Second,
@@ -381,7 +425,9 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 	}
 	if needHTTPSChange {
 		oldHTTPSSrv = i.httpsServer
+		oldMux = i.sniMux
 		i.httpsServer = newHTTPSSrv
+		i.sniMux = newMux
 		i.httpsBoundAddr = newHTTPSBound
 		i.httpsListenErr = ""
 		if i.sni != nil {
@@ -391,6 +437,9 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 		i.httpsListenErr = nextHTTPSErr
 	}
 	i.cfg = cfg
+	if rev := strings.TrimSpace(cand.Revision); rev != "" {
+		i.configRevision = rev
+	}
 	i.cfgMu.Unlock()
 
 	i.proxy.SetTrustedProxies(trusted)
@@ -411,10 +460,32 @@ func (i *instance) ApplyConfig(ctx context.Context, cand pluginsdk.Config) error
 		_ = oldHTTPSSrv.Shutdown(sctx)
 		cancel()
 	}
+	if oldMux != nil {
+		_ = oldMux.Close()
+	}
 	return nil
 }
 
 func (i *instance) Health(context.Context) pluginsdk.Health {
+	httpErr, httpsErr := i.currentListenErrors()
+	var errs []string
+	if httpErr != "" {
+		errs = append(errs, httpErr)
+	}
+	if httpsErr != "" {
+		errs = append(errs, httpsErr)
+	}
+	if len(errs) > 0 {
+		details, _ := json.Marshal(map[string]any{
+			"degraded":           true,
+			"http_listen_error":  httpErr,
+			"https_listen_error": httpsErr,
+		})
+		return pluginsdk.Health{
+			Message: "web.ingress 端口监听告警: " + strings.Join(errs, "；"),
+			Details: details,
+		}
+	}
 	return pluginsdk.Health{Message: "web.ingress 运行正常"}
 }
 
@@ -425,7 +496,7 @@ func (i *instance) Invoke(ctx context.Context, req pluginsdk.Request) (pluginsdk
 	case "ingress.checks.upstreams":
 		return i.handleChecksUpstreams(ctx)
 	case "ingress.overview":
-		return i.handleOverview(ctx)
+		return i.handleOverview(ctx, req.Call().NodeID)
 	case "ingress.ai.digest":
 		return i.handleAIDigest(ctx)
 	case "ingress.site.upsert":
@@ -448,6 +519,10 @@ func (i *instance) Invoke(ctx context.Context, req pluginsdk.Request) (pluginsdk
 		return i.handleACMEPresent(ctx, req.Call(), req.Payload)
 	case "ingress.acme.cleanup":
 		return i.handleACMECleanup(ctx, req.Call(), req.Payload)
+	case "ingress.sni_passthrough.upsert":
+		return i.handleSNIPassthroughUpsert(ctx, req.Payload)
+	case "ingress.sni_passthrough.delete":
+		return i.handleSNIPassthroughDelete(ctx, req.Payload)
 	default:
 		return pluginsdk.Response{}, pluginsdk.Errorf("NOT_FOUND", "未知操作: %s", req.Operation)
 	}
@@ -519,7 +594,7 @@ func (i *instance) handleChecksUpstreams(ctx context.Context) (pluginsdk.Respons
 	return jsonResp(map[string]any{"items": items})
 }
 
-func (i *instance) handleOverview(ctx context.Context) (pluginsdk.Response, error) {
+func (i *instance) handleOverview(ctx context.Context, nodeID string) (pluginsdk.Response, error) {
 	sites, err := i.store.listSites(ctx)
 	if err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
@@ -528,13 +603,23 @@ func (i *instance) handleOverview(ctx context.Context) (pluginsdk.Response, erro
 	if err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
 	}
+	sniRules, err := i.store.listSNIPassthroughs(ctx)
+	if err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
+	}
 	cfg := i.currentConfig()
 	boundAddr := i.currentBoundAddr()
 	httpsBoundAddr := i.currentHTTPSBoundAddr()
 	httpErr, httpsErr := i.currentListenErrors()
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		nodeID = "local"
+	}
 	return jsonResp(map[string]any{
 		"backend":                      detectBackends(cfg.PreferredEngine),
 		"running":                      boundAddr != "" || httpsBoundAddr != "",
+		"node_id":                      nodeID,
+		"config_revision":              i.currentConfigRevision(),
 		"bound_addr":                   boundAddr,
 		"https_bound_addr":             httpsBoundAddr,
 		"configured_listen_addr":       cfg.ListenAddr,
@@ -544,6 +629,7 @@ func (i *instance) handleOverview(ctx context.Context) (pluginsdk.Response, erro
 		"active_routes":                i.proxy.ActiveCount(),
 		"sites":                        sites,
 		"snapshots":                    snaps,
+		"sni_passthroughs":             sniRules,
 	})
 }
 
@@ -671,12 +757,82 @@ func syncSiteBindingsToSNI(sni *SNICertStore, sites []SiteRecord) {
 		return
 	}
 	bindings := make(map[string]string)
+	var scanned []*LoadedMaterializedBinding
+	scannedOnce := false
 	for _, s := range sites {
-		if s.Enabled && s.TLSMode != "off" && strings.TrimSpace(s.CertID) != "" {
-			bindings[s.Domain] = s.CertID
+		if !s.Enabled || s.TLSMode == "off" {
+			continue
+		}
+		if ref := strings.TrimSpace(s.CertID); ref != "" {
+			bindings[s.Domain] = ref
+			continue
+		}
+		// cert_id 为空时按域名（精确 SNI 或叶证书 SAN/泛域名）自动匹配已物化证书
+		if !scannedOnce {
+			scanned = ScanAllActiveConsumerBindings(sni.dataDir)
+			scannedOnce = true
+		}
+		normDom := normalizeSNIDomain(s.Domain)
+		for _, mat := range scanned {
+			if mat.SNI == normDom || (mat.Leaf != nil && mat.Leaf.VerifyHostname(normDom) == nil) {
+				bindings[s.Domain] = mat.BindingID
+				break
+			}
 		}
 	}
 	_, _ = sni.ReloadFromBindings(bindings)
+}
+
+func (i *instance) syncSNIMuxRoutes(ctx context.Context) {
+	i.cfgMu.RLock()
+	mux := i.sniMux
+	i.cfgMu.RUnlock()
+	if mux == nil {
+		return
+	}
+	if rules, err := i.store.listSNIPassthroughs(ctx); err == nil {
+		mux.SetRulesFromRecords(rules)
+	}
+}
+
+func (i *instance) handleSNIPassthroughUpsert(ctx context.Context, payload []byte) (pluginsdk.Response, error) {
+	var req struct {
+		ID           string `json:"id"`
+		SNIPattern   string `json:"sni_pattern"`
+		UpstreamAddr string `json:"upstream_addr"`
+		Enabled      *bool  `json:"enabled"`
+		Notes        string `json:"notes"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "请求格式错误: %s", err.Error())
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	rule, err := i.store.upsertSNIPassthrough(ctx, req.ID, req.SNIPattern, req.UpstreamAddr, enabled, req.Notes)
+	if err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
+	}
+	i.syncSNIMuxRoutes(ctx)
+	return jsonResp(map[string]any{"rule": rule})
+}
+
+func (i *instance) handleSNIPassthroughDelete(ctx context.Context, payload []byte) (pluginsdk.Response, error) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil || strings.TrimSpace(req.ID) == "" {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "缺少透传规则 id")
+	}
+	deleted, err := i.store.deleteSNIPassthrough(ctx, req.ID)
+	if err != nil {
+		return pluginsdk.Response{}, pluginsdk.Errorf("INTERNAL", "%s", err.Error())
+	}
+	if deleted {
+		i.syncSNIMuxRoutes(ctx)
+	}
+	return jsonResp(map[string]any{"deleted": deleted, "id": strings.TrimSpace(req.ID)})
 }
 
 func (i *instance) reloadAndRenderLocked(ctx context.Context) (int, []string, error) {
@@ -690,6 +846,7 @@ func (i *instance) reloadAndRenderLocked(ctx context.Context) (int, []string, er
 	cfg := i.currentConfig()
 	active := i.proxy.Reload(sites)
 	syncSiteBindingsToSNI(i.sni, sites)
+	i.syncSNIMuxRoutes(ctx)
 
 	writtenFiles := make([]string, 0, 3)
 	caddyOut := filepath.Join(i.dataDir, "rendered", "Caddyfile")

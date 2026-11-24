@@ -5,9 +5,12 @@ package agentsession
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -27,11 +30,12 @@ import (
 //     or agent-workspace/mcp/servers.json.
 
 const (
-	registryCacheTTL       = 10 * time.Minute
-	registryHTTPTimeout    = 10 * time.Second
-	registryMaxBodyBytes   = 2 << 20
-	registryMaxSkillBytes  = 512 << 10
-	registryMaxCachedItems = 300
+	registryCacheTTL        = 10 * time.Minute
+	registryRefreshCooldown = 15 * time.Second
+	registryHTTPTimeout     = 10 * time.Second
+	registryMaxBodyBytes    = 2 << 20
+	registryMaxSkillBytes   = 512 << 10
+	registryMaxCachedItems  = 300
 )
 
 // RegistrySourceMeta describes one built-in official repository.
@@ -126,17 +130,47 @@ type RegistryManager struct {
 	ws     *WorkspaceManager
 	client *http.Client
 
-	mu        sync.RWMutex
-	liveItems []RegistryItem
-	fetchedAt time.Time
+	refreshMu          sync.Mutex
+	mu                 sync.RWMutex
+	liveItems          []RegistryItem
+	fetchedAt          time.Time
+	lastRefreshAttempt time.Time
 }
 
 // NewRegistryManager builds a memory-bounded official registry manager.
 func NewRegistryManager(ws *WorkspaceManager, client *http.Client) *RegistryManager {
 	if client == nil {
 		client = &http.Client{Timeout: registryHTTPTimeout}
+	} else {
+		cp := *client
+		client = &cp
+	}
+	origRedirect := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return errors.New("registry redirect limit exceeded")
+		}
+		if req.URL == nil || !isAllowedRegistryRedirectHost(req.URL) {
+			return errors.New("registry redirect host not allowed")
+		}
+		if origRedirect != nil {
+			return origRedirect(req, via)
+		}
+		return nil
 	}
 	return &RegistryManager{ws: ws, client: client}
+}
+
+func isAllowedRegistryRedirectHost(u *url.URL) bool {
+	if u == nil || u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "api.github.com", "raw.githubusercontent.com", "objects.githubusercontent.com", "github.com":
+		return true
+	default:
+		return false
+	}
 }
 
 // Search searches built-in and cached live official Skills & MCP servers.
@@ -287,9 +321,25 @@ source: %s
 }
 
 func isAllowedOfficialRawURL(u string) bool {
-	return strings.HasPrefix(u, "https://raw.githubusercontent.com/anthropics/skills/") ||
-		strings.HasPrefix(u, "https://raw.githubusercontent.com/openai/skills/") ||
-		strings.HasPrefix(u, "https://raw.githubusercontent.com/modelcontextprotocol/servers/")
+	if strings.Contains(u, "..") || strings.Contains(u, "\\") || strings.ContainsAny(u, "?#") {
+		return false
+	}
+	lower := strings.ToLower(u)
+	if strings.Contains(lower, "%2e") || strings.Contains(lower, "%2f") || strings.Contains(lower, "%5c") {
+		return false
+	}
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "raw.githubusercontent.com") ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	cleaned := path.Clean(parsed.Path)
+	if cleaned != parsed.Path {
+		return false
+	}
+	return strings.HasPrefix(cleaned, "/anthropics/skills/") ||
+		strings.HasPrefix(cleaned, "/openai/skills/") ||
+		strings.HasPrefix(cleaned, "/modelcontextprotocol/servers/")
 }
 
 func (r *RegistryManager) fetchText(ctx context.Context, targetURL string, maxBytes int64) (string, bool) {
@@ -318,11 +368,18 @@ func (r *RegistryManager) fetchText(ctx context.Context, targetURL string, maxBy
 }
 
 func (r *RegistryManager) refreshLive(ctx context.Context) bool {
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+
+	if ctx.Err() != nil {
+		return false
+	}
 	r.mu.RLock()
-	fresh := !r.fetchedAt.IsZero() && time.Since(r.fetchedAt) < registryCacheTTL && len(r.liveItems) > 0
+	inCooldown := !r.lastRefreshAttempt.IsZero() && time.Since(r.lastRefreshAttempt) < registryRefreshCooldown
+	hasLive := len(r.liveItems) > 0 && !r.fetchedAt.IsZero() && time.Since(r.fetchedAt) < registryCacheTTL
 	r.mu.RUnlock()
-	if fresh {
-		return true
+	if inCooldown {
+		return hasLive
 	}
 
 	type repoFetch struct {
@@ -339,6 +396,9 @@ func (r *RegistryManager) refreshLive(ctx context.Context) bool {
 	var fetched []RegistryItem
 	anyOK := false
 	for _, t := range targets {
+		if ctx.Err() != nil {
+			return false
+		}
 		apiURL := fmt.Sprintf("https://api.github.com/repos/%s/contents/%s", t.repo, t.dirPath)
 		raw, ok := r.fetchText(ctx, apiURL, registryMaxBodyBytes)
 		if !ok {
@@ -379,10 +439,13 @@ func (r *RegistryManager) refreshLive(ctx context.Context) bool {
 		}
 	}
 
-	if anyOK {
+	if ctx.Err() == nil {
 		r.mu.Lock()
-		r.liveItems = fetched
-		r.fetchedAt = time.Now().UTC()
+		r.lastRefreshAttempt = time.Now()
+		if anyOK {
+			r.liveItems = fetched
+			r.fetchedAt = time.Now().UTC()
+		}
 		r.mu.Unlock()
 	}
 	return anyOK

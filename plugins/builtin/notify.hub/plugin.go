@@ -118,6 +118,14 @@ type instance struct {
 }
 
 func (i *instance) Deactivate(_ context.Context) error {
+	return nil
+}
+
+func (i *instance) Stop(_ context.Context) error {
+	return i.store.Close()
+}
+
+func (i *instance) Release(_ context.Context) error {
 	return i.store.Close()
 }
 
@@ -294,13 +302,42 @@ func (i *instance) handleAIDigest(ctx context.Context) (pluginsdk.Response, erro
 	})
 }
 
+// DefaultNotifyRuleSeed 描述首次添加通知渠道时自动生成的默认全局告警规则。
+type DefaultNotifyRuleSeed struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	SourcePattern string   `json:"source_pattern"`
+	MinSeverity   string   `json:"min_severity"`
+	ChannelIDs    []string `json:"channel_ids"`
+	CooldownSec   int      `json:"cooldown_sec"`
+	Enabled       bool     `json:"enabled"`
+}
+
+// BuildAutoCatchAllNotifyRuleIfEmpty 当规则表为空且首次创建启用渠道时生成默认全局路由，
+// 消除“测试渠道能收到，真实系统告警却静默丢弃”的反直觉陷阱。
+func BuildAutoCatchAllNotifyRuleIfEmpty(existingRuleCount int, firstChannelID string) *DefaultNotifyRuleSeed {
+	if existingRuleCount > 0 || strings.TrimSpace(firstChannelID) == "" {
+		return nil
+	}
+	return &DefaultNotifyRuleSeed{
+		ID:            "rule-default-all",
+		Name:          "默认全局重要告警转发（自动创建）",
+		SourcePattern: "*",
+		MinSeverity:   "warn",
+		ChannelIDs:    []string{strings.TrimSpace(firstChannelID)},
+		CooldownSec:   300,
+		Enabled:       true,
+	}
+}
+
 func (i *instance) handleChannelUpsert(ctx context.Context, payload []byte) (pluginsdk.Response, error) {
 	var req struct {
-		ID      string        `json:"id"`
-		Name    string        `json:"name"`
-		Kind    string        `json:"kind"`
-		Enabled *bool         `json:"enabled"`
-		Config  ChannelConfig `json:"config"`
+		ID       string        `json:"id"`
+		Name     string        `json:"name"`
+		Kind     string        `json:"kind"`
+		Enabled  *bool         `json:"enabled"`
+		AutoRule *bool         `json:"auto_rule"`
+		Config   ChannelConfig `json:"config"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "请求格式错误: %s", err.Error())
@@ -313,11 +350,19 @@ func (i *instance) handleChannelUpsert(ctx context.Context, payload []byte) (plu
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	rec, err := i.store.upsertChannel(ctx, strings.TrimSpace(req.ID), req.Name, req.Kind, enabled, req.Config)
+	autoRule := true
+	if req.AutoRule != nil {
+		autoRule = *req.AutoRule
+	}
+	rec, autoCreated, err := i.store.upsertChannelWithAutoRule(ctx, strings.TrimSpace(req.ID), req.Name, req.Kind, enabled, req.Config, autoRule)
 	if err != nil {
 		return pluginsdk.Response{}, pluginsdk.Errorf("INVALID_ARGUMENT", "%s", err.Error())
 	}
-	return jsonResp(map[string]any{"channel": rec})
+	out := map[string]any{"channel": rec}
+	if autoCreated != nil {
+		out["auto_created_rule"] = *autoCreated
+	}
+	return jsonResp(out)
 }
 
 func (i *instance) handleChannelDelete(ctx context.Context, payload []byte) (pluginsdk.Response, error) {

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -176,10 +177,39 @@ type ImageSummary struct {
 	Created int64    `json:"created"`
 }
 
-// PruneResult 描述清理悬空镜像释放的空间。
+// VolumeSummary 描述 Docker 存储卷摘要。
+type VolumeSummary struct {
+	Name       string `json:"name"`
+	Driver     string `json:"driver"`
+	Mountpoint string `json:"mountpoint,omitempty"`
+	CreatedAt  string `json:"created_at,omitempty"`
+}
+
+// PruneResult 描述清理悬空镜像或存储卷释放的空间。
 type PruneResult struct {
 	DeletedCount     int     `json:"deleted_count"`
 	SpaceReclaimedMB float64 `json:"space_reclaimed_mb"`
+}
+
+var (
+	imageRefRe     = regexp.MustCompile(`^(?:sha256:)?[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+	imagePullRefRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$`)
+)
+
+func validateImageRef(id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if !imageRefRe.MatchString(id) || strings.Contains(id, "..") {
+		return "", errors.New("非法镜像 ID")
+	}
+	return id, nil
+}
+
+func validateImagePullRef(image string) (string, error) {
+	image = strings.TrimSpace(image)
+	if !imagePullRefRe.MatchString(image) || strings.Contains(image, "..") {
+		return "", errors.New("非法 Docker 镜像名称（示例：nginx:alpine 或 ghcr.io/org/app:latest）")
+	}
+	return image, nil
 }
 
 type dockerClient struct {
@@ -659,6 +689,134 @@ func (c *dockerClient) pruneImages(ctx context.Context, all bool) (PruneResult, 
 	}, nil
 }
 
+func (c *dockerClient) pullImage(ctx context.Context, image string) (string, error) {
+	ref, err := validateImagePullRef(image)
+	if err != nil {
+		return "", err
+	}
+	path := "/images/create?fromImage=" + url.QueryEscape(ref)
+	if c.useHostCapability() {
+		statusCode, raw, err := c.doRaw(ctx, http.MethodPost, path, nil)
+		if err != nil {
+			return "", err
+		}
+		if statusCode < 200 || statusCode >= 300 {
+			return "", fmt.Errorf("docker pull %d: %s", statusCode, strings.TrimSpace(string(raw)))
+		}
+		return summarizeDockerPullOutput(raw)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker/"+dockerAPIVersion+path, nil)
+	if err != nil {
+		return "", err
+	}
+	pullClient := &http.Client{Transport: c.httpClient.Transport, Timeout: 10 * time.Minute}
+	resp, err := pullClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
+		return "", fmt.Errorf("docker pull %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	return drainDockerPullStream(resp.Body)
+}
+
+func drainDockerPullStream(r io.Reader) (string, error) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 32<<10), 256<<10)
+	lastStatus := "镜像拉取完成"
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var ev struct {
+			Status      string `json:"status"`
+			Error       string `json:"error"`
+			ErrorDetail *struct {
+				Message string `json:"message"`
+			} `json:"errorDetail"`
+		}
+		if json.Unmarshal([]byte(line), &ev) == nil {
+			if msg := strings.TrimSpace(ev.Error); msg != "" {
+				return "", fmt.Errorf("docker pull failed: %s", msg)
+			}
+			if ev.ErrorDetail != nil && strings.TrimSpace(ev.ErrorDetail.Message) != "" {
+				return "", fmt.Errorf("docker pull failed: %s", strings.TrimSpace(ev.ErrorDetail.Message))
+			}
+			if st := strings.TrimSpace(ev.Status); st != "" {
+				lastStatus = st
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("docker pull stream error: %w", err)
+	}
+	return lastStatus, nil
+}
+
+func summarizeDockerPullOutput(raw []byte) (string, error) {
+	return drainDockerPullStream(bytes.NewReader(raw))
+}
+
+func (c *dockerClient) removeImage(ctx context.Context, id string, force bool) error {
+	ref, err := validateImageRef(id)
+	if err != nil {
+		return err
+	}
+	path := "/images/" + url.PathEscape(ref) + "?force=" + strconv.FormatBool(force)
+	return c.doJSON(ctx, http.MethodDelete, path, nil, nil)
+}
+
+func (c *dockerClient) listVolumes(ctx context.Context) ([]VolumeSummary, error) {
+	var raw struct {
+		Volumes []struct {
+			Name       string `json:"Name"`
+			Driver     string `json:"Driver"`
+			Mountpoint string `json:"Mountpoint"`
+			CreatedAt  string `json:"CreatedAt"`
+		} `json:"Volumes"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/volumes", nil, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]VolumeSummary, 0, len(raw.Volumes))
+	for _, v := range raw.Volumes {
+		out = append(out, VolumeSummary{
+			Name:       v.Name,
+			Driver:     v.Driver,
+			Mountpoint: v.Mountpoint,
+			CreatedAt:  v.CreatedAt,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (c *dockerClient) pruneVolumes(ctx context.Context) (PruneResult, error) {
+	var raw struct {
+		VolumesDeleted []string `json:"VolumesDeleted"`
+		SpaceReclaimed int64    `json:"SpaceReclaimed"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "/volumes/prune", nil, &raw); err != nil {
+		return PruneResult{}, err
+	}
+	return PruneResult{
+		DeletedCount:     len(raw.VolumesDeleted),
+		SpaceReclaimedMB: float64(raw.SpaceReclaimed) / (1024 * 1024),
+	}, nil
+}
+
+func (c *dockerClient) removeVolume(ctx context.Context, name string, force bool) error {
+	ref, err := validateContainerRef(name)
+	if err != nil {
+		return errors.New("非法存储卷名称")
+	}
+	path := "/volumes/" + url.PathEscape(ref) + "?force=" + strconv.FormatBool(force)
+	return c.doJSON(ctx, http.MethodDelete, path, nil, nil)
+}
+
 // HostBindableIP 描述宿主机可供容器端口映射绑定的地址。
 type HostBindableIP struct {
 	IP          string `json:"ip"`
@@ -1000,6 +1158,13 @@ func parseDockerPortKey(spec string) (uint16, string) {
 func (c *dockerClient) listImageExposedPorts(ctx context.Context, imageRef string) ([]string, error) {
 	imageRef = strings.TrimSpace(imageRef)
 	if imageRef == "" || strings.Contains(imageRef, "..") {
+		return nil, errors.New("invalid image ref")
+	}
+	if ref, err := validateImagePullRef(imageRef); err == nil {
+		imageRef = ref
+	} else if ref2, err2 := validateImageRef(imageRef); err2 == nil {
+		imageRef = ref2
+	} else {
 		return nil, errors.New("invalid image ref")
 	}
 	var img struct {

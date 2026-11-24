@@ -66,7 +66,7 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 	if nowFn == nil {
 		nowFn = time.Now
 	}
-	db, masterKey, err := store.OpenDB(info.DataDir, embeddedSchemaSQL)
+	pool, masterKey, err := store.OpenDualDB(info.DataDir, embeddedSchemaSQL)
 	if err != nil {
 		return nil, pluginsdk.Errorf("INTERNAL", "初始化 AI 中转数据库失败")
 	}
@@ -76,7 +76,7 @@ func (p *Plugin) NewInstance(ctx context.Context, info pluginsdk.InstanceInfo) (
 		client = proxy.NewSafeHTTPClient(cfg.AllowPrivateUpstream, time.Duration(cfg.UpstreamTimeoutSeconds)*time.Second)
 	}
 
-	ledger := store.NewLedgerEngine(db, masterKey, client, nowFn)
+	ledger := store.NewLedgerEngineWithPool(pool, masterKey, client, nowFn)
 	if p.linuxDoBaseURL != "" {
 		ledger.SetLinuxDoBaseURL(p.linuxDoBaseURL)
 	}
@@ -293,6 +293,7 @@ func (i *instance) maintenanceLoop(ctx context.Context) {
 				continue
 			}
 			_ = i.ledger.PruneOldLogs(ctx, cfg.LogRetentionDays)
+			_ = i.ledger.CheckpointPassive(ctx)
 			i.mu.Lock()
 			i.lastMaintErr = ""
 			i.mu.Unlock()
@@ -362,6 +363,7 @@ func (i *instance) register() {
 	i.HandleJob("relay.channels.upsert", i.handleChannelsUpsert)
 	i.HandleJob("relay.channels.test", i.handleChannelsTest)
 	i.HandleJob("relay.channels.remove", i.handleChannelsRemove)
+	i.HandleInvoke("relay.pricings.list", i.handlePricingsList)
 	i.HandleJob("relay.pricings.upsert", i.handlePricingsUpsert)
 	i.HandleInvoke("relay.users.list", i.handleUsersList)
 	i.HandleJob("relay.users.create", i.handleUsersCreate)
@@ -643,7 +645,14 @@ func (i *instance) handleChannelsTest(ctx context.Context, req pluginsdk.Request
 		probeModel = target.Models[0]
 	}
 	if probeModel == "" {
-		probeModel = "gpt-4o-mini"
+		switch proxy.ChannelKind(target.Kind) {
+		case proxy.ChanAnthropicNative, proxy.ChanSub2ClaudeOAuth:
+			probeModel = "claude-3-5-haiku-latest"
+		case proxy.ChanGeminiNative, proxy.ChanSub2GeminiOAuth:
+			probeModel = "gemini-2.5-flash"
+		default:
+			probeModel = "gpt-4o-mini"
+		}
 	}
 
 	uc := &proxy.UpstreamChannel{
@@ -729,6 +738,18 @@ func (i *instance) handleChannelsRemove(ctx context.Context, req pluginsdk.Reque
 	}
 	_ = i.reloadRouterSnapshot(ctx)
 	return marshalResult(map[string]any{"id": strings.TrimSpace(in.ID), "removed": removed})
+}
+
+func (i *instance) handlePricingsList(ctx context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
+	var in struct{}
+	if err := decodeOptionalJSON(req.Payload, &in); err != nil {
+		return pluginsdk.Response{}, err
+	}
+	pricings, err := i.ledger.ListPricings(ctx)
+	if err != nil {
+		return pluginsdk.Response{}, err
+	}
+	return marshalResponse(map[string]any{"pricings": pricings})
 }
 
 func (i *instance) handlePricingsUpsert(ctx context.Context, req pluginsdk.Request, _ pluginsdk.Progress) (pluginsdk.Result, error) {
@@ -1016,6 +1037,26 @@ func (i *instance) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func sanitizeUpstreamErrorForClient(err error, statusCode int) string {
+	if statusCode >= 400 && statusCode <= 599 {
+		return fmt.Sprintf("upstream returned HTTP %d", statusCode)
+	}
+	if err == nil {
+		return "upstream service unavailable"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "upstream request timed out"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "request canceled"
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "SSRF_BLOCKED") {
+		return "upstream endpoint blocked by security policy"
+	}
+	return "upstream service unavailable"
+}
+
 func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanPath string) {
 	rawKey := extractRelayAPIKey(r)
 	if rawKey == "" || strings.HasPrefix(rawKey, "qwq_") {
@@ -1026,13 +1067,17 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 		return
 	}
 
+	clientIP := ExtractTrustedClientIP(r)
 	if cleanPath == "/v1/models" && r.Method == http.MethodGet {
-		tok, resv, err := i.ledger.AuthorizeAndReserve(rawKey, "", ExtractTrustedClientIP(r), 1)
+		tok, err := i.ledger.ValidateTokenPreRead(rawKey, clientIP)
 		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized", "message": err.Error()})
+			status := http.StatusUnauthorized
+			if strings.HasPrefix(err.Error(), "IP_DENIED") || strings.HasPrefix(err.Error(), "USER_DISABLED") {
+				status = http.StatusForbidden
+			}
+			writeJSON(w, status, map[string]string{"error": "unauthorized", "message": err.Error()})
 			return
 		}
-		resv.Settle(0, store.UsageLogRecord{})
 		chs, _ := i.ledger.ListChannels(r.Context(), "", 256, false)
 		modelSet := make(map[string]struct{})
 		for _, ch := range chs {
@@ -1062,9 +1107,24 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 		return
 	}
 
-	rawBody, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
+	// Pre-auth zero-alloc token/IP/status validation BEFORE reading up to 16 MiB body.
+	if _, preErr := i.ledger.ValidateTokenPreRead(rawKey, clientIP); preErr != nil {
+		status := http.StatusUnauthorized
+		if strings.HasPrefix(preErr.Error(), "IP_DENIED") || strings.HasPrefix(preErr.Error(), "USER_DISABLED") {
+			status = http.StatusForbidden
+		}
+		writeJSON(w, status, map[string]string{"error": "rejected", "message": preErr.Error()})
+		return
+	}
+
+	const maxRelayBodyBytes = 16 << 20
+	rawBody, err := io.ReadAll(io.LimitReader(r.Body, maxRelayBodyBytes+1))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request", "message": "failed to read body"})
+		return
+	}
+	if len(rawBody) > maxRelayBodyBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "payload_too_large", "message": "request body exceeds 16 MiB limit"})
 		return
 	}
 	ir, err := proxy.ParseDownstreamRequest(protoIn, urlModel, rawBody)
@@ -1087,7 +1147,7 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 		PerCallMicros:        pricing.PerCallMicros,
 		BillingMode:          pricing.BillingMode,
 	})
-	tok, reservation, err := i.ledger.AuthorizeAndReserve(rawKey, ir.Model, ExtractTrustedClientIP(r), reserveMicros)
+	tok, reservation, err := i.ledger.AuthorizeAndReserve(rawKey, ir.Model, clientIP, reserveMicros)
 	if err != nil {
 		status := http.StatusUnauthorized
 		if strings.HasPrefix(err.Error(), "QUOTA_EXHAUSTED") {
@@ -1100,115 +1160,130 @@ func (i *instance) handleRelayAPI(w http.ResponseWriter, r *http.Request, cleanP
 		writeJSON(w, status, map[string]string{"error": "rejected", "message": err.Error()})
 		return
 	}
+	// Idempotent safety net: guarantees reserved quota is always released on panic or early return.
+	defer reservation.Settle(0, store.UsageLogRecord{})
 
 	candidates := i.router.SelectCandidates(tok.EffectiveGroup(), ir.Model, ir.SessionHint, i.nowTime())
 	if len(candidates) == 0 {
-		reservation.Settle(0, store.UsageLogRecord{})
-		i.publishAllChannelsTrippedAlert(r.Context(), tok.EffectiveGroup(), ir.Model, "当前分组无可用健康上游渠道")
+		if i.router.HasConfiguredChannels(tok.EffectiveGroup(), ir.Model) {
+			i.publishAllChannelsTrippedAlert(r.Context(), tok.EffectiveGroup(), ir.Model, "当前分组无可用健康上游渠道")
+		}
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no_upstream", "message": "当前分组无可用健康上游渠道"})
 		return
 	}
 
 	startedAt := time.Now()
 	client := i.clientSnapshot()
-	var lastErrMsg string
+	var lastPublicErr string
+	var lastInternalErr string
 
 	for _, ch := range candidates {
-		if err := ch.AcquireSlot(r.Context()); err != nil {
-			lastErrMsg = err.Error()
-			continue
-		}
-		if refreshed, _ := ch.RefreshOAuthIfNeeded(r.Context(), client, i.nowTime()); refreshed {
-			if bundleJSON, ok := ch.OAuthBundleJSON(); ok {
-				if persistErr := i.ledger.PersistRefreshedChannelCredential(r.Context(), ch.ID, bundleJSON); persistErr != nil {
-					log.Printf("ai.relay: persist refreshed oauth token failed (channel=%s): %v", ch.ID, persistErr)
-				}
+		handled := func(ch *proxy.UpstreamChannel) bool {
+			if err := ch.AcquireSlot(r.Context()); err != nil {
+				lastInternalErr = err.Error()
+				lastPublicErr = sanitizeUpstreamErrorForClient(err, 0)
+				return false
 			}
-		}
-		upURL, hdrs, upBody, encErr := proxy.EncodeUpstreamRequest(ch, protoIn, rawBody, ir)
-		if encErr != nil {
-			ch.ReleaseSlot()
-			lastErrMsg = encErr.Error()
-			continue
-		}
-		upReq, reqErr := http.NewRequestWithContext(r.Context(), http.MethodPost, upURL, bytes.NewReader(upBody))
-		if reqErr != nil {
-			ch.ReleaseSlot()
-			lastErrMsg = reqErr.Error()
-			continue
-		}
-		for k, v := range hdrs {
-			upReq.Header.Set(k, v)
-		}
-		upResp, doErr := client.Do(upReq)
-		if doErr != nil {
-			ch.ReleaseSlot()
-			lastErrMsg = doErr.Error()
-			continue
-		}
-		if upResp.StatusCode < 200 || upResp.StatusCode >= 300 {
-			_, _ = io.CopyN(io.Discard, upResp.Body, 4096)
-			_ = upResp.Body.Close()
-			ch.MarkUpstreamStatus(upResp.StatusCode, 60*time.Second, i.nowTime())
-			ch.ReleaseSlot()
-			lastErrMsg = fmt.Sprintf("upstream %s returned %d", ch.ID, upResp.StatusCode)
-			continue
-		}
+			defer ch.ReleaseSlot()
 
-		var usage proxy.StreamUsage
-		var relayErr error
-		upCT := strings.ToLower(upResp.Header.Get("Content-Type"))
-		if ch.NativeProtocol() == protoIn && (!ir.Stream || strings.Contains(upCT, "application/json")) {
-			tw := &headerTrackingResponseWriter{ResponseWriter: w}
-			usage, relayErr = proxy.RelayJSONResponseBridge(startedAt, upResp.Body, upResp.StatusCode, upResp.Header.Get("Content-Type"), ir.EstimatedInputTokens, tw)
-			if relayErr != nil {
-				log.Printf("ai.relay: non-stream relay failed (channel=%s model=%s): %v", ch.ID, ir.Model, relayErr)
-				if !tw.wroteHeader {
-					writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_relay_failed", "message": relayErr.Error()})
+			if refreshed, _ := ch.RefreshOAuthIfNeeded(r.Context(), client, i.nowTime()); refreshed {
+				if bundleJSON, ok := ch.OAuthBundleJSON(); ok {
+					if persistErr := i.ledger.PersistRefreshedChannelCredential(r.Context(), ch.ID, bundleJSON); persistErr != nil {
+						log.Printf("ai.relay: persist refreshed oauth token failed (channel=%s): %v", ch.ID, persistErr)
+					}
 				}
 			}
-		} else if ch.NativeProtocol() != protoIn && !ir.Stream {
-			tw := &headerTrackingResponseWriter{ResponseWriter: w}
-			usage, relayErr = proxy.AggregateCanonicalNonStreamResponse(startedAt, upResp.Body, ch.NativeProtocol(), protoIn, ir.Model, ir.EstimatedInputTokens, tw)
-			if relayErr != nil {
-				log.Printf("ai.relay: cross-protocol non-stream aggregation failed (channel=%s model=%s): %v", ch.ID, ir.Model, relayErr)
-				if !tw.wroteHeader {
-					writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_relay_failed", "message": relayErr.Error()})
-				}
+			upURL, hdrs, upBody, encErr := proxy.EncodeUpstreamRequest(ch, protoIn, rawBody, ir)
+			if encErr != nil {
+				lastInternalErr = encErr.Error()
+				lastPublicErr = sanitizeUpstreamErrorForClient(encErr, 0)
+				return false
 			}
-		} else {
-			usage, _ = proxy.RelayStreamBridge(startedAt, upResp.Body, ch.NativeProtocol(), protoIn, ir.Model, w)
-			if usage.InputTokens <= 0 && ir.EstimatedInputTokens > 0 {
-				usage.InputTokens = ir.EstimatedInputTokens
+			upReq, reqErr := http.NewRequestWithContext(r.Context(), http.MethodPost, upURL, bytes.NewReader(upBody))
+			if reqErr != nil {
+				lastInternalErr = reqErr.Error()
+				lastPublicErr = sanitizeUpstreamErrorForClient(reqErr, 0)
+				return false
 			}
-		}
-		_ = upResp.Body.Close()
-		ch.ReleaseSlot()
+			for k, v := range hdrs {
+				upReq.Header.Set(k, v)
+			}
+			upResp, doErr := client.Do(upReq)
+			if doErr != nil {
+				log.Printf("ai.relay: upstream request failed (channel=%s model=%s): %v", ch.ID, ir.Model, doErr)
+				lastInternalErr = doErr.Error()
+				lastPublicErr = sanitizeUpstreamErrorForClient(doErr, 0)
+				return false
+			}
+			defer func() { _ = upResp.Body.Close() }()
 
-		settlePricing := i.router.PricingFor(ir.Model)
-		cost := settlePricing.CalculateMicros(usage.InputTokens, usage.CachedReadTokens, usage.CacheWriteTokens, usage.OutputTokens, 1.0)
-		reservation.Settle(cost, store.UsageLogRecord{
-			UserID:           tok.User.UserID,
-			TokenID:          tok.TokenID,
-			TokenName:        tok.TokenName,
-			ModelName:        ir.Model,
-			ProtocolIn:       string(protoIn),
-			InputTokens:      usage.InputTokens,
-			CachedReadTokens: usage.CachedReadTokens,
-			CacheWriteTokens: usage.CacheWriteTokens,
-			OutputTokens:     usage.OutputTokens,
-			TTFTMs:           usage.TTFTMs,
-			DurationMs:       time.Since(startedAt).Milliseconds(),
-			CreatedAtMs:      i.nowTime().UTC().UnixMilli(),
-		})
-		return
+			if upResp.StatusCode < 200 || upResp.StatusCode >= 300 {
+				_, _ = io.CopyN(io.Discard, upResp.Body, 4096)
+				ch.MarkUpstreamStatus(upResp.StatusCode, 60*time.Second, i.nowTime())
+				lastInternalErr = fmt.Sprintf("upstream %s returned %d", ch.ID, upResp.StatusCode)
+				lastPublicErr = sanitizeUpstreamErrorForClient(nil, upResp.StatusCode)
+				return false
+			}
+
+			var usage proxy.StreamUsage
+			var relayErr error
+			upCT := strings.ToLower(upResp.Header.Get("Content-Type"))
+			if ch.NativeProtocol() == protoIn && (!ir.Stream || strings.Contains(upCT, "application/json")) {
+				tw := &headerTrackingResponseWriter{ResponseWriter: w}
+				usage, relayErr = proxy.RelayJSONResponseBridge(startedAt, upResp.Body, upResp.StatusCode, upResp.Header.Get("Content-Type"), ir.EstimatedInputTokens, tw)
+				if relayErr != nil {
+					log.Printf("ai.relay: non-stream relay failed (channel=%s model=%s): %v", ch.ID, ir.Model, relayErr)
+					if !tw.wroteHeader {
+						writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_relay_failed", "message": "upstream response relay failed"})
+					}
+				}
+			} else if ch.NativeProtocol() != protoIn && !ir.Stream {
+				tw := &headerTrackingResponseWriter{ResponseWriter: w}
+				usage, relayErr = proxy.AggregateCanonicalNonStreamResponse(startedAt, upResp.Body, ch.NativeProtocol(), protoIn, ir.Model, ir.EstimatedInputTokens, tw)
+				if relayErr != nil {
+					log.Printf("ai.relay: cross-protocol non-stream aggregation failed (channel=%s model=%s): %v", ch.ID, ir.Model, relayErr)
+					if !tw.wroteHeader {
+						writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_relay_failed", "message": "upstream response relay failed"})
+					}
+				}
+			} else {
+				usage, _ = proxy.RelayStreamBridge(startedAt, upResp.Body, ch.NativeProtocol(), protoIn, ir.Model, w)
+				if usage.InputTokens <= 0 && ir.EstimatedInputTokens > 0 {
+					usage.InputTokens = ir.EstimatedInputTokens
+				}
+			}
+
+			settlePricing := i.router.PricingFor(ir.Model)
+			cost := settlePricing.CalculateMicros(usage.InputTokens, usage.CachedReadTokens, usage.CacheWriteTokens, usage.OutputTokens, 1.0)
+			reservation.Settle(cost, store.UsageLogRecord{
+				UserID:           tok.User.UserID,
+				TokenID:          tok.TokenID,
+				TokenName:        tok.TokenName,
+				ModelName:        ir.Model,
+				ProtocolIn:       string(protoIn),
+				InputTokens:      usage.InputTokens,
+				CachedReadTokens: usage.CachedReadTokens,
+				CacheWriteTokens: usage.CacheWriteTokens,
+				OutputTokens:     usage.OutputTokens,
+				TTFTMs:           usage.TTFTMs,
+				DurationMs:       time.Since(startedAt).Milliseconds(),
+				CreatedAtMs:      i.nowTime().UTC().UnixMilli(),
+			})
+			return true
+		}(ch)
+		if handled {
+			return
+		}
 	}
 
-	reservation.Settle(0, store.UsageLogRecord{})
-	if len(i.router.SelectCandidates(tok.EffectiveGroup(), ir.Model, "", i.nowTime())) == 0 {
-		i.publishAllChannelsTrippedAlert(r.Context(), tok.EffectiveGroup(), ir.Model, lastErrMsg)
+	if i.router.HasConfiguredChannels(tok.EffectiveGroup(), ir.Model) &&
+		len(i.router.SelectCandidates(tok.EffectiveGroup(), ir.Model, "", i.nowTime())) == 0 {
+		i.publishAllChannelsTrippedAlert(r.Context(), tok.EffectiveGroup(), ir.Model, lastInternalErr)
 	}
-	writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_failed", "message": lastErrMsg})
+	if lastPublicErr == "" {
+		lastPublicErr = "upstream service unavailable"
+	}
+	writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream_failed", "message": lastPublicErr})
 }
 
 func (i *instance) publishAllChannelsTrippedAlert(ctx context.Context, group, model, reason string) {
@@ -1288,6 +1363,21 @@ func (i *instance) handlePortalHTTP(w http.ResponseWriter, r *http.Request, clea
 	}
 
 	switch {
+	case subPath == "/api/public/meta" && r.Method == http.MethodGet:
+		view, err := i.ledger.GetSettings(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "无法读取门户元数据"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"site_title":           view.SiteTitle,
+			"site_announcement":    view.SiteAnnouncement,
+			"allow_invite_signup":  view.AllowInviteSignup,
+			"allow_email_signup":   view.AllowEmailSignup,
+			"allow_linuxdo_signup": view.AllowLinuxDoSignup,
+			"checkin_enabled":      view.CheckinEnabled,
+		})
+
 	case subPath == "/api/auth/send-email-code" && r.Method == http.MethodPost:
 		var in struct {
 			Email string `json:"email"`
@@ -1535,7 +1625,10 @@ func (i *instance) oauthCallbackURL(r *http.Request) string {
 			scheme = "http"
 		}
 	}
-	host := strings.TrimSpace(r.Host)
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host == "" || strings.ContainsAny(host, " \t\r\n/\\") {
+		host = strings.TrimSpace(r.Host)
+	}
 	if host == "" {
 		host = "localhost"
 	}

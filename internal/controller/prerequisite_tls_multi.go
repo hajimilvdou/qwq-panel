@@ -140,7 +140,12 @@ func CommitAndSyncPluginConfig(
 	payload []byte,
 ) (revStr string, applyOpID string, err error) {
 	nowStr := now.UTC().Format(time.RFC3339Nano)
-	var newRev int64
+	var (
+		newRev   int64
+		prevRev  int64
+		prevJSON string
+		hasPrev  bool
+	)
 
 	err = db.Update(ctx, func(tx *storage.Tx) error {
 		var curRev int64
@@ -152,6 +157,12 @@ func CommitAndSyncPluginConfig(
 		}
 		if expectedRevision != "" && strconv.FormatInt(curRev, 10) != expectedRevision {
 			return problem.New(problem.RevisionConflict, "target plugin configuration revision mismatch")
+		}
+		if perr := tx.QueryRowContext(ctx,
+			`SELECT revision, config_json FROM plugin_configs WHERE plugin_id = ? AND active = 1 ORDER BY revision DESC LIMIT 1`,
+			targetPluginID,
+		).Scan(&prevRev, &prevJSON); perr == nil {
+			hasPrev = true
 		}
 		newRev = curRev + 1
 		if _, uerr := tx.ExecContext(ctx,
@@ -187,6 +198,30 @@ func CommitAndSyncPluginConfig(
 		syncMemCache(targetPluginID, newRev, append([]byte(nil), toStore...))
 	}
 
+	rollbackActiveConfig := func() {
+		rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = db.Update(rbCtx, func(tx *storage.Tx) error {
+			if _, uerr := tx.ExecContext(rbCtx,
+				`UPDATE plugin_configs SET active = 0 WHERE plugin_id = ? AND revision = ?`,
+				targetPluginID, newRev,
+			); uerr != nil {
+				return uerr
+			}
+			if hasPrev {
+				_, uerr := tx.ExecContext(rbCtx,
+					`UPDATE plugin_configs SET active = 1 WHERE plugin_id = ? AND revision = ?`,
+					targetPluginID, prevRev,
+				)
+				return uerr
+			}
+			return nil
+		})
+		if syncMemCache != nil && hasPrev {
+			syncMemCache(targetPluginID, prevRev, []byte(prevJSON))
+		}
+	}
+
 	if triggerApply && ops != nil {
 		actionID := targetPluginID + "/core.apply"
 		opCtx := operations.WithPermissionMode(ctx, operations.PermissionFull)
@@ -203,11 +238,13 @@ func CommitAndSyncPluginConfig(
 			},
 		})
 		if rerr != nil {
+			rollbackActiveConfig()
 			return revStr, "", fmt.Errorf("dispatch %s failed: %w", actionID, rerr)
 		}
 		if resp != nil && resp.Operation != nil {
 			applyOpID = strings.TrimSpace(resp.Operation.ID)
 			if resp.Operation.Status == operations.Failed || resp.Operation.Status == operations.Rejected {
+				rollbackActiveConfig()
 				msg := "core.apply failed"
 				if resp.Operation.Error != nil && resp.Operation.Error.Detail != "" {
 					msg = resp.Operation.Error.Detail

@@ -169,55 +169,46 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 		return problem.New(problem.ValidationFailed, "No user prompt found in turn.")
 	}
 
-	var extraEnv []string
-	var cleanupEnv = func() {}
-	useProvider := cfg.AuthMode != "oauth" && cfg.ProviderID != ""
-	if useProvider {
-		pEnv, ep, found, cl, pErr := ResolveProviderForCLI(ctx, c.providers, cfg.ProviderID, CoreClaudeCode)
-		if pErr != nil {
-			return pErr
-		}
-		cleanupEnv = cl
-		extraEnv = append(extraEnv, pEnv...)
-		if found {
-			if cfg.Model == "" {
-				cfg.Model = ep.Model
-			}
-			if cfg.ReasoningEffort == "" {
-				cfg.ReasoningEffort = ep.ReasoningEffort
-			}
-			if cfg.MaxContextTokens == 0 {
-				cfg.MaxContextTokens = ep.MaxContextTokens
-			}
-		}
-	} else if c.auth != nil {
-		extraEnv = append(extraEnv, c.auth.PersistentEnvFor(CoreClaudeCode)...)
+	pEnv, ep, found, cleanupEnv, pErr := resolveCLIAuthEnvForSession(ctx, c.providers, c.auth, CoreClaudeCode, cfg.AuthMode, cfg.ProviderID, turn.SessionID)
+	if pErr != nil {
+		return pErr
 	}
 	defer cleanupEnv()
+	extraEnv := append([]string(nil), pEnv...)
+	if found {
+		if cfg.Model == "" {
+			cfg.Model = ep.Model
+		}
+		if cfg.ReasoningEffort == "" {
+			cfg.ReasoningEffort = ep.ReasoningEffort
+		}
+		if cfg.MaxContextTokens == 0 {
+			cfg.MaxContextTokens = ep.MaxContextTokens
+		}
+	}
 
 	effectiveMode := turn.PermissionMode
 	if cfg.PlanMode {
 		effectiveMode = operations.PermissionReadOnly
 	}
 
-	args := []string{
+	baseArgs := []string{
 		"-p",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--permission-mode", claudePermissionFlag(turn.PermissionMode, cfg.PlanMode),
-		"--disallowedTools", "Bash,Write,Edit,MultiEdit,NotebookEdit",
+	}
+	if disallowed := BuildSafeClaudeDisallowedTools(string(effectiveMode)); disallowed != "" {
+		baseArgs = append(baseArgs, "--disallowedTools", disallowed)
 	}
 	if cfg.Model != "" {
-		args = append(args, "--model", cfg.Model)
+		baseArgs = append(baseArgs, "--model", cfg.Model)
 	}
 	if eff, matched, _ := ResolveReasoningEffort(cfg.Model, cfg.ReasoningEffort); (strings.TrimSpace(cfg.ReasoningEffort) != "" || matched) && !IsReasoningEffortDisabled(eff) && !strings.EqualFold(eff, "none") {
 		extraEnv = append(extraEnv, "CLAUDE_CODE_EFFORT_LEVEL="+eff)
 	}
-	if cfg.ResumeSessionID != "" {
-		args = append(args, "--resume", cfg.ResumeSessionID)
-	}
 	if cfg.MaxTurns > 0 {
-		args = append(args, "--max-turns", fmt.Sprintf("%d", cfg.MaxTurns))
+		baseArgs = append(baseArgs, "--max-turns", fmt.Sprintf("%d", cfg.MaxTurns))
 	}
 	sysPrompt := c.skills.BuildSkillPrompt(cfg.ActiveSkills)
 	if c.workspace != nil {
@@ -229,12 +220,14 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 		}
 	}
 	if strings.TrimSpace(sysPrompt) != "" {
-		args = append(args, "--append-system-prompt", strings.TrimSpace(sysPrompt))
+		baseArgs = append(baseArgs, "--append-system-prompt", strings.TrimSpace(sysPrompt))
 	}
 
 	// Start an ephemeral authenticated loopback MCP bridge so Claude Code invokes
 	// qwq panel tools solely through Runner.RunTool -> operations.Run, plus any
-	// enabled user-installed MCP servers from agent-workspace/mcp/servers.json.
+	// enabled user-installed MCP servers from agent-workspace/mcp/servers.json
+	// (strictly omitted in read_only/plan_mode so third-party MCP servers cannot
+	// bypass the host read-only ceiling).
 	mcpServers := map[string]any{}
 	if turn.Runner != nil && len(turn.Tools) > 0 {
 		mcpTurn := turn
@@ -252,7 +245,7 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 			},
 		}
 	}
-	if c.workspace != nil {
+	if c.workspace != nil && effectiveMode != operations.PermissionReadOnly && !cfg.PlanMode {
 		if userMCPs, merr := c.workspace.ListMCPServers(); merr == nil {
 			for _, u := range userMCPs {
 				if !u.Enabled || u.ID == "" || u.ID == "qwq" {
@@ -285,36 +278,69 @@ func (c *ClaudeCodeCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 		if err := os.WriteFile(mcpCfgPath, mcpPayload, 0o600); err != nil {
 			return problem.New(problem.Internal, "Failed to write temporary MCP config.")
 		}
-		args = append(args, "--mcp-config", mcpCfgPath, "--strict-mcp-config")
+		baseArgs = append(baseArgs, "--mcp-config", mcpCfgPath, "--strict-mcp-config")
 	}
 
-	args = AppendPosixPromptArg(args, prompt)
-
-	proc, err := c.launcher.Start(ctx, bin, args, extraEnv, "")
-	if err != nil {
-		return err
-	}
-	if proc.Stdin() != nil {
-		_ = proc.Stdin().Close()
-	}
-
-	parseErr := ParseClaudeStreamJSON(ctx, proc.Stdout(), emit)
-	closeErr := proc.Close(defaultChildGracePeriod)
-	if parseErr != nil {
-		return parseErr
-	}
-	if closeErr != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	runOnce := func(resumeID string) (emittedAny bool, stderrText string, err error) {
+		args := append([]string(nil), baseArgs...)
+		if resumeID != "" {
+			args = append(args, "--resume", resumeID)
 		}
-		return problem.New(problem.Unavailable, "Claude Code CLI exited with error: %s", strings.TrimSpace(proc.StderrText()))
+		args = AppendPosixPromptArg(args, prompt)
+
+		proc, startErr := c.launcher.Start(ctx, bin, args, extraEnv, "")
+		if startErr != nil {
+			return false, "", startErr
+		}
+		if proc.Stdin() != nil {
+			_ = proc.Stdin().Close()
+		}
+
+		var capturedSessionID string
+		wrappedEmit := func(e Event) error {
+			if e.Type == EventMessageDelta || e.Type == EventToolCall || e.Type == EventReasoningDelta {
+				emittedAny = true
+			}
+			return emit(e)
+		}
+		parseErr := parseClaudeStreamJSONWithHook(ctx, proc.Stdout(), wrappedEmit, func(sid string) {
+			if sid != "" && sid != capturedSessionID {
+				capturedSessionID = sid
+				if turn.PersistExternalID != nil {
+					_ = turn.PersistExternalID(context.WithoutCancel(ctx), "resume_session_id", sid)
+				}
+			}
+		})
+		closeErr := proc.Close(defaultChildGracePeriod)
+		stderrText = strings.TrimSpace(proc.StderrText())
+		if parseErr != nil {
+			return emittedAny, stderrText, parseErr
+		}
+		if closeErr != nil {
+			if ctx.Err() != nil {
+				return emittedAny, stderrText, ctx.Err()
+			}
+			return emittedAny, stderrText, problem.New(problem.Unavailable, "Claude Code CLI exited with error: %s", stderrText)
+		}
+		return emittedAny, stderrText, nil
 	}
-	return nil
+
+	emittedAny, _, runErr := runOnce(strings.TrimSpace(cfg.ResumeSessionID))
+	if runErr != nil && strings.TrimSpace(cfg.ResumeSessionID) != "" && !emittedAny && ctx.Err() == nil {
+		// Stale resume session ID (e.g. rotated state dir or host restart):
+		// retry cleanly once as a fresh Claude Code conversation.
+		_, _, runErr = runOnce("")
+	}
+	return runErr
 }
 
 // ParseClaudeStreamJSON decodes Claude Code's `--output-format stream-json` NDJSON
 // stream into qwq session events. Exported for deterministic protocol testing.
 func ParseClaudeStreamJSON(ctx context.Context, r io.Reader, emit Emit) error {
+	return parseClaudeStreamJSONWithHook(ctx, r, emit, nil)
+}
+
+func parseClaudeStreamJSONWithHook(ctx context.Context, r io.Reader, emit Emit, onSessionID func(string)) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
 
@@ -335,9 +361,10 @@ func ParseClaudeStreamJSON(ctx context.Context, r io.Reader, emit Emit) error {
 			continue
 		}
 		var ev struct {
-			Type    string `json:"type"`
-			Subtype string `json:"subtype"`
-			Message struct {
+			Type      string `json:"type"`
+			Subtype   string `json:"subtype"`
+			SessionID string `json:"session_id"`
+			Message   struct {
 				ID      string `json:"id"`
 				Content []struct {
 					Type      string          `json:"type"`
@@ -362,6 +389,9 @@ func ParseClaudeStreamJSON(ctx context.Context, r io.Reader, emit Emit) error {
 		}
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			return problem.New(problem.PluginError, "Claude Code wrote malformed JSON output.")
+		}
+		if onSessionID != nil && strings.TrimSpace(ev.SessionID) != "" {
+			onSessionID(strings.TrimSpace(ev.SessionID))
 		}
 
 		switch ev.Type {

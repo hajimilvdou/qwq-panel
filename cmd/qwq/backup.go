@@ -22,10 +22,12 @@ package main
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -42,43 +44,40 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qwq-panel/qwq/internal/buildinfo"
+	"github.com/qwq-panel/qwq/internal/hostbackup"
 	"github.com/qwq-panel/qwq/internal/platform/config"
+	"github.com/qwq-panel/qwq/internal/sandbox"
 	"github.com/qwq-panel/qwq/internal/storage"
 )
 
 const (
-	backupFormat      = 1
-	backupDBName      = "qwq.db"
-	backupGlob        = "qwq-*.tar.gz"
-	backupStamp       = "20060102T150405.000Z"
-	archiveManifest   = "manifest.json"
-	archiveConfig     = "config/qwq.json"
-	archiveDataPrefix = "data/"
-	maxManifestBytes  = 4 << 20
-	maxRestoreBytes   = 4 << 30 // 4 GiB total decompressed archive budget
-	restoreStaging    = ".restore-tmp"
-	restoreOld        = ".restore-old"
+	backupFormat            = hostbackup.BackupFormat
+	backupDBName            = hostbackup.BackupDBName
+	backupGlob              = hostbackup.BackupGlob
+	backupStamp             = hostbackup.BackupStamp
+	archiveManifest         = hostbackup.ArchiveManifest
+	archiveConfig           = hostbackup.ArchiveConfig
+	archiveDataPrefix       = hostbackup.ArchiveDataPrefix
+	archivePluginDataPrefix = hostbackup.ArchivePluginDataPrefix
+	maxManifestBytes        = 4 << 20
+	maxRestoreBytes         = 4 << 30 // 4 GiB total decompressed archive budget
+	restoreStaging          = ".restore-tmp"
+	restoreOld              = ".restore-old"
 )
 
 // backupItems 是数据目录中纳入备份、恢复时整体替换的条目。backups/ 与
 // staging/ 不在其列：前者是备份本身，后者是安装过程的暂存。
-var backupItems = []string{backupDBName, "keys", "tls", "acme", "cluster", "trust", "plugin-state", "qwq-cn-rules.bundle"}
+var backupItems = append([]string(nil), hostbackup.BackupItems...)
+
+// Test seams for backup/restore of DynamicUser plugin private data & credentials.
+var (
+	backupHelperSocket    = sandbox.DefaultPrivilegedSocket
+	privatePluginDataRoot = sandbox.DefaultPrivatePluginDataRoot
+	pluginCredDir         = sandbox.DefaultCredDir
+)
 
 // backupManifest 是归档内 manifest.json 的内容。
-type backupManifest struct {
-	Format        int          `json:"format"`
-	SchemaVersion int          `json:"schema_version"`
-	Build         string       `json:"build"`
-	CreatedAt     string       `json:"created_at"`
-	Files         []backupFile `json:"files"`
-}
-
-type backupFile struct {
-	Path   string `json:"path"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256"`
-}
+type backupManifest = hostbackup.BackupManifest
 
 // controllerActive 报告 qwq-controller 是否在运行；测试中替换。
 var controllerActive = func() bool {
@@ -88,6 +87,27 @@ var controllerActive = func() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", "qwq-controller.service").Run() == nil
+}
+
+// activePluginUnits 返回当前正在运行的 qwq-plugin@*.service 单元列表；测试中可替换。
+var activePluginUnits = func() []string {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "systemctl", "list-units", "--type=service", "--state=active", "--no-legend", "--plain", "qwq-plugin@*.service").Output()
+	if err != nil {
+		return nil
+	}
+	var units []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && strings.HasPrefix(fields[0], "qwq-plugin@") {
+			units = append(units, fields[0])
+		}
+	}
+	return units
 }
 
 // ── qwq backup ──────────────────────────────────────────────────────────────
@@ -108,7 +128,7 @@ be able to write DIR. Copy backups off the machine: they contain the master key.
 	}
 	configPath := fs.String("config", config.DefaultPath, "bootstrap configuration file")
 	out := fs.String("out", "", "output directory (default <data_dir>/backups)")
-	keep := fs.Int("keep", 0, "keep only the newest N backups in the output directory (0 keeps all)")
+	keep := fs.Int("keep", hostbackup.DefaultKeepBackups, "keep only the newest N backups in the output directory (0 keeps all)")
 	if len(args) > 0 && strings.EqualFold(strings.TrimSpace(args[0]), "create") {
 		args = args[1:]
 	}
@@ -170,158 +190,14 @@ func parseBackupPositionalArgs(args []string) error {
 // writeBackup 在 outDir 写出归档并返回其路径。归档先写成 .partial，
 // 落盘后再 rename，所以 outDir 里的 qwq-*.tar.gz 总是完整的。
 func writeBackup(ctx context.Context, dataDir string, rawConfig []byte, outDir string, now time.Time) (string, error) {
-	db := filepath.Join(dataDir, backupDBName)
-	if _, err := os.Stat(db); err != nil {
-		return "", fmt.Errorf("%w (start qwq-controller once to initialize the data directory)", err)
-	}
-	if err := os.MkdirAll(outDir, 0o700); err != nil {
-		return "", err
-	}
-	stamp := now.UTC().Format(backupStamp)
-	final := filepath.Join(outDir, "qwq-"+stamp+".tar.gz")
-	snap := filepath.Join(outDir, ".qwq-"+stamp+".db")
-	if err := storage.BackupFile(ctx, db, snap); err != nil {
-		return "", err
-	}
-	defer os.Remove(snap)
-	version, err := storage.InspectFile(ctx, snap)
-	if err != nil {
-		return "", err
-	}
-
-	tmp := final + ".partial"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return "", err
-	}
-	defer os.Remove(tmp)
-	werr := func() error {
-		a := newArchiveWriter(f, now)
-		if err := a.addFile(archiveDataPrefix+backupDBName, snap); err != nil {
-			return err
-		}
-		for _, item := range backupItems[1:] {
-			full := filepath.Join(dataDir, item)
-			fi, serr := os.Lstat(full)
-			if errors.Is(serr, fs.ErrNotExist) {
-				continue
-			}
-			if serr != nil {
-				return serr
-			}
-			if fi.Mode().IsRegular() {
-				if err := a.addFile(archiveDataPrefix+item, full); err != nil {
-					return err
-				}
-				continue
-			}
-			if fi.IsDir() {
-				if err := a.addTree(archiveDataPrefix+item, full); err != nil {
-					return err
-				}
-			}
-		}
-		if err := a.add(archiveConfig, 0o640, int64(len(rawConfig)), bytes.NewReader(rawConfig)); err != nil {
-			return err
-		}
-		m, err := json.MarshalIndent(backupManifest{
-			Format:        backupFormat,
-			SchemaVersion: version,
-			Build:         buildinfo.Read().String(),
-			CreatedAt:     now.UTC().Format(time.RFC3339),
-			Files:         a.files,
-		}, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := a.entry(archiveManifest, 0o600, int64(len(m)), bytes.NewReader(m)); err != nil {
-			return err
-		}
-		if err := a.close(); err != nil {
-			return err
-		}
-		return f.Sync()
-	}()
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		return "", werr
-	}
-	if err := os.Rename(tmp, final); err != nil {
-		return "", err
-	}
-	return final, syncDirectory(outDir)
-}
-
-// archiveWriter 写 tar.gz，并为每个数据条目记下 sha256 供 manifest 使用。
-type archiveWriter struct {
-	gz    *gzip.Writer
-	tw    *tar.Writer
-	mtime time.Time
-	files []backupFile
-}
-
-func newArchiveWriter(w io.Writer, mtime time.Time) *archiveWriter {
-	gz := gzip.NewWriter(w)
-	return &archiveWriter{gz: gz, tw: tar.NewWriter(gz), mtime: mtime}
-}
-
-// entry 写一个普通文件条目（不记入 manifest）。文件在读取过程中变短时
-// tar 会在下一个条目报错，不会悄悄写出残缺归档。
-func (a *archiveWriter) entry(name string, mode fs.FileMode, size int64, r io.Reader) error {
-	if err := a.tw.WriteHeader(&tar.Header{
-		Typeflag: tar.TypeReg, Name: name, Mode: int64(mode.Perm()), Size: size, ModTime: a.mtime,
-	}); err != nil {
-		return err
-	}
-	_, err := io.Copy(a.tw, io.LimitReader(r, size))
-	return err
-}
-
-// add 写一个数据条目并记入 manifest。
-func (a *archiveWriter) add(name string, mode fs.FileMode, size int64, r io.Reader) error {
-	h := sha256.New()
-	if err := a.entry(name, mode, size, io.TeeReader(r, h)); err != nil {
-		return fmt.Errorf("%s: %w", name, err)
-	}
-	a.files = append(a.files, backupFile{Path: name, Size: size, SHA256: hex.EncodeToString(h.Sum(nil))})
-	return nil
-}
-
-func (a *archiveWriter) addFile(name, src string) error {
-	f, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	return a.add(name, fi.Mode(), fi.Size(), f)
-}
-
-// addTree 加入 root 下的全部普通文件。root 不存在时什么也不做（例如从未
-// 申请过 ACME 证书）；遍历中途被原子替换掉的文件同样跳过。符号链接等
-// 特殊文件不属于 qwq 的数据，跳过。
-func (a *archiveWriter) addTree(prefix, root string) error {
-	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && d.Type().IsRegular() {
-			var rel string
-			if rel, err = filepath.Rel(root, p); err == nil {
-				err = a.addFile(prefix+"/"+filepath.ToSlash(rel), p)
-			}
-		}
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		return err
+	_, final, err := hostbackup.CreateBackup(ctx, hostbackup.CreateOptions{
+		DataDir:      dataDir,
+		RawConfig:    rawConfig,
+		OutDir:       outDir,
+		Now:          now,
+		HelperSocket: backupHelperSocket,
 	})
-}
-
-func (a *archiveWriter) close() error {
-	return errors.Join(a.tw.Close(), a.gz.Close())
+	return final, err
 }
 
 // ── qwq restore ─────────────────────────────────────────────────────────────
@@ -353,6 +229,11 @@ must be stopped. The archive is verified completely before anything changes.
 	}
 	if controllerActive() {
 		fmt.Fprintln(stderr, "qwq restore: qwq-controller is running; stop it first: systemctl stop qwq-controller")
+		return 1
+	}
+	if units := activePluginUnits(); len(units) > 0 {
+		fmt.Fprintf(stderr, "qwq restore: plugin services are still running (%s); stop them first: systemctl stop 'qwq-plugin@*.service'\n",
+			strings.Join(units, ", "))
 		return 1
 	}
 	cfg, err := config.Load(*configPath)
@@ -466,6 +347,12 @@ func restoreBackup(ctx context.Context, archive, dataDir, configPath string) (ba
 	if err := replaceConfig(rawConfig, configPath, gid); err != nil {
 		return m, fmt.Errorf("configuration: %w (data directory already restored)", err)
 	}
+	if err := restorePluginPrivateData(staging, privatePluginDataRoot); err != nil {
+		return m, fmt.Errorf("plugin private data: %w (controller data already restored)", err)
+	}
+	if err := resyncRestoredPluginCredentials(ctx, filepath.Join(dataDir, backupDBName), pluginCredDir, uid, gid); err != nil {
+		return m, fmt.Errorf("resync plugin credentials: %w", err)
+	}
 	d, err := root.Open(".")
 	if err != nil {
 		return m, err
@@ -476,6 +363,331 @@ func restoreBackup(ctx context.Context, archive, dataDir, configPath string) (ba
 		return m, err
 	}
 	return m, root.RemoveAll(restoreOld)
+}
+
+// mkdirAllOwned creates every missing directory component under root for slash-
+// separated relDir and applies Lchown(dstUID, dstGID) to newly created segments
+// when preserveOwner is true so DynamicUser plugins can traverse nested state dirs.
+func mkdirAllOwned(root *os.Root, relDir string, preserveOwner bool, dstUID, dstGID int) error {
+	clean := path.Clean(relDir)
+	if clean == "." || clean == "" {
+		return nil
+	}
+	cur := ""
+	for _, seg := range strings.Split(clean, "/") {
+		if seg == "" || seg == "." {
+			continue
+		}
+		if cur == "" {
+			cur = seg
+		} else {
+			cur = cur + "/" + seg
+		}
+		fi, err := root.Lstat(cur)
+		if errors.Is(err, fs.ErrNotExist) {
+			if merr := root.Mkdir(cur, 0o700); merr != nil {
+				return merr
+			}
+			if preserveOwner {
+				_ = root.Lchown(cur, dstUID, dstGID)
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 || !fi.IsDir() {
+			return fmt.Errorf("refusing to restore through non-directory path %q", cur)
+		}
+	}
+	return nil
+}
+
+// restorePluginPrivateData restores archived plugin-data/<id>/... trees back
+// into <privateRoot>/<id>/default using pinned *os.Root handles and streaming
+// copies, preserving existing DynamicUser ownership (including nested parent
+// directories) and clearing stale SQLite WAL/SHM sidecar files next to *.db.
+func restorePluginPrivateData(staging *os.Root, privateRoot string) error {
+	pRootName := strings.TrimSuffix(archivePluginDataPrefix, "/")
+	if _, err := staging.Lstat(pRootName); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if strings.TrimSpace(privateRoot) == "" {
+		return nil
+	}
+	entries, err := fs.ReadDir(staging.FS(), pRootName)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(privateRoot); errors.Is(err, fs.ErrNotExist) {
+		if merr := os.MkdirAll(privateRoot, 0o700); merr != nil {
+			return merr
+		}
+	}
+	privRoot, err := backupTrustPolicy(privateRoot).Open(privateRoot)
+	if err != nil {
+		return fmt.Errorf("open private plugin data root %s: %w", privateRoot, err)
+	}
+	defer func() { _ = privRoot.Close() }()
+
+	for _, de := range entries {
+		if !de.IsDir() || sandbox.ValidateID(de.Name()) != nil {
+			continue
+		}
+		pluginID := de.Name()
+		if fi, serr := privRoot.Lstat(pluginID); errors.Is(serr, fs.ErrNotExist) {
+			if merr := privRoot.Mkdir(pluginID, 0o700); merr != nil {
+				return merr
+			}
+		} else if serr != nil {
+			return serr
+		} else if fi.Mode()&fs.ModeSymlink != 0 || !fi.IsDir() {
+			return fmt.Errorf("plugin private data entry %q is not a regular directory", pluginID)
+		}
+
+		defaultRel := pluginID + "/default"
+		dstUID, dstGID, preserveOwner := 0, 0, false
+		if fi, serr := privRoot.Lstat(defaultRel); errors.Is(serr, fs.ErrNotExist) {
+			if merr := privRoot.Mkdir(defaultRel, 0o700); merr != nil {
+				return merr
+			}
+		} else if serr != nil {
+			return serr
+		} else if fi.Mode()&fs.ModeSymlink != 0 || !fi.IsDir() {
+			return fmt.Errorf("plugin private state dir %q is not a regular directory", defaultRel)
+		} else if u, g, ok := ownerOf(fi); ok {
+			dstUID, dstGID, preserveOwner = u, g, true
+		}
+
+		dstRoot, err := privRoot.OpenRoot(defaultRel)
+		if err != nil {
+			return err
+		}
+		srcBase := pRootName + "/" + pluginID
+		walkErr := fs.WalkDir(staging.FS(), srcBase, func(p string, d fs.DirEntry, wErr error) error {
+			if wErr != nil {
+				return wErr
+			}
+			if p == srcBase || d.IsDir() {
+				return nil
+			}
+			rel := strings.TrimPrefix(p, srcBase+"/")
+			if !fs.ValidPath(rel) {
+				return fmt.Errorf("invalid plugin data path %q", rel)
+			}
+			if err := mkdirAllOwned(dstRoot, path.Dir(rel), preserveOwner, dstUID, dstGID); err != nil {
+				return err
+			}
+			if strings.HasSuffix(strings.ToLower(rel), ".db") {
+				_ = dstRoot.Remove(rel + "-wal")
+				_ = dstRoot.Remove(rel + "-shm")
+			}
+			srcFile, rerr := staging.Open(p)
+			if rerr != nil {
+				return rerr
+			}
+			defer func() { _ = srcFile.Close() }()
+
+			tmp := rel + ".restore-tmp"
+			_ = dstRoot.Remove(tmp)
+			out, oerr := dstRoot.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+			if oerr != nil {
+				return oerr
+			}
+			_, copyErr := io.Copy(out, srcFile)
+			if copyErr == nil {
+				copyErr = out.Sync()
+			}
+			if cerr := out.Close(); copyErr == nil {
+				copyErr = cerr
+			}
+			if copyErr != nil {
+				_ = dstRoot.Remove(tmp)
+				return copyErr
+			}
+			if preserveOwner {
+				_ = dstRoot.Lchown(tmp, dstUID, dstGID)
+			}
+			if err := dstRoot.Rename(tmp, rel); err != nil {
+				_ = dstRoot.Remove(tmp)
+				return err
+			}
+			return nil
+		})
+		_ = dstRoot.Close()
+		if walkErr != nil {
+			return walkErr
+		}
+	}
+	return nil
+}
+
+func backupTrustPolicy(rootPath string) sandbox.TrustPolicy {
+	if uid := geteuid(); uid != 0 {
+		return sandbox.TrustPolicy{UID: uid, StopAt: filepath.Clean(rootPath)}
+	}
+	return sandbox.TrustPolicy{}
+}
+
+// resyncRestoredPluginCredentials rotates and aligns every plugin's on-disk
+// /var/lib/qwq-privileged/creds/<id>.token with the restored qwq.db
+// plugin_credentials digest so restored or migrated nodes start plugins cleanly.
+func resyncRestoredPluginCredentials(ctx context.Context, dbPath, credDir string, dbUID, dbGID int) error {
+	if strings.TrimSpace(credDir) == "" {
+		return nil
+	}
+	if _, err := os.Stat(credDir); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	credRoot, err := backupTrustPolicy(credDir).Open(credDir)
+	if err != nil {
+		return fmt.Errorf("open plugin credentials dir %s: %w", credDir, err)
+	}
+	defer func() { _ = credRoot.Close() }()
+
+	dsn := "file:" + filepath.ToSlash(dbPath) + "?_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+		_ = db.Close()
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			_ = os.Lchown(dbPath+suffix, dbUID, dbGID)
+		}
+	}()
+	rows, err := db.QueryContext(ctx, `SELECT plugin_id FROM plugin_credentials`)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			// Older backups without plugin_credentials table skip cleanly.
+			return nil
+		}
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			_ = rows.Close()
+			return scanErr
+		}
+		if sandbox.ValidateID(id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	if rerr := rows.Err(); rerr != nil {
+		_ = rows.Close()
+		return rerr
+	}
+	_ = rows.Close()
+	if len(ids) == 0 {
+		return nil
+	}
+
+	hasPrevCol := false
+	colRows, err := db.QueryContext(ctx, `PRAGMA table_info(plugin_credentials)`)
+	if err != nil {
+		return err
+	}
+	for colRows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if colRows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk) == nil && name == "prev_token_sha256" {
+			hasPrevCol = true
+		}
+	}
+	_ = colRows.Close()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	type pendingCred struct {
+		name string
+		tmp  string
+		tok  []byte
+		sum  string
+	}
+	var pending []pendingCred
+	cleanupPending := func() {
+		for i := range pending {
+			clear(pending[i].tok)
+			_ = credRoot.Remove(pending[i].tmp)
+		}
+	}
+
+	nowStr := storage.FormatTime(time.Now().UTC())
+	for _, id := range ids {
+		raw := make([]byte, 32)
+		if _, err := rand.Read(raw); err != nil {
+			cleanupPending()
+			return err
+		}
+		tok := []byte(base64.RawURLEncoding.EncodeToString(raw))
+		clear(raw)
+		sum := sha256.Sum256(tok)
+		sumHex := hex.EncodeToString(sum[:])
+
+		credName := id + ".token"
+		tmp := credName + ".restore-tmp"
+		_ = credRoot.Remove(tmp)
+		out, oerr := credRoot.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+		if oerr != nil {
+			clear(tok)
+			cleanupPending()
+			return oerr
+		}
+		_, werr := out.Write(tok)
+		if werr == nil {
+			werr = out.Sync()
+		}
+		if cerr := out.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			clear(tok)
+			_ = credRoot.Remove(tmp)
+			cleanupPending()
+			return werr
+		}
+		if geteuid() == 0 {
+			_ = credRoot.Lchown(tmp, 0, 0)
+		}
+		pending = append(pending, pendingCred{name: credName, tmp: tmp, tok: tok, sum: sumHex})
+
+		var uerr error
+		if hasPrevCol {
+			_, uerr = tx.ExecContext(ctx,
+				`UPDATE plugin_credentials SET token_sha256 = ?, prev_token_sha256 = '', issued_at = ? WHERE plugin_id = ?`,
+				sumHex, nowStr, id)
+		} else {
+			_, uerr = tx.ExecContext(ctx,
+				`UPDATE plugin_credentials SET token_sha256 = ?, issued_at = ? WHERE plugin_id = ?`,
+				sumHex, nowStr, id)
+		}
+		if uerr != nil {
+			cleanupPending()
+			return uerr
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		cleanupPending()
+		return err
+	}
+	for i := range pending {
+		clear(pending[i].tok)
+		if err := credRoot.Rename(pending[i].tmp, pending[i].name); err != nil {
+			_ = credRoot.Remove(pending[i].tmp)
+			return err
+		}
+	}
+	return nil
 }
 
 // extractBackup 把归档解到 staging，并核对 manifest：条目一一对应、
@@ -536,7 +748,12 @@ func extractBackup(archive string, staging *os.Root) (backupManifest, error) {
 	case len(m.Files) != len(got):
 		return m, fmt.Errorf("archive has %d files, manifest lists %d", len(got), len(m.Files))
 	}
+	seenManifest := make(map[string]struct{}, len(m.Files))
 	for _, bf := range m.Files {
+		if _, dup := seenManifest[bf.Path]; dup {
+			return m, fmt.Errorf("duplicate manifest entry %q", bf.Path)
+		}
+		seenManifest[bf.Path] = struct{}{}
 		if got[bf.Path] != bf.SHA256 {
 			return m, fmt.Errorf("checksum mismatch for %s; the backup is damaged", bf.Path)
 		}
@@ -550,10 +767,17 @@ func extractBackup(archive string, staging *os.Root) (backupManifest, error) {
 	return m, nil
 }
 
-// validArchivePath 只认 config/qwq.json、data/qwq.db 与 data/<目录条目>/...。
+// validArchivePath 只认 config/qwq.json、data/qwq.db、data/<目录条目>/... 与 plugin-data/<plugin_id>/...。
 func validArchivePath(name string) bool {
 	if name == archiveConfig {
 		return true
+	}
+	if rest, ok := strings.CutPrefix(name, archivePluginDataPrefix); ok {
+		if !fs.ValidPath(rest) {
+			return false
+		}
+		pluginID, sub, nested := strings.Cut(rest, "/")
+		return nested && sub != "" && sandbox.ValidateID(pluginID) == nil
 	}
 	rest, ok := strings.CutPrefix(name, archiveDataPrefix)
 	if !ok || !fs.ValidPath(rest) {
@@ -629,13 +853,4 @@ func ownerOf(fi fs.FileInfo) (uid, gid int, ok bool) {
 		return 0, 0, false
 	}
 	return int(st.Uid), int(st.Gid), true
-}
-
-func syncDirectory(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
 }

@@ -330,6 +330,12 @@ type UnitSpec struct {
 	// scale-to-zero hibernation.
 	Startup    string `json:"startup,omitempty"`
 	Background bool   `json:"background,omitempty"`
+	// PublicStream is derived by the host when the verified manifest declares
+	// public.route capabilities. It grants a plugin-writable systemd
+	// RuntimeDirectory=qwq-plugin-stream-<id> and QWQ_PUBLIC_STREAM_SOCKET so
+	// streaming plugins (e.g. ai.relay) can serve zero-buffered SSE over UDS
+	// while SO_PEERCRED restricts peers to the host agent UID.
+	PublicStream bool `json:"public_stream,omitempty"`
 }
 
 // prepared is a validated UnitSpec with defaults applied and derived values
@@ -352,6 +358,7 @@ type prepared struct {
 	stateDirectory     string
 	startup            string
 	background         bool
+	publicStream       bool
 }
 
 func (s UnitSpec) prepare() (prepared, error) {
@@ -467,6 +474,7 @@ func (s UnitSpec) prepare() (prepared, error) {
 	}
 	p.startup = strings.TrimSpace(s.Startup)
 	p.background = s.Background
+	p.publicStream = s.PublicStream
 	return p, nil
 }
 
@@ -591,12 +599,28 @@ func renderService(p prepared) ([]byte, error) {
 			return nil, err
 		}
 	}
+	var extraDirectives []string
 	if p.stateDirectory != "" {
 		// systemd creates the directory below /var/lib and assigns it to the
 		// unit's dynamic UID; ProtectSystem=strict keeps everything else read
 		// only. The relative path was validated in prepare; no plugin text
 		// reaches this directive.
-		repl := "ProtectSystem=strict\nStateDirectory=" + p.stateDirectory + "\nStateDirectoryMode=0700"
+		extraDirectives = append(extraDirectives,
+			"StateDirectory="+p.stateDirectory,
+			"StateDirectoryMode=0700",
+		)
+	}
+	if p.publicStream {
+		dirName := "qwq-plugin-stream-" + p.id
+		sockPath := path.Join(filepath.ToSlash(p.runtimeBase), dirName, "public-stream.sock")
+		extraDirectives = append(extraDirectives,
+			"RuntimeDirectory="+dirName,
+			"RuntimeDirectoryMode=0755",
+			"Environment=QWQ_PUBLIC_STREAM_SOCKET="+sockPath,
+		)
+	}
+	if len(extraDirectives) > 0 {
+		repl := "ProtectSystem=strict\n" + strings.Join(extraDirectives, "\n")
 		if out, err = replaceLine(out, "ProtectSystem=strict", repl); err != nil {
 			return nil, err
 		}

@@ -25,6 +25,7 @@ const (
 	defaultReleaseMirror          = "https://github.com/hajimilvdou/qwq-panel/releases/download"
 	pluginCatalogCacheTTL         = 5 * time.Minute
 	pluginCatalogNegativeCacheTTL = 15 * time.Second
+	pluginCatalogRefreshCooldown  = 15 * time.Second
 	pluginCatalogFetchLimit       = 1 << 20 // 1 MiB max for plugins-index.json
 	pluginCatalogHTTPTimeout      = 12 * time.Second
 )
@@ -84,12 +85,13 @@ type releasePluginsIndexAsset struct {
 }
 
 type cachedPluginCatalog struct {
-	mu        sync.Mutex
-	release   string
-	source    string
-	online    bool
-	fetchedAt time.Time
-	items     []pluginCatalogItemDTO
+	mu               sync.Mutex
+	release          string
+	source           string
+	online           bool
+	fetchedAt        time.Time
+	lastForceRefresh time.Time
+	items            []pluginCatalogItemDTO
 }
 
 type builtinOfficialPluginMeta struct {
@@ -220,25 +222,13 @@ func buildCatalogIndexCandidates(mirror, hostVer string) []string {
 	return out
 }
 
-func (a *api) getPluginCatalog(w http.ResponseWriter, r *http.Request) {
-	act, err := a.caller(r)
-	if err != nil {
-		a.fail(w, r, err)
-		return
-	}
-	if err := a.authorize(r.Context(), act, "host.plugins:read", ""); err != nil {
-		a.fail(w, r, err)
-		return
-	}
-
-	forceRefresh := r.URL.Query().Get("refresh") == "1" || strings.EqualFold(r.URL.Query().Get("refresh"), "true")
+func (a *api) buildPluginCatalogResponse(ctx context.Context, forceRefresh bool) pluginCatalogResponseDTO {
 	platform, arch := hostTargetPlatform()
-
-	release, source, online, fetchedAt, baseItems := a.loadOfficialPluginCatalog(r.Context(), platform, arch, forceRefresh)
+	release, source, online, fetchedAt, baseItems := a.loadOfficialPluginCatalog(ctx, platform, arch, forceRefresh)
 
 	installedByID := map[string]Plugin{}
 	if a.d.Plugins != nil {
-		if list, lerr := a.d.Plugins.List(r.Context()); lerr == nil {
+		if list, lerr := a.d.Plugins.List(ctx); lerr == nil {
 			for _, p := range list {
 				installedByID[p.PluginID] = p
 			}
@@ -265,14 +255,33 @@ func (a *api) getPluginCatalog(w http.ResponseWriter, r *http.Request) {
 		items = append(items, cp)
 	}
 
-	a.writeResource(w, r, http.StatusOK, pluginCatalogResponseDTO{
+	return pluginCatalogResponseDTO{
 		Release:   release,
 		Platform:  platform,
 		Source:    source,
 		Online:    online,
 		FetchedAt: fetchedAt.UTC().Format(time.RFC3339),
 		Items:     items,
-	}, nil)
+	}
+}
+
+func (a *api) pluginCatalogSnapshot(ctx context.Context, forceRefresh bool) (any, error) {
+	return a.buildPluginCatalogResponse(ctx, forceRefresh), nil
+}
+
+func (a *api) getPluginCatalog(w http.ResponseWriter, r *http.Request) {
+	act, err := a.caller(r)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	if err := a.authorize(r.Context(), act, "host.plugins:read", ""); err != nil {
+		a.fail(w, r, err)
+		return
+	}
+
+	forceRefresh := r.URL.Query().Get("refresh") == "1" || strings.EqualFold(r.URL.Query().Get("refresh"), "true")
+	a.writeResource(w, r, http.StatusOK, a.buildPluginCatalogResponse(r.Context(), forceRefresh), nil)
 }
 
 func (a *api) loadOfficialPluginCatalog(
@@ -281,8 +290,8 @@ func (a *api) loadOfficialPluginCatalog(
 	forceRefresh bool,
 ) (release, source string, online bool, fetchedAt time.Time, items []pluginCatalogItemDTO) {
 	now := a.d.Clock.Now().UTC()
+	a.catalogCache.mu.Lock()
 	if !forceRefresh {
-		a.catalogCache.mu.Lock()
 		ttl := pluginCatalogCacheTTL
 		if !a.catalogCache.online {
 			ttl = pluginCatalogNegativeCacheTTL
@@ -296,8 +305,19 @@ func (a *api) loadOfficialPluginCatalog(
 			a.catalogCache.mu.Unlock()
 			return release, source, online, fetchedAt, items
 		}
+	} else if len(a.catalogCache.items) > 0 && !a.catalogCache.lastForceRefresh.IsZero() &&
+		now.Sub(a.catalogCache.lastForceRefresh) < pluginCatalogRefreshCooldown {
+		release = a.catalogCache.release
+		source = a.catalogCache.source
+		online = a.catalogCache.online
+		fetchedAt = a.catalogCache.fetchedAt
+		items = append([]pluginCatalogItemDTO(nil), a.catalogCache.items...)
 		a.catalogCache.mu.Unlock()
+		return release, source, online, fetchedAt, items
+	} else {
+		a.catalogCache.lastForceRefresh = now
 	}
+	a.catalogCache.mu.Unlock()
 
 	mirror := configuredReleaseMirror()
 	hostVer := strings.TrimSpace(buildinfo.Read().Version)

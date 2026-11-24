@@ -154,6 +154,20 @@ func (f *Forwarder) forwardCertificates(ctx context.Context, method string, requ
 		}
 		response.Task, err = f.tasks.Cancel(ctx, input.TaskId)
 		return response, err
+	case "ReserveBinding":
+		response := new(certificatesv1.ReserveBindingResponse)
+		input, err := requestAs[*certificatesv1.ReserveBindingRequest](request)
+		if err != nil {
+			return response, err
+		}
+		res, err := f.authority.ReserveBinding(ctx, input.CertificateId, input.ExpectedRevision)
+		if err == nil {
+			response.BindingRef = res.BindingRef
+			response.CertificateId = res.CertificateID
+			response.Revision = res.Revision
+			response.Status = res.Status
+		}
+		return response, err
 	case "BindCertificate":
 		response := new(certificatesv1.BindCertificateResponse)
 		input, err := requestAs[*certificatesv1.BindCertificateRequest](request)

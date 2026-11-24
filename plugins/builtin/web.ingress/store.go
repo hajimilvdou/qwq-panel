@@ -91,7 +91,7 @@ func openIngressStore(dataDir, schemaSQL string, nowFn func() time.Time) (*ingre
 		return nil, fmt.Errorf("mkdir data dir: %w", err)
 	}
 	dsn := "file:" + filepath.ToSlash(filepath.Join(dataDir, "ingress.db")) +
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=cache_size(-2048)"
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=cache_size(-2048)&_pragma=journal_size_limit(8388608)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -154,6 +154,7 @@ func (s *ingressStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	_, _ = s.db.Exec(`PRAGMA wal_checkpoint(PASSIVE)`)
 	return s.db.Close()
 }
 
@@ -564,4 +565,97 @@ func (s *ingressStore) rollbackToSnapshot(ctx context.Context, snapshotID string
 	}
 	sites, err := s.listSitesLocked(ctx)
 	return rec, sites, err
+}
+
+const maxSNIPassthroughRules = 64
+
+func (s *ingressStore) listSNIPassthroughs(ctx context.Context) ([]SNIPassthroughRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, sni_pattern, upstream_addr, enabled, notes, created_at, updated_at
+		 FROM ingress_sni_passthrough ORDER BY sni_pattern ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]SNIPassthroughRule, 0)
+	for rows.Next() {
+		var r SNIPassthroughRule
+		var enabled int
+		if err := rows.Scan(&r.ID, &r.SNIPattern, &r.UpstreamAddr, &enabled, &r.Notes, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		r.Enabled = enabled == 1
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *ingressStore) upsertSNIPassthrough(ctx context.Context, id, pattern, upstream string, enabled bool, notes string) (SNIPassthroughRule, error) {
+	normPattern, err := validateSNIPattern(pattern)
+	if err != nil {
+		return SNIPassthroughRule{}, err
+	}
+	normUpstream, err := validateSNIPassthroughUpstream(upstream)
+	if err != nil {
+		return SNIPassthroughRule{}, err
+	}
+	notes = strings.TrimSpace(notes)
+	if len(notes) > 256 {
+		notes = notes[:256]
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := s.now().Unix()
+	var existingID string
+	var createdAt int64
+	if strings.TrimSpace(id) != "" {
+		_ = s.db.QueryRowContext(ctx, `SELECT id, created_at FROM ingress_sni_passthrough WHERE id = ?`, strings.TrimSpace(id)).Scan(&existingID, &createdAt)
+	}
+	if existingID == "" {
+		_ = s.db.QueryRowContext(ctx, `SELECT id, created_at FROM ingress_sni_passthrough WHERE sni_pattern = ?`, normPattern).Scan(&existingID, &createdAt)
+	}
+	if existingID == "" {
+		var cnt int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ingress_sni_passthrough`).Scan(&cnt); err == nil && cnt >= maxSNIPassthroughRules {
+			return SNIPassthroughRule{}, fmt.Errorf("四层 SNI 透传规则已达上限 (%d)", maxSNIPassthroughRules)
+		}
+		existingID = newID("sni")
+		createdAt = now
+		_, err = s.db.ExecContext(ctx,
+			`INSERT INTO ingress_sni_passthrough (id, sni_pattern, upstream_addr, enabled, notes, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			existingID, normPattern, normUpstream, boolInt(enabled), notes, createdAt, now)
+	} else {
+		_, err = s.db.ExecContext(ctx,
+			`UPDATE ingress_sni_passthrough SET sni_pattern = ?, upstream_addr = ?, enabled = ?, notes = ?, updated_at = ?
+			 WHERE id = ?`,
+			normPattern, normUpstream, boolInt(enabled), notes, now, existingID)
+	}
+	if err != nil {
+		return SNIPassthroughRule{}, err
+	}
+	return SNIPassthroughRule{
+		ID:           existingID,
+		SNIPattern:   normPattern,
+		UpstreamAddr: normUpstream,
+		Enabled:      enabled,
+		Notes:        notes,
+		CreatedAt:    createdAt,
+		UpdatedAt:    now,
+	}, nil
+}
+
+func (s *ingressStore) deleteSNIPassthrough(ctx context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.ExecContext(ctx, `DELETE FROM ingress_sni_passthrough WHERE id = ?`, strings.TrimSpace(id))
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }

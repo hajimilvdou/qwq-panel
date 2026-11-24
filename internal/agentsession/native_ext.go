@@ -1034,6 +1034,9 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 	} else if p.cfg.Temperature != nil {
 		payload["temperature"] = *p.cfg.Temperature
 	}
+	if payload["thinking"] == nil {
+		stripAnthropicThinkingBlocksFromMessages(msgs)
+	}
 
 	resp, reqCtx, stopHeaderTimer, cancelCause, err := p.doAnthropicHTTP(ctx, payload)
 	if err != nil {
@@ -1048,6 +1051,7 @@ func (p *streamingOpenAIProvider) completeAnthropic(ctx context.Context, req Pro
 		stopHeaderTimer()
 		cancelCause(nil)
 		delete(payload, "thinking")
+		stripAnthropicThinkingBlocksFromMessages(msgs)
 		payload["max_tokens"] = maxTokens
 		if p.cfg.Temperature != nil {
 			payload["temperature"] = *p.cfg.Temperature
@@ -1148,13 +1152,16 @@ func (p *streamingOpenAIProvider) parseAnthropicJSON(r io.Reader, stepStart time
 		return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型响应未返回有效内容。")
 	}
 	p.thinkingKeeper.RecordAssistantTurn(out.Content)
+	thinkingBlocks := extractAnthropicThinkingBlocks(out.Content)
 
 	var textBuf strings.Builder
+	var reasonBuf strings.Builder
 	var toolCalls []ModelToolCall
 	for _, blk := range out.Content {
 		switch blk.Type {
 		case "thinking":
 			if blk.Thinking != "" {
+				reasonBuf.WriteString(blk.Thinking)
 				_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": blk.Thinking})
 			}
 		case "text":
@@ -1181,7 +1188,12 @@ func (p *streamingOpenAIProvider) parseAnthropicJSON(r io.Reader, stepStart time
 		usage.PromptTokensDetails.CachedTokens = out.Usage.CacheReadInputTokens
 	}
 	p.recordUsage(stepStart, time.Since(stepStart), usage, textBuf.String(), msgs)
-	return ProviderResponse{Content: textBuf.String(), ToolCalls: toolCalls}, nil
+	return ProviderResponse{
+		Content:          textBuf.String(),
+		ReasoningContent: reasonBuf.String(),
+		ThinkingBlocks:   thinkingBlocks,
+		ToolCalls:        toolCalls,
+	}, nil
 }
 
 func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.Time, msgs []ModelMessage) (ProviderResponse, error) {
@@ -1226,10 +1238,13 @@ func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.
 							} `json:"usage"`
 						} `json:"message"`
 						ContentBlock *struct {
-							Type string `json:"type"`
-							ID   string `json:"id"`
-							Name string `json:"name"`
-							Data string `json:"data"`
+							Type      string `json:"type"`
+							ID        string `json:"id"`
+							Name      string `json:"name"`
+							Text      string `json:"text"`
+							Thinking  string `json:"thinking"`
+							Signature string `json:"signature"`
+							Data      string `json:"data"`
 						} `json:"content_block"`
 						Delta *struct {
 							Type        string `json:"type"`
@@ -1264,6 +1279,27 @@ func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.
 									id:   ev.ContentBlock.ID,
 									name: ev.ContentBlock.Name,
 									data: ev.ContentBlock.Data,
+								}
+								if ev.ContentBlock.Text != "" {
+									if firstTokenAt.IsZero() {
+										firstTokenAt = time.Now()
+									}
+									acc.text.WriteString(ev.ContentBlock.Text)
+									textBuf.WriteString(ev.ContentBlock.Text)
+									if p.emit != nil {
+										p.streamedDelta = true
+										_ = p.emit(Event{Type: EventMessageDelta, Delta: ev.ContentBlock.Text})
+									}
+								}
+								if ev.ContentBlock.Thinking != "" {
+									if firstTokenAt.IsZero() {
+										firstTokenAt = time.Now()
+									}
+									acc.thinking.WriteString(ev.ContentBlock.Thinking)
+									_ = emitExtended(p.emit, EventReasoningDelta, map[string]string{"delta": ev.ContentBlock.Thinking})
+								}
+								if ev.ContentBlock.Signature != "" {
+									acc.signature.WriteString(ev.ContentBlock.Signature)
 								}
 								if _, exists := blocks[ev.Index]; !exists {
 									blockOrder = append(blockOrder, ev.Index)
@@ -1363,6 +1399,13 @@ func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.
 		return ProviderResponse{}, problem.New(problem.Unavailable, "上游模型流式响应未返回有效内容。")
 	}
 	p.thinkingKeeper.RecordAssistantTurn(recorded)
+	thinkingBlocks := extractAnthropicThinkingBlocks(recorded)
+	var reasonBuf strings.Builder
+	for _, blk := range recorded {
+		if blk.Type == "thinking" && blk.Thinking != "" {
+			reasonBuf.WriteString(blk.Thinking)
+		}
+	}
 
 	ttft := time.Since(stepStart)
 	if !firstTokenAt.IsZero() {
@@ -1373,7 +1416,36 @@ func (p *streamingOpenAIProvider) parseAnthropicSSE(r io.Reader, stepStart time.
 		usagePtr = &usage
 	}
 	p.recordUsage(stepStart, ttft, usagePtr, textBuf.String(), msgs)
-	return ProviderResponse{Content: textBuf.String(), ToolCalls: toolCalls}, nil
+	return ProviderResponse{
+		Content:          textBuf.String(),
+		ReasoningContent: reasonBuf.String(),
+		ThinkingBlocks:   thinkingBlocks,
+		ToolCalls:        toolCalls,
+	}, nil
+}
+
+// stripAnthropicThinkingBlocksFromMessages removes thinking / redacted_thinking
+// blocks from assistant content arrays whenever extended thinking is disabled or
+// dropped on retry so Anthropic gateways never reject orphan thinking blocks.
+func stripAnthropicThinkingBlocksFromMessages(msgs []map[string]any) {
+	for _, msg := range msgs {
+		if msg["role"] != "assistant" {
+			continue
+		}
+		blocks, ok := msg["content"].([]map[string]any)
+		if !ok || len(blocks) == 0 {
+			continue
+		}
+		filtered := make([]map[string]any, 0, len(blocks))
+		for _, blk := range blocks {
+			typ, _ := blk["type"].(string)
+			if typ == "thinking" || typ == "redacted_thinking" {
+				continue
+			}
+			filtered = append(filtered, blk)
+		}
+		msg["content"] = filtered
+	}
 }
 
 // ============================================================================

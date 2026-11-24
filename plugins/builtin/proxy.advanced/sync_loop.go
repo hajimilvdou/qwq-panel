@@ -5,6 +5,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,6 +60,7 @@ func (i *instance) syncInterval() time.Duration {
 // syncLoop 绑定在实例 Activate 生命周期内，按周期向 core.xray 采样流量并驱动超额/到期同步。
 func (i *instance) syncLoop(ctx context.Context) {
 	i.runSyncCycle(ctx)
+	cycles := 0
 	for {
 		timer := time.NewTimer(i.syncInterval())
 		select {
@@ -65,6 +69,10 @@ func (i *instance) syncLoop(ctx context.Context) {
 			return
 		case <-timer.C:
 			i.runSyncCycle(ctx)
+			cycles++
+			if cycles%10 == 0 && i.store != nil {
+				_ = i.store.CheckpointPassive(ctx)
+			}
 		}
 	}
 }
@@ -196,6 +204,11 @@ func (i *instance) syncCoreXrayLockedWithWARP(ctx context.Context, host *plugins
 	warpCfg, err := i.store.GetWARP(ctx)
 	if err != nil {
 		return "", err
+	}
+	if ssPID := detectUnmanagedSS2022ProfileID(getResp.GetRedactedConfigJson(), managedNodes); ssPID != "" {
+		i.mu.Lock()
+		i.syncedSSProfileID = ssPID
+		i.mu.Unlock()
 	}
 	mergedJSON, err := mergeCoreXrayConfigWithWARPAndNodes(getResp.GetRedactedConfigJson(), activeUsers, managedNodes, warpCfg, writeNewWARPSecret)
 	if err != nil {
@@ -362,10 +375,21 @@ func mergeCoreXrayConfigWithWARPAndNodes(redactedRaw []byte, activeUsers []userR
 				protocol, _ := prof["protocol"].(string)
 				existingUsers := indexExistingSecretSlots(prof["users"])
 				var nextUsers []any
-				if nodeRec, isManaged := managedByID[pid]; isManaged {
+				nodeRec, isManaged := managedByID[pid]
+				if isManaged {
 					nextUsers = BuildUnifiedProfileUsers(&nodeRec, protocol, activeUsers, existingUsers)
 				} else if len(activeUsers) > 0 {
-					nextUsers = buildProfileUsers(protocol, activeUsers, existingUsers)
+					ssMethod := ""
+					if protocol == "shadowsocks2022" {
+						if ss22, ok := prof["shadowsocks2022"].(map[string]any); ok {
+							ssMethod, _ = ss22["method"].(string)
+						}
+					}
+					nextUsers = buildProfileUsersForCipher(protocol, ssMethod, pid, activeUsers, existingUsers)
+				} else {
+					// 订阅用户全部停用/超额时，必须立即关闭非托管旧 Profile，防止旧用户凭据残留继续放行流量。
+					prof["enabled"] = false
+					continue
 				}
 				if len(nextUsers) > 0 {
 					if protocol == "shadowsocks2022" {
@@ -374,6 +398,8 @@ func mergeCoreXrayConfigWithWARPAndNodes(redactedRaw []byte, activeUsers []userR
 						}
 					}
 					prof["users"] = nextUsers
+				} else if !isManaged {
+					prof["enabled"] = false
 				}
 			}
 		}
@@ -460,7 +486,39 @@ func shouldAttachUserTrafficMark(mark, upLimitKbps, downLimitKbps uint32) bool {
 	return mark >= trafficMarkMin && mark <= trafficMarkMax
 }
 
+// DeriveSS2022UserPSKForCipher 根据 SS-2022 加密算法长度要求（AES-128=16B / AES-256 & ChaCha20=32B）
+// 对用户基础密钥执行确定性 RFC 5869 HKDF-SHA256 派生，无需迁移数据库即可同时支持 AES-128、AES-256 与 ChaCha20 托管节点。
+func DeriveSS2022UserPSKForCipher(rawUserKeyB64 string, cipherMethod string, nodeID string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(rawUserKeyB64))
+	if err != nil || len(raw) < 16 {
+		return "", fmt.Errorf("invalid base ss2022 user key")
+	}
+	wantLen := 16
+	normMethod := strings.ToLower(strings.TrimSpace(cipherMethod))
+	if normMethod == "2022-blake3-aes-256-gcm" || normMethod == "2022-blake3-chacha20-poly1305" {
+		wantLen = 32
+	}
+	if len(raw) == wantLen {
+		return base64.StdEncoding.EncodeToString(raw), nil
+	}
+	if len(raw) > wantLen {
+		return base64.StdEncoding.EncodeToString(raw[:wantLen]), nil
+	}
+	extract := hmac.New(sha256.New, []byte("qwq-ss2022-salt:"+nodeID))
+	extract.Write(raw)
+	prk := extract.Sum(nil)
+
+	expand := hmac.New(sha256.New, prk)
+	expand.Write([]byte("qwq-ss2022-aes256-user-psk\x01"))
+	okm := expand.Sum(nil)[:wantLen]
+	return base64.StdEncoding.EncodeToString(okm), nil
+}
+
 func buildProfileUsers(protocol string, activeUsers []userRecord, existing map[string]map[string]bool) []any {
+	return buildProfileUsersForCipher(protocol, "", "", activeUsers, existing)
+}
+
+func buildProfileUsersForCipher(protocol, ss2022Method, profileID string, activeUsers []userRecord, existing map[string]map[string]bool) []any {
 	out := make([]any, 0, len(activeUsers))
 	for _, u := range activeUsers {
 		entry := map[string]any{"id": u.ID}
@@ -482,11 +540,12 @@ func buildProfileUsers(protocol string, activeUsers []userRecord, existing map[s
 				entry["auth"] = u.Hy2Password
 			}
 		case "shadowsocks2022":
-			if slots["psk"] {
-				entry["psk"] = map[string]any{"$keep_secret": true}
-			} else {
-				entry["psk"] = u.SS2022UserKey
+			// 始终下发按当前 cipher 派生的确定性 PSK，防止切换 AES-128 <-> AES-256/ChaCha20 时复用旧长度 $keep_secret 导致校验失败。
+			psk := u.SS2022UserKey
+			if derived, derr := DeriveSS2022UserPSKForCipher(u.SS2022UserKey, ss2022Method, profileID); derr == nil {
+				psk = derived
 			}
+			entry["psk"] = psk
 		default:
 			continue
 		}
@@ -499,4 +558,35 @@ func (i *instance) setSyncError(msg string) {
 	i.mu.Lock()
 	i.lastSyncError = msg
 	i.mu.Unlock()
+}
+
+func detectUnmanagedSS2022ProfileID(redactedRaw []byte, managedNodes []proxyNodeRecord) string {
+	trimmed := bytes.TrimSpace(redactedRaw)
+	if len(trimmed) == 0 {
+		return ""
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(trimmed, &doc); err != nil {
+		return ""
+	}
+	profiles, ok := doc["profiles"].([]any)
+	if !ok {
+		return ""
+	}
+	managedByID := make(map[string]bool, len(managedNodes))
+	for _, n := range managedNodes {
+		managedByID[n.ID] = true
+	}
+	for _, item := range profiles {
+		prof, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		pid, _ := prof["id"].(string)
+		protocol, _ := prof["protocol"].(string)
+		if pid != "" && protocol == "shadowsocks2022" && !managedByID[pid] {
+			return pid
+		}
+	}
+	return ""
 }

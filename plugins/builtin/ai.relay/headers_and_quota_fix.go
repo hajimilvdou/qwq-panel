@@ -56,6 +56,20 @@ type DynamicReserveInput struct {
 	GroupRatio           float64
 }
 
+// ComputeSafeOutputTokenReserve 计算安全的输出 Token 预冻结上限：
+// 绝不允许把用户显式请求的 max_tokens 反向截小成 2048 造成并发穿透余额；
+// 未传 max_tokens 时按稳健默认 4096 预冻结，上限 128000，流结束后按实际消耗多退少补。
+func ComputeSafeOutputTokenReserve(requestedMaxTokens int) int {
+	switch {
+	case requestedMaxTokens <= 0:
+		return 4096
+	case requestedMaxTokens > 128_000:
+		return 128_000
+	default:
+		return requestedMaxTokens
+	}
+}
+
 // ComputeDynamicReserveMicros 基于上下文长度与模型倍率计算动态预扣微点额，
 // 防止余额仅剩极少额度的账号发送百万 Token 上下文透支昂贵上游渠道。
 func ComputeDynamicReserveMicros(in DynamicReserveInput) int64 {
@@ -72,10 +86,7 @@ func ComputeDynamicReserveMicros(in DynamicReserveInput) int64 {
 		return max(floor, callCost)
 	}
 	inTok := max(in.EstimatedInputTokens, 256)
-	estOutTok := in.RequestedMaxTokens
-	if estOutTok <= 0 || estOutTok > 4096 {
-		estOutTok = 2048
-	}
+	estOutTok := ComputeSafeOutputTokenReserve(in.RequestedMaxTokens)
 	rawMicros := (float64(inTok)*float64(in.InputMicrosPer1K)/1000.0 +
 		float64(estOutTok)*float64(in.OutputMicrosPer1K)/1000.0) * ratio
 	est := int64(math.Ceil(rawMicros))

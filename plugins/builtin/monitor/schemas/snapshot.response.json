@@ -65,6 +65,15 @@
           "enum": ["ok", "warn", "bad", "unavailable"]
         }
       }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": { "$ref": "#/$defs/threshold" },
+        "mem": { "$ref": "#/$defs/threshold" },
+        "disk": { "$ref": "#/$defs/threshold" }
+      }
     }
   },
   "$defs": {

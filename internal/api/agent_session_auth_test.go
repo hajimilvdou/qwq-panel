@@ -107,3 +107,30 @@ func TestAgentSessionAuthorizedServiceStillCreatesOwnChat(t *testing.T) {
 	token := e.serviceToken(admin)
 	e.do(bearer(http.MethodPost, "/api/v1/agent-sessions", `{}`, token)).expect(t, http.StatusCreated)
 }
+
+func TestAgentSessionOperatorBlockedFromExternalCLIAndFullMode(t *testing.T) {
+	model := newFakeModel(t, 0, func(int) string { return textReply("ok") })
+	e := newAgentEnv(t, func(o *agentsession.Options) { o.HTTPClient = model.srv.Client() })
+	e.setupAdmin(adminUser)
+	e.insertUser("ops-agent", identity.RoleOperator, adminPass)
+	ops := e.login("ops-agent", adminPass)
+
+	// Operator can create a native safe session.
+	sess := createSession(t, e, ops, map[string]any{
+		"core": "native", "permission_mode": "safe", "config": configFor(model.srv.URL),
+	})
+	id := mustString(t, sess, "session_id")
+	rev := mustString(t, sess, "revision")
+
+	// Operator CANNOT create external CLI sessions or full-mode sessions.
+	e.do(ops.sign(http.MethodPost, "/api/v1/agent-sessions", `{"core":"codex","permission_mode":"safe"}`)).
+		expectProblem(t, http.StatusForbidden, problem.PermissionDenied)
+	e.do(ops.sign(http.MethodPost, "/api/v1/agent-sessions", `{"core":"claude-code","permission_mode":"read_only"}`)).
+		expectProblem(t, http.StatusForbidden, problem.PermissionDenied)
+	e.do(ops.sign(http.MethodPost, "/api/v1/agent-sessions", `{"core":"native","permission_mode":"full"}`)).
+		expectProblem(t, http.StatusForbidden, problem.PermissionDenied)
+
+	// Operator CANNOT upgrade an existing session to full mode via PATCH.
+	e.do(ops.sign(http.MethodPatch, "/api/v1/agent-sessions/"+id, `{"permission_mode":"full","expected_revision":"`+rev+`"}`)).
+		expectProblem(t, http.StatusForbidden, problem.PermissionDenied)
+}

@@ -50,7 +50,7 @@
       <div class="card-head">
         <div>
           <h2>已登记 DNS 服务商</h2>
-          <p class="muted">支持 Cloudflare API Token 与阿里云 DNS AccessKey，明文密钥由宿主提前提取保护。</p>
+          <p class="muted">支持 Cloudflare API Token、阿里云 DNS AccessKey 与腾讯云 DNSPod SecretId/Key，明文密钥由宿主提前提取保护。</p>
         </div>
         <div class="actions-row">
           <button type="button" class="btn" id="reload-providers-btn">同步服务商</button>
@@ -73,6 +73,7 @@
             <select id="reg-kind">
               <option value="cloudflare">Cloudflare (API Token)</option>
               <option value="aliyun">阿里云 DNS (AccessKey)</option>
+              <option value="dnspod">腾讯云 DNSPod (TC3 SecretId/Key)</option>
             </select>
           </label>
           <label class="field">
@@ -94,6 +95,16 @@
           <label class="field">
             <span>阿里云 AccessKey Secret</span>
             <input id="reg-ali-secret" type="password" autocomplete="off" placeholder="粘贴 AccessKey Secret">
+          </label>
+        </div>
+        <div id="cred-dnspod" class="form-grid" hidden>
+          <label class="field">
+            <span>腾讯云 SecretId</span>
+            <input id="reg-dnspod-id" type="text" autocomplete="off" placeholder="AKID...">
+          </label>
+          <label class="field">
+            <span>腾讯云 SecretKey</span>
+            <input id="reg-dnspod-key" type="password" autocomplete="off" placeholder="粘贴 SecretKey">
           </label>
         </div>
         <div class="actions-row">
@@ -159,7 +170,7 @@
       <div class="card-head">
         <div>
           <h2>受管 Zone 解析记录</h2>
-          <p class="muted" id="records-rev-hint">选择已授权托管域后加载快照，支持 A / AAAA / CNAME / TXT 乐观锁变更。</p>
+          <p class="muted" id="records-rev-hint">选择已授权托管域后加载快照，支持 A / AAAA / CNAME / TXT / MX / CAA / SRV / NS 乐观锁变更；主机名可填 @ 或子域名前缀自动补齐根域。</p>
         </div>
         <div class="actions-row">
           <select id="rec-zone-select" aria-label="选择已授权 Zone"></select>
@@ -182,19 +193,23 @@
               <option value="AAAA">AAAA</option>
               <option value="CNAME">CNAME</option>
               <option value="TXT">TXT</option>
+              <option value="MX">MX（优先级 目标域名）</option>
+              <option value="CAA">CAA（0 issue "ca"）</option>
+              <option value="SRV">SRV（优先级 权重 端口 目标）</option>
+              <option value="NS">NS</option>
             </select>
           </label>
           <label class="field">
-            <span>完整域名 (FQDN)</span>
-            <input id="rec-name" type="text" placeholder="如 app.example.com">
+            <span>主机名 / 完整域名（支持 @ 或子域名前缀）</span>
+            <input id="rec-name" type="text" placeholder="如 @、app 或 app.example.com">
           </label>
           <label class="field">
             <span>记录目标值</span>
-            <input id="rec-value" type="text" placeholder="如 198.51.100.10">
+            <input id="rec-value" type="text" placeholder="如 198.51.100.10 或 10 mail.example.com">
           </label>
           <label class="field">
-            <span>TTL (秒，0=默认)</span>
-            <input id="rec-ttl" type="number" min="0" max="86400" value="300">
+            <span>TTL (秒，阿里云/DNSPod 需 ≥60 或 600)</span>
+            <input id="rec-ttl" type="number" min="1" max="86400" value="600">
           </label>
           <label class="field field-check">
             <input id="rec-proxied" type="checkbox">
@@ -236,8 +251,8 @@
       </div>
       <div class="form-grid">
         <label class="field">
-          <span>待校验完整域名</span>
-          <input id="chk-name" type="text" placeholder="如 app.example.com">
+          <span>待校验域名（支持 @ 或子域名前缀）</span>
+          <input id="chk-name" type="text" placeholder="如 @、app 或 app.example.com">
         </label>
         <label class="field">
           <span>记录类型</span>
@@ -246,6 +261,9 @@
             <option value="AAAA">AAAA</option>
             <option value="CNAME">CNAME</option>
             <option value="TXT">TXT</option>
+            <option value="MX">MX</option>
+            <option value="NS">NS</option>
+            <option value="SRV">SRV</option>
           </select>
         </label>
         <label class="field">

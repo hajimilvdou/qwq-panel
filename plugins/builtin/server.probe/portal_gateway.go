@@ -15,8 +15,12 @@ import (
 	"encoding/json"
 	"errors"
 	"html"
+	"io"
 	"io/fs"
+	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -97,6 +101,54 @@ func (g *PortalGateway) Close() error {
 	return g.themes.Close()
 }
 
+// ServeHTTP 实现 http.Handler，供独立回环/域名 TLS 监听器直接复用 PortalGateway。
+func (g *PortalGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if g == nil {
+		http.Error(w, "portal unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	const maxDirectPortalBody = 2 << 20
+	var body []byte
+	if r.Body != nil {
+		limited, err := io.ReadAll(io.LimitReader(r.Body, maxDirectPortalBody+1))
+		if err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if len(limited) > maxDirectPortalBody {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		body = limited
+	}
+	clientIP := strings.TrimSpace(r.RemoteAddr)
+	if host, _, err := net.SplitHostPort(clientIP); err == nil {
+		clientIP = host
+	}
+	hdrs := make(map[string]string, len(r.Header))
+	for k, vals := range r.Header {
+		if len(vals) > 0 {
+			hdrs[k] = vals[0]
+		}
+	}
+	route := "portal"
+	subpath := r.URL.Path
+	if subpath == "/api/probe/v1/report" || subpath == "/v1/report" {
+		route = "agent"
+	}
+	status, respHeaders, respBody := g.ServePortalHTTP(route, r.Method, subpath, clientIP, hdrs, body)
+	for k, v := range respHeaders {
+		w.Header().Set(k, v)
+	}
+	if status <= 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	if r.Method != http.MethodHead && len(respBody) > 0 {
+		_, _ = w.Write(respBody)
+	}
+}
+
 // ServePortalHTTP 处理独立探针页（公开展示 + 严格隔离的 /admin 后台 + 管理 API）与 Agent 单向上报。
 func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string, headers map[string]string, body []byte) (status int, respHeaders map[string]string, respBody []byte) {
 	now := g.now()
@@ -110,6 +162,13 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 		if method != http.MethodPost {
 			return jsonResp(http.StatusMethodNotAllowed, map[string]any{"error": "METHOD_NOT_ALLOWED"})
 		}
+		nowUnix := now.Unix()
+		if g.authGuard.CheckLocked("agent", clientIP, nowUnix) {
+			return jsonResp(http.StatusTooManyRequests, map[string]any{
+				"error":               "TOO_MANY_ATTEMPTS",
+				"retry_after_seconds": g.authGuard.RetryAfterSeconds("agent", clientIP, nowUnix),
+			})
+		}
 		bearer := extractHeaderCI(headers, "Authorization")
 		bearer = strings.TrimSpace(strings.TrimPrefix(bearer, "Bearer "))
 		var payload AgentReportPayload
@@ -118,8 +177,12 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 		}
 		pullCfg, err := g.store.IngestAgentReport(now, clientIP, bearer, payload)
 		if err != nil {
+			if errors.Is(err, ErrUnauthorizedAgent) {
+				g.authGuard.RecordResult("agent", clientIP, false, nowUnix)
+			}
 			return jsonResp(http.StatusUnauthorized, map[string]any{"error": err.Error()})
 		}
+		g.authGuard.RecordResult("agent", clientIP, true, nowUnix)
 		return jsonResp(http.StatusOK, pullCfg)
 	}
 
@@ -192,8 +255,8 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 		}, data
 	}
 
-	// 通道 2.8：由当前探针入口自托管的 Agent 安装脚本（消除硬编码不可达占位域名）
-	if (cleanSub == "/install-probe-agent.sh" || cleanSub == "/probe-agent.ps1") && method == http.MethodGet {
+	// 通道 2.8：由当前探针入口自托管的 Agent 安装脚本与 SHA-256 校验文件（大二进制走 plugin.go ServeHTTP 零缓冲直出）
+	if (cleanSub == "/install-probe-agent.sh" || cleanSub == "/probe-agent.ps1") && (method == http.MethodGet || method == http.MethodHead) {
 		if cleanSub == "/probe-agent.ps1" {
 			return http.StatusOK, map[string]string{
 				"Content-Type":  "text/plain; charset=utf-8",
@@ -204,6 +267,28 @@ func (g *PortalGateway) ServePortalHTTP(route, method, subpath, clientIP string,
 			"Content-Type":  "text/x-shellscript; charset=utf-8",
 			"Cache-Control": "no-cache",
 		}, []byte(probeAgentInstallSH)
+	}
+	if strings.HasPrefix(cleanSub, "/bin/") && (method == http.MethodGet || method == http.MethodHead) {
+		fname := strings.TrimPrefix(cleanSub, "/bin/")
+		if isAllowedProbeAgentAsset(fname) {
+			dataDir := ""
+			if g.store != nil {
+				dataDir = g.store.dataDir
+			}
+			if fullPath, ok := resolveAgentBinaryPath(dataDir, fname); ok {
+				if strings.HasSuffix(fname, ".sha256") {
+					if raw, err := os.ReadFile(fullPath); err == nil {
+						return http.StatusOK, map[string]string{
+							"Content-Type":  "text/plain; charset=utf-8",
+							"Cache-Control": "public, max-age=300",
+						}, raw
+					}
+				}
+				return jsonResp(http.StatusNotFound, map[string]any{"error": "USE_STREAM_ENDPOINT"})
+			}
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "AGENT_BINARY_NOT_BUNDLED"})
+		}
+		return jsonResp(http.StatusNotFound, map[string]any{"error": "ASSET_NOT_FOUND"})
 	}
 
 	// 通道 3：私有探针访客口令解锁（受 BoundedAuthGuard 防暴破保护）
@@ -602,6 +687,7 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 		}
 		return jsonResp(http.StatusOK, map[string]any{
 			"nodes":            nodes,
+			"service_monitors": g.store.ListServiceMonitors(),
 			"settings":         cfg,
 			"themes":           themes,
 			"active_theme_id":  cfg.ActiveThemeID,
@@ -760,6 +846,7 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 			ExpiresAt    *int64    `json:"expires_at,omitempty"`
 			ProviderName string    `json:"provider_name,omitempty"`
 			PublicOrigin string    `json:"public_origin,omitempty"`
+			CASHA256     string    `json:"ca_sha256,omitempty"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Name) == "" {
 			return jsonResp(http.StatusBadRequest, map[string]any{"error": "VALIDATION_FAILED"})
@@ -855,12 +942,18 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 			endpoint = "https://" + dom + "/api/probe/v1/report"
 		} else if origin := sanitizePublicOrigin(req.PublicOrigin); origin != "" {
 			endpoint = origin + "/p/server.probe/agent/v1/report"
-		} else if reqHost := strings.TrimSpace(extractHeaderCI(headers, "Host")); reqHost != "" && !strings.ContainsAny(reqHost, " \t\r\n/\\") {
-			proto := "https"
-			if strings.EqualFold(strings.TrimSpace(extractHeaderCI(headers, "X-Forwarded-Proto")), "http") {
-				proto = "http"
+		} else {
+			reqHost := strings.TrimSpace(extractHeaderCI(headers, "X-Forwarded-Host"))
+			if reqHost == "" || strings.HasSuffix(strings.ToLower(reqHost), ".qwq.internal") {
+				reqHost = strings.TrimSpace(extractHeaderCI(headers, "Host"))
 			}
-			endpoint = proto + "://" + reqHost + "/p/server.probe/agent/v1/report"
+			if reqHost != "" && !strings.HasSuffix(strings.ToLower(reqHost), ".qwq.internal") && !strings.ContainsAny(reqHost, " \t\r\n/\\") {
+				proto := "https"
+				if strings.EqualFold(strings.TrimSpace(extractHeaderCI(headers, "X-Forwarded-Proto")), "http") {
+					proto = "http"
+				}
+				endpoint = proto + "://" + reqHost + "/p/server.probe/agent/v1/report"
+			}
 		}
 		if !created {
 			return jsonResp(http.StatusOK, map[string]any{
@@ -870,11 +963,15 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 				"report_endpoint": endpoint,
 			})
 		}
+		pin := ""
+		if dom == "" {
+			pin = normalizeCertPinHex(req.CASHA256)
+		}
 		return jsonResp(http.StatusCreated, map[string]any{
 			"node_id":         id,
 			"one_time_token":  plainTok,
 			"report_endpoint": endpoint,
-			"linux_install":   BuildAgentInstallCommand("linux", endpoint, id, plainTok),
+			"linux_install":   BuildAgentInstallCommandWithPin("linux", endpoint, id, plainTok, pin),
 		})
 
 	case strings.HasPrefix(path, "/api/admin/nodes/") && method == http.MethodDelete:
@@ -894,6 +991,74 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 		_ = g.store.DeleteNode(context.Background(), id)
 		return jsonResp(http.StatusOK, map[string]any{"removed": id})
 
+	case path == "/api/admin/monitors" && method == http.MethodGet:
+		return jsonResp(http.StatusOK, map[string]any{
+			"items": g.store.ListServiceMonitors(),
+		})
+
+	case path == "/api/admin/monitors" && method == http.MethodPost:
+		var req struct {
+			ID                string `json:"id,omitempty"`
+			Name              string `json:"name"`
+			Kind              string `json:"kind"`
+			CarrierTag        string `json:"carrier_tag"`
+			TargetAddr        string `json:"target_addr"`
+			IntervalSec       int    `json:"interval_sec"`
+			ExpectedStatusMin int    `json:"expected_status_min"`
+			ExpectedStatusMax int    `json:"expected_status_max"`
+			PublicVisible     *bool  `json:"public_visible,omitempty"`
+			Enabled           *bool  `json:"enabled,omitempty"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.TargetAddr) == "" {
+			return jsonResp(http.StatusBadRequest, map[string]any{"error": "VALIDATION_FAILED", "message": "名称与探测目标地址不能为空"})
+		}
+		kind := strings.ToLower(strings.TrimSpace(req.Kind))
+		if kind == "" {
+			kind = "tcp"
+		}
+		target := strings.TrimSpace(req.TargetAddr)
+		vctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		err := ValidatePublicProbeTarget(vctx, kind, target, false)
+		cancel()
+		if err != nil {
+			return jsonResp(http.StatusBadRequest, map[string]any{"error": "VALIDATION_FAILED", "message": err.Error()})
+		}
+		pubVis := true
+		if req.PublicVisible != nil {
+			pubVis = *req.PublicVisible
+		}
+		enabled := true
+		if req.Enabled != nil {
+			enabled = *req.Enabled
+		}
+		saved, err := g.store.UpsertServiceMonitor(context.Background(), ServiceMonitor{
+			ID:                req.ID,
+			Name:              req.Name,
+			Kind:              kind,
+			CarrierTag:        strings.ToLower(strings.TrimSpace(req.CarrierTag)),
+			TargetAddr:        target,
+			IntervalSec:       req.IntervalSec,
+			ExpectedStatusMin: req.ExpectedStatusMin,
+			ExpectedStatusMax: req.ExpectedStatusMax,
+			PublicVisible:     pubVis,
+			Enabled:           enabled,
+		})
+		if err != nil {
+			return jsonResp(http.StatusBadRequest, map[string]any{"error": "VALIDATION_FAILED", "message": err.Error()})
+		}
+		return jsonResp(http.StatusOK, map[string]any{"monitor": saved})
+
+	case strings.HasPrefix(path, "/api/admin/monitors/") && method == http.MethodDelete:
+		id := strings.TrimSpace(strings.TrimPrefix(path, "/api/admin/monitors/"))
+		existed, err := g.store.DeleteServiceMonitor(context.Background(), id)
+		if err != nil {
+			return jsonResp(http.StatusBadRequest, map[string]any{"error": "VALIDATION_FAILED", "message": err.Error()})
+		}
+		if !existed {
+			return jsonResp(http.StatusNotFound, map[string]any{"error": "MONITOR_NOT_FOUND"})
+		}
+		return jsonResp(http.StatusOK, map[string]any{"removed": id})
+
 	case path == "/api/admin/domain/bind" && method == http.MethodPost:
 		var req struct {
 			CustomDomain       string             `json:"custom_domain"`
@@ -909,8 +1074,9 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 		}
 		keyBytes := []byte(req.KeyPEM.Plain)
 		defer clear(keyBytes)
-		g.store.mu.Lock()
+		g.store.mu.RLock()
 		candidate := g.store.settings
+		g.store.mu.RUnlock()
 		candidate.DomainEnabled = true
 		candidate.CustomDomain = req.CustomDomain
 		candidate.BindingTrack = req.BindingTrack
@@ -919,9 +1085,9 @@ func (g *PortalGateway) handleStandaloneAdminAction(now time.Time, method, path 
 		candidate.TrustCloudflareIPs = req.TrustCloudflareIPs
 		summary, err := g.domains.ValidateAndApply(now, &candidate, []byte(req.CertPEM), keyBytes)
 		if err != nil {
-			g.store.mu.Unlock()
 			return jsonResp(http.StatusUnprocessableEntity, map[string]any{"error": err.Error()})
 		}
+		g.store.mu.Lock()
 		g.store.settings = candidate
 		g.store.mu.Unlock()
 		_ = g.store.PersistSettings(context.Background(), candidate)
@@ -949,53 +1115,350 @@ func sanitizePublicOrigin(raw string) string {
 	return s
 }
 
+func isAllowedProbeAgentAsset(name string) bool {
+	switch name {
+	case "qwq-probe-agent-linux-amd64",
+		"qwq-probe-agent-linux-amd64.sha256",
+		"qwq-probe-agent-linux-arm64",
+		"qwq-probe-agent-linux-arm64.sha256":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveAgentBinaryPath(dataDir, filename string) (string, bool) {
+	if !isAllowedProbeAgentAsset(filename) {
+		return "", false
+	}
+	candidates := make([]string, 0, 3)
+	if envDir := strings.TrimSpace(os.Getenv("QWQ_PROBE_AGENT_BIN_DIR")); envDir != "" {
+		candidates = append(candidates, filepath.Join(envDir, filename))
+	}
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		pluginRoot := filepath.Dir(filepath.Dir(exe))
+		candidates = append(candidates, filepath.Join(pluginRoot, "assets", "bin", filename))
+	}
+	if strings.TrimSpace(dataDir) != "" {
+		candidates = append(candidates, filepath.Join(dataDir, "bin", filename))
+	}
+	for _, p := range candidates {
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() && st.Size() > 0 {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+func normalizeCertPinHex(raw string) string {
+	s := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(raw), ":", ""))
+	s = strings.TrimPrefix(s, "sha256")
+	if len(s) != 64 {
+		return ""
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return ""
+		}
+	}
+	return s
+}
+
 const probeAgentInstallSH = `#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-only
+# qwq-probe-agent 极简安全单向探针受控端一键安装/卸载脚本（支持 Debian/Ubuntu/Rocky systemd 与 Alpine OpenRC）
+# 零入站端口 · 零远程命令执行 · 动态非特权用户运行 · 凭据 0600 隔离 · 可选 --ca-sha256 密码学证书指纹固定
+
 set -euo pipefail
-ENDPOINT="" NODE="" TOKEN=""
-while [ $# -gt 0 ]; do
+
+ENDPOINT=""
+NODE_ID=""
+TOKEN=""
+CA_SHA256=""
+ALLOW_INSECURE="0"
+ALLOW_UNVERIFIED="0"
+ACTION="install"
+
+while [[ $# -gt 0 ]]; do
   case "$1" in
-    --endpoint) ENDPOINT="$2"; shift 2 ;;
-    --node)     NODE="$2"; shift 2 ;;
-    --token)    TOKEN="$2"; shift 2 ;;
-    *) shift ;;
+    --endpoint)
+      [[ $# -ge 2 ]] || { echo "缺少参数值: $1" >&2; exit 2; }
+      ENDPOINT="$2"; shift 2 ;;
+    --node)
+      [[ $# -ge 2 ]] || { echo "缺少参数值: $1" >&2; exit 2; }
+      NODE_ID="$2"; shift 2 ;;
+    --token)
+      [[ $# -ge 2 ]] || { echo "缺少参数值: $1" >&2; exit 2; }
+      TOKEN="$2"; shift 2 ;;
+    --ca-sha256)
+      [[ $# -ge 2 ]] || { echo "缺少参数值: $1" >&2; exit 2; }
+      CA_SHA256="$2"; shift 2 ;;
+    --insecure)         ALLOW_INSECURE="1"; shift 1 ;;
+    --allow-unverified) ALLOW_UNVERIFIED="1"; shift 1 ;;
+    --uninstall)        ACTION="uninstall"; shift 1 ;;
+    *) echo "Unknown arg: $1" >&2; exit 2 ;;
   esac
 done
-if [ -z "$ENDPOINT" ] || [ -z "$NODE" ] || [ -z "$TOKEN" ]; then
-  echo "Usage: install-probe-agent.sh --endpoint <url> --node <id> --token <prb_agt_...>" >&2
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "错误：请使用 root 或 sudo 运行此安装/卸载脚本。" >&2
+  exit 1
+fi
+
+if [[ "$ACTION" == "uninstall" ]]; then
+  systemctl disable --now qwq-probe-agent.service 2>/dev/null || true
+  rc-service qwq-probe-agent stop 2>/dev/null || true
+  rc-update del qwq-probe-agent default 2>/dev/null || true
+  rm -f /etc/systemd/system/qwq-probe-agent.service /etc/init.d/qwq-probe-agent /usr/local/bin/qwq-probe-agent
+  rm -rf /etc/qwq-probe-agent
+  systemctl daemon-reload 2>/dev/null || true
+  echo "[qwq-probe-agent] 已彻底卸载并清理全部文件。"
+  exit 0
+fi
+
+if [[ -z "$ENDPOINT" || -z "$NODE_ID" || -z "$TOKEN" ]]; then
+  echo "用法: install-probe-agent.sh --endpoint <URL> --node <ID> --token <prb_agt_...> [--ca-sha256 <64位hex>]" >&2
   exit 2
 fi
+
+if [[ ! "$NODE_ID" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,47}$ ]] || \
+   [[ ! "$TOKEN" =~ ^prb_agt_[A-Za-z0-9_-]{16,96}$ ]] || \
+   [[ ! "$ENDPOINT" =~ ^https?://[A-Za-z0-9._:/\[\]-]+$ ]]; then
+  echo "参数格式校验未通过：拒绝含非法字符的 endpoint / node / token" >&2
+  exit 2
+fi
+
+NORM_PIN=""
+if [[ -n "$CA_SHA256" ]]; then
+  NORM_PIN="$(printf '%s' "$CA_SHA256" | tr '[:upper:]' '[:lower:]' | tr -d ':' | sed 's/^sha256//')"
+  if [[ ! "$NORM_PIN" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "错误：--ca-sha256 必须是 64 位十六进制 SHA-256 指纹（支持带冒号格式）。" >&2
+    exit 2
+  fi
+fi
+
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64)  BIN_ARCH="amd64" ;;
+  aarch64|arm64) BIN_ARCH="arm64" ;;
+  *) echo "Unsupported arch: $ARCH" >&2; exit 2 ;;
+esac
+
+# 从上报地址派生探针门户基址（同时兼容 /p/server.probe/agent/v1/report 与独立域名 /api/probe/v1/report）
+PORTAL_BASE="$ENDPOINT"
+if [[ "$PORTAL_BASE" == */p/server.probe/agent/v1/report ]]; then
+  PORTAL_BASE="${PORTAL_BASE%/agent/v1/report}/portal"
+elif [[ "$PORTAL_BASE" == */api/probe/v1/report ]]; then
+  PORTAL_BASE="${PORTAL_BASE%/api/probe/v1/report}"
+else
+  PORTAL_BASE="${PORTAL_BASE%/v1/report}"
+fi
+
+TMP_DIR="$(mktemp -d /tmp/qwq-probe-agent.XXXXXX)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+TMP_BIN="$TMP_DIR/qwq-probe-agent"
+TMP_SHA="$TMP_DIR/qwq-probe-agent.sha256"
+PEER_CERT="$TMP_DIR/peer.crt"
+
+CURL_TLS_OPTS=()
+if [[ -n "$NORM_PIN" ]]; then
+  if [[ "$PORTAL_BASE" != https://* ]]; then
+    echo "安全拦截：指定 --ca-sha256 时必须使用 https:// 上报地址。" >&2
+    exit 3
+  fi
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "安全拦截：校验 --ca-sha256 需要 openssl，请先安装 openssl 后重试。" >&2
+    exit 3
+  fi
+  HOSTPORT="${PORTAL_BASE#https://}"
+  HOSTPORT="${HOSTPORT%%/*}"
+  TLS_HOST="$HOSTPORT"
+  TLS_PORT="443"
+  CONNECT_TARGET=""
+  if [[ "$HOSTPORT" == \[*\]:* ]]; then
+    TLS_HOST="${HOSTPORT#\[}"
+    TLS_HOST="${TLS_HOST%%\]:*}"
+    TLS_PORT="${HOSTPORT##*\]:}"
+    CONNECT_TARGET="[${TLS_HOST}]:${TLS_PORT}"
+  elif [[ "$HOSTPORT" == \[*\] ]]; then
+    TLS_HOST="${HOSTPORT#\[}"
+    TLS_HOST="${TLS_HOST%\]}"
+    CONNECT_TARGET="[${TLS_HOST}]:${TLS_PORT}"
+  elif [[ "$HOSTPORT" == *:* ]]; then
+    TLS_HOST="${HOSTPORT%:*}"
+    TLS_PORT="${HOSTPORT##*:}"
+    CONNECT_TARGET="${TLS_HOST}:${TLS_PORT}"
+  else
+    CONNECT_TARGET="${TLS_HOST}:${TLS_PORT}"
+  fi
+  if ! openssl s_client -connect "${CONNECT_TARGET}" -servername "${TLS_HOST}" </dev/null 2>/dev/null \
+    | openssl x509 -outform PEM > "$PEER_CERT" 2>/dev/null; then
+    echo "安全拦截：无法获取主控端 TLS 证书用于 --ca-sha256 核验，已中止下载！" >&2
+    exit 3
+  fi
+  GOT_PIN="$(openssl x509 -in "$PEER_CERT" -outform DER 2>/dev/null | sha256sum | awk '{print tolower($1)}' || true)"
+  if [[ -z "$GOT_PIN" || "$GOT_PIN" != "$NORM_PIN" ]]; then
+    echo "安全拦截：服务端证书 SHA-256 (${GOT_PIN:-empty}) 与 --ca-sha256 (${NORM_PIN}) 不匹配，已中止下载！" >&2
+    exit 3
+  fi
+  SPKI_PIN="$(openssl x509 -in "$PEER_CERT" -pubkey -noout 2>/dev/null \
+    | openssl pkey -pubin -outform der 2>/dev/null \
+    | openssl dgst -sha256 -binary 2>/dev/null \
+    | openssl enc -base64 2>/dev/null | tr -d '\r\n' || true)"
+  if [[ -z "$SPKI_PIN" ]]; then
+    echo "安全拦截：无法提取已验证证书公钥指纹，已中止下载！" >&2
+    exit 3
+  fi
+  # 使用 curl 原生 --pinnedpubkey 锁定已通过 DER SHA-256 校验的公钥，杜绝预检与下载间的 TOCTOU MITM
+  CURL_TLS_OPTS=(-k --pinnedpubkey "sha256//${SPKI_PIN}")
+elif [[ "$ALLOW_INSECURE" == "1" ]]; then
+  CURL_TLS_OPTS=(-k)
+fi
+
 install -d -m 0700 /etc/qwq-probe-agent
-cat >/etc/qwq-probe-agent/agent.env <<EOF
-QWQ_PROBE_ENDPOINT=${ENDPOINT}
-QWQ_PROBE_NODE=${NODE}
-QWQ_PROBE_TOKEN=${TOKEN}
-EOF
+umask 0077
+{
+  printf 'QWQ_PROBE_ENDPOINT=%s\n' "$ENDPOINT"
+  printf 'QWQ_PROBE_NODE=%s\n' "$NODE_ID"
+  printf 'QWQ_PROBE_TOKEN=%s\n' "$TOKEN"
+  if [[ -n "$NORM_PIN" ]]; then
+    printf 'QWQ_PROBE_CA_SHA256=%s\n' "$NORM_PIN"
+  elif [[ "$ALLOW_INSECURE" == "1" ]]; then
+    printf 'QWQ_PROBE_INSECURE=1\n'
+  fi
+} > /etc/qwq-probe-agent/agent.env
 chmod 0600 /etc/qwq-probe-agent/agent.env
-cat >/etc/systemd/system/qwq-probe-agent.service <<'EOF'
+
+echo "[qwq-probe-agent] 正在拉取单文件只读探针二进制 (linux/${BIN_ARCH})..."
+
+BIN_URL="${PORTAL_BASE}/bin/qwq-probe-agent-linux-${BIN_ARCH}"
+SHA_URL="${BIN_URL}.sha256"
+DOWNLOADED=0
+VERIFIED=0
+
+if curl -fsSL "${CURL_TLS_OPTS[@]}" "$BIN_URL" -o "$TMP_BIN"; then
+  DOWNLOADED=1
+  if curl -fsSL "${CURL_TLS_OPTS[@]}" "$SHA_URL" -o "$TMP_SHA" 2>/dev/null; then
+    WANT_SHA="$(awk '{print tolower($1)}' "$TMP_SHA" | head -n1)"
+    GOT_SHA="$(sha256sum "$TMP_BIN" | awk '{print tolower($1)}')"
+    if [[ ! "$WANT_SHA" =~ ^[0-9a-f]{64}$ ]] || [[ "$GOT_SHA" != "$WANT_SHA" ]]; then
+      echo "错误：探针二进制 SHA-256 校验失败 (got=${GOT_SHA}, want=${WANT_SHA})" >&2
+      exit 4
+    fi
+    VERIFIED=1
+    echo "[qwq-probe-agent] SHA-256 校验通过 (${GOT_SHA:0:16}...)"
+  elif [[ "$ALLOW_UNVERIFIED" != "1" ]]; then
+    echo "错误：无法获取主控端二进制校验文件 (${SHA_URL})；为防止篡改已中止（如需跳过请显式传 --allow-unverified）。" >&2
+    exit 4
+  fi
+fi
+
+if [[ "$DOWNLOADED" != "1" ]]; then
+  echo "[qwq-probe-agent] 主控端未内置该架构二进制，尝试从官方 GitHub Release 拉取..."
+  GH_BASE="https://github.com/hajimilvdou/qwq-panel/releases/latest/download"
+  curl -fsSL "${GH_BASE}/qwq-probe-agent-linux-${BIN_ARCH}" -o "$TMP_BIN"
+  if curl -fsSL "${GH_BASE}/SHA256SUMS" -o "$TMP_SHA" 2>/dev/null; then
+    WANT_SHA="$(awk -v f="qwq-probe-agent-linux-${BIN_ARCH}" '$2 == f || $2 == ("*" f) {print tolower($1); exit}' "$TMP_SHA")"
+    GOT_SHA="$(sha256sum "$TMP_BIN" | awk '{print tolower($1)}')"
+    if [[ ! "$WANT_SHA" =~ ^[0-9a-f]{64}$ ]] || [[ "$GOT_SHA" != "$WANT_SHA" ]]; then
+      echo "错误：官方 Release 二进制 SHA-256 校验失败 (got=${GOT_SHA}, want=${WANT_SHA:-missing})" >&2
+      exit 4
+    fi
+    VERIFIED=1
+    echo "[qwq-probe-agent] 官方 Release SHA-256 校验通过 (${GOT_SHA:0:16}...)"
+  elif [[ "$ALLOW_UNVERIFIED" != "1" ]]; then
+    echo "错误：无法获取官方 Release SHA256SUMS，已中止安装（如需跳过请显式传 --allow-unverified）。" >&2
+    exit 4
+  fi
+fi
+
+if [[ "$VERIFIED" != "1" && "$ALLOW_UNVERIFIED" != "1" ]]; then
+  echo "错误：探针二进制未通过完整性校验，已中止安装。" >&2
+  exit 4
+fi
+
+install -m 0755 "$TMP_BIN" /usr/local/bin/qwq-probe-agent
+
+echo "[qwq-probe-agent] 正在验证首包遥测上报与 TLS 连通性..."
+env -i PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  QWQ_PROBE_ENDPOINT="$ENDPOINT" \
+  QWQ_PROBE_NODE="$NODE_ID" \
+  QWQ_PROBE_TOKEN="$TOKEN" \
+  QWQ_PROBE_CA_SHA256="$NORM_PIN" \
+  QWQ_PROBE_INSECURE="$([[ -z "$NORM_PIN" && "$ALLOW_INSECURE" == "1" ]] && echo 1 || echo 0)" \
+  /usr/local/bin/qwq-probe-agent --check
+
+if command -v systemctl >/dev/null 2>&1; then
+  cat > /etc/systemd/system/qwq-probe-agent.service <<'EOF'
 [Unit]
-Description=qwq Probe One-Way Telemetry Agent
+Description=qwq One-Way Read-Only Server Probe Agent (Zero Inbound / Zero Exec)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
+DynamicUser=yes
 EnvironmentFile=/etc/qwq-probe-agent/agent.env
 ExecStart=/usr/local/bin/qwq-probe-agent
 Restart=always
-RestartSec=5
+RestartSec=5s
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=16M
+CPUQuota=5%
 
 [Install]
 WantedBy=multi-user.target
 EOF
-if command -v systemctl >/dev/null 2>&1 && [ -x /usr/local/bin/qwq-probe-agent ]; then
   systemctl daemon-reload
   systemctl enable --now qwq-probe-agent.service
+  echo "[qwq-probe-agent] systemd 沙箱服务已启动并完成首包上报验收 (DynamicUser=yes, MemoryMax=16M, 零入站监听)。"
+elif command -v rc-service >/dev/null 2>&1 || command -v openrc-run >/dev/null 2>&1; then
+  cat > /etc/init.d/qwq-probe-agent <<'EOF'
+#!/sbin/openrc-run
+name="qwq-probe-agent"
+description="qwq One-Way Read-Only Server Probe Agent"
+command="/usr/local/bin/qwq-probe-agent"
+command_user="nobody:nobody"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  if [ -f /etc/qwq-probe-agent/agent.env ]; then
+    while IFS='=' read -r key val; do
+      case "$key" in
+        QWQ_PROBE_ENDPOINT|QWQ_PROBE_NODE|QWQ_PROBE_TOKEN|QWQ_PROBE_CA_SHA256|QWQ_PROBE_INSECURE)
+          export "$key=$val"
+          ;;
+      esac
+    done < /etc/qwq-probe-agent/agent.env
+  fi
+}
+EOF
+  chmod 0755 /etc/init.d/qwq-probe-agent
+  rc-update add qwq-probe-agent default 2>/dev/null || true
+  rc-service qwq-probe-agent restart
+  echo "[qwq-probe-agent] Alpine OpenRC 服务已启动并完成首包上报验收 (command_user=nobody:nobody)。"
+else
+  echo "[qwq-probe-agent] 未检测到 systemd 或 OpenRC，二进制已安装至 /usr/local/bin/qwq-probe-agent，请手动配置守护进程。"
 fi
-echo "qwq-probe-agent configured for node ${NODE}"
 `
 
 const probeAgentInstallPS1 = `function Install-QwqProbeAgent {
@@ -1013,13 +1476,25 @@ const probeAgentInstallPS1 = `function Install-QwqProbeAgent {
 
 // BuildAgentInstallCommand 拼装单向安全探针 Agent 一键部署命令（脚本地址派生自当前可达 public_origin/reportURL，带严格单引号转义）。
 func BuildAgentInstallCommand(platform, reportURL, nodeID, token string) string {
+	return BuildAgentInstallCommandWithPin(platform, reportURL, nodeID, token, "")
+}
+
+// BuildAgentInstallCommandWithPin 在 BuildAgentInstallCommand 基础上支持自签面板证书 SHA-256 指纹固定（--ca-sha256）。
+func BuildAgentInstallCommandWithPin(platform, reportURL, nodeID, token, caSHA256 string) string {
 	scriptBase := deriveScriptBaseURL(reportURL)
 	if platform == "windows" {
 		psEsc := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 		return "irm " + psEsc(scriptBase+"/probe-agent.ps1") + " | iex; Install-QwqProbeAgent -Endpoint " + psEsc(reportURL) + " -Node " + psEsc(nodeID) + " -Token " + psEsc(token)
 	}
 	shEsc := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-	return "curl -fsSL " + shEsc(scriptBase+"/install-probe-agent.sh") + " | sudo bash -s -- --endpoint " + shEsc(reportURL) + " --node " + shEsc(nodeID) + " --token " + shEsc(token)
+	pin := normalizeCertPinHex(caSHA256)
+	curlFlags := "-fsSL"
+	pinArg := ""
+	if pin != "" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(reportURL)), "https://") {
+		curlFlags = "-fsSLk"
+		pinArg = " --ca-sha256 " + shEsc(pin)
+	}
+	return "curl " + curlFlags + " " + shEsc(scriptBase+"/install-probe-agent.sh") + " | sudo bash -s -- --endpoint " + shEsc(reportURL) + " --node " + shEsc(nodeID) + " --token " + shEsc(token) + pinArg
 }
 
 func isValidNodeID(id string) bool {

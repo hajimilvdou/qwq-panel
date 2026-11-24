@@ -8,6 +8,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import IconButton from './IconButton.svelte';
+  import { registerModalDialog, unregisterModalDialog } from './toplayer';
 
   interface Props {
     open?: boolean;
@@ -22,8 +23,22 @@
   let dlg: HTMLDialogElement;
 
   $effect(() => {
-    if (open && !dlg.open) dlg.showModal();
-    else if (!open && dlg.open) dlg.close();
+    const el = dlg;
+    if (!el) return;
+    if (open && !el.open) {
+      el.showModal();
+      registerModalDialog(el);
+    } else if (!open && el.open) {
+      unregisterModalDialog(el);
+      el.close();
+    }
+  });
+
+  $effect(() => {
+    const el = dlg;
+    return () => {
+      if (el) unregisterModalDialog(el);
+    };
   });
 </script>
 
@@ -32,6 +47,7 @@
   class="drawer {side}"
   aria-labelledby="{uid}-t"
   onclose={() => {
+    unregisterModalDialog(dlg);
     open = false;
     onclose?.();
   }}

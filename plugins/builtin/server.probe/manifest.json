@@ -28,11 +28,16 @@
     "schemas/probe.background.set.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
     "schemas/probe.domain.bind.request.json": "sha256:d9664151ec3d63f14c2bdc3ee83b6cb8c470db97b95dca5e034570b3708c752e",
     "schemas/probe.domain.bind.response.json": "sha256:e7ba8dfa1fcad25c393c9e71962aa2502ad243a2b27405bb749c845bf2af00ef",
+    "schemas/probe.monitors.list.response.json": "sha256:41f10a8cd752f9157672fd14cb4aedfbba4baffb568a230c770ba33e036f3546",
+    "schemas/probe.monitors.remove.request.json": "sha256:94b6382be7e0bb471952ea5e274d039c44640acecec4fcfd8dd7c05421e476f8",
+    "schemas/probe.monitors.remove.response.json": "sha256:2a02550a4ebdc5e74c00ce31a28d67db34e8e445cc4a92babae536868014eb19",
+    "schemas/probe.monitors.upsert.request.json": "sha256:8699ff0a213493b94de92c28782f0408132157a912e69e22d6335d1cbcf86b6f",
+    "schemas/probe.monitors.upsert.response.json": "sha256:462481134d5eeffe0423f5c78bc0d75015032b72c1f72368ea6123e1e7c55910",
     "schemas/probe.nodes.remove.request.json": "sha256:94b6382be7e0bb471952ea5e274d039c44640acecec4fcfd8dd7c05421e476f8",
     "schemas/probe.nodes.remove.response.json": "sha256:1069e4313449ff4b62fc4415c2d13e7c13ba4c1560e495be8f60ddb33c2468a4",
-    "schemas/probe.nodes.upsert.request.json": "sha256:a5fe137ec0db25dbd31866928db946886cfc3ed20be723fc48437becbf107a18",
+    "schemas/probe.nodes.upsert.request.json": "sha256:1b49ae844d660777fa4e62fbe52c36db68767bf23660f75472e077e551691c47",
     "schemas/probe.nodes.upsert.response.json": "sha256:e7033478158883cc7c0731d9490b737449bafb76b5abc64772f6570b61f51d0a",
-    "schemas/probe.overview.response.json": "sha256:a711ee1a28ae7d6fec161701317fe57bdfa6acd9d63c158baadb47f3b5ca5bfc",
+    "schemas/probe.overview.response.json": "sha256:01579af43dd8ed747157d42e9f51b361adb72d23564906d983b93b98b47fff15",
     "schemas/probe.settings.rollback.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
     "schemas/probe.settings.update.request.json": "sha256:2e453ad029693f817448fdb83cc39d3d6459412071f39878fa45df8411ac8ae5",
     "schemas/probe.settings.update.response.json": "sha256:fef974bf60f425c9b5aac171ab1899026ed0a3c44dc447dd564e66d85f123cbf",
@@ -49,10 +54,10 @@
     "schemas/probe.tls.reload.response.json": "sha256:2ed40148182d39857ce599f0779160945f60c432aeec8253412aeceac3d7a1e3",
     "schemas/series.response.json": "sha256:86977b76b12b7ea46a896e25369cda90bd52f030baad418056113daae519ce2a",
     "schemas/stat.response.json": "sha256:9dbcaeb1ff5098999b6b92c85076137faa4dae34b0c886994669a1115d038745",
-    "ui/index.html": "sha256:e0f049af6b253a1acae68e695bd1c454280339aeabaa04b4b03f9f77b8c2a145",
-    "ui/probe-panel.css": "sha256:7ad8bfeb26022fd161069090e7cd070773f44aba8dc08e845ca3ba36686a6ba9",
-    "ui/probe-panel.js": "sha256:93a4890bd2d62dce1173332bba428c29cdb909d0326b91ed382c70c2ae640af3",
-    "ui/tokens.css": "sha256:4c6de5c9232e4461bfc32497ff7ba097abbe542328fdc3443e876a74d12004e2"
+    "ui/index.html": "sha256:3c26a484300458ac8ad9459e610c9d43b1becd4baa15245689d27743ee0bbca5",
+    "ui/probe-panel.css": "sha256:9b9b7e9e18cdbdd8c9f59f1301733f60484e755aacde5ae9574523ae1262126d",
+    "ui/probe-panel.js": "sha256:da1f8b17c6559b6c023b733e26d00c8358f279427d6bcbd17a58c93b67b11d8d",
+    "ui/tokens.css": "sha256:5684a1621177b2962d21262c82e13a76be4ae6d8589cffeae3abd9126f929283"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -241,6 +246,74 @@
       ],
       "request_schema": "schemas/probe.nodes.remove.request.json",
       "response_schema": "schemas/probe.nodes.remove.response.json"
+    },
+    {
+      "name": "probe.monitors.list",
+      "api_version": "v1",
+      "permission": "server.probe:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "ui_route": "/probe",
+      "summary": "列出三网延迟与 TCP/HTTP(S) 服务拨测目标",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/empty.request.json",
+      "response_schema": "schemas/probe.monitors.list.response.json"
+    },
+    {
+      "name": "probe.monitors.upsert",
+      "api_version": "v1",
+      "permission": "server.probe:manage",
+      "mode": "job",
+      "effect": "write",
+      "risk": "low",
+      "idempotent": true,
+      "ui_route": "/probe",
+      "timeout_ms": 15000,
+      "approval": "ai_confirm",
+      "approval_summary": "新增或修改三网 TCP/HTTP(S) 拨测探测目标（严格防 SSRF 公网校验）",
+      "summary": "新增或编辑三网与服务拨测目标",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.egress",
+          "scope": "probe"
+        }
+      ],
+      "request_schema": "schemas/probe.monitors.upsert.request.json",
+      "response_schema": "schemas/probe.monitors.upsert.response.json"
+    },
+    {
+      "name": "probe.monitors.remove",
+      "api_version": "v1",
+      "permission": "server.probe:manage",
+      "mode": "job",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "ui_route": "/probe",
+      "timeout_ms": 10000,
+      "approval": "confirm",
+      "approval_summary": "移除指定三网或服务拨测目标",
+      "summary": "删除三网或服务拨测目标",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/probe.monitors.remove.request.json",
+      "response_schema": "schemas/probe.monitors.remove.response.json"
     },
     {
       "name": "probe.settings.update",
@@ -573,7 +646,9 @@
     "minimum_rollback_version": "0.1.0",
     "backup_paths": [
       "probe.db",
-      "probe_domain.seal"
+      "probe_domain.seal",
+      "themes",
+      "assets"
     ]
   },
   "config": {

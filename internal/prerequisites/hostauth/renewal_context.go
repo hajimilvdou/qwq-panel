@@ -387,7 +387,7 @@ func (p RenewalContexts) Context(ctx context.Context, request certificates.Renew
 		if err != nil {
 			return fail(err)
 		}
-		if facts.BindingRef != binding.ID || facts.PluginVersion != binding.PluginVersion {
+		if !bindingFactsMatch(binding, facts) {
 			return fail(fault.New("BINDING_REVOKED", "续期配置或真实安装能力已经变化"))
 		}
 		policy, err := bindingPolicyRevision(binding)

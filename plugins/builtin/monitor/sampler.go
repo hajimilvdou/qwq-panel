@@ -23,6 +23,7 @@ const (
 	alertDebounceWindow     = 15 * time.Minute
 	coarseHistoryMaxAge     = time.Hour
 	coarseHistoryKVKey      = "history/coarse"
+	thresholdsKVKey         = "config/thresholds"
 )
 
 // Source 是宿主能力客户端与测试序列之间的唯一采集接缝。
@@ -31,8 +32,10 @@ type Source interface {
 }
 
 type metricAlertState struct {
-	consecutive int
-	lastFiredAt time.Time
+	warnConsecutive int
+	warnLastFiredAt time.Time
+	critConsecutive int
+	critLastFiredAt time.Time
 }
 
 type coarseHistorySnapshot struct {
@@ -152,12 +155,13 @@ func (s *sampler) evaluateAlertsLocked(point Point, now time.Time) []pluginsdk.E
 		key   string
 		label string
 		val   *float64
+		warn  float64
 		crit  float64
 	}{
-		{key: "cpu", label: "CPU 使用率", val: point.CPU, crit: s.cfg.Thresholds.CPU.Crit},
-		{key: "mem", label: "内存使用率", val: point.Memory, crit: s.cfg.Thresholds.Memory.Crit},
-		{key: "swap", label: "Swap 使用率", val: point.Swap, crit: s.cfg.Thresholds.Memory.Crit},
-		{key: "disk", label: "磁盘使用率", val: point.Disk, crit: s.cfg.Thresholds.Disk.Crit},
+		{key: "cpu", label: "CPU 使用率", val: point.CPU, warn: s.cfg.Thresholds.CPU.Warn, crit: s.cfg.Thresholds.CPU.Crit},
+		{key: "mem", label: "内存使用率", val: point.Memory, warn: s.cfg.Thresholds.Memory.Warn, crit: s.cfg.Thresholds.Memory.Crit},
+		{key: "swap", label: "Swap 使用率", val: point.Swap, warn: s.cfg.Thresholds.Memory.Warn, crit: s.cfg.Thresholds.Memory.Crit},
+		{key: "disk", label: "磁盘使用率", val: point.Disk, warn: s.cfg.Thresholds.Disk.Warn, crit: s.cfg.Thresholds.Disk.Crit},
 	}
 	var drafts []pluginsdk.EventDraft
 	for _, chk := range checks {
@@ -166,27 +170,85 @@ func (s *sampler) evaluateAlertsLocked(point Point, now time.Time) []pluginsdk.E
 			st = &metricAlertState{}
 			s.alerts[chk.key] = st
 		}
-		if chk.val == nil || *chk.val < chk.crit {
-			st.consecutive = 0
+		if chk.val == nil || *chk.val < chk.warn {
+			st.warnConsecutive = 0
+			st.critConsecutive = 0
 			continue
 		}
-		st.consecutive++
-		if st.consecutive < alertConsecutiveSamples {
+		st.warnConsecutive++
+		if *chk.val >= chk.crit {
+			st.critConsecutive++
+			if st.critConsecutive < alertConsecutiveSamples {
+				if st.warnConsecutive >= alertConsecutiveSamples &&
+					(st.warnLastFiredAt.IsZero() || now.Sub(st.warnLastFiredAt) >= alertDebounceWindow) &&
+					(st.critLastFiredAt.IsZero() || now.Sub(st.critLastFiredAt) >= alertDebounceWindow) {
+					st.warnLastFiredAt = now
+					if payload, err := json.Marshal(map[string]any{
+						"source":    "monitor.basic",
+						"severity":  "warn",
+						"metric":    chk.key,
+						"value":     *chk.val,
+						"threshold": chk.warn,
+						"title":     fmt.Sprintf("主机 %s 偏高预警 (%.1f%%)", chk.label, *chk.val),
+						"message":   fmt.Sprintf("指标 %s 连续 %d 次采样超过警告阈值 %.1f%%（当前 %.1f%%）。", chk.label, alertConsecutiveSamples, chk.warn, *chk.val),
+						"dedup_key": "monitor.warn." + chk.key,
+						"timestamp": now.UTC().Format(time.RFC3339),
+					}); err == nil {
+						drafts = append(drafts, pluginsdk.EventDraft{
+							Type:          "monitor.alert",
+							SchemaVersion: "1",
+							Subject:       "metrics/" + chk.key,
+							Payload:       payload,
+						})
+					}
+				}
+				continue
+			}
+			if !st.critLastFiredAt.IsZero() && now.Sub(st.critLastFiredAt) < alertDebounceWindow {
+				continue
+			}
+			st.critLastFiredAt = now
+			payload, err := json.Marshal(map[string]any{
+				"source":    "monitor.basic",
+				"severity":  "critical",
+				"metric":    chk.key,
+				"value":     *chk.val,
+				"threshold": chk.crit,
+				"title":     fmt.Sprintf("主机 %s 持续超载告警 (%.1f%%)", chk.label, *chk.val),
+				"message":   fmt.Sprintf("指标 %s 连续 %d 次采样超过严重阈值 %.1f%%（当前 %.1f%%）。", chk.label, alertConsecutiveSamples, chk.crit, *chk.val),
+				"dedup_key": "monitor.crit." + chk.key,
+				"timestamp": now.UTC().Format(time.RFC3339),
+			})
+			if err != nil {
+				continue
+			}
+			drafts = append(drafts, pluginsdk.EventDraft{
+				Type:          "monitor.alert",
+				SchemaVersion: "1",
+				Subject:       "metrics/" + chk.key,
+				Payload:       payload,
+			})
 			continue
 		}
-		if !st.lastFiredAt.IsZero() && now.Sub(st.lastFiredAt) < alertDebounceWindow {
+		// 处于 warn <= value < crit 区间，触发 warn 级告警（连续 3 次采样 + 15 分钟防抖，且在刚发过 critical 窗口内不重复降级刷屏）。
+		st.critConsecutive = 0
+		if st.warnConsecutive < alertConsecutiveSamples {
 			continue
 		}
-		st.lastFiredAt = now
+		if (!st.warnLastFiredAt.IsZero() && now.Sub(st.warnLastFiredAt) < alertDebounceWindow) ||
+			(!st.critLastFiredAt.IsZero() && now.Sub(st.critLastFiredAt) < alertDebounceWindow) {
+			continue
+		}
+		st.warnLastFiredAt = now
 		payload, err := json.Marshal(map[string]any{
 			"source":    "monitor.basic",
-			"severity":  "critical",
+			"severity":  "warn",
 			"metric":    chk.key,
 			"value":     *chk.val,
-			"threshold": chk.crit,
-			"title":     fmt.Sprintf("主机 %s 持续超载告警 (%.1f%%)", chk.label, *chk.val),
-			"message":   fmt.Sprintf("指标 %s 连续 %d 次采样超过严重阈值 %.1f%%（当前 %.1f%%）。", chk.label, alertConsecutiveSamples, chk.crit, *chk.val),
-			"dedup_key": "monitor.crit." + chk.key,
+			"threshold": chk.warn,
+			"title":     fmt.Sprintf("主机 %s 偏高预警 (%.1f%%)", chk.label, *chk.val),
+			"message":   fmt.Sprintf("指标 %s 连续 %d 次采样超过警告阈值 %.1f%%（当前 %.1f%%）。", chk.label, alertConsecutiveSamples, chk.warn, *chk.val),
+			"dedup_key": "monitor.warn." + chk.key,
 			"timestamp": now.UTC().Format(time.RFC3339),
 		})
 		if err != nil {
@@ -200,6 +262,18 @@ func (s *sampler) evaluateAlertsLocked(point Point, now time.Time) []pluginsdk.E
 		})
 	}
 	return drafts
+}
+
+func (s *sampler) setThresholds(next thresholds) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.Thresholds = next
+	for _, st := range s.alerts {
+		if st != nil {
+			st.warnConsecutive = 0
+			st.critConsecutive = 0
+		}
+	}
 }
 
 func (s *sampler) configure(next config) bool {

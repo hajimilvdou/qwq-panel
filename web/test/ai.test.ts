@@ -290,7 +290,7 @@ describe('悬浮窗尺寸', () => {
 
 /* ------------------------------------------------------------------ ⌘K 条目 */
 
-import { buildGroups, gradeOf, moveCursor, pushRecent } from '../shell/src/features/palette/items';
+import { OFFICIAL_PLUGIN_SEARCH_KEYWORDS, buildGroups, filterPages, gradeOf, moveCursor, pushRecent } from '../shell/src/features/palette/items';
 
 describe('⌘K 条目', () => {
   const pages = [
@@ -305,11 +305,15 @@ describe('⌘K 条目', () => {
     expect(g[2]!.items.map((x) => x.id)).toEqual(['page:/x']);
     expect(g.at(-1)!.items[0]).toMatchObject({ kind: 'ask', label: '问 AI' });
   });
-  it('关键词命中、无结果时只剩问 AI', () => {
+  it('关键词命中、无结果时只剩问 AI；空查询不截断且 canAsk=false 隐藏问 AI', () => {
     expect(buildGroups({ q: 'PLUGIN', pages, actions: [], recent: [] })[0]!.items[0]!.id).toBe('page:/apps');
     const g = buildGroups({ q: '重启 nginx', pages, actions: [], recent: [] });
     expect(g).toHaveLength(1);
     expect(g[0]!.items[0]).toMatchObject({ prompt: '重启 nginx', label: '问 AI：重启 nginx' });
+    const many = Array.from({ length: 10 }, (_, i) => ({ label: `页${i}`, keywords: i === 9 ? OFFICIAL_PLUGIN_SEARCH_KEYWORDS['containers.docker'] : undefined }));
+    expect(filterPages(many, '')).toHaveLength(10);
+    expect(filterPages(many, 'docker')).toHaveLength(1);
+    expect(buildGroups({ q: '', pages, actions: [], recent: [], canAsk: false }).some((x) => x.title === 'AI')).toBe(false);
   });
   it('游标循环、最近置顶去重', () => {
     expect(moveCursor(0, -1, 3)).toBe(2);

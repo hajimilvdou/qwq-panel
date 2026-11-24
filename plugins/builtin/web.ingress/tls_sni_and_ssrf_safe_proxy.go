@@ -5,10 +5,12 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -213,6 +215,169 @@ func (s *SNICertStore) RemoveDomain(domain string) {
 	s.certTable.Store(&next)
 }
 
+type ConsumerBindingProofView struct {
+	Binding struct {
+		ID             string `json:"id"`
+		Generation     uint64 `json:"generation"`
+		PolicyRevision string `json:"policy_revision"`
+		Consumer       struct {
+			SNI string `json:"sni"`
+		} `json:"consumer"`
+	} `json:"binding"`
+	FullchainSHA256  string `json:"fullchain_sha256"`
+	PrivateKeySHA256 string `json:"private_key_sha256"`
+}
+
+// ConsumerBindingCurrentPointer 同时兼容宿主 consumerfiles.Store 真实格式
+// `{"version":1,"active":{"binding":{...},"fullchain_sha256":...}}` 与旧版扁平测试 fixture。
+type ConsumerBindingCurrentPointer struct {
+	Version int                       `json:"version"`
+	Active  *ConsumerBindingProofView `json:"active,omitempty"`
+	// 兼容旧版扁平格式（当 Active == nil 时回退使用）
+	Binding struct {
+		ID             string `json:"id"`
+		Generation     uint64 `json:"generation"`
+		PolicyRevision string `json:"policy_revision"`
+		Consumer       struct {
+			SNI string `json:"sni"`
+		} `json:"consumer"`
+	} `json:"binding"`
+	FullchainSHA256  string `json:"fullchain_sha256"`
+	PrivateKeySHA256 string `json:"private_key_sha256"`
+}
+
+func (p *ConsumerBindingCurrentPointer) activeProof() ConsumerBindingProofView {
+	if p != nil && p.Active != nil {
+		return *p.Active
+	}
+	var flat ConsumerBindingProofView
+	if p != nil {
+		flat.Binding = p.Binding
+		flat.FullchainSHA256 = p.FullchainSHA256
+		flat.PrivateKeySHA256 = p.PrivateKeySHA256
+	}
+	return flat
+}
+
+type LoadedMaterializedBinding struct {
+	BindingID        string
+	Generation       uint64
+	PolicyRevision   string
+	SNI              string
+	FullchainSHA256  string
+	PrivateKeySHA256 string
+	LeafFingerprint  string
+	Certificate      tls.Certificate
+	Leaf             *x509.Certificate
+}
+
+// CanonicalLeafFingerprint64 返回叶证书 DER 的 64 位小写 hex SHA-256（对齐 deployment.LeafFingerprintPEM）。
+func CanonicalLeafFingerprint64(leafDER []byte) string {
+	sum := sha256.Sum256(leafDER)
+	return hex.EncodeToString(sum[:])
+}
+
+// LoadConsumerBindingKeypair 优先按宿主 consumerfiles.Store 标准落盘结构
+// (`current.json` -> `generations/g<N>/{fullchain.pem,privkey.pem}`) 加载证书，
+// 若不存在则兼容回退读取 `active_{fullchain,privkey}.pem`。
+func LoadConsumerBindingKeypair(dataDir, bindingRef string, explicitGeneration uint64, fallbackPolicyRev, fallbackSNI string) (*LoadedMaterializedBinding, error) {
+	cleanRef := filepath.Base(strings.TrimSpace(bindingRef))
+	if cleanRef == "" || cleanRef == "." || cleanRef == ".." || cleanRef != strings.TrimSpace(bindingRef) {
+		return nil, errors.New("invalid binding_ref")
+	}
+	bindingDir := filepath.Join(dataDir, "tls", "bindings", cleanRef)
+
+	var (
+		gen        = explicitGeneration
+		policyRev  = fallbackPolicyRev
+		sni        = fallbackSNI
+		certBytes  []byte
+		keyBytes   []byte
+		readWorked bool
+	)
+
+	if curRaw, err := os.ReadFile(filepath.Join(bindingDir, "current.json")); err == nil {
+		var ptr ConsumerBindingCurrentPointer
+		if json.Unmarshal(curRaw, &ptr) == nil {
+			proof := ptr.activeProof()
+			if gen == 0 && proof.Binding.Generation > 0 {
+				gen = proof.Binding.Generation
+			}
+			if policyRev == "" {
+				policyRev = proof.Binding.PolicyRevision
+			}
+			if sni == "" {
+				sni = proof.Binding.Consumer.SNI
+			}
+		}
+	}
+
+	if gen > 0 {
+		genDir := filepath.Join(bindingDir, "generations", fmt.Sprintf("g%d", gen))
+		c, err1 := os.ReadFile(filepath.Join(genDir, "fullchain.pem"))
+		k, err2 := os.ReadFile(filepath.Join(genDir, "privkey.pem"))
+		if err1 == nil && err2 == nil {
+			certBytes, keyBytes, readWorked = c, k, true
+		}
+	}
+
+	if !readWorked {
+		c, err1 := os.ReadFile(filepath.Join(bindingDir, "active_fullchain.pem"))
+		k, err2 := os.ReadFile(filepath.Join(bindingDir, "active_privkey.pem"))
+		if err1 != nil || err2 != nil {
+			return nil, fmt.Errorf("MATERIALIZED_CERT_MISSING: binding %s (gen=%d) missing PEM files", cleanRef, gen)
+		}
+		certBytes, keyBytes = c, k
+	}
+	defer clear(keyBytes)
+
+	fullHash := sha256Hex(certBytes)
+	keyHash := sha256Hex(keyBytes)
+
+	pair, err := tls.X509KeyPair(certBytes, keyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse keypair for %s: %w", cleanRef, err)
+	}
+	if len(pair.Certificate) == 0 {
+		return nil, errors.New("certificate chain is empty")
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("parse leaf certificate: %w", err)
+	}
+	pair.Leaf = leaf
+
+	return &LoadedMaterializedBinding{
+		BindingID:        cleanRef,
+		Generation:       gen,
+		PolicyRevision:   policyRev,
+		SNI:              normalizeSNIDomain(sni),
+		FullchainSHA256:  fullHash,
+		PrivateKeySHA256: keyHash,
+		LeafFingerprint:  CanonicalLeafFingerprint64(leaf.Raw),
+		Certificate:      pair,
+		Leaf:             leaf,
+	}, nil
+}
+
+// ScanAllActiveConsumerBindings 扫描 `<dataDir>/tls/bindings/*` 下全部已激活物化证书供域名自动匹配使用。
+func ScanAllActiveConsumerBindings(dataDir string) []*LoadedMaterializedBinding {
+	entries, err := os.ReadDir(filepath.Join(dataDir, "tls", "bindings"))
+	if err != nil {
+		return nil
+	}
+	var out []*LoadedMaterializedBinding
+	for _, ent := range entries {
+		if !ent.IsDir() || strings.HasPrefix(ent.Name(), ".") {
+			continue
+		}
+		if loaded, lerr := LoadConsumerBindingKeypair(dataDir, ent.Name(), 0, "", ""); lerr == nil {
+			out = append(out, loaded)
+		}
+	}
+	return out
+}
+
 // ReloadFromBindings 遍历启用站点的 CertID（certbind_*），加载已物化证书并原子替换 SNI 表。
 // 单站点证书缺失或解析失败时跳过该站点继续加载其余有效站点，且不保留已删除/停用域名的旧证书。
 func (s *SNICertStore) ReloadFromBindings(domainToBindingRef map[string]string) (loaded int, err error) {
@@ -223,33 +388,33 @@ func (s *SNICertStore) ReloadFromBindings(domainToBindingRef map[string]string) 
 		if cleanRef == "" || cleanRef == "." || cleanRef == ".." {
 			continue
 		}
-		fullPath, keyPath := MaterializedCertPaths(s.dataDir, cleanRef)
-		certBytes, cerr := os.ReadFile(fullPath)
-		if cerr != nil {
-			errs = append(errs, fmt.Errorf("read materialized cert for %s (%s): %w", domain, cleanRef, cerr))
-			continue
-		}
-		keyBytes, kerr := os.ReadFile(keyPath)
-		if kerr != nil {
-			errs = append(errs, fmt.Errorf("read materialized key for %s (%s): %w", domain, cleanRef, kerr))
-			continue
-		}
-		pair, perr := tls.X509KeyPair(certBytes, keyBytes)
-		clear(keyBytes)
-		if perr != nil {
-			errs = append(errs, fmt.Errorf("parse keypair for %s: %w", domain, perr))
+		mat, lerr := LoadConsumerBindingKeypair(s.dataDir, cleanRef, 0, "", domain)
+		if lerr != nil {
+			errs = append(errs, fmt.Errorf("load materialized cert for %s (%s): %w", domain, cleanRef, lerr))
 			continue
 		}
 		norm := normalizeSNIDomain(domain)
 		if norm == "" {
 			continue
 		}
-		parsed[norm] = &pair
+		certCopy := mat.Certificate
+		parsed[norm] = &certCopy
 		loaded++
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	next := make(map[string]*tls.Certificate, len(parsed))
+	cur := s.certTable.Load()
+	next := make(map[string]*tls.Certificate, len(parsed)+len(s.bindings))
+	// 保留已通过 ingress.tls.reload 加载到 s.bindings 中的受管证书，防止在站点尚未写入 DB 前被清空。
+	if cur != nil {
+		for _, obs := range s.bindings {
+			if obs.SNI != "" {
+				if existing, ok := (*cur)[obs.SNI]; ok {
+					next[obs.SNI] = existing
+				}
+			}
+		}
+	}
 	for k, v := range parsed {
 		next[k] = v
 	}
@@ -275,36 +440,17 @@ func (s *SNICertStore) LoadBinding(
 	if normSNI == "" {
 		return tlsBindingObservation{}, errors.New("invalid sni")
 	}
-	fullPath, keyPath := MaterializedCertPaths(s.dataDir, cleanRef)
-	certBytes, err := os.ReadFile(fullPath)
+	loaded, err := LoadConsumerBindingKeypair(s.dataDir, cleanRef, generation, policyRevision, normSNI)
 	if err != nil {
-		return tlsBindingObservation{}, fmt.Errorf("read active_fullchain.pem: %w", err)
+		return tlsBindingObservation{}, err
 	}
-	keyBytes, err := os.ReadFile(keyPath)
-	if err != nil {
-		return tlsBindingObservation{}, fmt.Errorf("read active_privkey.pem: %w", err)
-	}
-	defer clear(keyBytes)
-
-	fullHash := sha256Hex(certBytes)
-	keyHash := sha256Hex(keyBytes)
-	if exp := strings.ToLower(strings.TrimSpace(expectedFullchainSHA256)); exp != "" && fullHash != exp {
+	if exp := strings.ToLower(strings.TrimSpace(expectedFullchainSHA256)); exp != "" &&
+		subtle.ConstantTimeCompare([]byte(loaded.FullchainSHA256), []byte(exp)) != 1 {
 		return tlsBindingObservation{}, errors.New("fullchain_sha256 mismatch")
 	}
-	if exp := strings.ToLower(strings.TrimSpace(expectedPrivKeySHA256)); exp != "" && keyHash != exp {
+	if exp := strings.ToLower(strings.TrimSpace(expectedPrivKeySHA256)); exp != "" &&
+		subtle.ConstantTimeCompare([]byte(loaded.PrivateKeySHA256), []byte(exp)) != 1 {
 		return tlsBindingObservation{}, errors.New("private_key_sha256 mismatch")
-	}
-
-	pair, err := tls.X509KeyPair(certBytes, keyBytes)
-	if err != nil {
-		return tlsBindingObservation{}, fmt.Errorf("parse keypair: %w", err)
-	}
-	var leafFP string
-	if len(pair.Certificate) > 0 {
-		if leaf, perr := x509.ParseCertificate(pair.Certificate[0]); perr == nil {
-			sum := sha256.Sum256(leaf.Raw)
-			leafFP = "sha256:" + hex.EncodeToString(sum[:])
-		}
 	}
 
 	obs := tlsBindingObservation{
@@ -312,8 +458,8 @@ func (s *SNICertStore) LoadBinding(
 		BindingRef:      cleanRef,
 		Generation:      generation,
 		PolicyRevision:  policyRevision,
-		FullchainSHA256: fullHash,
-		LeafFingerprint: leafFP,
+		FullchainSHA256: loaded.FullchainSHA256,
+		LeafFingerprint: loaded.LeafFingerprint,
 		SNI:             normSNI,
 		Endpoint:        endpoint,
 	}
@@ -325,19 +471,36 @@ func (s *SNICertStore) LoadBinding(
 	for k, v := range *cur {
 		next[k] = v
 	}
-	next[normSNI] = &pair
+	certCopy := loaded.Certificate
+	next[normSNI] = &certCopy
 	s.certTable.Store(&next)
 	s.bindings[cleanRef] = obs
 	return obs, nil
 }
 
-// InspectBinding 返回指定绑定在当前内存中的最新加载状态。
+// InspectBinding 返回指定绑定在当前内存中的最新加载状态；重启后若内存未命中则从物化目录回填。
 func (s *SNICertStore) InspectBinding(bindingRef, endpoint string) tlsBindingObservation {
 	cleanRef := strings.TrimSpace(bindingRef)
 	s.writeMu.Lock()
 	obs, ok := s.bindings[cleanRef]
 	s.writeMu.Unlock()
 	if !ok {
+		if loaded, err := LoadConsumerBindingKeypair(s.dataDir, cleanRef, 0, "", ""); err == nil && loaded.Generation > 0 {
+			obs = tlsBindingObservation{
+				Running:         s.HTTPSListenerActive(),
+				BindingRef:      loaded.BindingID,
+				Generation:      loaded.Generation,
+				PolicyRevision:  loaded.PolicyRevision,
+				FullchainSHA256: loaded.FullchainSHA256,
+				LeafFingerprint: loaded.LeafFingerprint,
+				SNI:             loaded.SNI,
+				Endpoint:        endpoint,
+			}
+			s.writeMu.Lock()
+			s.bindings[cleanRef] = obs
+			s.writeMu.Unlock()
+			return obs
+		}
 		return tlsBindingObservation{
 			Running:    s.HTTPSListenerActive(),
 			BindingRef: cleanRef,
@@ -401,10 +564,22 @@ func (s *SNICertStore) TLSConfig() *tls.Config {
 	}
 }
 
-// MaterializedCertPaths 返回宿主 consumerfiles 物化在插件数据目录下的 0600 证书链与私钥路径。
+// MaterializedCertPaths 返回宿主 consumerfiles 物化在插件数据目录下的 0600 证书链与私钥路径：
+// 优先从 current.json 解析当前生效代（generations/g<N>/{fullchain.pem,privkey.pem}），
+// 在尚未落盘或旧版测试夹具场景下回退至 active_{fullchain,privkey}.pem。
 func MaterializedCertPaths(pluginDataDir, certBindingRef string) (fullchainPath, privkeyPath string) {
 	cleanRef := filepath.Base(strings.TrimSpace(certBindingRef))
 	base := filepath.Join(pluginDataDir, "tls", "bindings", cleanRef)
+	if curRaw, err := os.ReadFile(filepath.Join(base, "current.json")); err == nil {
+		var ptr ConsumerBindingCurrentPointer
+		if json.Unmarshal(curRaw, &ptr) == nil {
+			if gen := ptr.activeProof().Binding.Generation; gen > 0 {
+				genDir := filepath.Join(base, "generations", fmt.Sprintf("g%d", gen))
+				return filepath.ToSlash(filepath.Join(genDir, "fullchain.pem")),
+					filepath.ToSlash(filepath.Join(genDir, "privkey.pem"))
+			}
+		}
+	}
 	return filepath.ToSlash(filepath.Join(base, "active_fullchain.pem")),
 		filepath.ToSlash(filepath.Join(base, "active_privkey.pem"))
 }
@@ -545,29 +720,71 @@ func MigrateIngressSitesCompositeUnique(ctx context.Context, db *sql.DB) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// 查询旧表实际存在的列，与目标表白名单列求交集进行显式列拷贝，避免 SELECT * 在列数/顺序漂移时失败。
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(ingress_sites)`)
+	if err != nil {
+		return fmt.Errorf("inspect ingress_sites columns: %w", err)
+	}
+	existingCols := make(map[string]bool)
+	for rows.Next() {
+		var (
+			cid        int
+			name, ctyp string
+			notnull    int
+			dflt       sql.NullString
+			pk         int
+		)
+		if scanErr := rows.Scan(&cid, &name, &ctyp, &notnull, &dflt, &pk); scanErr != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan ingress_sites column: %w", scanErr)
+		}
+		existingCols[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	_ = rows.Close()
+
+	allowedCols := []string{
+		"id", "domain", "enabled", "upstream_url", "path_prefix",
+		"websocket", "tls_mode", "cert_id", "force_https",
+		"rate_limit_rps", "rate_limit_burst", "basic_auth_user", "basic_auth_hash",
+		"extra_headers_json", "upstream_tls_insecure", "max_body_mb",
+		"notes", "revision", "created_at", "updated_at",
+	}
+	copyCols := make([]string, 0, len(allowedCols))
+	for _, col := range allowedCols {
+		if existingCols[col] {
+			copyCols = append(copyCols, col)
+		}
+	}
+	if len(copyCols) == 0 {
+		return errors.New("migrate ingress_sites composite unique: no matching columns")
+	}
+	colList := strings.Join(copyCols, ", ")
+
 	stmts := []string{
 		`CREATE TABLE ingress_sites_v2 (
-			id                 TEXT PRIMARY KEY,
-			domain             TEXT NOT NULL,
-			enabled            INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-			upstream_url       TEXT NOT NULL,
-			path_prefix        TEXT NOT NULL DEFAULT '/',
-			websocket          INTEGER NOT NULL DEFAULT 1 CHECK (websocket IN (0, 1)),
-			tls_mode           TEXT NOT NULL DEFAULT 'managed' CHECK (tls_mode IN ('off', 'managed', 'custom')),
-			cert_id            TEXT NOT NULL DEFAULT '',
-			force_https        INTEGER NOT NULL DEFAULT 1 CHECK (force_https IN (0, 1)),
-			rate_limit_rps     INTEGER NOT NULL DEFAULT 0 CHECK (rate_limit_rps >= 0 AND rate_limit_rps <= 10000),
-			rate_limit_burst   INTEGER NOT NULL DEFAULT 0 CHECK (rate_limit_burst >= 0 AND rate_limit_burst <= 20000),
-			basic_auth_user    TEXT NOT NULL DEFAULT '',
-			basic_auth_hash    TEXT NOT NULL DEFAULT '',
-			extra_headers_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(extra_headers_json)),
-			notes              TEXT NOT NULL DEFAULT '',
-			revision           INTEGER NOT NULL DEFAULT 1,
-			created_at         INTEGER NOT NULL,
-			updated_at         INTEGER NOT NULL,
+			id                    TEXT PRIMARY KEY,
+			domain                TEXT NOT NULL,
+			enabled               INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+			upstream_url          TEXT NOT NULL,
+			path_prefix           TEXT NOT NULL DEFAULT '/',
+			websocket             INTEGER NOT NULL DEFAULT 1 CHECK (websocket IN (0, 1)),
+			tls_mode              TEXT NOT NULL DEFAULT 'managed' CHECK (tls_mode IN ('off', 'managed', 'custom')),
+			cert_id               TEXT NOT NULL DEFAULT '',
+			force_https           INTEGER NOT NULL DEFAULT 1 CHECK (force_https IN (0, 1)),
+			rate_limit_rps        INTEGER NOT NULL DEFAULT 0 CHECK (rate_limit_rps >= 0 AND rate_limit_rps <= 10000),
+			rate_limit_burst      INTEGER NOT NULL DEFAULT 0 CHECK (rate_limit_burst >= 0 AND rate_limit_burst <= 20000),
+			basic_auth_user       TEXT NOT NULL DEFAULT '',
+			basic_auth_hash       TEXT NOT NULL DEFAULT '',
+			extra_headers_json    TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(extra_headers_json)),
+			upstream_tls_insecure INTEGER NOT NULL DEFAULT 0 CHECK (upstream_tls_insecure IN (0, 1)),
+			max_body_mb           INTEGER NOT NULL DEFAULT 0 CHECK (max_body_mb >= 0 AND max_body_mb <= 102400),
+			notes                 TEXT NOT NULL DEFAULT '',
+			revision              INTEGER NOT NULL DEFAULT 1,
+			created_at            INTEGER NOT NULL,
+			updated_at            INTEGER NOT NULL,
 			UNIQUE (domain, path_prefix)
 		) STRICT;`,
-		`INSERT INTO ingress_sites_v2 SELECT * FROM ingress_sites;`,
+		`INSERT INTO ingress_sites_v2 (` + colList + `) SELECT ` + colList + ` FROM ingress_sites;`,
 		`DROP TABLE ingress_sites;`,
 		`ALTER TABLE ingress_sites_v2 RENAME TO ingress_sites;`,
 		`CREATE INDEX IF NOT EXISTS idx_ingress_sites_domain ON ingress_sites(domain);`,

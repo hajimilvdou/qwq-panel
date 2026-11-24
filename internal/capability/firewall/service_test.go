@@ -315,4 +315,16 @@ func TestFirewallSyncPanelPortHotUpdatesActiveChain(t *testing.T) {
 	if !bytes.Contains(n.doc, []byte(`45002`)) || bytes.Contains(n.doc, []byte(`45001`)) {
 		t.Fatalf("expected 45002 allowed and retired 45001 removed, got %s", string(n.doc))
 	}
+	// Tightening to loopback 127.0.0.1 must close 45002 on public nftables while keeping SSH 22.
+	resp3, err := s.Run(t.Context(), sandbox.CapabilityRequest{
+		Op:         "firewall.sync-panel-port",
+		ID:         "controller",
+		ParamsJSON: []byte(`{"port":45002,"listen_host":"127.0.0.1"}`),
+	})
+	if err != nil || !resp3.OK {
+		t.Fatalf("loopback firewall.sync-panel-port failed: resp=%+v err=%v", resp3, err)
+	}
+	if bytes.Contains(n.doc, []byte(`45002`)) {
+		t.Fatalf("expected loopback listen_host to close 45002 on public chain, got %s", string(n.doc))
+	}
 }

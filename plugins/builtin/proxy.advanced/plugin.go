@@ -101,6 +101,7 @@ type proxyConfig struct {
 	SSPort              uint16
 	SSMethod            string
 	SSServerKey         string
+	SSProfileID         string
 	SSObfsMode          string
 	SSObfsHost          string
 	SSUDP               bool
@@ -236,6 +237,7 @@ type instance struct {
 
 	mu                    sync.RWMutex
 	cfg                   proxyConfig
+	syncedSSProfileID     string
 	shapingSupported      bool
 	shapingDegradedReason string
 	lastSyncError         string
@@ -255,7 +257,11 @@ type instance struct {
 func (i *instance) configSnapshot() proxyConfig {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	return i.cfg
+	cfg := i.cfg
+	if cfg.SSProfileID == "" {
+		cfg.SSProfileID = i.syncedSSProfileID
+	}
+	return cfg
 }
 
 func (i *instance) Activate(ctx context.Context) error {

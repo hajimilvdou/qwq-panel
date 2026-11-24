@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -144,6 +145,7 @@ func parseAliyunRecord(scope dns.Scope, raw json.RawMessage) (aliyunRecord, erro
 		Value    string         `json:"Value"`
 		TTL      uint32         `json:"TTL"`
 		Line     string         `json:"Line"`
+		Priority *uint16        `json:"Priority"`
 	}
 	if json.Unmarshal(raw, &payload) != nil || !aliyunID(payload.RecordID) || len(payload.Line) > 64 || strings.ContainsAny(payload.Line, "\x00\r\n") {
 		return aliyunRecord{}, fault.New("PROVIDER_INVALID", "阿里云记录身份无效")
@@ -162,7 +164,11 @@ func parseAliyunRecord(scope dns.Scope, raw json.RawMessage) (aliyunRecord, erro
 	if err != nil {
 		return aliyunRecord{}, err
 	}
-	record, err := dns.CanonicalRecord(scope, dns.Record{ID: payload.RecordID, Type: payload.Type, Name: name, Value: payload.Value, TTL: payload.TTL, ProviderRevision: version})
+	value := payload.Value
+	if payload.Type == dns.MX && payload.Priority != nil && !strings.Contains(strings.TrimSpace(value), " ") {
+		value = fmt.Sprintf("%d %s", *payload.Priority, strings.TrimSuffix(strings.TrimSpace(value), "."))
+	}
+	record, err := dns.CanonicalRecord(scope, dns.Record{ID: payload.RecordID, Type: payload.Type, Name: name, Value: value, TTL: payload.TTL, ProviderRevision: version})
 	line := payload.Line
 	if line == "" {
 		line = "default"
@@ -251,7 +257,18 @@ func aliyunWriteParameters(scope dns.Scope, record dns.Record) (url.Values, erro
 	if err != nil {
 		return nil, err
 	}
-	return url.Values{"RR": {rr}, "Type": {string(record.Type)}, "Value": {record.Value}, "TTL": {strconv.FormatUint(uint64(record.TTL), 10)}}, nil
+	val := record.Value
+	params := url.Values{"RR": {rr}, "Type": {string(record.Type)}, "TTL": {strconv.FormatUint(uint64(record.TTL), 10)}}
+	if record.Type == dns.MX {
+		prio, target, err := dns.ParseMXValue(record.Value)
+		if err != nil {
+			return nil, err
+		}
+		val = target
+		params.Set("Priority", strconv.FormatUint(uint64(prio), 10))
+	}
+	params.Set("Value", val)
+	return params, nil
 }
 
 func aliyunChangedID(data []byte, expected string) (string, error) {

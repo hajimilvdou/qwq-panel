@@ -292,6 +292,7 @@ var allowedPluginResponseHeaders = map[string]struct{}{
 	"ETag":                    {},
 	"Subscription-Userinfo":   {},
 	"Profile-Update-Interval": {},
+	"Profile-Title":           {},
 	"Content-Disposition":     {},
 	"Location":                {},
 	"X-Request-Id":            {},
@@ -331,19 +332,41 @@ func (g *Gateway) extractClientIP(r *http.Request) string {
 	if err != nil || !g.isTrustedProxyIP(remoteAddr) {
 		return remote
 	}
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff == "" {
+	// Merge all X-Forwarded-For headers in order and walk right-to-left so
+	// multiple reverse-proxy hops cannot be bypassed via duplicate XFF headers.
+	xffValues := r.Header.Values("X-Forwarded-For")
+	hasXFF := false
+	for i := len(xffValues) - 1; i >= 0; i-- {
+		if strings.TrimSpace(xffValues[i]) == "" {
+			continue
+		}
+		hasXFF = true
+		parts := strings.Split(xffValues[i], ",")
+		for j := len(parts) - 1; j >= 0; j-- {
+			cand := strings.TrimSpace(parts[j])
+			if cand == "" {
+				continue
+			}
+			addr, perr := netip.ParseAddr(cand)
+			if perr != nil {
+				return remote
+			}
+			if !g.isTrustedProxyIP(addr) {
+				return addr.Unmap().String()
+			}
+		}
+	}
+	if hasXFF {
 		return remote
 	}
-	parts := strings.Split(xff, ",")
-	for i := len(parts) - 1; i >= 0; i-- {
-		cand := strings.TrimSpace(parts[i])
-		addr, perr := netip.ParseAddr(cand)
-		if perr != nil {
-			return remote
-		}
-		if !g.isTrustedProxyIP(addr) {
-			return addr.Unmap().String()
+	// Only when no X-Forwarded-For header is present, accept a single valid
+	// non-trusted-proxy X-Real-IP value set by a trusted reverse proxy.
+	realIPs := r.Header.Values("X-Real-IP")
+	if len(realIPs) == 1 {
+		if cand := strings.TrimSpace(realIPs[0]); cand != "" {
+			if addr, perr := netip.ParseAddr(cand); perr == nil && !g.isTrustedProxyIP(addr) {
+				return addr.Unmap().String()
+			}
 		}
 	}
 	return remote
@@ -500,6 +523,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RelayAuthBearer: safeToken,
 		ExtraHeaders: map[string]string{
 			"Host":                  r.Host,
+			"X-Forwarded-Host":      r.Host,
 			"X-Forwarded-Proto":     g.effectiveProto(r),
 			"If-None-Match":         r.Header.Get("If-None-Match"),
 			"anthropic-version":     r.Header.Get("anthropic-version"),
@@ -517,12 +541,22 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if spec.Streaming && g.streamer != nil {
 		rc := http.NewResponseController(w)
-		_ = rc.SetReadDeadline(time.Time{})
+		// Keep a bounded per-write deadline on streaming responses (refreshed on
+		// every Write/Flush) so slowloris peers cannot pin stream slots forever,
+		// while keeping a 60s read deadline during body upload.
+		_ = rc.SetWriteDeadline(time.Now().Add(streamPerWriteTimeout))
 		ctx, cancel := context.WithTimeout(r.Context(), DefaultStreamTimeout)
 		defer cancel()
-		limitedBody := http.MaxBytesReader(w, r.Body, maxReqBytes)
-		defer limitedBody.Close()
-		if err := g.streamer.ServePublicStream(ctx, pluginID, pubReq, limitedBody, w); err != nil {
+		var streamBody io.ReadCloser = http.MaxBytesReader(w, r.Body, maxReqBytes)
+		if r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+			_ = rc.SetReadDeadline(time.Now().Add(60 * time.Second))
+			streamBody = &deadlineClearingReader{ReadCloser: streamBody, rc: rc}
+		} else {
+			_ = rc.SetReadDeadline(time.Time{})
+		}
+		defer streamBody.Close()
+		boundedW := &deadlineResponseWriter{ResponseWriter: w, rc: rc, writeTimeout: streamPerWriteTimeout}
+		if err := g.streamer.ServePublicStream(ctx, pluginID, pubReq, streamBody, boundedW); err != nil {
 			http.Error(w, "upstream gateway error", http.StatusBadGateway)
 		}
 		return
@@ -586,4 +620,64 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodHead && len(resp.Body) > 0 {
 		_, _ = w.Write(resp.Body)
 	}
+}
+
+const streamPerWriteTimeout = 30 * time.Second
+
+type deadlineResponseWriter struct {
+	http.ResponseWriter
+	rc           *http.ResponseController
+	writeTimeout time.Duration
+}
+
+func (d *deadlineResponseWriter) Unwrap() http.ResponseWriter {
+	return d.ResponseWriter
+}
+
+func (d *deadlineResponseWriter) refreshWriteDeadline() {
+	if d.rc != nil && d.writeTimeout > 0 {
+		_ = d.rc.SetWriteDeadline(time.Now().Add(d.writeTimeout))
+	}
+}
+
+func (d *deadlineResponseWriter) WriteHeader(code int) {
+	d.refreshWriteDeadline()
+	d.ResponseWriter.WriteHeader(code)
+}
+
+func (d *deadlineResponseWriter) Write(p []byte) (int, error) {
+	d.refreshWriteDeadline()
+	return d.ResponseWriter.Write(p)
+}
+
+func (d *deadlineResponseWriter) Flush() {
+	d.refreshWriteDeadline()
+	if f, ok := d.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+type deadlineClearingReader struct {
+	io.ReadCloser
+	rc      *http.ResponseController
+	cleared atomic.Bool
+}
+
+func (d *deadlineClearingReader) clearDeadline() {
+	if d.cleared.CompareAndSwap(false, true) && d.rc != nil {
+		_ = d.rc.SetReadDeadline(time.Time{})
+	}
+}
+
+func (d *deadlineClearingReader) Read(p []byte) (int, error) {
+	n, err := d.ReadCloser.Read(p)
+	if err != nil {
+		d.clearDeadline()
+	}
+	return n, err
+}
+
+func (d *deadlineClearingReader) Close() error {
+	d.clearDeadline()
+	return d.ReadCloser.Close()
 }

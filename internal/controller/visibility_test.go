@@ -184,7 +184,7 @@ func TestVisibilityUsersServiceAccountsAuditAdminOnly(t *testing.T) {
 // owner through its actor, and any other unknown subject is dropped.
 func TestVisibilityAgentSessionsOnlyOwner(t *testing.T) {
 	c, v := newVisibilityController(t)
-	owner := createVisibilityUser(t, c, "owner", identity.RoleViewer)
+	owner := createVisibilityUser(t, c, "owner", identity.RoleOperator)
 	admin := createVisibilityUser(t, c, "admin", identity.RoleAdmin)
 	other := createVisibilityUser(t, c, "other", identity.RoleViewer)
 
@@ -277,7 +277,7 @@ func TestVisibilitySessionOwnerWired(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	owner := createVisibilityUser(t, c, "owner", identity.RoleViewer)
+	owner := createVisibilityUser(t, c, "owner", identity.RoleOperator)
 
 	e := events.Event{Type: "agent.session.updated", Subject: "agent_sessions/sess_wired", Payload: json.RawMessage(`{}`)}
 	if c.vis.Allowed(owner, e) {

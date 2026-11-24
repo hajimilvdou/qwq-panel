@@ -141,28 +141,86 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 	return a
 }
 
-// sensitiveKeys are matched against the whole key or, for the last four, its
-// last "_"/"." separated segment (session_token, db.password).
+// sensitiveKeys are matched against the whole key (after normalizing camelCase & "-" -> "_").
 var sensitiveKeys = map[string]bool{
 	"authorization": true, "proxy_authorization": true, "cookie": true, "set_cookie": true,
 	"api_key": true, "private_key": true, "client_secret": true, "csr": true,
-	"otp": true, "totp_code": true, "recovery_code": true, "passwd": true,
-	"password": true, "secret": true, "token": true, "credential": true,
+	"otp": true, "totp_code": true, "mfa_code": true, "x_qwq_mfa_code": true,
+	"recovery_code": true, "passwd": true, "password": true, "secret": true,
+	"token": true, "credential": true, "passphrase": true, "entry_path": true,
+	"webhook_url": true,
 }
 
-var sensitiveSuffixes = map[string]bool{"password": true, "secret": true, "token": true, "credential": true}
+// benignKeyAllowlist lists identifier/metadata *_key fields that are not secrets.
+var benignKeyAllowlist = map[string]bool{
+	"public_key":      true,
+	"idempotency_key": true,
+	"sort_key":        true,
+	"primary_key":     true,
+	"foreign_key":     true,
+	"key_id":          true,
+	"cache_key":       true,
+}
+
+var sensitiveSuffixes = map[string]bool{
+	"password": true, "secret": true, "token": true, "credential": true,
+	"passphrase": true, "key": true, "pem": true,
+}
 
 // IsSensitiveKey reports whether a log attribute with this key is redacted;
 // offline tools (qwq support-bundle) use it to filter collected logs.
 func IsSensitiveKey(key string) bool { return sensitive(key) }
 
+func normalizeKeySnake(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	runes := []rune(s)
+	for i, r := range runes {
+		if r == '-' {
+			b.WriteByte('_')
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				prev := runes[i-1]
+				prevLowerOrDigit := (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9')
+				nextLower := i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z'
+				if prevLowerOrDigit || ((prev >= 'A' && prev <= 'Z') && nextLower) {
+					b.WriteByte('_')
+				}
+			}
+			b.WriteRune(r - 'A' + 'a')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func sensitive(key string) bool {
-	k := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	k := normalizeKeySnake(key)
+	if k == "" || benignKeyAllowlist[k] {
+		return false
+	}
 	if sensitiveKeys[k] {
 		return true
 	}
+	if dot := strings.LastIndexByte(k, '.'); dot >= 0 {
+		tail := k[dot+1:]
+		if benignKeyAllowlist[tail] {
+			return false
+		}
+		if sensitiveKeys[tail] {
+			return true
+		}
+	}
 	if i := strings.LastIndexAny(k, "_."); i >= 0 {
-		return sensitiveSuffixes[k[i+1:]]
+		last := k[i+1:]
+		return sensitiveSuffixes[last]
 	}
 	return false
 }

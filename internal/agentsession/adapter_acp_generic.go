@@ -141,6 +141,7 @@ func (c *GenericACPCore) Descriptor(context.Context) CoreDescriptor {
 type acpSessionConfig struct {
 	Binary       string   `json:"-"` // host-controlled only
 	Args         []string `json:"-"` // host-controlled only
+	AuthMode     string   `json:"auth_mode,omitempty"`
 	ProviderID   string   `json:"provider_id,omitempty"`
 	WorkDir      string   `json:"-"` // host-controlled only
 	PlanMode     bool     `json:"plan_mode,omitempty"`
@@ -181,15 +182,12 @@ func (c *GenericACPCore) Run(ctx context.Context, turn Turn, emit Emit) error {
 		}
 	}
 
-	var extraEnv []string
-	if cfg.ProviderID != "" {
-		if pEnv, cleanup, pErr := ResolveProviderEnv(ctx, c.providers, cfg.ProviderID, c.name); pErr == nil {
-			defer cleanup()
-			extraEnv = append(extraEnv, pEnv...)
-		}
-	} else if c.auth != nil {
-		extraEnv = append(extraEnv, c.auth.PersistentEnvFor(c.name)...)
+	pEnv, _, _, cleanupEnv, pErr := resolveCLIAuthEnvForSession(ctx, c.providers, c.auth, c.name, cfg.AuthMode, cfg.ProviderID, turn.SessionID)
+	if pErr != nil {
+		return pErr
 	}
+	defer cleanupEnv()
+	extraEnv := append([]string(nil), pEnv...)
 
 	proc, err := c.launcher.Start(ctx, cfg.Binary, cfg.Args, extraEnv, cfg.WorkDir)
 	if err != nil {

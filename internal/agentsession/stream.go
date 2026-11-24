@@ -559,15 +559,19 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 			reasoning = clipText(rt.reasoning.String(), maxAssistantBytes)
 		}
 		rt.reasoning.Reset()
-		// Clear ReasoningContent from the broadcast Event so rt.ring does not
-		// pin unbounded reasoning text invisible to maxRingBytes accounting.
+		// Clear ReasoningContent and ThinkingBlocks from the broadcast Event so
+		// rt.ring does not pin unbounded reasoning/signature payloads invisible to
+		// maxRingBytes accounting.
+		thinkingBlocks := boundThinkingBlocks(e.ThinkingBlocks, maxAssistantBytes)
 		e.ReasoningContent = ""
-		if len(e.ToolCalls) > 0 || reasoning != "" {
+		e.ThinkingBlocks = nil
+		if len(e.ToolCalls) > 0 || reasoning != "" || len(thinkingBlocks) > 0 {
 			for i := range e.ToolCalls {
 				e.ToolCalls[i].Arguments = storableArgs(e.ToolCalls[i].Arguments)
 			}
 			raw, err := json.Marshal(assistantContent{
 				ReasoningContent: reasoning,
+				ThinkingBlocks:   thinkingBlocks,
 				ToolCalls:        e.ToolCalls,
 			})
 			if err != nil {
@@ -603,15 +607,36 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 		e.Args = storableArgs(e.Args)
 		rec, err := s.loadToolCall(ctx, rt.session.ID, e.CallID)
 		if err != nil {
-			return err
-		}
-		rec.Status = ToolAwaitingApproval
-		rec.ApprovalID = e.ApprovalID
-		if rec.OperationID == "" {
-			rec.OperationID = e.OperationID
-		}
-		if err := s.updateToolCall(ctx, owner, rec); err != nil {
-			return err
+			if problem.HasCode(err, problem.NotFound) && e.CallID != "" {
+				// External CLI permission prompts (Codex / OpenCode / ACP) may
+				// request approval before emitting a separate tool_call event.
+				rec = &ToolRecord{
+					CallID:      e.CallID,
+					SessionID:   rt.session.ID,
+					Seq:         e.Seq,
+					Action:      firstNonEmpty(e.Action, "external.permission"),
+					Args:        e.Args,
+					Status:      ToolAwaitingApproval,
+					ApprovalID:  e.ApprovalID,
+					OperationID: e.OperationID,
+					CreatedAt:   e.At,
+					UpdatedAt:   e.At,
+				}
+				if insErr := s.insertToolCall(ctx, owner, rec); insErr != nil {
+					return insErr
+				}
+			} else {
+				return err
+			}
+		} else {
+			rec.Status = ToolAwaitingApproval
+			rec.ApprovalID = e.ApprovalID
+			if rec.OperationID == "" {
+				rec.OperationID = e.OperationID
+			}
+			if err := s.updateToolCall(ctx, owner, rec); err != nil {
+				return err
+			}
 		}
 		if err := s.setRuntimeStatusLocked(ctx, rt, StatusWaitingApproval, e.Seq); err != nil {
 			return err
@@ -648,7 +673,15 @@ func (s *Service) publishLocked(ctx context.Context, rt *sessionRuntime, e Event
 			}
 		}
 	case EventApprovalDecided:
-		// Events only: the transcript and the tool-call row carry the same facts.
+		// When an external CLI turn waited inline for an approval while
+		// rt.running remained true, clear the pending marker and restore
+		// StatusRunning once the human decides.
+		if rt.running && rt.pending != nil && (e.ApprovalID == "" || rt.pending.approvalID == e.ApprovalID) {
+			rt.pending = nil
+			if rt.session.Status == StatusWaitingApproval {
+				_ = s.setRuntimeStatusLocked(ctx, rt, StatusRunning, e.Seq)
+			}
+		}
 	}
 	rt.broadcastLocked(e, s.cfg.RingSize)
 	return nil
@@ -763,4 +796,29 @@ func clipText(s string, n int) string {
 		n--
 	}
 	return s[:n]
+}
+
+// boundThinkingBlocks preserves signed Anthropic thinking blocks up to maxBytes
+// atomically: if the complete thinking sequence exceeds maxBytes, it drops the
+// whole sequence rather than keeping a partial prefix (which Anthropic rejects).
+func boundThinkingBlocks(in []AnthropicThinkingBlock, maxBytes int) []AnthropicThinkingBlock {
+	if len(in) == 0 || maxBytes <= 0 {
+		return nil
+	}
+	total := 0
+	for _, blk := range in {
+		if blk.Type == "thinking" && blk.Signature == "" {
+			return nil
+		}
+		if blk.Type == "redacted_thinking" && blk.Data == "" {
+			return nil
+		}
+		total += len(blk.Type) + len(blk.Thinking) + len(blk.Signature) + len(blk.Data)
+		if total > maxBytes {
+			return nil
+		}
+	}
+	out := make([]AnthropicThinkingBlock, len(in))
+	copy(out, in)
+	return out
 }

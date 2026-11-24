@@ -84,7 +84,7 @@ func NewCodexCore(opts CodexOptions) *CodexCore {
 		skills = NewSkillRegistry()
 	}
 	return &CodexCore{
-		launcher: opts.Launcher, minter: opts.Minter, bridge: opts.Bridge,
+		launcher: launcher, minter: opts.Minter, bridge: opts.Bridge,
 		providers: opts.Providers, skills: skills, auth: opts.Auth, workspace: opts.Workspace, bin: bin,
 	}
 }
@@ -186,31 +186,23 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 	mcpBridge := NewMCPBridge(turn, cfg.PlanMode, emit, c.bridge)
 
 	args := []string{"app-server"}
-	var extraEnv []string
-	var cleanupEnv = func() {}
-	useProvider := cfg.AuthMode != "oauth" && cfg.ProviderID != ""
-	if useProvider {
-		pEnv, ep, found, cl, pErr := ResolveProviderForCLI(ctx, c.providers, cfg.ProviderID, CoreCodex)
-		if pErr != nil {
-			return pErr
-		}
-		cleanupEnv = cl
-		extraEnv = append(extraEnv, pEnv...)
-		if found {
-			if cfg.Model == "" {
-				cfg.Model = ep.Model
-			}
-			if cfg.ReasoningEffort == "" {
-				cfg.ReasoningEffort = ep.ReasoningEffort
-			}
-			if cfg.MaxContextTokens == 0 {
-				cfg.MaxContextTokens = ep.MaxContextTokens
-			}
-		}
-	} else if c.auth != nil {
-		extraEnv = append(extraEnv, c.auth.PersistentEnvFor(CoreCodex)...)
+	pEnv, ep, found, cleanupEnv, pErr := resolveCLIAuthEnvForSession(ctx, c.providers, c.auth, CoreCodex, cfg.AuthMode, cfg.ProviderID, turn.SessionID)
+	if pErr != nil {
+		return pErr
 	}
 	defer cleanupEnv()
+	extraEnv := append([]string(nil), pEnv...)
+	if found {
+		if cfg.Model == "" {
+			cfg.Model = ep.Model
+		}
+		if cfg.ReasoningEffort == "" {
+			cfg.ReasoningEffort = ep.ReasoningEffort
+		}
+		if cfg.MaxContextTokens == 0 {
+			cfg.MaxContextTokens = ep.MaxContextTokens
+		}
+	}
 
 	if len(turn.Tools) > 0 && turn.Runner != nil {
 		if mcpSrv, mErr := StartLoopbackMCPServerWithContext(ctx, mcpBridge); mErr == nil {
@@ -435,7 +427,27 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 
 	// 2. Start or resume thread with host-mapped sandbox & approval policy
 	sandbox, approvalPolicy := MapCodexSandboxAndApproval(turn.PermissionMode, cfg.PlanMode)
-	threadID := cfg.ThreadID
+	threadID := strings.TrimSpace(cfg.ThreadID)
+	if threadID != "" {
+		var rResp struct {
+			Thread struct {
+				ID string `json:"id"`
+			} `json:"thread"`
+			ThreadID string `json:"threadId"`
+		}
+		resumeParams := map[string]any{
+			"threadId":       threadID,
+			"sandbox":        sandbox,
+			"approvalPolicy": approvalPolicy,
+			"cwd":            cfg.WorkDir,
+		}
+		if err := rpc.Call(ctx, "thread/resume", resumeParams, &rResp); err != nil {
+			// Stale thread across Codex restarts: start a fresh thread cleanly.
+			threadID = ""
+		} else if resumedID := firstNonEmpty(strings.TrimSpace(rResp.Thread.ID), strings.TrimSpace(rResp.ThreadID)); resumedID != "" {
+			threadID = resumedID
+		}
+	}
 	if threadID == "" {
 		var tResp struct {
 			Thread struct {
@@ -469,9 +481,9 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 		if err := rpc.Call(ctx, "thread/start", startParams, &tResp); err != nil {
 			return err
 		}
-		threadID = tResp.Thread.ID
-		if threadID == "" {
-			threadID = tResp.ThreadID
+		threadID = firstNonEmpty(strings.TrimSpace(tResp.Thread.ID), strings.TrimSpace(tResp.ThreadID))
+		if threadID != "" && turn.PersistExternalID != nil {
+			_ = turn.PersistExternalID(context.WithoutCancel(ctx), "external_thread_id", threadID)
 		}
 	}
 
@@ -500,31 +512,26 @@ func (c *CodexCore) runAppServer(ctx context.Context, cfg CodexConfig, turn Turn
 
 // runExecJSONL implements the fallback `codex exec --json` NDJSON parser.
 func (c *CodexCore) runExecJSONL(ctx context.Context, cfg CodexConfig, turn Turn, emit Emit) error {
-	var extraEnv []string
-	var cleanupEnv = func() {}
-	useProvider := cfg.AuthMode != "oauth" && cfg.ProviderID != ""
-	if useProvider {
-		pEnv, ep, found, cl, pErr := ResolveProviderForCLI(ctx, c.providers, cfg.ProviderID, CoreCodex)
-		if pErr != nil {
-			return pErr
-		}
-		cleanupEnv = cl
-		extraEnv = append(extraEnv, pEnv...)
-		if found {
-			if cfg.Model == "" {
-				cfg.Model = ep.Model
-			}
-			if cfg.ReasoningEffort == "" {
-				cfg.ReasoningEffort = ep.ReasoningEffort
-			}
-		}
-	} else if c.auth != nil {
-		extraEnv = append(extraEnv, c.auth.PersistentEnvFor(CoreCodex)...)
+	if turn.PermissionMode != operations.PermissionReadOnly && !cfg.PlanMode {
+		return problem.New(problem.PermissionDenied,
+			"非交互式回退传输 (exec-json) 无法桥接宿主人工审批，仅允许在只读或计划模式下使用。")
+	}
+	pEnv, ep, found, cleanupEnv, pErr := resolveCLIAuthEnvForSession(ctx, c.providers, c.auth, CoreCodex, cfg.AuthMode, cfg.ProviderID, turn.SessionID)
+	if pErr != nil {
+		return pErr
 	}
 	defer cleanupEnv()
+	extraEnv := append([]string(nil), pEnv...)
+	if found {
+		if cfg.Model == "" {
+			cfg.Model = ep.Model
+		}
+		if cfg.ReasoningEffort == "" {
+			cfg.ReasoningEffort = ep.ReasoningEffort
+		}
+	}
 
-	sandbox, _ := MapCodexSandboxAndApproval(turn.PermissionMode, cfg.PlanMode)
-	args := []string{"exec", "--json", "--sandbox", sandbox}
+	args := []string{"exec", "--json", "--sandbox", "read-only"}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
 	}

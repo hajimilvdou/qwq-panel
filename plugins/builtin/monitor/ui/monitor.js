@@ -5,8 +5,11 @@
   const root = document.documentElement;
   const pick = (value, options, fallback) => options.includes(value) ? value : fallback;
   const initial = new URLSearchParams(location.hash.slice(1));
-  root.dataset.theme = pick(initial.get('theme'), ['light', 'dark'], 'light');
+  const initialTheme = pick(initial.get('theme'), ['light', 'dark'], 'light');
+  root.dataset.theme = initialTheme;
+  root.style.colorScheme = initialTheme;
   root.dataset.motion = pick(initial.get('motion'), ['full', 'reduced', 'off'], 'reduced');
+  root.dataset.density = pick(initial.get('density'), ['comfortable', 'compact'], 'comfortable');
   const $ = (id) => document.getElementById(id);
   let port, timer, paused = false, visible = true, busy = false, pendingRefresh = false, range = '5m', sequence = 0;
   const pending = new Map();
@@ -56,8 +59,20 @@
       } else request.reject(new Error(extractErrorMessage(data.problem || data.error, '宿主指标暂不可用')));
     }
     if (data.t === 'ui.settings') {
-      root.dataset.theme = pick(data.theme, ['light', 'dark'], root.dataset.theme);
+      const nextTheme = pick(data.theme, ['light', 'dark'], root.dataset.theme);
+      root.dataset.theme = nextTheme;
+      root.style.colorScheme = nextTheme;
       root.dataset.motion = pick(data.motion, ['full', 'reduced', 'off'], 'reduced');
+      if (data.density === 'comfortable' || data.density === 'compact') {
+        root.dataset.density = data.density;
+      }
+      if (data.tokens && typeof data.tokens === 'object') {
+        for (const [k, v] of Object.entries(data.tokens)) {
+          if (k.startsWith('--') && typeof v === 'string' && !/[;{}<>]/.test(v)) {
+            root.style.setProperty(k, v.trim());
+          }
+        }
+      }
       if (typeof data.visible === 'boolean') visible = data.visible;
       schedule();
     }
@@ -170,6 +185,7 @@
       const at = value(current.t);
       $('sample-time').textContent = at ? '最近采样 ' + new Date(at).toLocaleTimeString() : '等待宿主采样';
       status(snapshot.status === 'ready' ? '采集中' : '等待有效采样');
+      syncThresholdsFromSnapshot(snapshot.thresholds);
       plot('net-chart', history, ['net_rx_bps', 'net_tx_bps'], null, 1e6);
       plot('resource-chart', history, ['cpu_pct', 'mem_pct', 'cpu_iowait_percent'], 100);
       plot('disk-io-chart', history, ['disk_read_bps', 'disk_write_bps'], null, 1024 * 1024);
@@ -181,6 +197,46 @@
       else schedule();
     }
   }
+
+  let thresholdsHydrated = false;
+  function syncThresholdsFromSnapshot(th) {
+    if (!th || typeof th !== 'object' || thresholdsHydrated) return;
+    if (th.cpu) {
+      if (typeof th.cpu.warn === 'number') $('th-cpu-warn').value = String(th.cpu.warn);
+      if (typeof th.cpu.crit === 'number') $('th-cpu-crit').value = String(th.cpu.crit);
+    }
+    if (th.mem) {
+      if (typeof th.mem.warn === 'number') $('th-mem-warn').value = String(th.mem.warn);
+      if (typeof th.mem.crit === 'number') $('th-mem-crit').value = String(th.mem.crit);
+    }
+    if (th.disk) {
+      if (typeof th.disk.warn === 'number') $('th-disk-warn').value = String(th.disk.warn);
+      if (typeof th.disk.crit === 'number') $('th-disk-crit').value = String(th.disk.crit);
+    }
+    thresholdsHydrated = true;
+  }
+
+  $('btn-save-thresholds')?.addEventListener('click', async () => {
+    const payload = {
+      cpu: { warn: Number($('th-cpu-warn').value), crit: Number($('th-cpu-crit').value) },
+      mem: { warn: Number($('th-mem-warn').value), crit: Number($('th-mem-crit').value) },
+      disk: { warn: Number($('th-disk-warn').value), crit: Number($('th-disk-crit').value) },
+    };
+    for (const [label, lv] of [['CPU', payload.cpu], ['内存', payload.mem], ['磁盘', payload.disk]]) {
+      if (!Number.isFinite(lv.warn) || !Number.isFinite(lv.crit) || lv.warn < 0 || lv.warn >= lv.crit || lv.crit > 100) {
+        $('th-status').textContent = `${label} 阈值无效：需满足 0 ≤ 警告 < 严重 ≤ 100`;
+        return;
+      }
+    }
+    $('th-status').textContent = '保存中…';
+    try {
+      await invoke('monitor.thresholds.set', payload);
+      $('th-status').textContent = '告警阈值已保存并热生效';
+      void refresh();
+    } catch (err) {
+      $('th-status').textContent = '保存失败：' + (err?.message || '请确认拥有写入权限');
+    }
+  });
 
   function schedule() {
     clearTimeout(timer);

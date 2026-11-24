@@ -22,7 +22,7 @@ export interface TrackedInvokeOptions<TRes> extends KitInvokeOptions {
  * invokeWithApprovalFollowup 封装完整的三态调用闭环：
  *  - 若直接 `done`：立即触发 `onImmediateDone` 并返回结果；
  *  - 若进入 `awaiting_approval` 或 `running`：自动调用宿主 `toast` 提示用户前往右侧审批卡确认，
- *    同时自动订阅 `plugins/<pluginId>/*` 与 `operations/*`，审批通过落地后自动触发 `onBackgroundSettled()` 并销毁监听器。
+ *    同时自动订阅 `plugins/<pluginId>/*`，审批通过落地后自动触发 `onBackgroundSettled()` 并销毁监听器。
  */
 export async function invokeWithApprovalFollowup<TRes = unknown>(
   bridge: PluginBridgeClient,
@@ -56,7 +56,7 @@ export async function invokeWithApprovalFollowup<TRes = unknown>(
       }
     }, waitMs);
 
-    unsub = bridge.subscribe([`plugins/${opts.pluginId}/*`, 'operations/*'], (ev) => {
+    unsub = bridge.subscribe([`plugins/${opts.pluginId}/*`], (ev) => {
       if (settled) return;
       const evOpId = typeof ev.operation_id === 'string' ? ev.operation_id : '';
       const matchesOp = Boolean(outcome.operationId && evOpId === outcome.operationId);

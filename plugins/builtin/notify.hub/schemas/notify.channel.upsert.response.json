@@ -8,6 +8,9 @@
   "properties": {
     "channel": {
       "type": "object"
+    },
+    "auto_created_rule": {
+      "type": "object"
     }
   }
 }

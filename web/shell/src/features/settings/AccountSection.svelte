@@ -38,14 +38,16 @@
 
   async function saveName(e: SubmitEvent) {
     e.preventDefault();
-    if (!nameDirty || nameBusy || !displayName.trim()) return;
+    if (!nameDirty || nameBusy) return;
     nameBusy = true;
     nameErr = null;
+    const nextName = displayName.trim();
     try {
-      const r = await account.updateProfile({ display_name: displayName.trim(), expected_revision: user.revision }, nameIntent.key);
+      const r = await account.updateProfile({ display_name: nextName, expected_revision: user.revision }, nameIntent.key);
       session.updateUser(r.result as User);
+      displayName = (r.result as User)?.display_name ?? nextName;
       nameIntent = createIntent();
-      toasts.success('显示名已更新');
+      toasts.success(nextName ? '显示名已更新' : '已清空显示名');
     } catch (err) {
       nameErr = describeError(err);
     } finally {
@@ -141,7 +143,7 @@
     {/if}
     <Input label="显示名" autocomplete="nickname" maxlength={64} bind:value={displayName} error={nameErr?.fields['/display_name']} />
     <div class="actions">
-      <Button type="submit" variant="primary" loading={nameBusy} disabled={!nameDirty || !displayName.trim()}>保存</Button>
+      <Button type="submit" variant="primary" loading={nameBusy} disabled={!nameDirty}>保存</Button>
     </div>
   </form>
 </Card>

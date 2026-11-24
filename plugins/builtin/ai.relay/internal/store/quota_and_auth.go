@@ -30,6 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/qwq-panel/qwq/sdk/pluginsdk/sqlitedb"
 	_ "modernc.org/sqlite"
 )
 
@@ -54,6 +55,65 @@ var ErrUserDisabled = errors.New("USER_DISABLED: 该分发账号已被停用")
 // ErrQuotaExhausted 表示用户或子令牌的可用虚拟统计额度不足以覆盖本次请求的最小预冻结额。
 var ErrQuotaExhausted = errors.New("QUOTA_EXHAUSTED: insufficient account statistical quota")
 
+// OpenDualDB 使用 sdk/pluginsdk/sqlitedb 打开读写分离 WAL 双连接池（1 Writer + 4 Reader + 8MiB journal_size_limit），
+// 同时加载或生成 32 字节本地 AES-256-GCM 主密钥。当 dataDir 为空时回退内存单连接池。
+func OpenDualDB(dataDir, schemaSQL string) (*sqlitedb.DualPool, []byte, error) {
+	if strings.TrimSpace(dataDir) == "" {
+		db, key, err := OpenDB("", schemaSQL)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &sqlitedb.DualPool{Writer: db, Reader: db}, key, nil
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return nil, nil, fmt.Errorf("create relay data dir: %w", err)
+	}
+	masterKey, err := loadOrCreateMasterKey(filepath.Join(dataDir, "relay.key"))
+	if err != nil {
+		return nil, nil, err
+	}
+	pool, err := sqlitedb.OpenDualSQLite("sqlite", filepath.Join(dataDir, "relay.db"), 4)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open dual sqlite: %w", err)
+	}
+	if _, err := pool.Writer.Exec(schemaSQL); err != nil {
+		_ = pool.Close()
+		return nil, nil, fmt.Errorf("init schema: %w", err)
+	}
+	nowMs := time.Now().UTC().UnixMilli()
+	if _, err := pool.Writer.Exec(`INSERT OR IGNORE INTO portal_settings (id, updated_at) VALUES (1, ?);`, nowMs); err != nil {
+		_ = pool.Close()
+		return nil, nil, fmt.Errorf("seed portal_settings: %w", err)
+	}
+	return pool, masterKey, nil
+}
+
+func loadOrCreateMasterKey(keyPath string) ([]byte, error) {
+	rawKey, err := os.ReadFile(keyPath)
+	if err == nil {
+		if len(rawKey) == 32 {
+			return rawKey, nil
+		}
+		return nil, fmt.Errorf("master key %s is corrupted (len=%d, want 32)", keyPath, len(rawKey))
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read master key: %w", err)
+	}
+	masterKey := make([]byte, 32)
+	if _, err := rand.Read(masterKey); err != nil {
+		return nil, fmt.Errorf("generate master key: %w", err)
+	}
+	tmp := keyPath + ".tmp"
+	if err := os.WriteFile(tmp, masterKey, 0o600); err != nil {
+		return nil, fmt.Errorf("persist master key: %w", err)
+	}
+	if err := os.Rename(tmp, keyPath); err != nil {
+		_ = os.Remove(tmp)
+		return nil, fmt.Errorf("rename master key: %w", err)
+	}
+	return masterKey, nil
+}
+
 // OpenDB 打开并初始化 WAL 模式 SQLite 数据库，同时加载或生成 32 字节本地 AES-256-GCM 主密钥。
 func OpenDB(dataDir, schemaSQL string) (*sql.DB, []byte, error) {
 	dsn := ":memory:"
@@ -64,18 +124,10 @@ func OpenDB(dataDir, schemaSQL string) (*sql.DB, []byte, error) {
 			return nil, nil, fmt.Errorf("create relay data dir: %w", err)
 		}
 		dsn = filepath.Join(dataDir, "relay.db")
-		keyPath := filepath.Join(dataDir, "relay.key")
-		rawKey, err := os.ReadFile(keyPath)
-		if err == nil && len(rawKey) == 32 {
-			masterKey = rawKey
-		} else {
-			masterKey = make([]byte, 32)
-			if _, err := rand.Read(masterKey); err != nil {
-				return nil, nil, fmt.Errorf("generate master key: %w", err)
-			}
-			if err := os.WriteFile(keyPath, masterKey, 0o600); err != nil {
-				return nil, nil, fmt.Errorf("persist master key: %w", err)
-			}
+		var err error
+		masterKey, err = loadOrCreateMasterKey(filepath.Join(dataDir, "relay.key"))
+		if err != nil {
+			return nil, nil, err
 		}
 	} else {
 		masterKey = make([]byte, 32)
@@ -94,6 +146,7 @@ func OpenDB(dataDir, schemaSQL string) (*sql.DB, []byte, error) {
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL;",
 		"PRAGMA synchronous=NORMAL;",
+		"PRAGMA journal_size_limit=8388608;",
 		"PRAGMA cache_size=-2048;",
 		"PRAGMA busy_timeout=5000;",
 		"PRAGMA foreign_keys=ON;",
@@ -373,6 +426,7 @@ type LiveAPIToken struct {
 	RPMLimit         int
 	ExpiresAtUnixMs  int64
 
+	quotaMu     sync.Mutex
 	rpmMu       sync.Mutex
 	rpmWindowID int64
 	rpmCount    int
@@ -385,17 +439,14 @@ func (t *LiveAPIToken) EffectiveGroup() string {
 	return t.User.GetGroupName()
 }
 
-func (t *LiveAPIToken) AllowRequest(model, clientIP string, now time.Time) error {
+// AllowPreRead validates user active status, token expiry, and IP allowlist
+// without consuming an RPM counter slot (used before reading request bodies).
+func (t *LiveAPIToken) AllowPreRead(clientIP string, now time.Time) error {
 	if !t.User.StatusActive.Load() {
 		return errors.New("USER_DISABLED: account is disabled")
 	}
 	if t.ExpiresAtUnixMs > 0 && now.UnixMilli() > t.ExpiresAtUnixMs {
 		return errors.New("TOKEN_EXPIRED: sub-key has expired")
-	}
-	if len(t.AllowedModels) > 0 && model != "" {
-		if _, ok := t.AllowedModels[model]; !ok {
-			return fmt.Errorf("MODEL_NOT_ALLOWED: key is not permitted to access model %s", model)
-		}
 	}
 	if len(t.AllowedPrefixes) > 0 {
 		addr, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(clientIP), "[]"))
@@ -412,6 +463,18 @@ func (t *LiveAPIToken) AllowRequest(model, clientIP string, now time.Time) error
 		}
 		if !allowed {
 			return fmt.Errorf("IP_DENIED: client IP %s not in key allowlist", clientIP)
+		}
+	}
+	return nil
+}
+
+func (t *LiveAPIToken) AllowRequest(model, clientIP string, now time.Time) error {
+	if err := t.AllowPreRead(clientIP, now); err != nil {
+		return err
+	}
+	if len(t.AllowedModels) > 0 && model != "" {
+		if _, ok := t.AllowedModels[model]; !ok {
+			return fmt.Errorf("MODEL_NOT_ALLOWED: key is not permitted to access model %s", model)
 		}
 	}
 	if t.RPMLimit > 0 {
@@ -447,8 +510,27 @@ func (r *QuotaReservation) ReservedMicros() int64 {
 	return r.reserved
 }
 
+// CapSubKeyExtraSettlement 限制带独立上限（QuotaLimitMicros > 0）的子令牌在流结束补扣时
+// 最多扣到自身剩余额度归零，绝不允许穿透子令牌硬顶透支父账户余额。
+func CapSubKeyExtraSettlement(extraNeeded, subKeyLimitMicros, subKeyAlreadyUsedAndReserved int64) int64 {
+	if extraNeeded <= 0 {
+		return 0
+	}
+	if subKeyLimitMicros <= 0 {
+		return extraNeeded
+	}
+	rem := subKeyLimitMicros - subKeyAlreadyUsedAndReserved
+	if rem <= 0 {
+		return 0
+	}
+	if extraNeeded > rem {
+		return rem
+	}
+	return extraNeeded
+}
+
 // Settle 在流式响应结束或异常中断时调用（幂等只结算一次）：
-// 严格保证余额 >= 0 且累计扣费不超可用余额，同时将消费记录推入微批写库器。
+// 严格保证余额 >= 0、子令牌累计扣费不超独立硬顶、且父账户扣费不超可用余额，同时将消费记录推入微批写库器。
 func (r *QuotaReservation) Settle(actualCostMicros int64, logRec UsageLogRecord) int64 {
 	if r == nil || !r.settled.CompareAndSwap(false, true) {
 		return 0
@@ -458,6 +540,7 @@ func (r *QuotaReservation) Settle(actualCostMicros int64, logRec UsageLogRecord)
 	}
 
 	var charged int64
+	var subExtraLocked int64
 	if actualCostMicros <= r.reserved {
 		charged = actualCostMicros
 		if refund := r.reserved - actualCostMicros; refund > 0 {
@@ -465,8 +548,20 @@ func (r *QuotaReservation) Settle(actualCostMicros int64, logRec UsageLogRecord)
 		}
 	} else {
 		extraNeeded := actualCostMicros - r.reserved
+		if r.token.QuotaLimitMicros > 0 {
+			r.token.quotaMu.Lock()
+			used := r.token.UsedMicros.Load()
+			res := r.token.ReservedMicros.Load()
+			allowed := CapSubKeyExtraSettlement(extraNeeded, r.token.QuotaLimitMicros, used+res)
+			if allowed > 0 {
+				r.token.ReservedMicros.Add(allowed)
+				subExtraLocked = allowed
+			}
+			r.token.quotaMu.Unlock()
+			extraNeeded = allowed
+		}
 		var extraTaken int64
-		for {
+		for extraNeeded > 0 {
 			cur := r.token.User.BalanceMicros.Load()
 			if cur <= 0 {
 				break
@@ -480,11 +575,20 @@ func (r *QuotaReservation) Settle(actualCostMicros int64, logRec UsageLogRecord)
 		charged = r.reserved + extraTaken
 	}
 
-	if r.subReserved > 0 {
-		r.token.ReservedMicros.Add(-r.subReserved)
-	}
+	// 在子令牌锁内原子更新 UsedMicros 并释放 ReservedMicros，确保并发路径上的 used+reserved 永不竞态双花。
 	if charged > 0 {
 		r.token.User.UsedMicros.Add(charged)
+	}
+	if r.token.QuotaLimitMicros > 0 || r.subReserved > 0 || subExtraLocked > 0 {
+		r.token.quotaMu.Lock()
+		if charged > 0 {
+			r.token.UsedMicros.Add(charged)
+		}
+		if totalSubRelease := r.subReserved + subExtraLocked; totalSubRelease > 0 {
+			r.token.ReservedMicros.Add(-totalSubRelease)
+		}
+		r.token.quotaMu.Unlock()
+	} else if charged > 0 {
 		r.token.UsedMicros.Add(charged)
 	}
 	if charged > 0 || logRec.InputTokens > 0 || logRec.OutputTokens > 0 {
@@ -508,7 +612,9 @@ type oauthPKCEState struct {
 }
 
 type LedgerEngine struct {
+	pool           *sqlitedb.DualPool
 	db             *sql.DB
+	readDB         *sql.DB
 	masterKey      []byte
 	httpClient     atomic.Pointer[http.Client]
 	now            func() time.Time
@@ -538,6 +644,7 @@ func NewLedgerEngine(db *sql.DB, masterKey []byte, httpClient *http.Client, now 
 	}
 	eng := &LedgerEngine{
 		db:               db,
+		readDB:           db,
 		masterKey:        append([]byte(nil), masterKey...),
 		now:              now,
 		linuxDoBaseURL:   defaultLinuxDoBase,
@@ -551,6 +658,44 @@ func NewLedgerEngine(db *sql.DB, masterKey []byte, httpClient *http.Client, now 
 	}
 	eng.httpClient.Store(httpClient)
 	return eng
+}
+
+// NewLedgerEngineWithPool 使用读写分离的双连接池构造内存账本引擎。
+func NewLedgerEngineWithPool(pool *sqlitedb.DualPool, masterKey []byte, httpClient *http.Client, now func() time.Time) *LedgerEngine {
+	var writer, reader *sql.DB
+	if pool != nil {
+		writer = pool.Writer
+		reader = pool.Reader
+	}
+	if reader == nil {
+		reader = writer
+	}
+	eng := NewLedgerEngine(writer, masterKey, httpClient, now)
+	eng.pool = pool
+	eng.readDB = reader
+	return eng
+}
+
+func (e *LedgerEngine) readerDB() *sql.DB {
+	if e != nil && e.readDB != nil {
+		return e.readDB
+	}
+	return e.db
+}
+
+// CheckpointPassive 执行非阻塞 PASSIVE WAL 检查点，防止长时间运行后 WAL 文件持续膨胀。
+func (e *LedgerEngine) CheckpointPassive(ctx context.Context) error {
+	if e == nil {
+		return nil
+	}
+	if e.pool != nil {
+		return e.pool.CheckpointPassive(ctx)
+	}
+	if e.db == nil {
+		return nil
+	}
+	_, err := e.db.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)")
+	return err
 }
 
 // SetHTTPClient 原子替换账本内部用于 LinuxDo OAuth 回调的 HTTP 客户端，供热更新配置时同步生效。
@@ -760,7 +905,9 @@ func (e *LedgerEngine) Close() error {
 	var closeErr error
 	e.closeOnce.Do(func() {
 		_ = e.FlushSync(context.Background())
-		if e.db != nil {
+		if e.pool != nil {
+			closeErr = e.pool.Close()
+		} else if e.db != nil {
 			closeErr = e.db.Close()
 		}
 	})
@@ -836,6 +983,27 @@ func (e *LedgerEngine) flushBatchToSQLite(ctx context.Context, batch []UsageLogR
 	return tx.Commit()
 }
 
+// ValidateTokenPreRead 在读取请求体之前执行零分配密钥、状态、过期与 IP 白名单预校验，
+// 防止未认证请求占用大请求体内存且不消耗 RPM / 额度配额。
+func (e *LedgerEngine) ValidateTokenPreRead(rawBearerKey, clientIP string) (*LiveAPIToken, error) {
+	if !strings.HasPrefix(rawBearerKey, "sk-qwq-") || len(rawBearerKey) < 24 {
+		return nil, errors.New("UNAUTHENTICATED: invalid sk-qwq-* API key")
+	}
+	sum := sha256.Sum256([]byte(rawBearerKey))
+	keyHash := hex.EncodeToString(sum[:])
+
+	e.mu.RLock()
+	tok, exists := e.tokens[keyHash]
+	e.mu.RUnlock()
+	if !exists {
+		return nil, errors.New("UNAUTHENTICATED: API key not found or disabled")
+	}
+	if err := tok.AllowPreRead(clientIP, e.now()); err != nil {
+		return nil, err
+	}
+	return tok, nil
+}
+
 // AuthorizeAndReserve 热路径零数据库锁完成 sk-qwq-* 鉴权与原子 CAS 预冻结额度。
 func (e *LedgerEngine) AuthorizeAndReserve(rawBearerKey, model, clientIP string, reserveMicros int64) (*LiveAPIToken, *QuotaReservation, error) {
 	if !strings.HasPrefix(rawBearerKey, "sk-qwq-") || len(rawBearerKey) < 24 {
@@ -861,25 +1029,26 @@ func (e *LedgerEngine) AuthorizeAndReserve(rawBearerKey, model, clientIP string,
 
 	var subLock int64
 	if tok.QuotaLimitMicros > 0 {
-		for {
-			used := tok.UsedMicros.Load()
-			res := tok.ReservedMicros.Load()
-			rem := tok.QuotaLimitMicros - used - res
-			if rem < reserveMicros {
-				return nil, nil, fmt.Errorf("%w: sub-key quota limit reached", ErrQuotaExhausted)
-			}
-			if tok.ReservedMicros.CompareAndSwap(res, res+reserveMicros) {
-				subLock = reserveMicros
-				break
-			}
+		tok.quotaMu.Lock()
+		used := tok.UsedMicros.Load()
+		res := tok.ReservedMicros.Load()
+		rem := tok.QuotaLimitMicros - used - res
+		if rem < reserveMicros {
+			tok.quotaMu.Unlock()
+			return nil, nil, fmt.Errorf("%w: sub-key quota limit reached", ErrQuotaExhausted)
 		}
+		tok.ReservedMicros.Add(reserveMicros)
+		subLock = reserveMicros
+		tok.quotaMu.Unlock()
 	}
 
 	for {
 		cur := tok.User.BalanceMicros.Load()
 		if cur < reserveMicros {
 			if subLock > 0 {
+				tok.quotaMu.Lock()
 				tok.ReservedMicros.Add(-subLock)
+				tok.quotaMu.Unlock()
 			}
 			return nil, nil, ErrQuotaExhausted
 		}
@@ -1918,45 +2087,65 @@ func (e *LedgerEngine) RunPeriodicAutoRefill(ctx context.Context) error {
 	nowMs := now.UnixMilli()
 
 	rows, err := e.db.QueryContext(ctx, `
-		SELECT id, balance_micros, auto_refill_cap_micros, auto_refill_cycle, last_refilled_period
+		SELECT id, auto_refill_cycle, last_refilled_period
 		FROM relay_users WHERE status = 'active' AND auto_refill_cap_micros > 0 AND auto_refill_cycle IN ('daily', 'monthly');`)
 	if err != nil {
 		return err
 	}
 	type candidate struct {
 		id     string
-		cur    int64
-		capAmt int64
 		period string
 	}
 	var todo []candidate
 	for rows.Next() {
 		var id, cycle, lastP string
-		var cur, capAmt int64
-		if err := rows.Scan(&id, &cur, &capAmt, &cycle, &lastP); err != nil {
+		if err := rows.Scan(&id, &cycle, &lastP); err != nil {
 			continue
 		}
 		targetP := dayPeriod
 		if cycle == "monthly" {
 			targetP = monthPeriod
 		}
-		if lastP != targetP && cur < capAmt {
-			todo = append(todo, candidate{id: id, cur: cur, capAmt: capAmt, period: targetP})
+		if lastP != targetP {
+			todo = append(todo, candidate{id: id, period: targetP})
 		}
 	}
 	_ = rows.Close()
 
 	for _, c := range todo {
-		delta := c.capAmt - c.cur
 		tx, err := e.db.BeginTx(ctx, nil)
 		if err != nil {
 			continue
 		}
+		// Claim the period with a conditional UPDATE first to acquire SQLite's write
+		// lock immediately and prevent concurrent callers from double-refilling.
+		claim, err := tx.ExecContext(ctx, `
+			UPDATE relay_users SET last_refilled_period = ?
+			WHERE id = ? AND status = 'active' AND last_refilled_period != ?;`,
+			c.period, c.id, c.period)
+		if err != nil {
+			_ = tx.Rollback()
+			continue
+		}
+		if n, _ := claim.RowsAffected(); n != 1 {
+			_ = tx.Rollback()
+			continue
+		}
+		var curBal, capAmt int64
+		if err := tx.QueryRowContext(ctx, `
+			SELECT balance_micros, auto_refill_cap_micros FROM relay_users WHERE id = ?;`, c.id).Scan(&curBal, &capAmt); err != nil {
+			_ = tx.Rollback()
+			continue
+		}
+		delta := capAmt - curBal
+		if delta <= 0 {
+			_ = tx.Commit()
+			continue
+		}
 		var newBal int64
 		if err := e.creditUserTx(ctx, tx, c.id, "periodic_refill", delta, "AutoRefill:"+c.period, nowMs, &newBal); err == nil {
-			_, _ = tx.ExecContext(ctx, `UPDATE relay_users SET last_refilled_period = ? WHERE id = ?;`, c.period, c.id)
 			if tx.Commit() == nil {
-				e.addMemoryBalance(c.id, delta)
+				e.addMemoryBalance(c.id, newBal-curBal)
 			}
 		} else {
 			_ = tx.Rollback()
@@ -1990,6 +2179,7 @@ func (e *LedgerEngine) AdjustUserQuota(ctx context.Context, userID string, delta
 		return UserView{}, err
 	}
 	cur.Email = emailNull.String
+	beforeBal := cur.BalanceMicros
 
 	if strings.TrimSpace(groupName) != "" {
 		cur.GroupName = strings.TrimSpace(groupName)
@@ -2021,11 +2211,13 @@ func (e *LedgerEngine) AdjustUserQuota(ctx context.Context, userID string, delta
 		return UserView{}, err
 	}
 
+	var appliedDelta int64
 	if deltaMicros != 0 {
 		var after int64
 		if err := e.creditUserTx(ctx, tx, userID, "admin_adjust", deltaMicros, note, nowMs, &after); err != nil {
 			return UserView{}, err
 		}
+		appliedDelta = after - beforeBal
 		cur.BalanceMicros = after
 	}
 	cur.UpdatedAt = nowMs
@@ -2038,8 +2230,8 @@ func (e *LedgerEngine) AdjustUserQuota(ctx context.Context, userID string, delta
 	if lu, ok := e.users[userID]; ok {
 		lu.SetGroupName(cur.GroupName)
 		lu.StatusActive.Store(cur.Status == "active")
-		if deltaMicros != 0 {
-			ApplyAtomicBalanceDelta(&lu.BalanceMicros, deltaMicros)
+		if appliedDelta != 0 {
+			ApplyAtomicBalanceDelta(&lu.BalanceMicros, appliedDelta)
 		}
 	}
 	if cur.Status != "active" {
@@ -2317,7 +2509,7 @@ func (e *LedgerEngine) ListChannels(ctx context.Context, kindFilter string, limi
 	q += " ORDER BY priority DESC, id ASC LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := e.db.QueryContext(ctx, q, args...)
+	rows, err := e.readerDB().QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2410,7 +2602,7 @@ func (e *LedgerEngine) UpsertPricing(ctx context.Context, rec PricingRecord) (Pr
 }
 
 func (e *LedgerEngine) ListPricings(ctx context.Context) ([]PricingRecord, error) {
-	rows, err := e.db.QueryContext(ctx, `
+	rows, err := e.readerDB().QueryContext(ctx, `
 		SELECT model_name, billing_mode, input_micros_per_1k, output_micros_per_1k,
 		       cache_read_ratio, cache_write_ratio, per_call_micros, updated_at
 		FROM model_pricings ORDER BY model_name ASC;`)
@@ -2457,7 +2649,7 @@ func (e *LedgerEngine) ListUsers(ctx context.Context, groupFilter, statusFilter,
 	q += " ORDER BY created_at DESC LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := e.db.QueryContext(ctx, q, args...)
+	rows, err := e.readerDB().QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2564,26 +2756,60 @@ func (e *LedgerEngine) Overview(ctx context.Context, windowHours int) (OverviewS
 	if windowHours <= 0 {
 		windowHours = 24
 	}
+	rdb := e.readerDB()
 	var st OverviewStats
-	_ = e.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM upstream_channels;`).Scan(&st.TotalChannels)
-	_ = e.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM upstream_channels WHERE enabled = 1 AND health_state = 'healthy';`).Scan(&st.HealthyChannels)
-	_ = e.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM relay_users;`).Scan(&st.TotalUsers)
-	_ = e.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM relay_users WHERE status = 'active';`).Scan(&st.ActiveUsers)
+	_ = rdb.QueryRowContext(ctx, `SELECT COUNT(1) FROM upstream_channels;`).Scan(&st.TotalChannels)
+	_ = rdb.QueryRowContext(ctx, `SELECT COUNT(1) FROM upstream_channels WHERE enabled = 1 AND health_state = 'healthy';`).Scan(&st.HealthyChannels)
+	_ = rdb.QueryRowContext(ctx, `SELECT COUNT(1) FROM relay_users;`).Scan(&st.TotalUsers)
+	_ = rdb.QueryRowContext(ctx, `SELECT COUNT(1) FROM relay_users WHERE status = 'active';`).Scan(&st.ActiveUsers)
 	cutoff := e.now().UTC().Add(-time.Duration(windowHours) * time.Hour).UnixMilli()
-	_ = e.db.QueryRowContext(ctx, `
+	_ = rdb.QueryRowContext(ctx, `
 		SELECT COUNT(1), COALESCE(SUM(cost_micros), 0) FROM usage_logs WHERE created_at >= ?;`, cutoff,
 	).Scan(&st.WindowRequests, &st.WindowCostMicros)
 	return st, nil
 }
 
-// PruneOldLogs 清理超过保留天数的调用明细记录。
+// PruneOldLogs 分批（每次最多 2000 行）清理过期调用明细、历史流水、陈旧签到与过期邮箱验证码，
+// 并触发非阻塞 WAL PASSIVE 检查点，防止大表一次性全表锁表与 WAL 无限膨胀。
 func (e *LedgerEngine) PruneOldLogs(ctx context.Context, retentionDays int) error {
 	if retentionDays <= 0 {
 		retentionDays = 30
 	}
-	cutoff := e.now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour).UnixMilli()
-	_, err := e.db.ExecContext(ctx, `DELETE FROM usage_logs WHERE created_at < ?;`, cutoff)
-	return err
+	nowUTC := e.now().UTC()
+	usageCutoff := nowUTC.Add(-time.Duration(retentionDays) * 24 * time.Hour).UnixMilli()
+	auditDays := max(retentionDays, 90)
+	auditCutoff := nowUTC.Add(-time.Duration(auditDays) * 24 * time.Hour).UnixMilli()
+	otpCutoff := nowUTC.Add(-24 * time.Hour).UnixMilli()
+
+	pruneBatched := func(query string, cutoff int64) error {
+		const maxBatches = 20
+		for range maxBatches {
+			res, err := e.db.ExecContext(ctx, query, cutoff)
+			if err != nil {
+				return err
+			}
+			n, _ := res.RowsAffected()
+			if n < 2000 {
+				break
+			}
+		}
+		return nil
+	}
+
+	if err := pruneBatched(`DELETE FROM usage_logs WHERE id IN (SELECT id FROM usage_logs WHERE created_at < ? LIMIT 2000);`, usageCutoff); err != nil {
+		return err
+	}
+	if err := pruneBatched(`DELETE FROM quota_ledger WHERE id IN (SELECT id FROM quota_ledger WHERE created_at < ? LIMIT 2000);`, auditCutoff); err != nil {
+		return err
+	}
+	if err := pruneBatched(`DELETE FROM checkin_records WHERE rowid IN (SELECT rowid FROM checkin_records WHERE created_at < ? LIMIT 2000);`, auditCutoff); err != nil {
+		return err
+	}
+	if err := pruneBatched(`DELETE FROM email_verifications WHERE email IN (SELECT email FROM email_verifications WHERE expires_at < ? LIMIT 2000);`, otpCutoff); err != nil {
+		return err
+	}
+	_ = e.CheckpointPassive(ctx)
+	return nil
 }
 
 // ======================== 校验与内部辅助函数 ========================

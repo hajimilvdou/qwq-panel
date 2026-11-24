@@ -261,6 +261,48 @@ func TestTLSConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestSetListenRefreshesSelfSignedSANs(t *testing.T) {
+	fake := clock.NewFake(testTime)
+	dir := t.TempDir()
+	pubIP := net.ParseIP("203.0.113.10")
+	m, err := New(Options{
+		TLS:     config.TLS{Mode: config.TLSSelfSigned},
+		Listen:  "127.0.0.1:8443",
+		DataDir: dir,
+		Clock:   fake,
+		LocalAddrs: func() ([]net.Addr, error) {
+			return []net.Addr{
+				&net.IPNet{IP: net.ParseIP("127.0.0.1"), Mask: net.CIDRMask(8, 32)},
+				&net.IPNet{IP: pubIP, Mask: net.CIDRMask(24, 32)},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	origFP := m.Fingerprint()
+	if c := m.current.Load(); c == nil || slices.ContainsFunc(c.leaf.IPAddresses, func(ip net.IP) bool { return ip.Equal(pubIP) }) {
+		t.Fatalf("loopback-only cert should not yet include public IP %v", pubIP)
+	}
+	if err := m.SetListen("0.0.0.0:45001"); err != nil {
+		t.Fatalf("SetListen(0.0.0.0:45001): %v", err)
+	}
+	pubFP := m.Fingerprint()
+	if pubFP == origFP {
+		t.Fatal("SetListen to 0.0.0.0 should regenerate cert to include public NIC IP SAN")
+	}
+	if c := m.current.Load(); c == nil || !slices.ContainsFunc(c.leaf.IPAddresses, func(ip net.IP) bool { return ip.Equal(pubIP) }) {
+		t.Fatalf("public cert missing NIC IP SAN %v", pubIP)
+	}
+	// Repeating SetListen with already-covered SAN keeps the same fingerprint.
+	if err := m.SetListen("0.0.0.0:45002"); err != nil {
+		t.Fatalf("SetListen(0.0.0.0:45002): %v", err)
+	}
+	if m.Fingerprint() != pubFP {
+		t.Fatal("SetListen rotated cert unnecessarily when SANs were already covered")
+	}
+}
+
 func TestStatusSelfSigned(t *testing.T) {
 	ctx := context.Background()
 	fake := clock.NewFake(testTime)

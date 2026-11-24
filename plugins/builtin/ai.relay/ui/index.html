@@ -49,10 +49,12 @@
         <button class="btn" id="btn-save-channel" type="button">加密保存上游渠道</button>
         <button class="btn ghost" id="btn-cancel-channel-edit" type="button" hidden>取消编辑</button>
       </div>
-      <table>
-        <thead><tr><th>名称</th><th>协议类型</th><th>分组</th><th>健康状态</th><th>TTFT</th><th>操作</th></tr></thead>
-        <tbody id="channels-tbody"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>名称</th><th>协议类型</th><th>分组</th><th>健康状态</th><th>TTFT</th><th>操作</th></tr></thead>
+          <tbody id="channels-tbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section data-pane="pricings" class="card" hidden>
@@ -78,10 +80,12 @@
         <button class="btn ghost" id="btn-preset-gpt4o" type="button">填入 GPT-4o 常用值</button>
         <button class="btn ghost" id="btn-preset-gemini" type="button">填入 Gemini 2.5 Pro 常用值</button>
       </div>
-      <table>
-        <thead><tr><th>本次已保存模型</th><th>模式</th><th>输入 (micros/1K)</th><th>输出 (micros/1K)</th><th>缓存读/写</th><th>按次单价</th></tr></thead>
-        <tbody id="pricings-tbody"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>已配置模型</th><th>模式</th><th>输入 (micros/1K)</th><th>输出 (micros/1K)</th><th>缓存读/写</th><th>按次单价</th></tr></thead>
+          <tbody id="pricings-tbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section data-pane="auth" class="card" hidden>
@@ -163,10 +167,12 @@
       <div class="actions-row">
         <button class="btn" id="btn-create-user" type="button">直接创建分发成员</button>
       </div>
-      <table>
-        <thead><tr><th>用户名</th><th>来源</th><th>分组</th><th>状态</th><th>剩余额度</th><th>累计已用</th><th>日回血上限</th><th>操作</th></tr></thead>
-        <tbody id="users-tbody"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>用户名</th><th>来源</th><th>分组</th><th>状态</th><th>剩余额度</th><th>累计已用</th><th>日回血上限</th><th>操作</th></tr></thead>
+          <tbody id="users-tbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <div id="user-adjust-modal" class="modal-backdrop" hidden>

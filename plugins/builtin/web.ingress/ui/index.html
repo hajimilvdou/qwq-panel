@@ -16,6 +16,7 @@
       </div>
       <div class="tabs" id="nav-tabs">
         <button data-tab="sites" class="active" type="button">反代站点</button>
+        <button data-tab="sni" type="button">:443 SNI 透传</button>
         <button data-tab="preview" type="button">配置预览与热重载</button>
         <button data-tab="snapshots" type="button">快照回滚</button>
       </div>
@@ -60,10 +61,34 @@
         <button class="btn ghost" id="btn-cancel-edit" type="button" hidden>取消编辑</button>
         <button class="btn ghost" id="btn-apply" type="button">强制热重载并渲染配置</button>
       </div>
-      <table>
-        <thead><tr><th>域名与路径</th><th>上游</th><th>TLS / 特性</th><th>限速</th><th>操作</th></tr></thead>
-        <tbody id="sites-tbody"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>域名与路径</th><th>上游</th><th>TLS / 特性</th><th>限速</th><th>操作</th></tr></thead>
+          <tbody id="sites-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section data-pane="sni" class="card" hidden>
+      <h3>TCP :443 零解密 L4 SNI 透传分流（与 core.xray Reality / Trojan 共用 443）</h3>
+      <p class="sub">按 TLS ClientHello SNI 在握手解密前将流量原样四层转发至本机回环上游（如 127.0.0.1:24443），不触碰私钥、完整保留 Reality 验签与 uTLS 指纹；其余建站域名仍走本地 HTTPS 反代。</p>
+      <div class="form-grid">
+        <label>匹配 SNI 域名（精确或 *.泛域名） <input id="sni-pattern" placeholder="如 www.microsoft.com 或 *.node.example.com" /></label>
+        <label>本机回环上游地址 <input id="sni-upstream" placeholder="127.0.0.1:24443" /></label>
+        <label>备注（可选） <input id="sni-notes" placeholder="如 Xray VLESS-Reality 节点" /></label>
+      </div>
+      <div class="check-row">
+        <label class="check-label"><input id="sni-enabled" type="checkbox" checked /> 启用该透传规则</label>
+      </div>
+      <div class="actions">
+        <button class="btn" id="btn-save-sni" type="button">保存四层透传并立即生效</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>SNI 匹配模式</th><th>本机上游</th><th>状态</th><th>备注</th><th>操作</th></tr></thead>
+          <tbody id="sni-tbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section data-pane="preview" class="card" hidden>
@@ -82,10 +107,12 @@
 
     <section data-pane="snapshots" class="card" hidden>
       <h3>配置快照历史（保留最近 20 个版本，一键无损回滚）</h3>
-      <table>
-        <thead><tr><th>版本号</th><th>变更原因</th><th>站点数</th><th>操作</th></tr></thead>
-        <tbody id="snaps-tbody"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>版本号</th><th>变更原因</th><th>站点数</th><th>操作</th></tr></thead>
+          <tbody id="snaps-tbody"></tbody>
+        </table>
+      </div>
     </section>
   </main>
   <script src="./plugin.js"></script>

@@ -28,7 +28,7 @@ export type SessionStatus = 'booting' | 'uninitialized' | 'anonymous' | 'authent
 const BOOT_DEADLINE_MS = 3000;
 const BOOT_RETRY_BUDGET_MS = 1000;
 
-const ADMIN_ONLY_RES = new Set(['host.users', 'host.service_accounts', 'host.audit']);
+const ADMIN_ONLY_RES = new Set(['host.users', 'host.service_accounts', 'host.audit', 'host.agent_external_approval']);
 const SELF_SERVICE_RES = new Set(['host.account']);
 const OPERATOR_DENY = new Set(['host.ai_providers:create', 'host.ai_providers:update', 'host.ai_providers:delete']);
 /** 与后端 sdk/manifest/rules.go ReadOnlyActions 1:1 对齐 */

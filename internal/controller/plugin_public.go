@@ -152,11 +152,129 @@ var allowedPublicStreamResponseHeaders = map[string]struct{}{
 	http.CanonicalHeaderKey("Location"):                {},
 	http.CanonicalHeaderKey("Subscription-Userinfo"):   {},
 	http.CanonicalHeaderKey("Profile-Update-Interval"): {},
+	http.CanonicalHeaderKey("Profile-Title"):           {},
 	http.CanonicalHeaderKey("X-Request-Id"):            {},
 	http.CanonicalHeaderKey("X-Relay-Request-Id"):      {},
 	http.CanonicalHeaderKey("Anthropic-Version"):       {},
 	http.CanonicalHeaderKey("Retry-After"):             {},
 	http.CanonicalHeaderKey("X-Accel-Buffering"):       {},
+}
+
+const (
+	maxConcurrentPublicStreams    = 64
+	maxConcurrentStreamsPerPlugin = 32
+	maxConcurrentStreamsPerIP     = 8
+)
+
+type cachedStreamTransport struct {
+	sockPath  string
+	sockInfo  os.FileInfo
+	transport *http.Transport
+}
+
+func (rt *PluginRuntime) streamTransportFor(pluginID, streamSock string) *http.Transport {
+	curInfo, _ := os.Stat(streamSock)
+	rt.streamMu.Lock()
+	defer rt.streamMu.Unlock()
+	if rt.streamTransports == nil {
+		rt.streamTransports = make(map[string]*cachedStreamTransport)
+	}
+	if cur, ok := rt.streamTransports[pluginID]; ok {
+		sameSocket := cur.sockPath == streamSock &&
+			cur.sockInfo != nil && curInfo != nil && os.SameFile(cur.sockInfo, curInfo)
+		if sameSocket {
+			return cur.transport
+		}
+		cur.transport.CloseIdleConnections()
+	}
+	dialer := &net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}
+	tr := &http.Transport{
+		DialContext: func(dctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(dctx, "unix", streamSock)
+		},
+		DisableCompression:    true,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       60 * time.Second,
+		ResponseHeaderTimeout: 180 * time.Second,
+	}
+	rt.streamTransports[pluginID] = &cachedStreamTransport{sockPath: streamSock, sockInfo: curInfo, transport: tr}
+	return tr
+}
+
+// EvictStreamTransport closes idle connections and removes the cached UDS
+// streaming transport for pluginID when the plugin stops, restarts, or rotates.
+func (rt *PluginRuntime) EvictStreamTransport(pluginID string) {
+	if rt == nil || pluginID == "" {
+		return
+	}
+	rt.streamMu.Lock()
+	entry := rt.streamTransports[pluginID]
+	delete(rt.streamTransports, pluginID)
+	rt.streamMu.Unlock()
+	if entry != nil && entry.transport != nil {
+		entry.transport.CloseIdleConnections()
+	}
+}
+
+func (rt *PluginRuntime) acquirePublicStreamSlot(pluginID, clientIP string) (func(), bool) {
+	rt.streamMu.Lock()
+	defer rt.streamMu.Unlock()
+	if rt.streamActiveByPlugin == nil {
+		rt.streamActiveByPlugin = make(map[string]int)
+	}
+	if rt.streamActiveByIP == nil {
+		rt.streamActiveByIP = make(map[string]int)
+	}
+	if rt.streamActiveTotal >= maxConcurrentPublicStreams {
+		return nil, false
+	}
+	if rt.streamActiveByPlugin[pluginID] >= maxConcurrentStreamsPerPlugin {
+		return nil, false
+	}
+	ipKey := strings.TrimSpace(clientIP)
+	if ipKey != "" && rt.streamActiveByIP[ipKey] >= maxConcurrentStreamsPerIP {
+		return nil, false
+	}
+	rt.streamActiveTotal++
+	rt.streamActiveByPlugin[pluginID]++
+	if ipKey != "" {
+		rt.streamActiveByIP[ipKey]++
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			rt.streamMu.Lock()
+			if rt.streamActiveTotal > 0 {
+				rt.streamActiveTotal--
+			}
+			if rt.streamActiveByPlugin[pluginID] > 1 {
+				rt.streamActiveByPlugin[pluginID]--
+			} else {
+				delete(rt.streamActiveByPlugin, pluginID)
+			}
+			if ipKey != "" {
+				if rt.streamActiveByIP[ipKey] > 1 {
+					rt.streamActiveByIP[ipKey]--
+				} else {
+					delete(rt.streamActiveByIP, ipKey)
+				}
+			}
+			rt.streamMu.Unlock()
+		})
+	}, true
+}
+
+func (rt *PluginRuntime) closeStreamTransports() {
+	rt.streamMu.Lock()
+	transports := rt.streamTransports
+	rt.streamTransports = nil
+	rt.streamMu.Unlock()
+	for _, entry := range transports {
+		if entry != nil && entry.transport != nil {
+			entry.transport.CloseIdleConnections()
+		}
+	}
 }
 
 func isAllowedPublicStreamResponseHeader(name string) bool {
@@ -255,22 +373,20 @@ func (rt *PluginRuntime) ServePublicStream(
 		RawQuery: req.RawQuery,
 	}
 
+	releaseSlot, acquired := rt.acquirePublicStreamSlot(pluginID, req.ClientIP)
+	if !acquired {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, `{"error":"too_many_concurrent_streams"}`, http.StatusServiceUnavailable)
+		return nil
+	}
+	defer releaseSlot()
+
 	outReq, err := http.NewRequestWithContext(ctx, req.Method, u.String(), body)
 	if err != nil {
 		return err
 	}
 
-	dialer := &net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}
-	transport := &http.Transport{
-		DialContext: func(dctx context.Context, _, _ string) (net.Conn, error) {
-			return dialer.DialContext(dctx, "unix", streamSock)
-		},
-		DisableCompression:    true,
-		MaxIdleConns:          8,
-		IdleConnTimeout:       30 * time.Second,
-		ResponseHeaderTimeout: 180 * time.Second,
-	}
-	defer transport.CloseIdleConnections()
+	transport := rt.streamTransportFor(pluginID, streamSock)
 
 	var proxyErr error
 	ensurePublicStreamSecurityHeaders(w.Header())
@@ -294,6 +410,7 @@ func (rt *PluginRuntime) ServePublicStream(
 	}
 	rp.ServeHTTP(w, outReq)
 	if proxyErr != nil && !errors.Is(proxyErr, context.Canceled) {
+		transport.CloseIdleConnections()
 		return fmt.Errorf("public stream proxy %s: %w", pluginID, proxyErr)
 	}
 	return nil
@@ -318,6 +435,11 @@ func injectCanonicalPublicHeaders(hdr http.Header, req pluginpublic.PublicReques
 	for k, v := range req.ExtraHeaders {
 		if v != "" {
 			hdr.Set(k, v)
+		}
+	}
+	if hdr.Get("X-Forwarded-Host") == "" {
+		if origHost := strings.TrimSpace(req.ExtraHeaders["Host"]); origHost != "" {
+			hdr.Set("X-Forwarded-Host", origHost)
 		}
 	}
 }
@@ -413,6 +535,7 @@ func (rt *PluginRuntime) SyncPublicRoutes() {
 				spec.AllowedMethods = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete}
 			case pluginID == "server.probe" && capDecl.Scope == "portal":
 				spec.PortalSPA = true
+				spec.Streaming = true
 				spec.RateLimitPerMin = 120
 				spec.AllowedMethods = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodDelete}
 			case pluginID == "server.probe" && capDecl.Scope == "agent":

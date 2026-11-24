@@ -6,7 +6,31 @@
   const root = document.documentElement;
   const pick = (v, list, fb) => (list.includes(v) ? v : fb);
   const hash = new URLSearchParams(location.hash.slice(1));
-  root.dataset.theme = pick(hash.get('theme'), ['light', 'dark'], 'light');
+  const initialTheme = pick(hash.get('theme'), ['light', 'dark'], 'light');
+  root.dataset.theme = initialTheme;
+  root.style.colorScheme = initialTheme;
+  root.dataset.density = pick(hash.get('density'), ['comfortable', 'compact'], 'comfortable');
+
+  function applyHostVisualSettings(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.theme === 'light' || msg.theme === 'dark') {
+      root.dataset.theme = msg.theme;
+      root.style.colorScheme = msg.theme;
+    }
+    if (msg.density === 'comfortable' || msg.density === 'compact') {
+      root.dataset.density = msg.density;
+    }
+    if (msg.tokens && typeof msg.tokens === 'object') {
+      for (const [k, v] of Object.entries(msg.tokens)) {
+        if (k.startsWith('--') && typeof v === 'string' && !/[;{}<>]/.test(v)) {
+          root.style.setProperty(k, v.trim());
+        }
+      }
+      if (msg.tokens['--accent-strong']) root.style.setProperty('--cocoa', msg.tokens['--accent-strong'].trim());
+      else if (msg.tokens['--accent']) root.style.setProperty('--cocoa', msg.tokens['--accent'].trim());
+      if (msg.tokens['--on-accent']) root.style.setProperty('--on-cocoa', msg.tokens['--on-accent'].trim());
+    }
+  }
 
   const VALID_ROUTES = ['/proxy', '/proxy/nodes', '/proxy/chains', '/proxy/tuning'];
   const ROUTE_TITLES = {
@@ -302,12 +326,20 @@
     }
 
     if (data.t === 'ui.settings') {
-      if (data.theme) {
-        root.dataset.theme = pick(data.theme, ['light', 'dark'], root.dataset.theme);
-      }
+      applyHostVisualSettings(data);
       if (typeof data.public_origin === 'string' && data.public_origin.trim()) {
         publicOrigin = data.public_origin.trim();
       }
+      return;
+    }
+
+    if (data.t === 'ui.viewport') {
+      const vpTop = Math.max(0, Math.round(Number(data.offsetTopPx ?? data.visibleTop ?? data.scroll_top) || 0));
+      const vpH = Math.max(280, Math.round(Number(data.viewportHeightPx ?? data.visibleHeight ?? data.visible_height) || 720));
+      hostViewportTop = vpTop;
+      root.style.setProperty('--qwq-vp-top', `${vpTop}px`);
+      root.style.setProperty('--qwq-vp-h', `${vpH}px`);
+      notifyResize();
       return;
     }
 
@@ -3361,11 +3393,38 @@
   updateOversendPreview();
   populateSNISelects(DEFAULT_SNI_CANDIDATES[0]);
 
-  const observer = new ResizeObserver(() => {
-    const height = Math.ceil($('proxy-root').getBoundingClientRect().height) + 16;
+  let hostViewportTop = 0;
+  const MODAL_BACKDROP_IDS = [
+    'user-sub-modal',
+    'user-create-modal',
+    'user-history-modal',
+    'node-config-modal',
+    'node-builder-modal',
+  ];
+
+  function notifyResize() {
+    const rootEl = $('proxy-root');
+    if (!rootEl) return;
+    let height = Math.ceil(rootEl.getBoundingClientRect().height) + 16;
+    for (const id of MODAL_BACKDROP_IDS) {
+      const backdrop = $(id);
+      if (backdrop && !backdrop.classList.contains('hidden')) {
+        const dialog = backdrop.querySelector('.modal-dialog');
+        const modalH = dialog ? Math.ceil(dialog.getBoundingClientRect().height) : 480;
+        height = Math.max(height, hostViewportTop + modalH + 64);
+      }
+    }
     send({ t: 'ui.resize', height });
-  });
+  }
+
+  const observer = new ResizeObserver(() => notifyResize());
   observer.observe($('proxy-root'));
+
+  const modalObserver = new MutationObserver(() => requestAnimationFrame(notifyResize));
+  for (const id of MODAL_BACKDROP_IDS) {
+    const el = $(id);
+    if (el) modalObserver.observe(el, { attributes: true, attributeFilter: ['class', 'hidden'] });
+  }
 
   window.addEventListener('message', (event) => {
     if (event.source !== window.parent || event.data?.t !== 'plugin.port' || !event.ports[0] || port) return;
@@ -3378,6 +3437,7 @@
 
   window.addEventListener('pagehide', () => {
     observer.disconnect();
+    modalObserver.disconnect();
     if (builder.previewTimer) clearTimeout(builder.previewTimer);
     for (const req of pendingInvoke.values()) {
       clearTimeout(req.timer);

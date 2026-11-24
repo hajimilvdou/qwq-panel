@@ -609,7 +609,7 @@ func nativeEmit(emit Emit, names toolNames) LoopEmit {
 			}
 			return emit(Event{Type: EventMessageDelta, Delta: e.Delta})
 		case LoopEventAssistant:
-			out := Event{Type: EventMessageCompleted, ReasoningContent: e.ReasoningContent}
+			out := Event{Type: EventMessageCompleted, ReasoningContent: e.ReasoningContent, ThinkingBlocks: e.ThinkingBlocks}
 			if len(e.Calls) > 0 {
 				calls := make([]MessageToolCall, 0, len(e.Calls))
 				for _, call := range e.Calls {
@@ -853,7 +853,7 @@ func historyMessages(history []Message, names toolNames) []ModelMessage {
 			if len(msg.ContentJSON) > 0 {
 				_ = json.Unmarshal(msg.ContentJSON, &ac)
 			}
-			m := ModelMessage{Role: RoleAssistant, Content: msg.Content, ReasoningContent: ac.ReasoningContent}
+			m := ModelMessage{Role: RoleAssistant, Content: msg.Content, ReasoningContent: ac.ReasoningContent, ThinkingBlocks: ac.ThinkingBlocks}
 			for _, call := range ac.ToolCalls {
 				m.ToolCalls = append(m.ToolCalls, ModelToolCall{
 					CallID: call.CallID, Name: names.name(call.Action), Arguments: call.Arguments,

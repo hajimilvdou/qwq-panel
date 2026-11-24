@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -85,13 +86,23 @@ func (c *apiClient) cloudflare(ctx context.Context, scope dns.Scope, method, pat
 
 func cloudflareRecord(scope dns.Scope, raw json.RawMessage) (dns.Record, error) {
 	var payload struct {
-		ID      string         `json:"id"`
-		Type    dns.RecordType `json:"type"`
-		Name    string         `json:"name"`
-		Content string         `json:"content"`
-		TTL     uint32         `json:"ttl"`
-		Proxied bool           `json:"proxied"`
-		Comment string         `json:"comment"`
+		ID       string         `json:"id"`
+		Type     dns.RecordType `json:"type"`
+		Name     string         `json:"name"`
+		Content  string         `json:"content"`
+		TTL      uint32         `json:"ttl"`
+		Proxied  bool           `json:"proxied"`
+		Priority *uint16        `json:"priority"`
+		Data     *struct {
+			Flags    *uint8  `json:"flags"`
+			Tag      string  `json:"tag"`
+			Value    string  `json:"value"`
+			Priority *uint16 `json:"priority"`
+			Weight   *uint16 `json:"weight"`
+			Port     *uint16 `json:"port"`
+			Target   string  `json:"target"`
+		} `json:"data"`
+		Comment string `json:"comment"`
 	}
 	if json.Unmarshal(raw, &payload) != nil || !cloudflareID(payload.ID) {
 		return dns.Record{}, fault.New("PROVIDER_INVALID", "Cloudflare 记录身份无效")
@@ -100,7 +111,26 @@ func cloudflareRecord(scope dns.Scope, raw json.RawMessage) (dns.Record, error) 
 	if err != nil {
 		return dns.Record{}, err
 	}
-	record := dns.Record{ID: payload.ID, Type: payload.Type, Name: payload.Name, Value: payload.Content, TTL: payload.TTL, Proxied: payload.Proxied, ProviderRevision: version}
+	value := payload.Content
+	switch payload.Type {
+	case dns.MX:
+		if payload.Priority != nil && !strings.Contains(strings.TrimSpace(value), " ") {
+			value = fmt.Sprintf("%d %s", *payload.Priority, strings.TrimSuffix(strings.TrimSpace(value), "."))
+		}
+	case dns.CAA:
+		if payload.Data != nil && payload.Data.Flags != nil && payload.Data.Tag != "" {
+			value = fmt.Sprintf("%d %s %q", *payload.Data.Flags, strings.ToLower(payload.Data.Tag), payload.Data.Value)
+		}
+	case dns.SRV:
+		if payload.Data != nil && payload.Data.Priority != nil && payload.Data.Weight != nil && payload.Data.Port != nil && payload.Data.Target != "" {
+			target := strings.TrimSuffix(strings.TrimSpace(payload.Data.Target), ".")
+			if target == "" {
+				target = "."
+			}
+			value = fmt.Sprintf("%d %d %d %s", *payload.Data.Priority, *payload.Data.Weight, *payload.Data.Port, target)
+		}
+	}
+	record := dns.Record{ID: payload.ID, Type: payload.Type, Name: payload.Name, Value: value, TTL: payload.TTL, Proxied: payload.Proxied, ProviderRevision: version}
 	if strings.HasPrefix(payload.Comment, cloudflareMarkerPrefix) {
 		marker := strings.TrimPrefix(payload.Comment, cloudflareMarkerPrefix)
 		if len(marker) != 64 {
@@ -160,14 +190,48 @@ func cloudflareWriteBody(record dns.Record) ([]byte, error) {
 	if record.ManagedBy != "" {
 		comment = cloudflareMarkerPrefix + record.ManagedBy
 	}
-	return json.Marshal(struct {
-		Name    string         `json:"name"`
-		Type    dns.RecordType `json:"type"`
-		Content string         `json:"content"`
-		TTL     uint32         `json:"ttl"`
-		Proxied bool           `json:"proxied"`
-		Comment string         `json:"comment,omitempty"`
-	}{record.Name, record.Type, record.Value, record.TTL, record.Proxied, comment})
+	payload := map[string]any{
+		"name":    record.Name,
+		"type":    record.Type,
+		"ttl":     record.TTL,
+		"proxied": record.Proxied,
+	}
+	if comment != "" {
+		payload["comment"] = comment
+	}
+	switch record.Type {
+	case dns.MX:
+		prio, target, err := dns.ParseMXValue(record.Value)
+		if err != nil {
+			return nil, err
+		}
+		payload["priority"] = prio
+		payload["content"] = target
+	case dns.CAA:
+		flags, tag, val, err := dns.ParseCAAValue(record.Value)
+		if err != nil {
+			return nil, err
+		}
+		payload["data"] = map[string]any{
+			"flags": flags,
+			"tag":   tag,
+			"value": val,
+		}
+	case dns.SRV:
+		prio, weight, port, target, err := dns.ParseSRVValue(record.Value)
+		if err != nil {
+			return nil, err
+		}
+		payload["data"] = map[string]any{
+			"priority": prio,
+			"weight":   weight,
+			"port":     port,
+			"target":   target,
+		}
+	default:
+		payload["content"] = record.Value
+	}
+	return json.Marshal(payload)
 }
 
 func (p *cloudflareProvider) Create(ctx context.Context, scope dns.Scope, input dns.Record) (dns.Record, error) {

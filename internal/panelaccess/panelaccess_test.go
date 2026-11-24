@@ -4,6 +4,7 @@ package panelaccess
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -251,7 +252,13 @@ func TestOnPortChangeWritesCapabilityPanelPortAtomically(t *testing.T) {
 		t.Fatalf("OnPortChange after update = %v, want [41236 41999]", observed)
 	}
 	raw, err := os.ReadFile(portFile)
-	if err != nil || strings.TrimSpace(string(raw)) != `{"port":41999}` {
-		t.Fatalf("panel-port.json = %q (err=%v), want {\"port\":41999}", string(raw), err)
+	if err != nil {
+		t.Fatalf("read panel-port.json: %v", err)
+	}
+	var got struct {
+		Port int `json:"port"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil || got.Port != 41999 {
+		t.Fatalf("panel-port.json = %q (err=%v), want port=41999", string(raw), err)
 	}
 }

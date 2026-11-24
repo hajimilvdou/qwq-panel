@@ -38,6 +38,8 @@ type credentialDocument struct {
 	Token           string `json:"token,omitempty"`
 	AccessKeyID     string `json:"access_key_id,omitempty"`
 	AccessKeySecret string `json:"access_key_secret,omitempty"`
+	SecretID        string `json:"secret_id,omitempty"`
+	SecretKey       string `json:"secret_key,omitempty"`
 }
 
 func credentialOwner(ownerID, nodeID, providerID string) string {
@@ -54,7 +56,26 @@ func decodeCredentials(raw []byte, kind dns.ProviderKind) (provider.Credentials,
 	if !strictObject(raw, &document, 16<<10) {
 		return provider.Credentials{}, fault.New("VALIDATION_FAILED", "提供商凭据不是受控 JSON 对象")
 	}
-	result := provider.Credentials{Kind: kind, Token: []byte(document.Token), AccessKeyID: document.AccessKeyID, AccessKeySecret: []byte(document.AccessKeySecret)}
+	keyID := document.AccessKeyID
+	keySecret := document.AccessKeySecret
+	if kind == dns.DNSPod {
+		if keyID == "" && document.SecretID != "" {
+			keyID = document.SecretID
+		}
+		if keySecret == "" && document.SecretKey != "" {
+			keySecret = document.SecretKey
+		}
+		// Reject mixed/ambiguous aliases when both forms are supplied with conflicting values.
+		if document.AccessKeyID != "" && document.SecretID != "" && document.AccessKeyID != document.SecretID {
+			return provider.Credentials{}, fault.New("VALIDATION_FAILED", "DNSPod SecretId 字段冲突")
+		}
+		if document.AccessKeySecret != "" && document.SecretKey != "" && document.AccessKeySecret != document.SecretKey {
+			return provider.Credentials{}, fault.New("VALIDATION_FAILED", "DNSPod SecretKey 字段冲突")
+		}
+	} else if document.SecretID != "" || document.SecretKey != "" {
+		return provider.Credentials{}, fault.New("VALIDATION_FAILED", "提供商类型与凭据字段不匹配")
+	}
+	result := provider.Credentials{Kind: kind, Token: []byte(document.Token), AccessKeyID: keyID, AccessKeySecret: []byte(keySecret)}
 	if result.Validate(kind) != nil {
 		result.Clear()
 		return provider.Credentials{}, fault.New("VALIDATION_FAILED", "提供商类型与凭据字段不匹配")
@@ -91,7 +112,7 @@ func (a *Authority) RegisterProvider(ctx context.Context, providerID, expected s
 	if err != nil {
 		return nil, "", err
 	}
-	if input.ProviderID != providerID || !names.ID(providerID) || !validProviderName(input.Name) || (input.Kind != dns.Cloudflare && input.Kind != dns.Aliyun) || value.invocation.Subject != "plugins/domain.dns/resources/providers/"+providerID {
+	if input.ProviderID != providerID || !names.ID(providerID) || !validProviderName(input.Name) || (input.Kind != dns.Cloudflare && input.Kind != dns.Aliyun && input.Kind != dns.DNSPod) || value.invocation.Subject != "plugins/domain.dns/resources/providers/"+providerID {
 		return nil, "", fault.New("PERMISSION_DENIED", "提供商资源不属于原 operation")
 	}
 	if err := a.RequireRevision(ctx, expected); err != nil {

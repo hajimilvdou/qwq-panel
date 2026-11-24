@@ -15,6 +15,12 @@
     "running": {
       "type": "boolean"
     },
+    "node_id": {
+      "type": "string"
+    },
+    "config_revision": {
+      "type": "string"
+    },
     "bound_addr": {
       "type": "string"
     },
@@ -43,6 +49,12 @@
       }
     },
     "snapshots": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "sni_passthroughs": {
       "type": "array",
       "items": {
         "type": "object"

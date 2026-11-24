@@ -122,9 +122,14 @@ func (a *api) deleteAgentWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// searchAgentRegistry implements GET /api/v1/agent/registry.
+// searchAgentRegistry implements GET /api/v1/agent/registry (admin-only).
 func (a *api) searchAgentRegistry(w http.ResponseWriter, r *http.Request) {
-	if _, err := a.caller(r); err != nil {
+	act, err := a.caller(r)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	if err := a.requireAdmin(r.Context(), act); err != nil {
 		a.fail(w, r, err)
 		return
 	}

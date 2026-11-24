@@ -4,6 +4,7 @@ package operations
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -11,6 +12,116 @@ import (
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 	"github.com/qwq-panel/qwq/internal/storage"
 )
+
+// ExternalApprovalAction and ExternalApprovalPermission identify host approval
+// cards minted for external CLI agent permission prompts (Codex, OpenCode,
+// DSH/ACP) so they flow through POST /api/v1/approvals/{id}/decision.
+const (
+	ExternalApprovalAction     = "host.agent.external_approval"
+	ExternalApprovalPermission = "host.agent_external_approval:approve"
+)
+
+// ExternalApprovalInput describes an external CLI permission prompt to persist
+// as a real pending operation + approval record.
+type ExternalApprovalInput struct {
+	Actor          actor.Actor
+	ExternalAction string
+	Summary        string
+	Description    string
+	Risk           string
+	Destructive    bool
+	Args           json.RawMessage
+	PermissionMode PermissionMode
+	TraceID        string
+	RequestID      string
+}
+
+// MintExternalApproval persists an AWAITING_APPROVAL operation and its paired
+// PENDING approval card for an external CLI permission request so a human
+// administrator can decide it via POST /api/v1/approvals/{id}/decision.
+func (s *Service) MintExternalApproval(ctx context.Context, req ExternalApprovalInput) (approvalID, operationID string, err error) {
+	if req.Actor.ID == "" || req.Actor.Valid() != nil {
+		return "", "", problem.New(problem.Unauthenticated, "The external approval request has no valid actor.")
+	}
+	risk := strings.ToLower(strings.TrimSpace(req.Risk))
+	switch risk {
+	case RiskLow, RiskMedium, RiskHigh:
+	default:
+		risk = RiskHigh
+	}
+	effect := EffectWrite
+	if req.Destructive {
+		effect = EffectDestructive
+		risk = RiskHigh
+	}
+	payloadObj := map[string]any{
+		"external_action": strings.TrimSpace(req.ExternalAction),
+	}
+	if len(req.Args) > 0 && json.Valid(req.Args) {
+		payloadObj["args"] = json.RawMessage(req.Args)
+	}
+	argsBytes, err := json.Marshal(payloadObj)
+	if err != nil {
+		return "", "", problem.Wrap(err)
+	}
+	args, err := canonicalObject(argsBytes)
+	if err != nil {
+		return "", "", problem.Wrap(err)
+	}
+	summary := clipText(strings.TrimSpace(req.Summary), 200)
+	if summary == "" {
+		summary = "External agent action requires administrator confirmation"
+	}
+	desc := clipText(strings.TrimSpace(req.Description), 1000)
+
+	act := Action{
+		ID:                  ExternalApprovalAction,
+		Summary:             summary,
+		Effect:              effect,
+		Risk:                risk,
+		Mode:                ModeInvoke,
+		Permission:          ExternalApprovalPermission,
+		Source:              HostSource,
+		Approval:            ApprovalConfirm,
+		ApprovalSummary:     summary,
+		ApprovalDescription: desc,
+	}
+	w := &writeRequest{
+		req: RunRequest{
+			Actor:     req.Actor,
+			TraceID:   req.TraceID,
+			RequestID: req.RequestID,
+			NodeID:    s.nodeID,
+			Action:    ExternalApprovalAction,
+			Args:      args,
+		},
+		act:           act,
+		args:          args,
+		digest:        digestOf(args),
+		effectiveRisk: risk,
+		needApproval:  true,
+		mode:          req.PermissionMode.normalized(),
+	}
+	op := s.newOperation(w)
+	approval := s.newApproval(op, w)
+	op.ApprovalID = approval.ID
+
+	err = s.db.Update(ctx, func(tx *storage.Tx) error {
+		tx.SetOrigin(s.origin(op.Actor, op.ID, op.TraceID, op.NodeID))
+		if err := s.insertOperation(ctx, tx, op); err != nil {
+			return err
+		}
+		if err := s.transition(ctx, tx, op, AwaitingApproval); err != nil {
+			return err
+		}
+		return s.insertApproval(ctx, tx, op, approval)
+	})
+	if err != nil {
+		return "", "", problem.From(err)
+	}
+	s.notify(ctx, op)
+	return approval.ID, op.ID, nil
+}
 
 // Approval decisions (OpenAPI ApprovalDecisionRequest).
 const (

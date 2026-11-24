@@ -126,12 +126,14 @@ type CertCandidate struct {
 
 // ProxyIntegrationReadiness 描述 web.ingress / tls.certificates / domain.dns 联动组件的就绪状态。
 type ProxyIntegrationReadiness struct {
-	IngressInstalled bool            `json:"ingress_installed"`
-	IngressRunning   bool            `json:"ingress_running"`
-	CertsInstalled   bool            `json:"certs_installed"`
-	DNSInstalled     bool            `json:"dns_installed"`
-	MissingPlugins   []string        `json:"missing_plugins"`
-	AvailableCerts   []CertCandidate `json:"available_certs"`
+	IngressInstalled      bool            `json:"ingress_installed"`
+	IngressRunning        bool            `json:"ingress_running"`
+	IngressNodeID         string          `json:"ingress_node_id,omitempty"`
+	IngressConfigRevision string          `json:"ingress_config_revision,omitempty"`
+	CertsInstalled        bool            `json:"certs_installed"`
+	DNSInstalled          bool            `json:"dns_installed"`
+	MissingPlugins        []string        `json:"missing_plugins"`
+	AvailableCerts        []CertCandidate `json:"available_certs"`
 }
 
 // ProbeProxyIntegrationStatus 只读探测反代、证书与 DNS 组件安装状态并拉取可复用证书清单。
@@ -157,6 +159,8 @@ func probeProxyIntegrationStatusWithInvoker(ctx context.Context, inv pluginInvok
 		res.IngressInstalled = true
 		var ov struct {
 			Running        *bool  `json:"running"`
+			NodeID         string `json:"node_id"`
+			ConfigRevision string `json:"config_revision"`
 			BoundAddr      string `json:"bound_addr"`
 			HTTPSBoundAddr string `json:"https_bound_addr"`
 		}
@@ -166,6 +170,8 @@ func probeProxyIntegrationStatusWithInvoker(ctx context.Context, inv pluginInvok
 		} else {
 			res.IngressRunning = ov.BoundAddr != "" || ov.HTTPSBoundAddr != ""
 		}
+		res.IngressNodeID = strings.TrimSpace(ov.NodeID)
+		res.IngressConfigRevision = strings.TrimSpace(ov.ConfigRevision)
 	} else if !isPluginMissingErr(err) {
 		res.IngressInstalled = true
 	} else {
@@ -386,10 +392,20 @@ func EnsureCertForContainerDomain(
 }
 
 // BindCertificateToWebIngress 在拿到尚未物化绑定到 web.ingress 的 certificate_id 后，
-// 调用 tls.certificates/bindings.bind 将证书投递至 web.ingress 隔离目录并返回稳定的 binding_ref。
-func BindCertificateToWebIngress(ctx context.Context, inv pluginInvoker, certificateID, siteProfileID string, generation int) (string, error) {
+// 先调用 tls.certificates/bindings.reserve 为 web.ingress 预留稳定 binding_ref，
+// 再调用 tls.certificates/bindings.bind 将证书投递至 web.ingress 隔离目录并返回稳定的 binding_ref。
+func BindCertificateToWebIngress(ctx context.Context, inv pluginInvoker, certificateID, siteProfileID, serverName, nodeID, expectedConfigRevision string, generation int) (string, error) {
 	certificateID = strings.TrimSpace(certificateID)
 	siteProfileID = strings.TrimSpace(siteProfileID)
+	serverName = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(serverName), "."))
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		nodeID = "local"
+	}
+	expectedConfigRevision = strings.TrimSpace(expectedConfigRevision)
+	if expectedConfigRevision == "" {
+		expectedConfigRevision = "0"
+	}
 	if inv == nil || certificateID == "" {
 		return "", errors.New("绑定证书至 web.ingress 参数不完整")
 	}
@@ -399,18 +415,46 @@ func BindCertificateToWebIngress(ctx context.Context, inv pluginInvoker, certifi
 	if generation <= 0 {
 		generation = 1
 	}
-	bindingRef := siteProfileID
-	if !strings.HasPrefix(bindingRef, "certbind_") {
-		slug := certSlugCleanRe.ReplaceAllString(strings.ToLower(siteProfileID), "-")
-		slug = strings.Trim(slug, "-.")
-		if slug == "" {
-			slug = certificateID
-		}
-		if len(slug) > 48 {
-			slug = slug[:48]
-		}
-		bindingRef = "certbind_" + slug
+	profileID := strings.TrimPrefix(siteProfileID, "certbind_")
+	profileID = certSlugCleanRe.ReplaceAllString(strings.ToLower(profileID), "-")
+	profileID = strings.Trim(profileID, "-.")
+	if profileID == "" {
+		profileID = certificateID
 	}
+	if len(profileID) > 48 {
+		profileID = profileID[:48]
+	}
+	if serverName == "" {
+		serverName = profileID
+	}
+
+	reserveBytes, err := json.Marshal(map[string]any{
+		"certificate_id":           certificateID,
+		"expected_config_revision": expectedConfigRevision,
+		"consumer": map[string]any{
+			"node_id":    nodeID,
+			"plugin_id":  "web.ingress",
+			"profile_id": profileID,
+			"sni":        serverName,
+			"purpose":    "ingress.https",
+			"test":       false,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	reserveRaw, err := inv.Invoke(ctx, "tls.certificates", "bindings.reserve", "v1", reserveBytes)
+	if err != nil {
+		return "", fmt.Errorf("为反向代理网关预留证书 %s 绑定失败: %w", certificateID, err)
+	}
+	var reserveResp struct {
+		BindingRef string `json:"binding_ref"`
+	}
+	if json.Unmarshal(reserveRaw, &reserveResp) != nil || strings.TrimSpace(reserveResp.BindingRef) == "" {
+		return "", fmt.Errorf("tls.certificates/bindings.reserve 未返回有效 binding_ref")
+	}
+	bindingRef := strings.TrimSpace(reserveResp.BindingRef)
+
 	reqBytes, err := json.Marshal(map[string]any{
 		"certificate_id": certificateID,
 		"binding_ref":    bindingRef,
@@ -673,21 +717,36 @@ func UpsertContainerProxyAndCert(
 	}
 	if tlsMode != "off" && certID != "" && !strings.HasPrefix(certID, "certbind_") {
 		siteProfileID := "docker-" + normalizeContainerName(target.ContainerName)
-		gen := 1
+		gen := 0
 		for _, c := range readiness.AvailableCerts {
 			if c.CertID == certID && c.LatestGeneration > 0 {
 				gen = c.LatestGeneration
 				break
 			}
 		}
-		boundRef, berr := BindCertificateToWebIngress(ctx, inv, certID, siteProfileID, gen)
-		if berr != nil {
-			warnings = append(warnings, "证书已就绪，但自动绑定至 web.ingress 失败（"+berr.Error()+"）；站点已先以 HTTP 模式上线以防 HTTPS 不可访问，请在「TLS 证书 → 消费者部署绑定」完成绑定后再开启 HTTPS。")
-			certID = ""
-			tlsMode = "off"
-		} else {
-			certID = boundRef
+		// 若为刚签发的证书或尚未拉到最新代次，先实时重查一次 certificates.list 获取真实 latest_generation 与既有绑定。
+		if gen == 0 {
+			if refreshed := probeProxyIntegrationStatusWithInvoker(ctx, inv); len(refreshed.AvailableCerts) > 0 {
+				for _, c := range refreshed.AvailableCerts {
+					if c.CertID == certID && c.LatestGeneration > 0 {
+						gen = c.LatestGeneration
+						break
+					}
+				}
+			}
 		}
+		if gen <= 0 {
+			gen = 1
+		}
+		boundRef, berr := BindCertificateToWebIngress(
+			ctx, inv, certID, siteProfileID, domain,
+			readiness.IngressNodeID, readiness.IngressConfigRevision, gen,
+		)
+		if berr != nil {
+			// 安全失败闭环（fail-closed）：拒绝静默降级为明文 HTTP，防止凭据或业务流量在管理员不知情下明文暴露。
+			return ContainerIngressLink{}, warnings, fmt.Errorf("HTTPS 证书绑定至 web.ingress 失败，已中止上线以避免降级为明文 HTTP：%w", berr)
+		}
+		certID = boundRef
 	}
 	if !readiness.IngressRunning {
 		warnings = append(warnings, "检测到 web.ingress 当前未成功监听 80/443 端口（可能存在端口冲突或未启用），请前往「反向代理」页检查监听状态。")

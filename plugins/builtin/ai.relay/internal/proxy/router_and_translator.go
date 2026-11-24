@@ -99,19 +99,7 @@ func NewSafeHTTPClient(allowPrivate bool, timeout time.Duration) *http.Client {
 				}
 				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
 			}
-			ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", cleanHost)
-			if err != nil {
-				return nil, err
-			}
-			if len(ips) == 0 {
-				return nil, fmt.Errorf("ssrf: no ip resolved for %s", cleanHost)
-			}
-			for _, ip := range ips {
-				if checkIP(ip) {
-					return nil, fmt.Errorf("SSRF_BLOCKED: upstream %s resolved to blocked ip %s", cleanHost, ip.String())
-				}
-			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].Unmap().String(), port))
+			return DialSafeMultiIP(ctx, network, cleanHost, port, allowPrivate, checkIP)
 		},
 	}
 	return &http.Client{
@@ -120,6 +108,46 @@ func NewSafeHTTPClient(allowPrivate bool, timeout time.Duration) *http.Client {
 			return http.ErrUseLastResponse
 		},
 	}
+}
+
+// DialSafeMultiIP 先校验目标域名解析出的全部 IP（阻断 DNS Rebinding 与内网/元数据地址），
+// 再逐一以有界超时尝试连接，避免纯 IPv4 主机因双栈域名首条 AAAA 不可达而直接失败。
+func DialSafeMultiIP(
+	ctx context.Context,
+	network, host, port string,
+	allowPrivate bool,
+	isBlockedIP func(netip.Addr) bool,
+) (net.Conn, error) {
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("ssrf: no ip resolved for %s", host)
+	}
+	validIPs := make([]netip.Addr, 0, len(ips))
+	for _, raw := range ips {
+		ip := raw.Unmap()
+		if isBlockedIP != nil && isBlockedIP(ip) {
+			return nil, fmt.Errorf("SSRF_BLOCKED: upstream %s resolved to blocked ip %s", host, ip.String())
+		}
+		validIPs = append(validIPs, ip)
+	}
+	dialer := &net.Dialer{Timeout: 6 * time.Second, KeepAlive: 30 * time.Second}
+	var lastErr error
+	for _, ip := range validIPs {
+		attemptCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		conn, derr := dialer.DialContext(attemptCtx, network, net.JoinHostPort(ip.String(), port))
+		cancel()
+		if derr == nil {
+			return conn, nil
+		}
+		lastErr = derr
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, fmt.Errorf("dial upstream %s:%s failed: %w", host, port, lastErr)
 }
 
 func isAlwaysBlockedUpstreamIP(addr netip.Addr) bool {
@@ -394,6 +422,23 @@ func (r *Router) PricingFor(model string) ModelPricing {
 	}
 }
 
+// HasConfiguredChannels 报告指定分组与模型是否存在至少一条已配置的上游渠道（无论是否熔断或冷却），
+// 避免客户端请求未配置/拼写错误的模型时误报“全部上游渠道熔断”告警。
+func (r *Router) HasConfiguredChannels(group, model string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, ch := range r.channels {
+		if len(ch.Groups) > 0 && !slices.Contains(ch.Groups, group) {
+			continue
+		}
+		if len(ch.Models) > 0 && model != "" && !slices.Contains(ch.Models, model) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // SelectCandidates 按分组与模型筛选健康渠道；最高优先级层内通过 Sticky Session 哈希锁定上游账号以命中 Prompt Cache。
 func (r *Router) SelectCandidates(group, model, sessionAffinityKey string, now time.Time) []*UpstreamChannel {
 	nowMs := now.UnixMilli()
@@ -455,10 +500,24 @@ var sseLineBufPool = sync.Pool{
 	},
 }
 
+type CanonicalToolCall struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type CanonicalToolResult struct {
+	ToolCallID string `json:"tool_call_id"`
+	Content    string `json:"content"`
+	IsError    bool   `json:"is_error,omitempty"`
+}
+
 type CanonicalMessage struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Reasoning string `json:"reasoning,omitempty"`
+	Role        string                `json:"role"`
+	Content     string                `json:"content"`
+	Reasoning   string                `json:"reasoning,omitempty"`
+	ToolCalls   []CanonicalToolCall   `json:"tool_calls,omitempty"`
+	ToolResults []CanonicalToolResult `json:"tool_results,omitempty"`
 }
 
 type CanonicalRequest struct {
@@ -515,9 +574,12 @@ func ParseDownstreamRequest(protoIn ProtocolKind, urlModel string, raw []byte) (
 		cr.System = extractFlexibleText(in.System)
 		cr.SessionHint = in.Metadata.UserID
 		for _, m := range in.Messages {
+			txt, tcs, trs := parseAnthropicContentBlocks(m.Content)
 			cr.Messages = append(cr.Messages, CanonicalMessage{
-				Role:    m.Role,
-				Content: extractFlexibleText(m.Content),
+				Role:        m.Role,
+				Content:     txt,
+				ToolCalls:   tcs,
+				ToolResults: trs,
 			})
 		}
 
@@ -586,8 +648,17 @@ func ParseDownstreamRequest(protoIn ProtocolKind, urlModel string, raw []byte) (
 			Stream      bool              `json:"stream"`
 			User        string            `json:"user"`
 			Messages    []struct {
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
+				Role       string          `json:"role"`
+				Content    json.RawMessage `json:"content"`
+				ToolCallID string          `json:"tool_call_id"`
+				ToolCalls  []struct {
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
 			} `json:"messages"`
 		}
 		if err := json.Unmarshal(raw, &in); err != nil {
@@ -607,8 +678,26 @@ func ParseDownstreamRequest(protoIn ProtocolKind, urlModel string, raw []byte) (
 					cr.System += "\n"
 				}
 				cr.System += txt
+			} else if m.Role == "tool" {
+				cr.Messages = append(cr.Messages, CanonicalMessage{
+					Role: "tool",
+					ToolResults: []CanonicalToolResult{{
+						ToolCallID: m.ToolCallID,
+						Content:    txt,
+					}},
+				})
 			} else {
-				cr.Messages = append(cr.Messages, CanonicalMessage{Role: m.Role, Content: txt})
+				cm := CanonicalMessage{Role: m.Role, Content: txt}
+				for _, tc := range m.ToolCalls {
+					if tc.Function.Name != "" {
+						cm.ToolCalls = append(cm.ToolCalls, CanonicalToolCall{
+							ID:        tc.ID,
+							Name:      tc.Function.Name,
+							Arguments: tc.Function.Arguments,
+						})
+					}
+				}
+				cr.Messages = append(cr.Messages, cm)
 			}
 		}
 	}
@@ -634,7 +723,7 @@ func ParseDownstreamRequest(protoIn ProtocolKind, urlModel string, raw []byte) (
 
 func extractFlexibleText(raw json.RawMessage) string {
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return ""
 	}
 	var s string
@@ -655,6 +744,54 @@ func extractFlexibleText(raw json.RawMessage) string {
 		return sb.String()
 	}
 	return string(trimmed)
+}
+
+func parseAnthropicContentBlocks(raw json.RawMessage) (string, []CanonicalToolCall, []CanonicalToolResult) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return "", nil, nil
+	}
+	var s string
+	if json.Unmarshal(trimmed, &s) == nil {
+		return s, nil, nil
+	}
+	var blocks []struct {
+		Type      string          `json:"type"`
+		Text      string          `json:"text"`
+		ID        string          `json:"id"`
+		Name      string          `json:"name"`
+		Input     json.RawMessage `json:"input"`
+		ToolUseID string          `json:"tool_use_id"`
+		Content   json.RawMessage `json:"content"`
+		IsError   bool            `json:"is_error"`
+	}
+	if json.Unmarshal(trimmed, &blocks) != nil {
+		return string(trimmed), nil, nil
+	}
+	var sb strings.Builder
+	var tcs []CanonicalToolCall
+	var trs []CanonicalToolResult
+	for _, b := range blocks {
+		switch b.Type {
+		case "tool_use":
+			args := strings.TrimSpace(string(b.Input))
+			if args == "" {
+				args = "{}"
+			}
+			tcs = append(tcs, CanonicalToolCall{ID: b.ID, Name: b.Name, Arguments: args})
+		case "tool_result":
+			trs = append(trs, CanonicalToolResult{
+				ToolCallID: b.ToolUseID,
+				Content:    extractFlexibleText(b.Content),
+				IsError:    b.IsError,
+			})
+		default:
+			if b.Text != "" {
+				sb.WriteString(b.Text)
+			}
+		}
+	}
+	return sb.String(), tcs, trs
 }
 
 // EncodeUpstreamRequest 将中立 IR 编码为目标渠道原生协议请求（同协议同模型时原样零损耗直通）。
@@ -723,8 +860,70 @@ func EncodeUpstreamRequest(ch *UpstreamChannel, protoIn ProtocolKind, rawOrigina
 			maxTok = 8192
 		}
 		msgs := make([]map[string]any, 0, len(ir.Messages))
+		appendAnthropicMsg := func(role string, blocks []map[string]any) {
+			if len(blocks) == 0 {
+				return
+			}
+			if len(msgs) > 0 && msgs[len(msgs)-1]["role"] == role {
+				prev := msgs[len(msgs)-1]
+				switch existing := prev["content"].(type) {
+				case []map[string]any:
+					prev["content"] = append(existing, blocks...)
+					return
+				case string:
+					merged := make([]map[string]any, 0, 1+len(blocks))
+					if existing != "" {
+						merged = append(merged, map[string]any{"type": "text", "text": existing})
+					}
+					prev["content"] = append(merged, blocks...)
+					return
+				}
+			}
+			if len(blocks) == 1 && blocks[0]["type"] == "text" {
+				if txt, ok := blocks[0]["text"].(string); ok {
+					msgs = append(msgs, map[string]any{"role": role, "content": txt})
+					return
+				}
+			}
+			msgs = append(msgs, map[string]any{"role": role, "content": blocks})
+		}
 		for _, m := range ir.Messages {
-			msgs = append(msgs, map[string]any{"role": m.Role, "content": m.Content})
+			role := m.Role
+			if role == "tool" || len(m.ToolResults) > 0 {
+				role = "user"
+			}
+			blocks := make([]map[string]any, 0, len(m.ToolCalls)+len(m.ToolResults)+1)
+			if m.Content != "" || (len(m.ToolCalls) == 0 && len(m.ToolResults) == 0) {
+				blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
+			}
+			for idx, tc := range m.ToolCalls {
+				id := tc.ID
+				if id == "" {
+					id = fmt.Sprintf("toolu_qwq_%d", idx)
+				}
+				var inputObj map[string]any
+				if err := json.Unmarshal([]byte(tc.Arguments), &inputObj); err != nil || inputObj == nil {
+					inputObj = map[string]any{}
+				}
+				blocks = append(blocks, map[string]any{
+					"type":  "tool_use",
+					"id":    id,
+					"name":  tc.Name,
+					"input": inputObj,
+				})
+			}
+			for _, tr := range m.ToolResults {
+				item := map[string]any{
+					"type":        "tool_result",
+					"tool_use_id": tr.ToolCallID,
+					"content":     tr.Content,
+				}
+				if tr.IsError {
+					item["is_error"] = true
+				}
+				blocks = append(blocks, item)
+			}
+			appendAnthropicMsg(role, blocks)
 		}
 		payload := map[string]any{
 			"model":      upModel,
@@ -815,12 +1014,57 @@ func EncodeUpstreamRequest(ch *UpstreamChannel, protoIn ProtocolKind, rawOrigina
 			map[string]string{"Content-Type": "application/json", "x-goog-api-key": cred}, b, nil
 
 	default:
-		msgs := make([]map[string]string, 0, len(ir.Messages)+1)
+		msgs := make([]map[string]any, 0, len(ir.Messages)+1)
 		if ir.System != "" {
-			msgs = append(msgs, map[string]string{"role": "system", "content": ir.System})
+			msgs = append(msgs, map[string]any{"role": "system", "content": ir.System})
 		}
 		for _, m := range ir.Messages {
-			msgs = append(msgs, map[string]string{"role": m.Role, "content": m.Content})
+			if len(m.ToolResults) > 0 {
+				for _, tr := range m.ToolResults {
+					msgs = append(msgs, map[string]any{
+						"role":         "tool",
+						"tool_call_id": tr.ToolCallID,
+						"content":      tr.Content,
+					})
+				}
+				if m.Content != "" {
+					msgs = append(msgs, map[string]any{"role": "user", "content": m.Content})
+				}
+				continue
+			}
+			if len(m.ToolCalls) > 0 {
+				tcs := make([]map[string]any, 0, len(m.ToolCalls))
+				for idx, tc := range m.ToolCalls {
+					id := tc.ID
+					if id == "" {
+						id = fmt.Sprintf("call_qwq_%d", idx)
+					}
+					args := tc.Arguments
+					if strings.TrimSpace(args) == "" {
+						args = "{}"
+					}
+					tcs = append(tcs, map[string]any{
+						"id":   id,
+						"type": "function",
+						"function": map[string]any{
+							"name":      tc.Name,
+							"arguments": args,
+						},
+					})
+				}
+				msg := map[string]any{
+					"role":       "assistant",
+					"tool_calls": tcs,
+				}
+				if m.Content != "" {
+					msg["content"] = m.Content
+				} else {
+					msg["content"] = nil
+				}
+				msgs = append(msgs, msg)
+				continue
+			}
+			msgs = append(msgs, map[string]any{"role": m.Role, "content": m.Content})
 		}
 		payload := map[string]any{
 			"model":          upModel,
@@ -850,6 +1094,8 @@ func EncodeUpstreamRequest(ch *UpstreamChannel, protoIn ProtocolKind, rawOrigina
 	}
 }
 
+const maxStreamToolArgsBytes = 2 << 20
+
 // RelayStreamBridge 零全量缓冲地边读上游 SSE 边向下游写出四协议转换帧并提取精确 Token 与 Prompt Cache 用量。
 func RelayStreamBridge(
 	startedAt time.Time,
@@ -861,6 +1107,7 @@ func RelayStreamBridge(
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
 
@@ -872,13 +1119,101 @@ func RelayStreamBridge(
 
 	var usage StreamUsage
 	var estOutChars int
+	var writeErr error
 	var anthropicSM *AnthropicSSEStateMachine
 	if upProto != downProto && downProto == ProtoAnthropicMessages {
 		anthropicSM = NewAnthropicSSEStateMachine(w, reqModel)
 	}
+	toolAccum := make(map[int]*CanonicalToolCall)
+	var toolOrder []int
+	openAIToolSlot := make(map[int]int)
+	var emittedToolCalls bool
+
+	writeFormatted := func(format string, args ...any) {
+		if writeErr != nil {
+			return
+		}
+		if _, err := fmt.Fprintf(w, format, args...); err != nil {
+			writeErr = err
+		}
+	}
+
+	recordToolDelta := func(td streamToolCallDelta) {
+		if writeErr != nil {
+			return
+		}
+		if usage.TTFTMs == 0 {
+			usage.TTFTMs = time.Since(startedAt).Milliseconds()
+		}
+		estOutChars += len(td.Name) + len(td.ArgsDelta)
+		acc, ok := toolAccum[td.Index]
+		if !ok {
+			if len(toolAccum) >= 64 {
+				return
+			}
+			acc = &CanonicalToolCall{ID: td.ID, Name: td.Name}
+			toolAccum[td.Index] = acc
+			toolOrder = append(toolOrder, td.Index)
+		}
+		if td.ID != "" && acc.ID == "" {
+			acc.ID = td.ID
+		}
+		if td.Name != "" && acc.Name == "" {
+			acc.Name = td.Name
+		}
+		if len(acc.Arguments)+len(td.ArgsDelta) <= maxStreamToolArgsBytes {
+			acc.Arguments += td.ArgsDelta
+		}
+
+		// OpenAI Chat 下游支持边收边流式推送 tool_calls 增量块。
+		if downProto == ProtoOpenAIChat {
+			slot, exists := openAIToolSlot[td.Index]
+			if !exists {
+				slot = len(openAIToolSlot)
+				openAIToolSlot[td.Index] = slot
+			}
+			fnObj := map[string]any{}
+			if td.Name != "" {
+				fnObj["name"] = td.Name
+			}
+			if td.ArgsDelta != "" {
+				fnObj["arguments"] = td.ArgsDelta
+			}
+			tcObj := map[string]any{
+				"index": slot,
+			}
+			if td.ID != "" || td.Start {
+				id := acc.ID
+				if id == "" {
+					id = fmt.Sprintf("call_qwq_%d", slot)
+				}
+				tcObj["id"] = id
+				tcObj["type"] = "function"
+			}
+			if len(fnObj) > 0 {
+				tcObj["function"] = fnObj
+			}
+			chunk, _ := json.Marshal(map[string]any{
+				"id":     "chatcmpl-qwq",
+				"object": "chat.completion.chunk",
+				"model":  reqModel,
+				"choices": []map[string]any{{
+					"index": 0,
+					"delta": map[string]any{
+						"tool_calls": []map[string]any{tcObj},
+					},
+				}},
+			})
+			writeFormatted("data: %s\n\n", chunk)
+			emittedToolCalls = true
+			if writeErr == nil && flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}
 
 	emitDownstreamDelta := func(textDelta, reasoningDelta string) {
-		if textDelta == "" && reasoningDelta == "" {
+		if (textDelta == "" && reasoningDelta == "") || writeErr != nil {
 			return
 		}
 		if usage.TTFTMs == 0 {
@@ -890,6 +1225,9 @@ func RelayStreamBridge(
 		case ProtoAnthropicMessages:
 			if anthropicSM != nil {
 				anthropicSM.EmitDelta(usage.InputTokens, reasoningDelta, textDelta)
+				if err := anthropicSM.Err(); err != nil {
+					writeErr = err
+				}
 			}
 
 		case ProtoOpenAIResponses:
@@ -898,14 +1236,14 @@ func RelayStreamBridge(
 					"type":  "response.reasoning_summary_text.delta",
 					"delta": reasoningDelta,
 				})
-				_, _ = fmt.Fprintf(w, "event: response.reasoning_summary_text.delta\ndata: %s\n\n", chunk)
+				writeFormatted("event: response.reasoning_summary_text.delta\ndata: %s\n\n", chunk)
 			}
 			if textDelta != "" {
 				chunk, _ := json.Marshal(map[string]any{
 					"type":  "response.output_text.delta",
 					"delta": textDelta,
 				})
-				_, _ = fmt.Fprintf(w, "event: response.output_text.delta\ndata: %s\n\n", chunk)
+				writeFormatted("event: response.output_text.delta\ndata: %s\n\n", chunk)
 			}
 
 		case ProtoGeminiNative:
@@ -921,7 +1259,7 @@ func RelayStreamBridge(
 					{"content": map[string]any{"role": "model", "parts": parts}},
 				},
 			})
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk)
+			writeFormatted("data: %s\n\n", chunk)
 
 		default: // ProtoOpenAIChat
 			deltaObj := map[string]any{}
@@ -937,9 +1275,9 @@ func RelayStreamBridge(
 				"model":   reqModel,
 				"choices": []map[string]any{{"index": 0, "delta": deltaObj}},
 			})
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk)
+			writeFormatted("data: %s\n\n", chunk)
 		}
-		if flusher != nil {
+		if writeErr == nil && flusher != nil {
 			flusher.Flush()
 		}
 	}
@@ -950,8 +1288,14 @@ func RelayStreamBridge(
 			if usage.TTFTMs == 0 && bytes.HasPrefix(line, []byte("data:")) {
 				usage.TTFTMs = time.Since(startedAt).Milliseconds()
 			}
-			_, _ = w.Write(line)
-			_, _ = w.Write([]byte("\n"))
+			if _, err := w.Write(line); err != nil {
+				writeErr = err
+				break
+			}
+			if _, err := w.Write([]byte("\n")); err != nil {
+				writeErr = err
+				break
+			}
 			if len(line) == 0 && flusher != nil {
 				flusher.Flush()
 			}
@@ -969,17 +1313,59 @@ func RelayStreamBridge(
 		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
 			continue
 		}
-		textD, reasonD := parseUpstreamDeltaAndUsage(payload, upProto, &usage)
+		textD, reasonD, toolDeltas := parseUpstreamEvent(payload, upProto, &usage)
 		emitDownstreamDelta(textD, reasonD)
+		if writeErr != nil {
+			break
+		}
+		for _, td := range toolDeltas {
+			recordToolDelta(td)
+			if writeErr != nil {
+				break
+			}
+		}
+		if writeErr != nil {
+			break
+		}
 	}
 
-	if upProto != downProto {
+	if upProto != downProto && writeErr == nil {
 		switch downProto {
 		case ProtoAnthropicMessages:
-			if anthropicSM != nil && anthropicSM.Started() {
-				anthropicSM.Finish(usage.InputTokens, max(usage.OutputTokens, estOutChars/4), "end_turn")
+			if anthropicSM != nil {
+				for _, idx := range toolOrder {
+					tc := toolAccum[idx]
+					if tc != nil && tc.Name != "" {
+						anthropicSM.EmitToolUseBlock(usage.InputTokens, tc.ID, tc.Name, tc.Arguments)
+						emittedToolCalls = true
+					}
+				}
+				stopReason := "end_turn"
+				if emittedToolCalls {
+					stopReason = "tool_use"
+				}
+				anthropicSM.Finish(usage.InputTokens, max(usage.OutputTokens, estOutChars/4), stopReason)
+				if err := anthropicSM.Err(); err != nil {
+					writeErr = err
+				}
 			}
 		case ProtoOpenAIResponses:
+			for _, idx := range toolOrder {
+				tc := toolAccum[idx]
+				if tc == nil || tc.Name == "" {
+					continue
+				}
+				itemDone, _ := json.Marshal(map[string]any{
+					"type": "response.output_item.done",
+					"item": map[string]any{
+						"type":      "function_call",
+						"call_id":   tc.ID,
+						"name":      tc.Name,
+						"arguments": tc.Arguments,
+					},
+				})
+				writeFormatted("event: response.output_item.done\ndata: %s\n\n", itemDone)
+			}
 			completed, _ := json.Marshal(map[string]any{
 				"type": "response.completed",
 				"response": map[string]any{
@@ -990,17 +1376,67 @@ func RelayStreamBridge(
 					},
 				},
 			})
-			_, _ = fmt.Fprintf(w, "event: response.completed\ndata: %s\n\n", completed)
+			writeFormatted("event: response.completed\ndata: %s\n\n", completed)
+		case ProtoGeminiNative:
+			if len(toolOrder) > 0 {
+				parts := make([]map[string]any, 0, len(toolOrder))
+				for _, idx := range toolOrder {
+					tc := toolAccum[idx]
+					if tc == nil || tc.Name == "" {
+						continue
+					}
+					var argsObj map[string]any
+					if err := json.Unmarshal([]byte(tc.Arguments), &argsObj); err != nil || argsObj == nil {
+						argsObj = map[string]any{}
+					}
+					parts = append(parts, map[string]any{
+						"functionCall": map[string]any{
+							"name": tc.Name,
+							"args": argsObj,
+						},
+					})
+				}
+				if len(parts) > 0 {
+					chunk, _ := json.Marshal(map[string]any{
+						"candidates": []map[string]any{
+							{"content": map[string]any{"role": "model", "parts": parts}},
+						},
+					})
+					writeFormatted("data: %s\n\n", chunk)
+				}
+			}
 		case ProtoOpenAIChat:
-			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			finishReason := "stop"
+			if emittedToolCalls {
+				finishReason = "tool_calls"
+			}
+			finChunk, _ := json.Marshal(map[string]any{
+				"id":     "chatcmpl-qwq",
+				"object": "chat.completion.chunk",
+				"model":  reqModel,
+				"choices": []map[string]any{{
+					"index":         0,
+					"delta":         map[string]any{},
+					"finish_reason": finishReason,
+				}},
+			})
+			writeFormatted("data: %s\n\n", finChunk)
+			if writeErr == nil {
+				if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
+					writeErr = err
+				}
+			}
 		}
-		if flusher != nil {
+		if writeErr == nil && flusher != nil {
 			flusher.Flush()
 		}
 	}
 
 	if usage.OutputTokens == 0 && estOutChars > 0 {
 		usage.OutputTokens = max(1, estOutChars/4)
+	}
+	if writeErr != nil {
+		return usage, writeErr
 	}
 	return usage, sc.Err()
 }
@@ -1013,11 +1449,30 @@ func sniffUsageFromDataFrame(payload []byte, proto ProtocolKind, u *StreamUsage,
 	*estChars += len(payload) / 12
 }
 
+type streamToolCallDelta struct {
+	Index     int
+	ID        string
+	Name      string
+	ArgsDelta string
+	Start     bool
+}
+
 func parseUpstreamDeltaAndUsage(payload []byte, proto ProtocolKind, u *StreamUsage) (textDelta string, reasonDelta string) {
+	t, r, _ := parseUpstreamEvent(payload, proto, u)
+	return t, r
+}
+
+func parseUpstreamEvent(payload []byte, proto ProtocolKind, u *StreamUsage) (textDelta string, reasonDelta string, toolDeltas []streamToolCallDelta) {
 	switch proto {
 	case ProtoAnthropicMessages:
 		var ev struct {
-			Type    string `json:"type"`
+			Type         string `json:"type"`
+			Index        int    `json:"index"`
+			ContentBlock struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"content_block"`
 			Message struct {
 				Usage struct {
 					InputTokens              int `json:"input_tokens"`
@@ -1027,9 +1482,10 @@ func parseUpstreamDeltaAndUsage(payload []byte, proto ProtocolKind, u *StreamUsa
 				} `json:"usage"`
 			} `json:"message"`
 			Delta struct {
-				Type     string `json:"type"`
-				Text     string `json:"text"`
-				Thinking string `json:"thinking"`
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				Thinking    string `json:"thinking"`
+				PartialJSON string `json:"partial_json"`
 			} `json:"delta"`
 			Usage struct {
 				OutputTokens int `json:"output_tokens"`
@@ -1044,7 +1500,20 @@ func parseUpstreamDeltaAndUsage(payload []byte, proto ProtocolKind, u *StreamUsa
 			if ev.Usage.OutputTokens > 0 {
 				u.OutputTokens = ev.Usage.OutputTokens
 			}
-			return ev.Delta.Text, ev.Delta.Thinking
+			if ev.Type == "content_block_start" && ev.ContentBlock.Type == "tool_use" {
+				toolDeltas = append(toolDeltas, streamToolCallDelta{
+					Index: ev.Index,
+					ID:    ev.ContentBlock.ID,
+					Name:  ev.ContentBlock.Name,
+					Start: true,
+				})
+			} else if ev.Delta.Type == "input_json_delta" && ev.Delta.PartialJSON != "" {
+				toolDeltas = append(toolDeltas, streamToolCallDelta{
+					Index:     ev.Index,
+					ArgsDelta: ev.Delta.PartialJSON,
+				})
+			}
+			return ev.Delta.Text, ev.Delta.Thinking, toolDeltas
 		}
 
 	case ProtoGeminiNative:
@@ -1052,8 +1521,12 @@ func parseUpstreamDeltaAndUsage(payload []byte, proto ProtocolKind, u *StreamUsa
 			Candidates []struct {
 				Content struct {
 					Parts []struct {
-						Text    string `json:"text"`
-						Thought bool   `json:"thought"`
+						Text         string `json:"text"`
+						Thought      bool   `json:"thought"`
+						FunctionCall *struct {
+							Name string          `json:"name"`
+							Args json.RawMessage `json:"args"`
+						} `json:"functionCall"`
 					} `json:"parts"`
 				} `json:"content"`
 			} `json:"candidates"`
@@ -1072,15 +1545,27 @@ func parseUpstreamDeltaAndUsage(payload []byte, proto ProtocolKind, u *StreamUsa
 				u.OutputTokens = ev.UsageMetadata.CandidatesTokenCount
 			}
 			if len(ev.Candidates) > 0 {
-				for _, p := range ev.Candidates[0].Content.Parts {
-					if p.Thought {
+				for idx, p := range ev.Candidates[0].Content.Parts {
+					if p.FunctionCall != nil && p.FunctionCall.Name != "" {
+						args := strings.TrimSpace(string(p.FunctionCall.Args))
+						if args == "" {
+							args = "{}"
+						}
+						toolDeltas = append(toolDeltas, streamToolCallDelta{
+							Index:     idx,
+							ID:        fmt.Sprintf("call_gem_%d", idx),
+							Name:      p.FunctionCall.Name,
+							ArgsDelta: args,
+							Start:     true,
+						})
+					} else if p.Thought {
 						reasonDelta += p.Text
 					} else {
 						textDelta += p.Text
 					}
 				}
 			}
-			return textDelta, reasonDelta
+			return textDelta, reasonDelta, toolDeltas
 		}
 
 	case ProtoOpenAIResponses:
@@ -1100,9 +1585,9 @@ func parseUpstreamDeltaAndUsage(payload []byte, proto ProtocolKind, u *StreamUsa
 		if json.Unmarshal(payload, &ev) == nil {
 			switch ev.Type {
 			case "response.output_text.delta":
-				return ev.Delta, ""
+				return ev.Delta, "", nil
 			case "response.reasoning_summary_text.delta":
-				return "", ev.Delta
+				return "", ev.Delta, nil
 			case "response.completed":
 				if ev.Response.Usage.InputTokens > 0 {
 					u.InputTokens = ev.Response.Usage.InputTokens
@@ -1120,6 +1605,14 @@ func parseUpstreamDeltaAndUsage(payload []byte, proto ProtocolKind, u *StreamUsa
 				Delta struct {
 					Content          string `json:"content"`
 					ReasoningContent string `json:"reasoning_content"`
+					ToolCalls        []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
 				} `json:"delta"`
 			} `json:"choices"`
 			Usage struct {
@@ -1139,11 +1632,20 @@ func parseUpstreamDeltaAndUsage(payload []byte, proto ProtocolKind, u *StreamUsa
 				u.OutputTokens = ev.Usage.CompletionTokens
 			}
 			if len(ev.Choices) > 0 {
-				return ev.Choices[0].Delta.Content, ev.Choices[0].Delta.ReasoningContent
+				for _, tc := range ev.Choices[0].Delta.ToolCalls {
+					toolDeltas = append(toolDeltas, streamToolCallDelta{
+						Index:     tc.Index,
+						ID:        tc.ID,
+						Name:      tc.Function.Name,
+						ArgsDelta: tc.Function.Arguments,
+						Start:     tc.ID != "" || tc.Function.Name != "",
+					})
+				}
+				return ev.Choices[0].Delta.Content, ev.Choices[0].Delta.ReasoningContent, toolDeltas
 			}
 		}
 	}
-	return "", ""
+	return "", "", nil
 }
 
 func translateToolsToAnthropic(tools []json.RawMessage) []any {
@@ -1218,7 +1720,7 @@ func translateToolChoiceToAnthropic(raw json.RawMessage) any {
 		case "required":
 			return map[string]any{"type": "any"}
 		case "none":
-			return nil
+			return map[string]any{"type": "none"}
 		}
 	}
 	var obj struct {
@@ -1249,6 +1751,8 @@ func translateToolChoiceToOpenAI(raw json.RawMessage) any {
 			return "auto"
 		case "any":
 			return "required"
+		case "none":
+			return "none"
 		case "tool":
 			if obj.Name != "" {
 				return map[string]any{
