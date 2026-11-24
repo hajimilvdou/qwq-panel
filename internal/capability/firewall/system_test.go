@@ -118,7 +118,7 @@ func TestSystemGuardManagementPortsAndMultilineConfig(t *testing.T) {
 		Config:   &fakeState{raw: raw},
 		Executor: guardExecutor{sshOutput: []byte("port 22\n")},
 		RootPath: tmpRoot,
-		Trust:    sandbox.TrustPolicy{UID: os.Geteuid()},
+		Trust:    sandbox.TrustPolicy{UID: os.Geteuid(), StopAt: tmpRoot},
 	}
 	authPorts, err := authGuard.PreservedPorts(t.Context())
 	if err != nil {
