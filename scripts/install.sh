@@ -4,8 +4,8 @@
 #  install.sh —— 安装或升级 qwq（随发布包分发，可重复幂等执行）
 # -----------------------------------------------------------------------------
 #  用法：
+#    sudo bash install.sh [--minimal | --plugins <csv|all>] [--version <vX.Y.Z|latest>] [--mirror URL] [--port N] [--entry-path PATH]
 #    sudo bash install.sh --offline qwq-vX.Y.Z-linux-amd64.tar.gz [--minimal | --plugins <csv|all> --plugin-dir <dir>] [--port N] [--entry-path PATH]
-#    sudo bash install.sh --version vX.Y.Z [--mirror URL] [--minimal | --plugins <csv|all>] [--port N] [--entry-path PATH]
 #
 #  默认必装范围（Track 10 架构）：
 #    初始强制必装且仅必装：原面板底座（qwq / qwq-privileged / qwq-capability）+ 基础安全插件（security.basic）。
@@ -19,8 +19,9 @@
 # =============================================================================
 set -euo pipefail
 
-# 发布公钥（PEM，Ed25519）由 release.sh 在打包时写入；为空时只允许 --offline。
+# 发布公钥（PEM，Ed25519）与默认版本号由 package.sh / release.sh 在打包时写入；公钥为空时只允许 --offline。
 RELEASE_PUBKEY_PEM=''
+DEFAULT_VERSION=''
 DEFAULT_MIRROR=https://github.com/hajimilvdou/qwq-panel/releases/download
 
 PREFIX=/opt/qwq
@@ -78,9 +79,28 @@ while (($#)); do
     *) echo "未知参数：$1" >&2; usage ;;
   esac
 done
-[[ -n $offline || -n $version ]] || usage
 [[ -n $offline && -n $version ]] && { echo "--offline 与 --version 只能二选一" >&2; usage; }
 ((mode_minimal)) && [[ -n $csv_plugins ]] && { echo "--minimal 与 --plugins 不能同时指定" >&2; usage; }
+if [[ -z $offline ]]; then
+  if [[ -z $version || $version == "latest" ]]; then
+    if [[ -n $DEFAULT_VERSION && $version != "latest" ]]; then
+      version=$DEFAULT_VERSION
+    elif [[ -n $RELEASE_PUBKEY_PEM ]]; then
+      command -v curl >/dev/null || die "在线安装需要 curl"
+      latest_url=$(curl -fsSLI --proto '=https' --connect-timeout 10 --retry 3 -o /dev/null -w '%{url_effective}' "${mirror%/download}/latest" 2>/dev/null || true)
+      if [[ $latest_url =~ /tag/(v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?)$ ]]; then
+        version=${BASH_REMATCH[1]}
+        log "已自动解析最新版本：$version"
+      elif [[ -n $DEFAULT_VERSION ]]; then
+        version=$DEFAULT_VERSION
+      else
+        die "无法自动获取最新版本号，请使用 --version vX.Y.Z 手动指定"
+      fi
+    else
+      usage
+    fi
+  fi
+fi
 if [[ -n $custom_port ]]; then
   [[ $custom_port =~ ^[0-9]+$ ]] && ((custom_port >= 1 && custom_port <= 65535)) || die "--port 必须是 1~65535 之间的整数"
 fi

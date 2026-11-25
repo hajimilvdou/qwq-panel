@@ -55,6 +55,15 @@ if [[ -n ${QWQ_RELEASE_PUBKEY:-} ]]; then
     { echo "install.sh 中找不到 RELEASE_PUBKEY_PEM=''" >&2; exit 1; }
   mv "$D/install.sh.tmp" "$D/install.sh"
   chmod 0755 "$D/install.sh"
+  if [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+    VER=$VERSION awk -v q="'" '
+      $0 == "DEFAULT_VERSION=" q q { print "DEFAULT_VERSION=" q ENVIRON["VER"] q; n++; next }
+      { print }
+      END { exit n != 1 }' "$D/install.sh" >"$D/install.sh.tmp" ||
+      { echo "install.sh 中找不到 DEFAULT_VERSION=''" >&2; exit 1; }
+    mv "$D/install.sh.tmp" "$D/install.sh"
+    chmod 0755 "$D/install.sh"
+  fi
 fi
 if [[ -n ${QWQ_RELEASE_MIRROR:-} ]]; then
   mirror=${QWQ_RELEASE_MIRROR%/}
