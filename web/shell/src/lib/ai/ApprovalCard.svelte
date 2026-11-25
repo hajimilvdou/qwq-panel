@@ -22,7 +22,7 @@
   interface Props {
     approval: Approval;
     /** 决定已提交（或已被他处处理）后回调 */
-    ondecided?: (approvalId: string) => void;
+    ondecided?: (approvalId: string, decision?: 'approve' | 'reject') => void;
   }
   let { approval: a, ondecided }: Props = $props();
 
@@ -79,7 +79,7 @@
       case 'ok':
         key = newIdempotencyKey();
         approvals.upsert(r.approval);
-        ondecided?.(a.approval_id);
+        ondecided?.(a.approval_id, decision);
         break;
       case 'handled':
         handled = true;

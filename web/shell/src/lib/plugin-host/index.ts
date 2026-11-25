@@ -101,6 +101,7 @@ export interface BridgeDeps {
   newKey: () => string;
   onReady: () => void;
   onResize: (height: number) => void;
+  onModal?: (open: boolean) => void;
   onToast: (text: string) => void;
   onNavigate: (path: string) => void;
   onOpenPlugin?: (pluginId: string, path?: string) => void;
@@ -138,6 +139,7 @@ export class PluginBridge {
   #unsub: (() => void) | null = null;
   #confirmInflight = false;
   #ensureInflight = false;
+  #modalOpen = false;
   #gate: RateGate;
   #toastGate: () => boolean;
   #setTimer: (fn: () => void, ms: number) => unknown;
@@ -224,6 +226,10 @@ export class PluginBridge {
     this.#send({ t: 'ui.route', path: p });
   }
 
+  dismissModal(): void {
+    this.#send({ t: 'ui.modal.dismiss' });
+  }
+
   /* ---------------------------------------------------------------- P → S */
 
   #onPortMessage(data: unknown, gen: number, port: MessagePort): void {
@@ -256,6 +262,10 @@ export class PluginBridge {
         return;
       case 'ui.resize':
         this.deps.onResize(clampHeight(msg.height));
+        return;
+      case 'ui.modal':
+        this.#modalOpen = msg.open;
+        this.deps.onModal?.(msg.open);
         return;
       case 'ui.toast': {
         const text = cleanToast(msg.text);
@@ -490,6 +500,10 @@ export class PluginBridge {
     this.#connAbort = null;
     this.#confirmInflight = false;
     this.#ensureInflight = false;
+    if (this.#modalOpen) {
+      this.#modalOpen = false;
+      this.deps.onModal?.(false);
+    }
     this.#unsub?.();
     this.#unsub = null;
     this.#subjects.clear();

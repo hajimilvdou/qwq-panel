@@ -61,6 +61,7 @@ export type RpcId = string | number;
 export type PluginToShell =
   | { t: 'ui.ready' }
   | { t: 'ui.resize'; height: number }
+  | { t: 'ui.modal'; open: boolean }
   | { t: 'ui.toast'; text: string }
   | { t: 'ui.navigate'; path: string }
   | { t: 'ui.open_plugin'; plugin_id: string; path?: string }
@@ -104,6 +105,7 @@ export type ShellToPlugin =
   | ({ t: 'ui.settings' } & HostSettings)
   | ({ t: 'ui.viewport' } & HostViewport)
   | { t: 'ui.route'; path: string }
+  | { t: 'ui.modal.dismiss' }
   | { t: 'api.result'; id: RpcId; ok: true; data: unknown }
   | { t: 'api.result'; id: RpcId; ok: false; problem: { code: string; detail?: string; status?: number } }
   | { t: 'ui.confirm.result'; id: RpcId; ok: true; data: { confirmed: boolean } }
@@ -176,6 +178,8 @@ export function parsePluginMessage(data: unknown): PluginToShell | null {
       return { t: 'ui.ready' };
     case 'ui.resize':
       return typeof data.height === 'number' && Number.isFinite(data.height) ? { t: 'ui.resize', height: data.height } : null;
+    case 'ui.modal':
+      return typeof data.open === 'boolean' ? { t: 'ui.modal', open: data.open } : null;
     case 'ui.toast':
       return isStr(data.text, 10_000) ? { t: 'ui.toast', text: data.text } : null;
     case 'ui.navigate':

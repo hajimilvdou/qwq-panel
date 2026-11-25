@@ -203,21 +203,21 @@
   // ==================== 地区旗帜自动识别与快捷选择 ====================
 
   const REGION_PRESETS = [
-    { flag: '🇭🇰', label: '香港', re: /(^|[\s_\-[\]])(hk|hkg|hong\s*kong)|香港/i },
-    { flag: '🇹🇼', label: '台湾', re: /(^|[\s_\-[\]])(tw|tpe|taiwan)|台湾|台北/i },
-    { flag: '🇯🇵', label: '日本', re: /(^|[\s_\-[\]])(jp|tyo|nrt|kix|tokyo|osaka|japan)|日本|东京|大阪/i },
-    { flag: '🇸🇬', label: '新加坡', re: /(^|[\s_\-[\]])(sg|sin|singapore)|新加坡|狮城/i },
-    { flag: '🇺🇸', label: '美国', re: /(^|[\s_\-[\]])(us|usa|lax|sjc|sea|nyc|ord|dfw|mia|los|san|seattle|dallas|miami|vmiss)|美国|美西|美东|洛杉矶|圣何塞/i },
-    { flag: '🇰🇷', label: '韩国', re: /(^|[\s_\-[\]])(kr|icn|seoul|korea)|韩国|首尔/i },
-    { flag: '🇬🇧', label: '英国', re: /(^|[\s_\-[\]])(uk|gb|lhr|london)|英国|伦敦/i },
-    { flag: '🇩🇪', label: '德国', re: /(^|[\s_\-[\]])(de|fra|frankfurt|germany)|德国|法兰克福/i },
-    { flag: '🇫🇷', label: '法国', re: /(^|[\s_\-[\]])(fr|cdg|paris|france)|法国|巴黎/i },
-    { flag: '🇳🇱', label: '荷兰', re: /(^|[\s_\-[\]])(nl|ams|amsterdam)|荷兰/i },
-    { flag: '🇨🇦', label: '加拿大', re: /(^|[\s_\-[\]])(ca|yyz|yvr|canada)|加拿大/i },
-    { flag: '🇦🇺', label: '澳洲', re: /(^|[\s_\-[\]])(au|syd|australia)|澳洲|澳大利亚|悉尼/i },
-    { flag: '🇷🇺', label: '俄国', re: /(^|[\s_\-[\]])(ru|mow|russia)|俄罗斯/i },
-    { flag: '🇹🇷', label: '土耳其', re: /(^|[\s_\-[\]])(tr|ist|turkey)|土耳其/i },
-    { flag: '🇮🇳', label: '印度', re: /(^|[\s_\-[\]])(in|bom|india)|印度/i },
+    { flag: '🇭🇰', code: 'HK', label: '香港', re: /(^|[\s_\-[\]])(hk|hkg|hong\s*kong)|香港/i },
+    { flag: '🇹🇼', code: 'TW', label: '台湾', re: /(^|[\s_\-[\]])(tw|tpe|taiwan)|台湾|台北/i },
+    { flag: '🇯🇵', code: 'JP', label: '日本', re: /(^|[\s_\-[\]])(jp|tyo|nrt|kix|tokyo|osaka|japan)|日本|东京|大阪/i },
+    { flag: '🇸🇬', code: 'SG', label: '新加坡', re: /(^|[\s_\-[\]])(sg|sin|singapore)|新加坡|狮城/i },
+    { flag: '🇺🇸', code: 'US', label: '美国', re: /(^|[\s_\-[\]])(us|usa|lax|sjc|sea|nyc|ord|dfw|mia|los|san|seattle|dallas|miami|vmiss)|美国|美西|美东|洛杉矶|圣何塞/i },
+    { flag: '🇰🇷', code: 'KR', label: '韩国', re: /(^|[\s_\-[\]])(kr|icn|seoul|korea)|韩国|首尔/i },
+    { flag: '🇬🇧', code: 'UK', label: '英国', re: /(^|[\s_\-[\]])(uk|gb|lhr|london)|英国|伦敦/i },
+    { flag: '🇩🇪', code: 'DE', label: '德国', re: /(^|[\s_\-[\]])(de|fra|frankfurt|germany)|德国|法兰克福/i },
+    { flag: '🇫🇷', code: 'FR', label: '法国', re: /(^|[\s_\-[\]])(fr|cdg|paris|france)|法国|巴黎/i },
+    { flag: '🇳🇱', code: 'NL', label: '荷兰', re: /(^|[\s_\-[\]])(nl|ams|amsterdam)|荷兰/i },
+    { flag: '🇨🇦', code: 'CA', label: '加拿大', re: /(^|[\s_\-[\]])(ca|yyz|yvr|canada)|加拿大/i },
+    { flag: '🇦🇺', code: 'AU', label: '澳洲', re: /(^|[\s_\-[\]])(au|syd|australia)|澳洲|澳大利亚|悉尼/i },
+    { flag: '🇷🇺', code: 'RU', label: '俄国', re: /(^|[\s_\-[\]])(ru|mow|russia)|俄罗斯/i },
+    { flag: '🇹🇷', code: 'TR', label: '土耳其', re: /(^|[\s_\-[\]])(tr|ist|turkey)|土耳其/i },
+    { flag: '🇮🇳', code: 'IN', label: '印度', re: /(^|[\s_\-[\]])(in|bom|india)|印度/i },
   ];
 
   const FLAG_PREFIX_RE = /^[\u{1F1E6}-\u{1F1FF}]{2}\s*/u;
@@ -248,7 +248,7 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'flag-chip';
-      btn.textContent = `${item.flag} ${item.label}`;
+      btn.textContent = `${item.label} · ${item.code}`;
       btn.addEventListener('click', () => applyFlagToNameInput($(targetInputId), item.flag));
       box.appendChild(btn);
     }
@@ -383,28 +383,7 @@
     }
   }
 
-  // ==================== 路由与上下文按钮调度 ====================
-
-  function updateContextPrimaryBtn(route) {
-    const btn = $('btn-ctx-primary');
-    if (!btn) return;
-    const labels = {
-      '/proxy': '+ 添加节点',
-      '/proxy/nodes': '+ 添加节点',
-      '/proxy/users': '+ 新建用户',
-      '/proxy/plans': '+ 新建套餐',
-      '/proxy/rules': '保存分流规则',
-      '/proxy/chains': chainsSubTab === 'hops' ? '+ 添加链式节点' : '',
-      '/proxy/tuning': tuningSubTab === 'brutal' ? '+ 添加接管绑定' : '',
-    };
-    const label = labels[route] || '';
-    if (label) {
-      btn.textContent = label;
-      btn.classList.remove('hidden');
-    } else {
-      btn.classList.add('hidden');
-    }
-  }
+  // ==================== 路由与子标签调度 ====================
 
   function setChainsSubTab(tab) {
     chainsSubTab = tab === 'hops' ? 'hops' : 'warp';
@@ -416,7 +395,6 @@
     for (const pane of document.querySelectorAll('[data-chains-pane]')) {
       pane.classList.toggle('hidden', pane.dataset.chainsPane !== chainsSubTab);
     }
-    updateContextPrimaryBtn(activeRoute);
     requestAnimationFrame(() => notifyResize());
   }
 
@@ -430,14 +408,12 @@
     for (const pane of document.querySelectorAll('[data-tuning-pane]')) {
       pane.classList.toggle('hidden', pane.dataset.tuningPane !== tuningSubTab);
     }
-    updateContextPrimaryBtn(activeRoute);
     requestAnimationFrame(() => notifyResize());
   }
 
   function switchRoute(route, notifyHost = true) {
     if (!VALID_ROUTES.includes(route)) return;
     activeRoute = route;
-    updateContextPrimaryBtn(route);
     for (const sec of document.querySelectorAll('section[data-view]')) {
       sec.classList.toggle('hidden', sec.dataset.view !== route);
     }
@@ -472,8 +448,8 @@
 
       const env = data.data;
       if (env && typeof env === 'object') {
-        if (env.status === 'AWAITING_APPROVAL' || env.approval_id) {
-          req.reject(new PendingStateError('approval', '操作已提交，请在右侧审批流中确认'));
+        if (env.status === 'AWAITING_APPROVAL') {
+          req.reject(new PendingStateError('approval', '操作等待确认，请在弹出的确认窗口中完成确认'));
           return;
         }
         if ((env.status === 'RUNNING' || env.status === 'PENDING') && !env.result) {
@@ -557,6 +533,11 @@
 
     if (data.t === 'ui.route' && typeof data.path === 'string' && VALID_ROUTES.includes(data.path)) {
       switchRoute(data.path, false);
+      return;
+    }
+
+    if (data.t === 'ui.modal.dismiss') {
+      closeTopModal();
       return;
     }
 
@@ -3600,18 +3581,6 @@
 
   // ==================== 全局事件绑定 ====================
 
-  $('btn-ctx-primary')?.addEventListener('click', () => {
-    if (activeRoute === '/proxy/users') openUserCreateModal();
-    else if (activeRoute === '/proxy/plans') openPlanEditModal(null);
-    else if (activeRoute === '/proxy/rules') void saveRulesConfig();
-    else if (activeRoute === '/proxy/chains') openChainEditModal(null);
-    else if (activeRoute === '/proxy/tuning') openBrutalEditModal(null);
-    else {
-      if (activeRoute !== '/proxy/nodes') switchRoute('/proxy/nodes', true);
-      openNodeBuilder(null);
-    }
-  });
-
   for (const btn of document.querySelectorAll('[data-go-route]')) {
     btn.addEventListener('click', () => switchRoute(btn.dataset.goRoute, true));
   }
@@ -4539,10 +4508,9 @@
     });
   }
 
-  // ==================== 键盘 ESC 关闭弹窗 ====================
+  // ==================== 键盘 ESC 与宿主遮罩同步关闭弹窗 ====================
 
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
+  function closeTopModal() {
     if (document.querySelector('.qwq-sel.open')) {
       closeAllCustomSelects();
       return;
@@ -4556,6 +4524,11 @@
     else if (userCreateModal.open) closeUserCreateModal();
     else if (configViewer.open) closeConfigViewer();
     else if (builder.open) closeNodeBuilder();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    closeTopModal();
   });
 
   // ==================== 初始化、自适应高度与宿主桥接 ====================
@@ -4606,10 +4579,22 @@
     send({ t: 'ui.resize', height });
   }
 
+  let lastModalOpen = false;
+  function syncModalState() {
+    const open = hasOpenModal();
+    if (open !== lastModalOpen) {
+      lastModalOpen = open;
+      send({ t: 'ui.modal', open });
+    }
+  }
+
   const observer = new ResizeObserver(() => notifyResize());
   observer.observe($('proxy-root'));
 
-  const modalObserver = new MutationObserver(() => requestAnimationFrame(notifyResize));
+  const modalObserver = new MutationObserver(() => {
+    syncModalState();
+    requestAnimationFrame(notifyResize);
+  });
   for (const id of MODAL_BACKDROP_IDS) {
     const el = $(id);
     if (el) modalObserver.observe(el, { attributes: true, attributeFilter: ['class', 'hidden'] });
@@ -4620,11 +4605,19 @@
     port = event.ports[0];
     port.onmessage = (msg) => handleMessage(msg.data);
     send({ t: 'ui.ready' });
+    if (hasOpenModal()) {
+      lastModalOpen = true;
+      send({ t: 'ui.modal', open: true });
+    }
     send({ t: 'api.subscribe', id: 'sub-changes', subjects: ['*'] });
     void refreshActiveView();
   });
 
   window.addEventListener('pagehide', () => {
+    if (lastModalOpen) {
+      lastModalOpen = false;
+      send({ t: 'ui.modal', open: false });
+    }
     observer.disconnect();
     modalObserver.disconnect();
     if (builder.previewTimer) clearTimeout(builder.previewTimer);

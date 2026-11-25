@@ -12,7 +12,7 @@ import { operations as opsApi, plugins as pluginsApi } from '$api/endpoints';
 import { isPluginActiveReady } from '$api/endpoints-plugins';
 import type { Plugin } from '$api/types';
 import { installOfficialPlugin } from '../../features/apps/official-install';
-import { dock } from '../ai/dock.svelte';
+import { humanApproval, tryAutoApproveHuman } from '../ai/human-approval.svelte';
 import { events } from '../events.svelte';
 import { prefs } from '../prefs.svelte';
 import { resources } from '../resource.svelte';
@@ -402,10 +402,46 @@ export function createEnsurePluginsHandler(
 
 type Hooks = Pick<
   BridgeDeps,
-  'onReady' | 'onResize' | 'onToast' | 'onNavigate' | 'onOpenPlugin' | 'onTimeout' | 'onConfirm' | 'onCopy' | 'onEnsurePlugins'
+  'onReady' | 'onResize' | 'onModal' | 'onToast' | 'onNavigate' | 'onOpenPlugin' | 'onTimeout' | 'onConfirm' | 'onCopy' | 'onEnsurePlugins'
 >;
 
 export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
+  let lastConfirmedAt = 0;
+  const wrappedConfirm = hooks.onConfirm
+    ? async (req: BridgeConfirmRequest): Promise<boolean> => {
+        const ok = await hooks.onConfirm!(req);
+        if (ok) lastConfirmedAt = Date.now();
+        return ok;
+      }
+    : undefined;
+
+  const resolvePluginApproval = async (r: OpResult, waitMs: number, signal?: AbortSignal): Promise<OpResult> => {
+    if (r.status !== 'AWAITING_APPROVAL' || !r.approvalId) return r;
+    const recentlyConfirmed = Date.now() - lastConfirmedAt < 10_000;
+    let approved = false;
+    if (recentlyConfirmed) {
+      lastConfirmedAt = 0;
+      approved = await tryAutoApproveHuman(r.approvalId);
+    }
+    if (!approved) {
+      const outcome = await humanApproval.open(r.approvalId);
+      if (outcome === 'rejected') return { ...r, status: 'REJECTED' };
+      if (outcome !== 'approved') return r;
+    }
+    if (!r.operationId || signal?.aborted) return r;
+    const latest = await opsApi.get(r.operationId, signal);
+    const cur: OpResult = {
+      operationId: latest.operation_id,
+      status: latest.status,
+      approvalId: latest.approval_id,
+      result: latest.result,
+      error: latest.error,
+      operation: latest,
+    };
+    if (TERMINAL.has(cur.status) || cur.status === 'AWAITING_APPROVAL') return cur;
+    return waitForOperation(cur, waitMs, signal);
+  };
+
   const defaultEnsurePlugins = createEnsurePluginsHandler({
     listPlugins: pluginsApi.list,
     installPlugin: async (pluginId: string): Promise<OpResult> => {
@@ -417,11 +453,19 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
         throw new EnsurePluginsError('FAILED_PRECONDITION', 422, err instanceof Error ? err.message : '官方插件安装失败');
       }
     },
-    enablePlugin: pluginsApi.enable,
+    enablePlugin: async (pluginId: string, key: string): Promise<OpResult> => {
+      const op = await pluginsApi.enable(pluginId, key);
+      if (op.status === 'AWAITING_APPROVAL' && op.approvalId) {
+        return resolvePluginApproval(op, 60_000);
+      }
+      return op;
+    },
     waitForOp: waitForOperation,
     newKey: newIdempotencyKey,
-    confirmAction: hooks.onConfirm,
-    onAwaitingApproval: (approvalId) => dock.open({ approvalId }),
+    confirmAction: wrappedConfirm,
+    onAwaitingApproval: (approvalId) => {
+      if (approvalId) void humanApproval.open(approvalId);
+    },
     onChanged: () => {
       resources.invalidate('plugins');
       resources.invalidate('plugin-catalog');
@@ -441,36 +485,41 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
     routes: plugin.ui?.routes ?? [],
     invoke: async (op, payload, key, meta) => {
       const name = op.id.slice(plugin.plugin_id.length + 1);
+      const waitMs = computeBridgeJobWaitMs(op.timeoutMs);
       let r = await pluginsApi.invoke(
         { pluginId: plugin.plugin_id, operation: name, placement: plugin.placement },
         payload,
         { key, subject: meta?.subject, expectedRevision: meta?.expectedRevision, signal: meta?.signal },
       );
-      /* 需要批准：交给悬浮窗，插件只知道"在等批准"，拿不到批准能力 */
       if (r.status === 'AWAITING_APPROVAL') {
-        dock.open({ approvalId: r.approvalId });
+        r = await resolvePluginApproval(r, waitMs, meta?.signal);
       } else if (r.operationId && !TERMINAL.has(r.status)) {
         /* mode="job" 返回 HTTP 202 PENDING/RUNNING 时按声明超时透明等待终态，超时明确报错 */
-        const waitMs = computeBridgeJobWaitMs(op.timeoutMs);
         r = await waitForOperation(r, waitMs, meta?.signal);
         if (r.status === 'AWAITING_APPROVAL') {
-          dock.open({ approvalId: r.approvalId });
-        } else if (!TERMINAL.has(r.status) && !meta?.signal?.aborted) {
-          return {
-            status: 'FAILED',
-            operation_id: r.operationId,
-            approval_id: r.approvalId,
-            result: r.result,
-            error: `TIMEOUT: 后台任务耗时超过 ${Math.round(waitMs / 1000)} 秒仍未结束，可在「动态」中继续查看进度`,
-          };
+          r = await resolvePluginApproval(r, waitMs, meta?.signal);
         }
+      }
+      if (r.operationId && !TERMINAL.has(r.status) && r.status !== 'AWAITING_APPROVAL' && !meta?.signal?.aborted) {
+        return {
+          status: 'FAILED',
+          operation_id: r.operationId,
+          result: r.result,
+          error: `TIMEOUT: 后台任务耗时超过 ${Math.round(waitMs / 1000)} 秒仍未结束，可在「动态」中继续查看进度`,
+        };
       }
       const errDetail = r.error
         ? SAFE_DETAIL_CODES.has(r.error.code)
           ? r.error.detail || r.error.code
           : r.error.code
         : undefined;
-      return { status: r.status, operation_id: r.operationId, approval_id: r.approvalId, result: r.result, error: errDetail };
+      return {
+        status: r.status,
+        operation_id: r.operationId,
+        approval_id: r.status === 'AWAITING_APPROVAL' ? r.approvalId : undefined,
+        result: r.result,
+        error: errDetail,
+      };
     },
     toProblem,
     subscribe: (fn) => {
@@ -498,5 +547,6 @@ export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {
     },
     onEnsurePlugins: defaultEnsurePlugins,
     ...hooks,
+    ...(wrappedConfirm ? { onConfirm: wrappedConfirm } : {}),
   };
 }

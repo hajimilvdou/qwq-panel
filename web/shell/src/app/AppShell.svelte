@@ -62,7 +62,7 @@
 </script>
 
 <a class="skip" href="#main">跳到主要内容</a>
-<div class="app" class:top-nav={!isSide} class:side-collapsed={isSide && prefs.sideCollapsed}>
+<div class="app" class:top-nav={!isSide} class:side-collapsed={isSide && prefs.sideCollapsed} class:p-modal={pluginFramePool.modalOpen}>
   {#if isSide}
     <Sidebar />
   {/if}
@@ -134,6 +134,9 @@
   }
   .app.top-nav {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .app.p-modal {
+    z-index: var(--z-scrim);
   }
   .stage {
     position: relative;

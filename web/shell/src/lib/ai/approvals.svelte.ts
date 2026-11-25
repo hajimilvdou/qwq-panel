@@ -25,6 +25,7 @@ const POLL = 30_000;
 export class ApprovalQueue {
   #map = new SvelteMap<string, Approval>();
   #seen = new SvelteSet<string>();
+  #suppressed = new Set<string>();
   #poll: ReturnType<typeof setInterval> | null = null;
   #offs: (() => void)[] = [];
   #inflight = new Set<string>();
@@ -46,6 +47,16 @@ export class ApprovalQueue {
     this.#seen.add(id);
   }
 
+  suppress(id: string): void {
+    this.#suppressed.add(id);
+    this.#seen.add(id);
+    this.#map.delete(id);
+  }
+
+  unsuppress(id: string): void {
+    this.#suppressed.delete(id);
+  }
+
   async load(): Promise<void> {
     try {
       const page = await this.fetchList();
@@ -60,11 +71,11 @@ export class ApprovalQueue {
 
   /** 拉单条：仍 PENDING 则放入，否则移除；404 视为已不存在。同一 id 并发只拉一次 */
   async refreshOne(id: string): Promise<void> {
-    if (this.#inflight.has(id)) return;
+    if (this.#suppressed.has(id) || this.#inflight.has(id)) return;
     this.#inflight.add(id);
     try {
       const a = await this.fetchOne(id);
-      this.upsert(a);
+      if (!this.#suppressed.has(id)) this.upsert(a);
     } catch {
       this.#map.delete(id);
     } finally {
@@ -74,7 +85,7 @@ export class ApprovalQueue {
 
   /** 决定后由审批卡调用；或事件带来新状态 */
   upsert(a: Approval): void {
-    if (a.status === 'PENDING') this.#map.set(a.approval_id, a);
+    if (a.status === 'PENDING' && !this.#suppressed.has(a.approval_id)) this.#map.set(a.approval_id, a);
     else this.#map.delete(a.approval_id);
   }
 

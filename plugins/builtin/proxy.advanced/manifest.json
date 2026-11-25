@@ -117,9 +117,9 @@
     "schemas/warp.status.response.json": "sha256:ca1da9258a97ab1f47ea5f48657025b16fc3582cf49699b713b36115aa78857b",
     "schemas/xray.status.request.json": "sha256:2656294ca60aa23acaa3e6e1b688fa8b754196e6636657eb146a559936511803",
     "schemas/xray.status.response.json": "sha256:d373163dd75afcb140bf5c1872123193499ebb58e0b68ec0723b5b22f0bc14a6",
-    "ui/index.html": "sha256:c5c686032e8b1d6f66f673f118cd254529c65928d472793554a4fccf9363d5cd",
-    "ui/proxy.css": "sha256:a038e78c91e516068ddab7fee1c1a765fe313e975ff1a67d80fead641a8b7405",
-    "ui/proxy.js": "sha256:746afa997726d605d3a9ac28a62ac9afa6df1ee00642f6b11393214afc8c7137"
+    "ui/index.html": "sha256:d7ee1a40cce1a3288eb593c3979e3ed6c44c2de58d28c14748e086d922f1c816",
+    "ui/proxy.css": "sha256:d8c3098359a002d0d57747acbbee6333f4fe28de62aeb15005f9838a94ab681b",
+    "ui/proxy.js": "sha256:1749631a9974c22ea79140d444dd23c47fd3e0a78a48ed02da7b09bf4e8d1f8e"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

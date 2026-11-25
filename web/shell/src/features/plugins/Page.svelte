@@ -138,7 +138,7 @@
       await runIntent(
         createIntent(),
         (key) => (enable ? plugins.enable(plugin.plugin_id, key) : plugins.disable(plugin.plugin_id, key)),
-        { label: `${enable ? '启用' : '停用'} ${plugin.name}` },
+        { label: `${enable ? '启用' : '停用'} ${plugin.name}`, preConfirmed: true },
       );
       if (!enable) pluginFramePool.evict(plugin.plugin_id);
       resources.invalidate('plugins');
@@ -198,7 +198,7 @@
       const r = await runIntent(
         { key },
         (k) => plugins.uninstall(cur.plugin_id, cur.revision, k, purge, showRemoveOtp ? removeMfa : undefined),
-        { label: `卸载 ${cur.name}` },
+        { label: `卸载 ${cur.name}`, preConfirmed: true, mfaCode: showRemoveOtp ? removeMfa : undefined },
       );
       removeIntent.reset();
       pluginFramePool.evict(cur.plugin_id);

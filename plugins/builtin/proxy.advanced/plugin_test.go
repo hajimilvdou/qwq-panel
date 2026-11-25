@@ -1010,7 +1010,16 @@ func TestProxyV2PlansNodesRulesAndStoredSub(t *testing.T) {
 	if err := json.Unmarshal(listNodes.GetPayloadJson(), &nodesOut); err != nil || len(nodesOut.Nodes) != 2 {
 		t.Fatalf("去重后应剩 2 条节点，实际 %d err=%v", len(nodesOut.Nodes), err)
 	}
-	onlyNodeID := nodesOut.Nodes[0].ID
+	var onlyNodeID string
+	for _, n := range nodesOut.Nodes {
+		if n.Server == "hk.example.com" {
+			onlyNodeID = n.ID
+			break
+		}
+	}
+	if onlyNodeID == "" {
+		t.Fatalf("去重后未找到 hk.example.com 节点: %+v", nodesOut.Nodes)
+	}
 
 	// 2. 创建带倍率、描述、绑定节点白名单与分流预设的套餐。
 	pProg := runProxyJob(t, h.srv, "plans.upsert", map[string]any{

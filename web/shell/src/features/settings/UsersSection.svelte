@@ -50,7 +50,7 @@
     createErr = null;
     try {
       const body = { username: form.username.trim(), role: form.role, display_name: form.display_name.trim() || undefined };
-      const r = await runIntent(createIntentRef, (key) => users.create(body, key), { label: `创建用户 ${body.username}` });
+      const r = await runIntent(createIntentRef, (key) => users.create(body, key), { label: `创建用户 ${body.username}`, preConfirmed: true });
       createOpen = false;
       void list.refresh();
       const created = (r.op.result as { user?: User } | undefined)?.user;
@@ -84,6 +84,7 @@
     try {
       await runIntent(roleIntent, (key) => users.update(u.user_id, { expected_revision: u.revision, role: roleValue }, key), {
         label: `把 ${nameOf(u)} 改为${roleName(roleValue)}`,
+        preConfirmed: true,
       });
       roleTarget = null;
       void list.refresh();
@@ -99,6 +100,7 @@
     try {
       await runIntent(createIntent(), (key) => users.update(u.user_id, { expected_revision: u.revision, disabled: !u.disabled }, key), {
         label: `${u.disabled ? '启用' : '停用'} ${nameOf(u)}`,
+        preConfirmed: true,
       });
       void list.refresh();
     } catch (err) {
@@ -122,7 +124,7 @@
   async function submitRemove() {
     const u = removeTarget!;
     try {
-      await runIntent(removeIntent, (key) => users.remove(u.user_id, u.revision, key), { label: `删除用户 ${nameOf(u)}` });
+      await runIntent(removeIntent, (key) => users.remove(u.user_id, u.revision, key), { label: `删除用户 ${nameOf(u)}`, preConfirmed: true });
       void list.refresh();
     } catch (err) {
       removeErr = describeError(err).message;

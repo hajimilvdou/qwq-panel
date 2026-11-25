@@ -1367,7 +1367,19 @@ func (a *api) invokePlugin(w http.ResponseWriter, r *http.Request, target operat
 		}
 	}
 	target.Subject = req.Subject
-	resp, err := a.d.Ops.Run(r.Context(), operations.RunRequest{
+	runCtx := r.Context()
+	if _, explicitMode := operations.PermissionModeFromContext(runCtx); !explicitMode &&
+		act.IsHumanSession() && entry != nil &&
+		entry.Effect != operations.EffectDestructive && !entry.Reachability &&
+		(entry.Approval == operations.ApprovalAuto || entry.Approval == operations.ApprovalAIConfirm) {
+		// Direct authenticated human browser clicks on non-destructive,
+		// non-reachability plugin operations declared auto or ai_confirm run
+		// immediately instead of stalling behind capability risk floors.
+		// AI agents, delegations, service accounts, destructive operations and
+		// reachability-changing actions keep their strict approval gates.
+		runCtx = operations.WithPermissionMode(runCtx, operations.PermissionFull)
+	}
+	resp, err := a.d.Ops.Run(runCtx, operations.RunRequest{
 		Actor:            act,
 		TraceID:          gateway.TraceID(r.Context()),
 		RequestID:        gateway.RequestID(r.Context()),

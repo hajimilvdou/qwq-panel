@@ -261,7 +261,7 @@
   async function submitRemove() {
     const p = removeTarget!;
     try {
-      await runIntent(removeIntent, (key) => ai.removeProvider(p.provider_id, p.revision!, key), { label: `删除 AI 服务 ${p.name}` });
+      await runIntent(removeIntent, (key) => ai.removeProvider(p.provider_id, p.revision!, key), { label: `删除 AI 服务 ${p.name}`, preConfirmed: true });
       void list.refresh();
     } catch (err) {
       const v = describeError(err);

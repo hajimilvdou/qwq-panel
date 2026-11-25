@@ -17,6 +17,7 @@
   import { useResource } from '$lib/resource.svelte';
   import { navigate } from '$lib/router.svelte';
   import { toasts } from '$lib/toast.svelte';
+  import { pluginFramePool } from './plugin-frame-pool.svelte';
 
   interface Props {
     plugin: Plugin;
@@ -37,10 +38,21 @@
   let phase = $state<'loading' | 'ready' | 'timeout'>('loading');
   let height = $state(Math.max(HEIGHT_MIN, 420));
   let attempt = $state(0);
+  let modalOpen = $state(false);
   let docVisible = $state(typeof document === 'undefined' || document.visibilityState === 'visible');
   let frame = $state<HTMLIFrameElement>();
 
   const effectiveVisible = $derived(docVisible && active);
+  const activeModal = $derived(modalOpen && active);
+
+  $effect(() => {
+    const open = activeModal;
+    untrack(() => pluginFramePool.setModalOpen(open));
+  });
+
+  function dismissModal() {
+    bridge.dismissModal();
+  }
 
   /* 宿主受控确认弹窗（代理沙箱内 ui.confirm） */
   interface PendingConfirm extends BridgeConfirmRequest {
@@ -68,6 +80,7 @@
     bridgeDeps(p, {
       onReady: () => (phase = 'ready'),
       onResize: (h) => (height = Math.max(HEIGHT_MIN, h + 12)),
+      onModal: (open) => (modalOpen = open),
       onToast: (text) => toasts.info(`${p.name}：${text}`),
       onNavigate: (to) => navigate(`/plugins/${encodeURIComponent(p.plugin_id)}${to === '/' ? '' : to}`),
       onOpenPlugin: (targetPid, subPath) =>
@@ -178,22 +191,32 @@
   });
 
   const onVisibility = () => (docVisible = document.visibilityState === 'visible');
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && activeModal) dismissModal();
+  };
   window.addEventListener('message', bridge.onWindowMessage);
   window.addEventListener('scroll', scheduleViewportSync, { passive: true });
   window.addEventListener('resize', scheduleViewportSync, { passive: true });
+  window.addEventListener('keydown', onKeyDown);
   document.addEventListener('visibilitychange', onVisibility);
   onDestroy(() => {
     if (vpRaf) cancelAnimationFrame(vpRaf);
+    if (modalOpen) pluginFramePool.setModalOpen(false);
     settleConfirm(false);
     window.removeEventListener('message', bridge.onWindowMessage);
     window.removeEventListener('scroll', scheduleViewportSync);
     window.removeEventListener('resize', scheduleViewportSync);
+    window.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('visibilitychange', onVisibility);
     bridge.dispose();
   });
 </script>
 
-<div class="host" class:ready={phase === 'ready'}>
+{#if activeModal}
+  <div class="p-scrim" role="presentation" onclick={dismissModal}></div>
+{/if}
+
+<div class="host" class:ready={phase === 'ready'} class:modal-open={activeModal}>
   {#if phase === 'timeout'}
     <div class="state">
       <ErrorState message="{p.name} 的页面没有响应" />
@@ -234,18 +257,25 @@
 </ConfirmDialog>
 
 <style>
+  .p-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    background: rgb(21 18 16 / 0.5);
+  }
   .host {
     position: relative;
     min-height: 220px;
+  }
+  .host.modal-open {
+    z-index: 45;
   }
   iframe {
     display: block;
     width: 100%;
     border: 0;
     overflow: hidden;
-    border-radius: var(--r-lg);
-    background: var(--surface);
-    box-shadow: var(--shadow-1);
+    background: var(--bg);
     opacity: 0;
     transition: opacity var(--dur-2) var(--ease);
   }

@@ -21,6 +21,11 @@ const MAX_POOLED = 4;
 class PluginFramePool {
   entries = $state<PooledPluginFrame[]>([]);
   activeKey = $state<string | null>(null);
+  modalOpen = $state(false);
+
+  setModalOpen(open: boolean): void {
+    this.modalOpen = open;
+  }
 
   keyOf(plugin: Plugin): string {
     return `${plugin.plugin_id}::${plugin.ui?.entry_url ?? ''}`;
@@ -54,6 +59,7 @@ class PluginFramePool {
     if (!this.activeKey) return;
     if (!key || this.activeKey === key) {
       this.activeKey = null;
+      this.modalOpen = false;
     }
   }
 
@@ -95,6 +101,7 @@ class PluginFramePool {
   clear(): void {
     this.entries = [];
     this.activeKey = null;
+    this.modalOpen = false;
   }
 }
 

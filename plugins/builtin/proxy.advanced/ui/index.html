@@ -18,8 +18,7 @@
         <span class="view-status" id="status">连接宿主中…</span>
       </div>
       <div class="view-bar-right">
-        <button id="btn-ctx-primary" class="btn sm" type="button">+ 添加节点</button>
-        <button id="refresh" class="btn sm ghost" type="button">刷新</button>
+        <button id="refresh" class="btn secondary" type="button">刷新数据</button>
       </div>
     </div>
 
@@ -174,9 +173,9 @@
             <p class="card-desc">节点的修改、启停与删除均会自动同步更新所有订阅链接</p>
           </div>
           <div class="actions actions-tight">
-            <button id="btn-nodes-batch-test" class="btn sm ghost" type="button">批量测速</button>
-            <button id="btn-nodes-dedup" class="btn sm ghost" type="button">清理重复</button>
-            <button id="btn-node-add" class="btn sm" type="button">+ 添加节点</button>
+            <button id="btn-nodes-batch-test" class="btn secondary" type="button">批量测速</button>
+            <button id="btn-nodes-dedup" class="btn secondary" type="button">清理重复</button>
+            <button id="btn-node-add" class="btn primary-cta" type="button">+ 添加节点</button>
           </div>
         </div>
 
@@ -247,7 +246,7 @@
             <h3>账号列表</h3>
             <p class="card-desc">集中管理订阅账号、套餐配额与实时连接，支持随时一键复制 Clash / Sing-box / Base64 订阅链接</p>
           </div>
-          <button id="btn-user-create-open" class="btn sm" type="button">+ 新建用户</button>
+          <button id="btn-user-create-open" class="btn primary-cta" type="button">+ 新建用户</button>
         </div>
 
         <div class="filter-toolbar">
@@ -295,7 +294,7 @@
             <h3>套餐管理</h3>
             <p class="card-desc">定义可复用的流量额度、计费倍率、上下行限速、分流规则与可用节点范围，用户订阅自动按套餐生效</p>
           </div>
-          <button id="btn-plan-create-open" class="btn sm" type="button">+ 新建套餐</button>
+          <button id="btn-plan-create-open" class="btn primary-cta" type="button">+ 新建套餐</button>
         </div>
         <div id="plans-cards" class="plans-grid">
           <div class="empty-card muted">等待加载套餐…</div>
@@ -313,7 +312,7 @@
                 <h3>分流预设模板</h3>
                 <p class="card-desc">选择 Clash 与 sing-box 订阅默认使用的分流策略，套餐也可单独覆盖预设</p>
               </div>
-              <button id="btn-rules-save" class="btn sm" type="button">保存并应用规则</button>
+              <button id="btn-rules-save" class="btn primary-cta" type="button">保存并应用规则</button>
             </div>
             <div id="rules-preset-grid" class="preset-cards"></div>
           </section>
@@ -472,10 +471,10 @@
           </details>
 
           <div class="actions">
-            <button id="btn-warp-register" class="btn" type="button">一键注册 Cloudflare WARP</button>
+            <button id="btn-warp-register" class="btn primary-cta" type="button">一键注册 Cloudflare WARP</button>
             <button id="btn-warp-save" class="btn" type="button">保存绑定并同步生效</button>
-            <button id="btn-warp-probe" class="btn ghost" type="button">探测优选端点与本机 IP</button>
-            <button id="btn-warp-preview" class="btn ghost" type="button">预览 WireGuard 配置</button>
+            <button id="btn-warp-probe" class="btn secondary" type="button">探测优选端点与本机 IP</button>
+            <button id="btn-warp-preview" class="btn secondary" type="button">预览 WireGuard 配置</button>
             <button id="btn-warp-delete" class="btn danger" type="button">注销清除 WARP</button>
           </div>
           <pre id="warp-output" class="hidden"></pre>
@@ -491,8 +490,8 @@
               <p class="card-desc">支持客户端订阅 <code>dialer-proxy</code> / <code>detour</code> 多跳级联与服务端出口预览，凭据本地 AES-256-GCM 加密存储。</p>
             </div>
             <div class="actions actions-tight">
-              <button id="btn-chain-preview" class="btn sm ghost" type="button">预览 Xray 出口 JSON</button>
-              <button id="btn-chain-add" class="btn sm" type="button">+ 添加链式节点</button>
+              <button id="btn-chain-preview" class="btn secondary" type="button">预览 Xray 出口 JSON</button>
+              <button id="btn-chain-add" class="btn primary-cta" type="button">+ 添加链式节点</button>
             </div>
           </div>
 
@@ -647,8 +646,8 @@
               <p class="card-desc">为选定的单个 TCP 订阅入站独立启用 <code>TCP_CONGESTION=brutal</code> 与自定义超发倍率（默认 125%），其余节点保持直连。</p>
             </div>
             <div class="actions actions-tight">
-              <button id="btn-brutal-apply" class="btn sm ghost" type="button">热重载所有接管端口</button>
-              <button id="btn-brutal-add" class="btn sm" type="button">+ 添加接管绑定</button>
+              <button id="btn-brutal-apply" class="btn secondary" type="button">热重载所有接管端口</button>
+              <button id="btn-brutal-add" class="btn primary-cta" type="button">+ 添加接管绑定</button>
             </div>
           </div>
 

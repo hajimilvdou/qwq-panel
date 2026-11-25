@@ -149,6 +149,7 @@ func (s *Service) resolveDispatched(ctx context.Context, exact DispatchTarget, o
 	if err != nil {
 		return DispatchedContext{}, err
 	}
+	limits = effectiveDispatchLimits(ctx, before, limits)
 	approved, err := s.checkDispatchPolicy(ctx, before, limits)
 	if err != nil {
 		return DispatchedContext{}, err
@@ -169,6 +170,7 @@ func (s *Service) resolveDispatched(ctx context.Context, exact DispatchTarget, o
 	if err != nil {
 		return DispatchedContext{}, err
 	}
+	currentLimits = effectiveDispatchLimits(ctx, after, currentLimits)
 	if currentLimits != limits {
 		return DispatchedContext{}, dispatchDenied()
 	}
@@ -269,4 +271,26 @@ func dispatchRisk(value string, empty bool) bool {
 
 func dispatchDenied() error {
 	return problem.New(problem.PermissionDenied, "operation 未在精确目标上执行，或当前授权、策略和状态已变化。")
+}
+
+// effectiveDispatchLimits carries forward the host-recorded PermissionFull of a
+// direct human browser click on a non-destructive, non-reachability plugin
+// operation declared auto/ai_confirm when the plugin later invokes host
+// callbacks (such as secret.reveal) over a fresh gRPC context. Explicit
+// read_only overrides, RBAC revocations, non-human actors, destructive effects,
+// reachability actions and confirm-level operations are never relaxed.
+func effectiveDispatchLimits(ctx context.Context, op *Operation, limits Limits) Limits {
+	if op.PermissionMode != PermissionFull || op.Actor.Kind != actor.Human || op.Meta.Source != PluginSource ||
+		op.Meta.Reachability || op.Meta.Effect == EffectDestructive {
+		return limits
+	}
+	level := op.Meta.ApprovalLevel()
+	if level != ApprovalAuto && level != ApprovalAIConfirm {
+		return limits
+	}
+	if mode, ok := PermissionModeFromContext(ctx); ok && mode == PermissionReadOnly {
+		return limits
+	}
+	limits.PermissionMode = PermissionFull
+	return limits
 }

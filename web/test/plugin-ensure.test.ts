@@ -261,4 +261,58 @@ describe('STEP-04: 零信任 ui.ensure_plugins 桥接协议与处理器', () => 
     await expect(handler({ plugins: ['evil.plugin'] })).rejects.toBeInstanceOf(EnsurePluginsError);
     await expect(handler({ plugins: ['evil.plugin'] })).rejects.toMatchObject({ code: 'PERMISSION_DENIED', status: 403 });
   });
+
+  it('ui.modal 协议与 dismissModal 支持跨 iframe 全屏统一遮罩', async () => {
+    expect(parsePluginMessage({ t: 'ui.modal', open: true })).toEqual({ t: 'ui.modal', open: true });
+    expect(parsePluginMessage({ t: 'ui.modal', open: false })).toEqual({ t: 'ui.modal', open: false });
+    expect(parsePluginMessage({ t: 'ui.modal', open: 'yes' })).toBeNull();
+
+    const modalStates: boolean[] = [];
+    const received: ShellToPlugin[] = [];
+    const ports: MessagePort[] = [];
+    const bridge = new PluginBridge({
+      pluginId: 'proxy.advanced',
+      operations: [],
+      routes: [{ path: '/proxy' }],
+      invoke: async () => ({}),
+      toProblem,
+      subscribe: () => () => {},
+      newKey: () => 'k',
+      onReady: vi.fn(),
+      onResize: vi.fn(),
+      onModal: (open) => modalStates.push(open),
+      onToast: vi.fn(),
+      onNavigate: vi.fn(),
+      onTimeout: vi.fn(),
+    });
+    const iframeWin = {
+      postMessage: (data: unknown, _origin: string, transfer?: Transferable[]) => {
+        if ((data as { t?: string })?.t === 'plugin.port' && transfer?.[0]) {
+          const p = transfer[0] as unknown as MessagePort;
+          ports.push(p);
+          p.onmessage = (m) => received.push(m.data as ShellToPlugin);
+          p.start?.();
+        }
+      },
+    } as unknown as Window;
+    bridge.attach(iframeWin);
+    bridge.onWindowMessage({ source: iframeWin, data: { t: 'plugin.hello', kit_major: 1 } } as unknown as MessageEvent);
+
+    try {
+      expect(ports.length).toBe(1);
+      ports[0]!.postMessage({ t: 'ui.modal', open: true });
+      await new Promise((r) => setTimeout(r, 25));
+      expect(modalStates).toEqual([true]);
+
+      bridge.dismissModal();
+      await new Promise((r) => setTimeout(r, 25));
+      expect(received).toContainEqual({ t: 'ui.modal.dismiss' });
+
+      bridge.dispose();
+      expect(modalStates).toEqual([true, false]);
+    } finally {
+      for (const p of ports) p.close();
+      bridge.dispose();
+    }
+  });
 });

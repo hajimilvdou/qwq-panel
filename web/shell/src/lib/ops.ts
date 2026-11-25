@@ -18,7 +18,8 @@
  * 失败（ApiError / NetworkError）原样抛出：调用方决定行内显示或 reportError()。
  * ========================================================================== */
 import { newIdempotencyKey, TERMINAL, type OpResult } from '$api/client';
-import { dock } from './ai/dock.svelte';
+import { operations as opsApi } from '$api/endpoints';
+import { humanApproval, tryAutoApproveHuman } from './ai/human-approval.svelte';
 import { liveOps } from './operations.svelte';
 import { toasts } from './toast.svelte';
 import { navigate } from './router.svelte';
@@ -77,6 +78,10 @@ export interface RunOptions {
   onSettled?: (status: OpResult['status']) => void;
   /** 不弹"已开始"等 Toast（调用方自己展示进度） */
   quiet?: boolean;
+  /** 人工已在宿主确认弹窗/表单中明确确认此操作，无需再弹二次确认（开启 2FA 时仍走验证） */
+  preConfirmed?: boolean;
+  /** 已收集的 6 位两步验证码（如卸载清理数据时） */
+  mfaCode?: string;
 }
 
 export async function runIntent(
@@ -84,10 +89,35 @@ export async function runIntent(
   call: (key: string) => Promise<OpResult>,
   opts: RunOptions,
 ): Promise<IntentResult> {
-  const op = await call(intent.key);
+  let op = await call(intent.key);
 
+  if (op.status === 'AWAITING_APPROVAL' && op.approvalId) {
+    let approved = false;
+    if (opts.preConfirmed) {
+      approved = await tryAutoApproveHuman(op.approvalId, opts.mfaCode);
+    }
+    if (!approved) {
+      const outcome = await humanApproval.open(op.approvalId);
+      approved = outcome === 'approved';
+      if (!approved) return { kind: 'awaiting', op };
+    }
+    if (op.operationId) {
+      try {
+        const latest = await opsApi.get(op.operationId);
+        op = {
+          operationId: latest.operation_id,
+          status: latest.status,
+          approvalId: latest.approval_id,
+          result: latest.result,
+          error: latest.error,
+          operation: latest,
+        };
+      } catch {
+        /* 保持后续跟踪 */
+      }
+    }
+  }
   if (op.status === 'AWAITING_APPROVAL') {
-    dock.open({ approvalId: op.approvalId });
     return { kind: 'awaiting', op };
   }
   if (TERMINAL.has(op.status)) {

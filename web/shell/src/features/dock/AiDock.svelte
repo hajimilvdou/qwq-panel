@@ -27,6 +27,7 @@
   import Transcript from '../ai/Transcript.svelte';
   import ApprovalStack from './ApprovalStack.svelte';
   import DockBall from './DockBall.svelte';
+  import HumanApprovalDialog from './HumanApprovalDialog.svelte';
 
   const sessions = useResource(sessionsResource);
   dockSession.init();
@@ -190,6 +191,8 @@
 {#if showDock}
   <DockBall {progress} aiState={liveAiState} onopen={openFromBall} />
 {/if}
+
+<HumanApprovalDialog />
 
 <dialog
   bind:this={dlg}
