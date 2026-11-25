@@ -172,8 +172,8 @@ func isPublicUnicastIP(ip net.IP) bool {
 	return true
 }
 
-// defaultOrigin 由配置推导浏览器访问面板的 origin。监听在通配地址时
-// 用回环地址（配合 SSH 隧道），运维人员可用 --origin 覆盖。
+// defaultOrigin 由配置推导基础 origin（无公网地址探测时回退回环地址），
+// 运维人员可用 --origin 覆盖。
 func defaultOrigin(h config.HTTP) string {
 	if len(h.PublicOrigins) > 0 {
 		return h.PublicOrigins[0]

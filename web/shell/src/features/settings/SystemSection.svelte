@@ -54,17 +54,17 @@
     { value: 'custom_html', label: '自定义静态伪装页 HTML' },
   ];
   const BASE_LISTEN_OPTIONS: readonly { value: string; label: string }[] = [
-    { value: '127.0.0.1', label: '127.0.0.1（仅本机 SSH 隧道 / 本机反向代理）' },
-    { value: '0.0.0.0', label: '0.0.0.0（开放 IPv4 公网直连与订阅访问）' },
+    { value: '0.0.0.0', label: '0.0.0.0（开放 IPv4 公网直连 · 推荐，配合安全密道防扫描）' },
     { value: '::', label: '::（开放 IPv4 + IPv6 双栈公网直连）' },
+    { value: '127.0.0.1', label: '127.0.0.1（仅本机反向代理接入）' },
   ];
 
   const PROXY_LISTEN_OPTIONS: readonly { value: string; label: string }[] = [
-    { value: '127.0.0.1', label: '127.0.0.1（仅本机反向代理 / SSH 隧道，推荐）' },
+    { value: '127.0.0.1', label: '127.0.0.1（仅本机反向代理，推荐）' },
     { value: '::1', label: '::1（仅本机 IPv6 回环反向代理）' },
   ];
 
-  let listenHost = $state('127.0.0.1');
+  let listenHost = $state('0.0.0.0');
   let portText = $state('');
   let entryPath = $state('');
   let disguise = $state<DisguiseMode>('drop');
@@ -384,7 +384,7 @@
             <Alert
               tone="warn"
               title={reboundLoopbackWarning
-                ? '已切换为仅本机回环监听（公网直连将在 5 秒后关闭，请改用 SSH 隧道接入）'
+                ? '已切换为仅本机回环监听（公网直连将在 5 秒后关闭，请通过本机反向代理接入）'
                 : '监听地址已热切换，请使用新地址访问（旧入口将在 5 秒后关闭）'}
             >
               <div class="url-row">
@@ -415,8 +415,8 @@
             hint={isProxyTLS
               ? '当前处于反向代理 TLS 模式（明文 HTTP 后端），为保证口令与会话安全，仅允许监听本机回环地址（127.0.0.1 或 ::1）'
               : listenHost === '127.0.0.1' || listenHost === '::1'
-                ? '仅允许本机 SSH 隧道或本机反向代理接入；如需外部直接访问面板、拉取代理订阅或接收探针上报，请切为 0.0.0.0 或 ::'
-                : '已开放公网监听：强烈建议保留安全密道或绑定 HTTPS 反代域名，防火墙将自动同步放行面板端口'}
+                ? '仅允许本机反向代理接入；如需外部直接访问面板、拉取代理订阅或接收探针上报，请切为 0.0.0.0 或 ::'
+                : '已开放公网监听：配合随机高位端口、安全密道与静默伪装防扫描，防火墙将自动同步放行面板端口'}
           />
 
           <div class="inline-field">

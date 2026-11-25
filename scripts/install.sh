@@ -908,9 +908,8 @@ fi
 echo "===================================================================="
 if is_loopback_host "$cfg_bind_host"; then
   cat <<EOF
-  当前仅监听本机回环，通过 SSH 隧道访问：
-    ssh -L ${cfg_port}:127.0.0.1:${cfg_port} root@<服务器IP>
-  如需改为公网直连：sudo qwq access reset --listen 0.0.0.0
+  当前监听本机回环（${cfg_listen}，仅本机反向代理可用）。
+  如需直接公网访问面板，请执行：sudo qwq access reset --listen 0.0.0.0
 EOF
 elif ((setup_rc == 0)); then
   cat <<EOF

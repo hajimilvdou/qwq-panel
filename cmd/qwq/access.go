@@ -244,8 +244,13 @@ func formatAccessHelp(listenHost string, port int, entryPath, panelDomain, tlsMo
 	}
 	host := listenHost
 	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "<你的服务器IP>"
-	} else if strings.Contains(host, ":") {
+		if pubIP := detectLocalPublicIP(); pubIP != "" {
+			host = pubIP
+		} else {
+			host = "<你的服务器IP>"
+		}
+	}
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
 		host = "[" + host + "]"
 	}
 	entry := strings.Trim(entryPath, "/")
@@ -264,12 +269,10 @@ func formatAccessHelp(listenHost string, port int, entryPath, panelDomain, tlsMo
 	if panelDomain != "" {
 		fmt.Fprintf(&b, "  反代域名 : https://%s/\n", panelDomain)
 	}
-	fmt.Fprintf(&b, "  直连/救援: %s\n", directURL)
-	if listenHost == "127.0.0.1" {
-		fmt.Fprintf(&b, "  SSH 隧道 : ssh -L %d:127.0.0.1:%d root@<你的服务器IP>\n", port, port)
-	} else if listenHost == "::1" {
-		fmt.Fprintf(&b, "  SSH 隧道 : ssh -L %d:[::1]:%d root@<你的服务器IP>\n", port, port)
+	fmt.Fprintf(&b, "  面板地址 : %s\n", directURL)
+	if listenHost == "127.0.0.1" || listenHost == "::1" {
+		fmt.Fprintf(&b, "  开启公网 : sudo qwq access reset --listen 0.0.0.0\n")
 	}
-	fmt.Fprintf(&b, "  应急重置 : sudo qwq access reset [--listen 127.0.0.1|0.0.0.0] [--port N] [--entry-path none|<path>] [--clear-domain]\n")
+	fmt.Fprintf(&b, "  应急重置 : sudo qwq access reset [--listen 0.0.0.0|127.0.0.1] [--port N] [--entry-path none|<path>] [--clear-domain]\n")
 	return b.String()
 }
