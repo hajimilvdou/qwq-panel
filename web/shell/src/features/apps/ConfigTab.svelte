@@ -291,8 +291,9 @@
     gap: var(--s-3);
   }
   .stack {
+    display: flex;
+    flex-direction: column;
     gap: var(--s-4);
-    max-width: 560px;
   }
   .actions {
     display: flex;

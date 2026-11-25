@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/anytls"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/coreproc"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/metrics"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
+	"github.com/qwq-panel/qwq/internal/xraycore/anytls"
+	"github.com/qwq-panel/qwq/internal/xraycore/coreproc"
+	"github.com/qwq-panel/qwq/internal/xraycore/metrics"
+	"github.com/qwq-panel/qwq/internal/xraycore/state"
 	pb "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
 )
 

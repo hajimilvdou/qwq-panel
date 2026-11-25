@@ -41,9 +41,9 @@
     "schemas/renewal.configure.request.json": "sha256:cc380cb05b894389f56a22ec1e0ea3b1853170674ef1b164a973869ba2c53a21",
     "schemas/renewal.target.request.json": "sha256:98617422a6140266126f3172aac462a55f35c00fb4228f04f4fc82ee9101fc3d",
     "schemas/renewal.view.response.json": "sha256:b7a5e6a68129bdfc3fd5013576682fa27140cbb274a7a6045af017ad4444d0e7",
-    "ui/certs.js": "sha256:bb94fb35668d245c80d3a9f5b88312bc2c63564361861e47bf9847305b5e7d65",
+    "ui/certs.js": "sha256:d480478e7849f0c1c413613e3d3e0a9b08f69a5bc5a48cfe803c22f33656d937",
     "ui/index.html": "sha256:cc6822344868002011bdcfacc82731b4d9886c804e727b755bdb51524a7fc6e1",
-    "ui/plugin.css": "sha256:9859f7542699cb5e34edb642f96524671b0a01ea042c66dd9a2f15745c078d5c"
+    "ui/plugin.css": "sha256:9a58701dd10e05cb227e29923b1268492a90635d757a72feb08ab54417924e9e"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

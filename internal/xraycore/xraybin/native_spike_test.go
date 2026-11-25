@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/sandbox"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayapi"
+	"github.com/qwq-panel/qwq/internal/xraycore/xrayapi"
 )
 
 // TestNativePreflightAndPrivateStats 仅由隔离测试单元执行，不进入产品构建。

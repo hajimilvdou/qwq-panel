@@ -67,7 +67,7 @@
   const bridge = new PluginBridge(
     bridgeDeps(p, {
       onReady: () => (phase = 'ready'),
-      onResize: (h) => (height = h),
+      onResize: (h) => (height = Math.max(HEIGHT_MIN, h + 12)),
       onToast: (text) => toasts.info(`${p.name}：${text}`),
       onNavigate: (to) => navigate(`/plugins/${encodeURIComponent(p.plugin_id)}${to === '/' ? '' : to}`),
       onTimeout: () => (phase = 'timeout'),
@@ -212,6 +212,7 @@
         sandbox={SANDBOX}
         referrerpolicy="no-referrer"
         allow=""
+        scrolling="no"
         loading="eager"
         style:height="{height}px"
       ></iframe>
@@ -239,6 +240,7 @@
     display: block;
     width: 100%;
     border: 0;
+    overflow: hidden;
     border-radius: var(--r-lg);
     background: var(--surface);
     box-shadow: var(--shadow-1);

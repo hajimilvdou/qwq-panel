@@ -37,17 +37,6 @@ export const PLUGIN_GUIDES: Record<string, PluginHumanGuide> = {
     ],
     defaults: { memory_max_mb: 32, cpu_quota_percent: 20, pids_max: 16, fds_max: 128, disk_max_mb: 16 },
   },
-  'monitor.basic': {
-    title: '历史监控曲线',
-    tagline: '更长时间段的 CPU / 内存 / 磁盘 / 网络趋势图表',
-    whatItDoes:
-      '面板主页本身已经自带实时资源监控（CPU、内存、磁盘、网络速率）。如果你希望在独立监控页里查看更长时间窗口的详细历史曲线和磁盘读写变化，可以选装本插件。',
-    highlights: [
-      '提供 5 分钟 / 15 分钟 / 更长窗口的连续趋势折线图',
-      '轻量驻留内存，不影响低配 VPS 运行',
-    ],
-    defaults: { memory_max_mb: 24, cpu_quota_percent: 5, pids_max: 8, fds_max: 64, disk_max_mb: 16 },
-  },
   'web.ingress': {
     title: '反向代理与建站',
     tagline: '域名反代本机服务 · 静态网站托管 · 自动 HTTPS · 限流保护',
@@ -108,31 +97,18 @@ export const PLUGIN_GUIDES: Record<string, PluginHumanGuide> = {
     ],
     defaults: { memory_max_mb: 32, cpu_quota_percent: 10, pids_max: 16, fds_max: 256, disk_max_mb: 128 },
   },
-  'core.xray': {
-    title: 'Xray 代理核心',
-    tagline: '用于科学上网与加密代理转发的底层核心引擎（支持 VLESS / VMess / Trojan / SS2022 / Hysteria2 / AnyTLS）',
-    whatItDoes:
-      '负责实际跑代理转发流量的核心引擎，用于搭建科学上网 / 加密代理节点，支持 VLESS (Reality / Vision)、VMess、Trojan、Shadowsocks 2022、Hysteria2、AnyTLS、WireGuard / WARP 分流等主流协议，可导出节点分享链接与 Clash / sing-box 客户端配置。',
-    highlights: [
-      '支持协议：VLESS (Reality / Vision / WS / gRPC)、VMess、Trojan、Shadowsocks 2022、Hysteria2、AnyTLS',
-      '支持 Cloudflare WARP 出站分流与 Reality 伪装域名测速',
-      '支持导出单节点链接与 Clash / sing-box 配置文件',
-    ],
-    tip: '这是底层代理运行核心；如果你需要可视化图形界面来快速搭建节点、分配多用户流量配额和生成订阅链接，建议一并安装「高级代理与订阅中心」。',
-    defaults: { memory_max_mb: 256, cpu_quota_percent: 100, pids_max: 64, fds_max: 4096, disk_max_mb: 64 },
-  },
   'proxy.advanced': {
-    title: '高级代理与订阅中心',
-    tagline: '科学上网图形化建节点 · 多用户流量限速 · Clash / sing-box / Base64 订阅',
+    title: '代理与订阅中心（内置 Xray 引擎）',
+    tagline: '科学上网一站式建节点 · 内置 Xray 核心 · 多用户限速 · Clash / sing-box / Base64 订阅',
     whatItDoes:
-      '科学上网与代理的完整可视化管理工作台：一键创建 VLESS Reality / Trojan / Hysteria2 / Shadowsocks 2022 / AnyTLS 节点，给不同用户设置流量限额、过期时间与网速限制，并自动生成 Clash / sing-box / Base64 客户端订阅地址。',
+      '一站式科学上网与加密代理管理台：已经把 Xray v26.11.9 核心与 AnyTLS 引擎深度合并到同一个应用里，无需再单独装驱动。支持一键搭建 VLESS (Reality/Vision/WS/gRPC/XHTTP)、VMess、Trojan、Hysteria2、Shadowsocks 2022、AnyTLS 节点，配置 Cloudflare WARP 解锁、多用户流量限速，并自动生成 Clash / sing-box / Base64 订阅链接。',
     highlights: [
-      '新手向导一键搭建 Reality / Hysteria2 / VMess / Trojan / SS2022 / AnyTLS 节点',
-      '多用户账号管理、流量配额、到期自动停用、连接数与带宽限速',
-      '支持链式代理中转落地与网络加速参数调优',
-      '自动生成 Base64 / Clash / sing-box 订阅链接，扫码即用（安装时自动连带安装 Xray 核心）',
+      '内置 Xray 核心引擎，单插件即装即用，无需再分步安装驱动与前端',
+      '支持 VLESS Reality / VMess / Trojan / Hysteria2 / SS2022 / AnyTLS 全协议图形化建节点',
+      '多用户账号管理、流量配额、到期自动停用、连接数与带宽限速，以及一键生成多格式订阅',
+      '内置 Cloudflare WARP 出口解锁、链式代理中转与 TCP Brutal / tcpfit 加速调优',
     ],
-    defaults: { memory_max_mb: 64, cpu_quota_percent: 25, pids_max: 16, fds_max: 4096, disk_max_mb: 32 },
+    defaults: { memory_max_mb: 256, cpu_quota_percent: 100, pids_max: 64, fds_max: 4096, disk_max_mb: 96 },
   },
   'ai.relay': {
     title: 'AI API 中转站',

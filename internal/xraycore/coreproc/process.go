@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayapi"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayconfig"
+	"github.com/qwq-panel/qwq/internal/xraycore/state"
+	"github.com/qwq-panel/qwq/internal/xraycore/xrayapi"
+	"github.com/qwq-panel/qwq/internal/xraycore/xrayconfig"
 	"github.com/qwq-panel/qwq/sdk/coreapi"
 )
 

@@ -1,44 +1,62 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "web.ingress plugin configuration",
+  "title": "网站与反向代理配置",
+  "description": "选择反代引擎与 HTTP / HTTPS 监听地址，配置可信代理网段。",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "preferred_engine": {
       "type": "string",
-      "enum": [
-        "builtin-go",
-        "caddy",
-        "nginx"
-      ],
-      "default": "builtin-go"
+      "enum": ["builtin-go", "caddy", "nginx"],
+      "default": "builtin-go",
+      "title": "反向代理引擎",
+      "x-group": "反代引擎与监听端口",
+      "x-group-desc": "内置 Go 引擎无需安装任何额外软件，开箱即用；也可切换为 Caddy 或 Nginx 导出模式。",
+      "x-qwq-enum-titles": {
+        "builtin-go": "内置 Go 反代网关（推荐，零依赖开箱即用）",
+        "caddy": "Caddy 配置导出模式",
+        "nginx": "Nginx 配置导出模式"
+      },
+      "description": "决定网站域名转发由内置网关直接承接，还是生成外部 Web 服务器配置。"
     },
     "listen_addr": {
       "type": "string",
       "maxLength": 64,
       "default": ":80",
-      "description": "内置 Go 反代 HTTP 监听地址（默认 :80；填 off 关闭）"
+      "title": "HTTP 监听地址",
+      "x-group": "反代引擎与监听端口",
+      "x-placeholder": ":80",
+      "description": "内置 Go 反代监听的 HTTP 地址（默认 :80；填 off 可关闭 HTTP 监听）。"
     },
     "https_listen_addr": {
       "type": "string",
       "maxLength": 64,
       "default": ":443",
-      "description": "内置 Go 反代 HTTPS SNI 监听地址（默认 :443；填 off 关闭）"
-    },
-    "trusted_proxies": {
-      "type": "array",
-      "maxItems": 32,
-      "items": {
-        "type": "string",
-        "maxLength": 64
-      },
-      "default": []
+      "title": "HTTPS 监听地址",
+      "x-group": "反代引擎与监听端口",
+      "x-placeholder": ":443",
+      "description": "内置 Go 反代监听的 HTTPS SNI 地址（默认 :443；填 off 可关闭 HTTPS 监听）。"
     },
     "export_config_path": {
       "type": "string",
       "maxLength": 255,
       "default": "",
-      "description": "可选：额外导出配置到当前插件数据目录内的绝对路径（外部 Nginx/Caddy 请在预览页一键复制）"
+      "title": "外部配置导出路径（可选）",
+      "x-group": "高级选项",
+      "x-group-desc": "仅在配合 Cloudflare / 外部反代 CDN 或手工导出配置时需要调整。",
+      "description": "将生成的配置额外同步写入插件数据目录内的指定路径；通常留空即可。"
+    },
+    "trusted_proxies": {
+      "type": "array",
+      "maxItems": 32,
+      "title": "可信上游代理网段（JSON 数组）",
+      "x-group": "高级选项",
+      "description": "位于 CDN 或前置反代之后时，填写可信代理 IP / CIDR 以正确识别访客真实 IP。",
+      "items": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "default": []
     }
   }
 }

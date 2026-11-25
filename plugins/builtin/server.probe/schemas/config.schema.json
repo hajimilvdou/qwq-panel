@@ -1,20 +1,65 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "server.probe plugin configuration",
+  "title": "多机探针与延迟拨测配置",
+  "description": "设置本机节点展示名称、数据保留天数与独立公开页管理密码。",
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "collect_local_host": { "type": "boolean", "default": true },
-    "local_node_name": { "type": "string", "minLength": 1, "maxLength": 64, "default": "本机主控节点" },
-    "local_region_code": { "type": "string", "minLength": 2, "maxLength": 8, "default": "HK" },
-    "rollup_retention_days": { "type": "integer", "minimum": 1, "maximum": 90, "default": 30 },
-    "sla_retention_days": { "type": "integer", "minimum": 7, "maximum": 365, "default": 90 },
+    "collect_local_host": {
+      "type": "boolean",
+      "default": true,
+      "title": "将本机主控节点纳入探针墙",
+      "x-group": "本机节点展示",
+      "x-group-desc": "控制当前服务器是否作为第一台服务器显示在多机监控墙中。",
+      "description": "开启后自动采集本机在线状态与基础资源并在探针列表展示。"
+    },
+    "local_node_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "default": "本机主控节点",
+      "title": "本机展示名称",
+      "x-group": "本机节点展示",
+      "description": "在多机状态墙上显示的本机名称，例如“东京主控”或“香港 CN2”。"
+    },
+    "local_region_code": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 8,
+      "default": "HK",
+      "title": "地区代码（国旗标识）",
+      "x-group": "本机节点展示",
+      "x-placeholder": "HK / JP / US / SG / DE",
+      "description": "两位 ISO 国家/地区代码，用于在探针列表显示地区标记。"
+    },
+    "rollup_retention_days": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 90,
+      "default": 30,
+      "title": "历史监控数据保留天数",
+      "x-group": "历史留存与独立密码",
+      "x-group-desc": "控制本地 SQLite 历史指标保存周期，避免长时间运行占用过多磁盘。",
+      "description": "超过此天数的采样记录会自动清理（默认保留 30 天）。"
+    },
+    "sla_retention_days": {
+      "type": "integer",
+      "minimum": 7,
+      "maximum": 365,
+      "default": 90,
+      "title": "在线率 (SLA) 记录保留天数",
+      "x-group": "历史留存与独立密码",
+      "description": "各节点可用率与掉线记录的保留天数（默认 90 天）。"
+    },
     "standalone_admin_password": {
       "type": "string",
       "minLength": 8,
       "maxLength": 128,
       "writeOnly": true,
-      "x-secret": true
+      "x-secret": true,
+      "title": "独立状态页管理密码（可选）",
+      "x-group": "历史留存与独立密码",
+      "description": "如需将探针状态页单独对外公开，可设置至少 8 位的独立管理密码。"
     }
   }
 }

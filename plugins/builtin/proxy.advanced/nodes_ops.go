@@ -1053,8 +1053,29 @@ func (i *instance) handleNodesTest(ctx context.Context, req pluginsdk.Request) (
 // ======================== 托管节点同步至 core.xray v2 Intent ========================
 
 func (i *instance) trySyncManagedNodesToCore(ctx context.Context, host *pluginsdk.Host, removedIDs ...string) (bool, string, string) {
+	if i.xray != nil && i.xray.Available() {
+		i.syncMu.Lock()
+		defer i.syncMu.Unlock()
+		managedNodes, err := i.store.ListNodes(ctx, "managed", "", "", "", false)
+		if err != nil {
+			return false, "", err.Error()
+		}
+		activeUsers, err := i.store.ListUsers(ctx, "active", "", 10000)
+		if err != nil {
+			return false, "", err.Error()
+		}
+		warpCfg, _ := i.store.GetWARP(ctx)
+		ok, rev, note, serr := i.xray.Sync(ctx, managedNodes, activeUsers, warpCfg)
+		if serr != nil {
+			if note != "" {
+				return false, "", note
+			}
+			return false, "", "同步至内置 Xray 引擎失败：" + serr.Error()
+		}
+		return ok, rev, note
+	}
 	if host == nil || host.Conn() == nil {
-		return false, "", "当前处于独立模式，节点已保存到本地数据库，待接入 core.xray 后自动生效"
+		return false, "", "当前处于独立模式，节点已保存到本地数据库，待接入 Xray 引擎后自动生效"
 	}
 	i.syncMu.Lock()
 	defer i.syncMu.Unlock()

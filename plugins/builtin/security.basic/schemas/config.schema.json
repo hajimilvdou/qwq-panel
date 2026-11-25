@@ -1,53 +1,76 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "基础安全插件配置",
-  "description": "轻量防爆破巡检策略与 SSH 双端口切换超时参数。",
+  "title": "基础安全配置",
+  "description": "配置 SSH 自动防暴力破解规则、白名单 IP 与 SSH 换端口安全回滚时长。",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "ban_enabled": {
       "type": "boolean",
       "default": true,
-      "description": "是否启用轻量级 SSH 爆破巡检与自动封禁；检测到 fail2ban 活跃时仍自动退回只读旁观模式。"
+      "title": "开启 SSH 自动防爆破封禁",
+      "x-group": "SSH 自动防爆破",
+      "x-group-desc": "自动监控 SSH 登录失败日志，并在连续输错密码时临时拉黑攻击来源 IP。",
+      "description": "若宿主机已运行 fail2ban 且未点击接管，插件会自动保持只读观察模式以避免冲突。"
     },
     "ban_threshold": {
       "type": "integer",
       "minimum": 1,
       "maximum": 1000,
       "default": 5,
-      "description": "统计窗口内触发封禁的认证失败次数阈值。"
+      "title": "触发封禁的失败次数",
+      "x-group": "SSH 自动防爆破",
+      "description": "在统计时间窗口内连续登录失败达到此次数后自动拉黑该 IP（默认 5 次）。"
     },
     "ban_window_seconds": {
       "type": "integer",
       "minimum": 60,
       "maximum": 3600,
       "default": 600,
-      "description": "失败计数滑动窗口秒数（最大 3600 秒）。"
+      "title": "失败计数窗口（秒）",
+      "x-group": "SSH 自动防爆破",
+      "description": "只累计最近这段时间内的失败次数，默认 600 秒（10 分钟）。"
     },
     "ban_ttl_seconds": {
       "type": "integer",
       "minimum": 60,
       "maximum": 604800,
       "default": 3600,
-      "description": "自动封禁条目的 nftables 超时秒数。"
-    },
-    "ban_unit": {
-      "type": "string",
-      "enum": ["", "auto", "both", "ssh.service", "sshd.service"],
-      "default": "",
-      "description": "增量扫描的 journald SSH 服务单元名；留空或 auto 同时扫描 ssh.service 与 sshd.service（兼容 Ubuntu 24.04 / Debian / RHEL）。"
+      "title": "自动封禁时长（秒）",
+      "x-group": "SSH 自动防爆破",
+      "description": "IP 被拉黑后在防火墙中保留的拦截时间，默认 3600 秒（1 小时），到期自动解封。"
     },
     "ban_scan_interval_seconds": {
       "type": "integer",
       "minimum": 10,
       "maximum": 300,
       "default": 30,
-      "description": "防爆破巡检周期间隔秒数。"
+      "title": "日志巡检间隔（秒）",
+      "x-group": "SSH 自动防爆破",
+      "description": "后台检查 SSH 登录失败日志的频率（默认 30 秒，越短响应越快）。"
+    },
+    "ban_unit": {
+      "type": "string",
+      "enum": ["", "auto", "both", "ssh.service", "sshd.service"],
+      "default": "",
+      "title": "监控的 SSH 服务名",
+      "x-group": "SSH 自动防爆破",
+      "x-qwq-enum-titles": {
+        "": "自动识别（推荐，兼容 Debian / Ubuntu / CentOS）",
+        "auto": "自动识别（ssh + sshd）",
+        "both": "同时监控 ssh.service 与 sshd.service",
+        "ssh.service": "仅监控 ssh.service（Debian / Ubuntu）",
+        "sshd.service": "仅监控 sshd.service（RHEL / CentOS / Alpine）"
+      },
+      "description": "指定读取哪一个 systemd 服务的 SSH 认证日志，保持自动识别即可。"
     },
     "ban_whitelist": {
       "type": "array",
       "maxItems": 128,
-      "description": "永不自动封禁的白名单 IP 或 CIDR 网段列表。",
+      "title": "永久白名单 IP / 网段（JSON 数组）",
+      "x-group": "白名单与 SSH 换端口保护",
+      "x-group-desc": "白名单里的 IP 永远不会被误封；切换 SSH 端口时若超时未确认会自动回滚防失联。",
+      "description": "例如 [\"1.2.3.4\", \"10.0.0.0/8\"]，填你常用办公网或跳板机地址。",
       "items": {
         "type": "string",
         "minLength": 1,
@@ -59,7 +82,9 @@
       "minimum": 30,
       "maximum": 3600,
       "default": 600,
-      "description": "双端口 SSH 切换未确认时的自动回滚超时秒数（默认 600 秒）。"
+      "title": "SSH 换端口自动回滚超时（秒）",
+      "x-group": "白名单与 SSH 换端口保护",
+      "description": "修改 SSH 端口后若在此时间内未用新端口确认连通，系统将自动恢复旧端口防止锁死（默认 600 秒）。"
     }
   }
 }

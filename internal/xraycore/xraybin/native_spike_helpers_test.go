@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/sandbox"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayconfig"
+	"github.com/qwq-panel/qwq/internal/xraycore/xrayconfig"
 	"github.com/qwq-panel/qwq/sdk/coreapi"
 )
 

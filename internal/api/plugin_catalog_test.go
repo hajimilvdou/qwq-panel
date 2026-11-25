@@ -102,16 +102,16 @@ func TestPluginCatalogOnlineCacheAndFallback(t *testing.T) {
 	if len(cat1.Items) != 2 {
 		t.Fatalf("expected 2 catalog items, got %d", len(cat1.Items))
 	}
-	// Official default order places containers.docker before proxy.advanced.
-	if cat1.Items[0].PluginID != "containers.docker" || cat1.Items[1].PluginID != "proxy.advanced" {
+	// Official default order places proxy.advanced first, then containers.docker.
+	if cat1.Items[0].PluginID != "proxy.advanced" || cat1.Items[1].PluginID != "containers.docker" {
 		t.Fatalf("unexpected item ordering: %+v", cat1.Items)
 	}
 	wantURL := "https://github.com/hajimilvdou/qwq-panel/releases/download/v0.1.11/containers.docker-v0.1.11-linux-" + arch + ".qwqpkg"
-	if cat1.Items[0].DownloadURL != wantURL || cat1.Items[0].Size != 3145728 {
-		t.Fatalf("unexpected item[0] download info: got=%q want=%q size=%d", cat1.Items[0].DownloadURL, wantURL, cat1.Items[0].Size)
+	if cat1.Items[1].DownloadURL != wantURL || cat1.Items[1].Size != 3145728 {
+		t.Fatalf("unexpected item[1] download info: got=%q want=%q size=%d", cat1.Items[1].DownloadURL, wantURL, cat1.Items[1].Size)
 	}
-	if len(cat1.Items[1].Dependencies) != 1 || cat1.Items[1].Dependencies[0] != "core.xray" {
-		t.Fatalf("expected proxy.advanced dependency on core.xray, got %+v", cat1.Items[1].Dependencies)
+	if len(cat1.Items[0].Dependencies) != 1 || cat1.Items[0].Dependencies[0] != "core.xray" {
+		t.Fatalf("expected index dependencies preserved on item[0], got %+v", cat1.Items[0].Dependencies)
 	}
 	if fetchHits.Load() != 1 {
 		t.Fatalf("expected 1 upstream hit, got %d", fetchHits.Load())
@@ -129,7 +129,7 @@ func TestPluginCatalogOnlineCacheAndFallback(t *testing.T) {
 		t.Fatalf("expected refresh=1 to re-fetch, hits=%d", fetchHits.Load())
 	}
 
-	// 4. Offline failure degrades cleanly to builtin_fallback with all 10 official plugins.
+	// 4. Offline failure degrades cleanly to builtin_fallback with all 8 official optional plugins.
 	eOff := newEnvWith(t, func(d *api.Deps) {
 		d.PackageFetchTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			return nil, errors.New("simulated network offline")
@@ -143,7 +143,7 @@ func TestPluginCatalogOnlineCacheAndFallback(t *testing.T) {
 		Items  []json.RawMessage `json:"items"`
 	}
 	resOff.decode(t, &catOff)
-	if catOff.Online || catOff.Source != "builtin_fallback" || len(catOff.Items) != 10 {
+	if catOff.Online || catOff.Source != "builtin_fallback" || len(catOff.Items) != 8 {
 		t.Fatalf("unexpected offline fallback: online=%v source=%q count=%d", catOff.Online, catOff.Source, len(catOff.Items))
 	}
 }

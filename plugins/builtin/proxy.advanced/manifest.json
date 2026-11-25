@@ -2,9 +2,9 @@
   "schema_version": "1.3",
   "id": "proxy.advanced",
   "version": "0.1.0",
-  "name": "高级代理管理",
-  "summary": "科学上网节点可视化管理与订阅中心：多用户流量限额、一键建节点、生成 Clash / sing-box / Base64 订阅",
-  "description": "科学上网与代理管理工作台：提供图形化节点搭建向导（VLESS Reality、VMess、Trojan、Hysteria2、Shadowsocks 2022、AnyTLS）、多用户流量配额与限速、链式代理中转落地、网络加速调优，以及一键生成 Base64 / Clash / sing-box 客户端订阅链接（安装时自动连带安装 Xray 核心）。",
+  "name": "代理与订阅中心",
+  "summary": "一站式科学上网与代理订阅中心：深度内置 Xray v26.11.9 核心，支持多协议一键建节点、多用户配额限速与 Clash / sing-box 订阅",
+  "description": "一站式科学上网与代理工作台（深度内置 Xray v26.11.9 与 AnyTLS 数据面，无需额外安装独立核心）：提供可视化全协议建节点向导（VLESS Reality、VMess、Trojan、Hysteria2、Shadowsocks 2022、AnyTLS）、多用户流量配额与限速、链式代理与 WARP 解锁、网络加速调优，以及一键生成 Base64 / Clash / sing-box 客户端订阅链接。",
   "license": "AGPL-3.0-only",
   "publisher": {
     "id": "qwq-builtin",
@@ -38,7 +38,7 @@
     "schemas/chains.probe.response.json": "sha256:ddc0ec1ebf94a196fd5f4f027aaf8e293e599244195aad6827b697a21571327d",
     "schemas/chains.upsert.request.json": "sha256:66f249b396345414286bd284074e23d12a1a6b8e7553afd619d40776738b9ebf",
     "schemas/chains.upsert.response.json": "sha256:78fef37747b34575d439619f75418bc1a226833135379675713e5fb209f0f9d9",
-    "schemas/config.schema.json": "sha256:36649ce8a22fbbf147ff65ef2162971581157b1c4dd8fe5380ecf6d7d4467043",
+    "schemas/config.schema.json": "sha256:7fbabd3a38ddc207abc0a4884ea3fe569df55ac5446b94a26068834d554c619c",
     "schemas/nodes.delete.request.json": "sha256:f69fce7b936b284d82f1a31351ae5ea03bc87a1d5a02f1a8a083006a44e20ca1",
     "schemas/nodes.delete.response.json": "sha256:13cdf446df05cb1e15019cf20cb4daf3093bb8ea2fde55325fa7db210db9c5db",
     "schemas/nodes.import_uri.request.json": "sha256:f9bc73100f14e8ec3de8d163e14e0f7cbf5adb45924b1f1ea4a09eb68e889c4f",
@@ -58,7 +58,11 @@
     "schemas/plans.upsert.request.json": "sha256:fb448ec813273eeb7a12316d485ddf8589c4b5244e4dd58f690053bf451e5a9b",
     "schemas/plans.upsert.response.json": "sha256:e82cfc9a05526968f6c85389b241f4e1a744ee6af7726005fa49aceaae220ce2",
     "schemas/proxy.overview.request.json": "sha256:d085279016004f0be2a6964cfd4eb04af6e69017a27cd2e1e0ee6e207f133c77",
-    "schemas/proxy.overview.response.json": "sha256:1dedd7aefc9afaa8bc56d8bdd4d5accab6dd25f732d3864c5d169eae116b3b89",
+    "schemas/proxy.overview.response.json": "sha256:f804f06370fdc565446bd194649a6caaf01652bbac212f1b898ed5a282a6d491",
+    "schemas/tls.inspect.request.json": "sha256:86d0568e3680cf519c1c9e22d070652e5c332833dc59314b7a18ed2d803fe2ef",
+    "schemas/tls.inspect.response.json": "sha256:78d1474bfaeb02729f1d86fba933ee697f08b67badfe406cb67090eec39e07cc",
+    "schemas/tls.reload.request.json": "sha256:527b2bff790b429bf532b486830d6f2d18f0c090f6fc8ecfb4a2a68f1ced3779",
+    "schemas/tls.reload.response.json": "sha256:78d1474bfaeb02729f1d86fba933ee697f08b67badfe406cb67090eec39e07cc",
     "schemas/traffic.status.request.json": "sha256:963ef466f9f272ae4f37054f08e9880636dfe9cd52cf1bab3e76c97add70cb09",
     "schemas/traffic.status.response.json": "sha256:1a3e94df736e6b7f5dedebc3216f97d868656b06f9b8e40c24e1018c8a811d8a",
     "schemas/tuning.apply.request.json": "sha256:a4728d471d2787a6ade055b32928fc3e6d0f56a3a0a030b1d89e28284cd517fa",
@@ -95,9 +99,11 @@
     "schemas/warp.register.response.json": "sha256:ec31d645d6e618aaf280202fcef84c2807a6eb089a0cf01f2fd4ad4f990281fe",
     "schemas/warp.status.request.json": "sha256:9fecaf0be57870533738379f6bd1dab1d8303d91d77ad4e88731cdc2cb7e7665",
     "schemas/warp.status.response.json": "sha256:ca1da9258a97ab1f47ea5f48657025b16fc3582cf49699b713b36115aa78857b",
-    "ui/index.html": "sha256:9d588c89c734c202d384e3325ef465fc8a280ad61e451653cf4dad3f53e78e6d",
-    "ui/proxy.css": "sha256:1328b57266c713b524ddb33be3d630ea1ce9a9032af581764f5325607657c2bc",
-    "ui/proxy.js": "sha256:8f305a5a32d79d1252435523b35ecaaadaf3f6a7e7aeb9fbf86cc89a15d4ff20"
+    "schemas/xray.status.request.json": "sha256:2656294ca60aa23acaa3e6e1b688fa8b754196e6636657eb146a559936511803",
+    "schemas/xray.status.response.json": "sha256:d373163dd75afcb140bf5c1872123193499ebb58e0b68ec0723b5b22f0bc14a6",
+    "ui/index.html": "sha256:9e08eb2e6c3e218897a23ae0f5055d9e39f230c950057f024a4f402832eb3aba",
+    "ui/proxy.css": "sha256:414bd133cc5b57c34aa03e162f1d261791049fba4633359e298bf0c49f1bccea",
+    "ui/proxy.js": "sha256:8eb0f891b903b8c6b54e4cbed2591b85e2f52da1e86441ca1e3e91ecb387b654"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -109,20 +115,14 @@
     "update_strategy": "restart",
     "overlap_safe": false
   },
-  "dependencies": [
-    {
-      "kind": "plugin",
-      "id": "core.xray",
-      "constraint": ">=0.1.0 <1.0.0",
-      "required": true
-    }
-  ],
+  "dependencies": [],
   "state": {
     "schema_version": "1",
     "minimum_rollback_version": "0.1.0",
     "backup_paths": [
       "proxy.db",
-      "proxy.key"
+      "proxy.key",
+      "xray"
     ]
   },
   "config": {
@@ -130,68 +130,28 @@
     "hot_apply": true
   },
   "resources": {
-    "memory_max_mb": 64,
-    "cpu_quota_percent": 25,
-    "pids_max": 16,
+    "memory_max_mb": 256,
+    "cpu_quota_percent": 100,
+    "pids_max": 64,
     "fds_max": 4096,
-    "disk_max_mb": 32,
-    "kv_max_kb": 128
+    "disk_max_mb": 96,
+    "kv_max_kb": 512
   },
   "capabilities": [
     {
       "name": "state.kv.read",
       "scope": "self",
-      "reason": "读取高级代理插件本地轻量状态缓存"
+      "reason": "读取代理与订阅插件本地轻量状态缓存"
     },
     {
       "name": "state.kv.write",
       "scope": "self",
-      "reason": "持久化高级代理插件本地轻量状态缓存"
+      "reason": "持久化代理与订阅插件本地轻量状态缓存"
     },
     {
-      "name": "plugin.config.read",
-      "scope": "core.xray",
-      "reason": "读取 core.xray 脱敏配置快照以便保留既有密钥槽位合并多用户列表"
-    },
-    {
-      "name": "plugin.config.write",
-      "scope": "core.xray",
-      "reason": "同步活跃多用户列表与 traffic_mark 到 core.xray 并触发受控生效"
-    },
-    {
-      "name": "plugin.invoke",
-      "scope": "core.xray/core.observe",
-      "reason": "按需查询 core.xray 运行流量计数器"
-    },
-    {
-      "name": "plugin.invoke",
-      "scope": "core.xray/core.status",
-      "reason": "查询 core.xray 当前运行状态"
-    },
-    {
-      "name": "plugin.invoke",
-      "scope": "core.xray/core.capabilities",
-      "reason": "查询 core.xray 支持能力与 simple-obfs 二进制可用性"
-    },
-    {
-      "name": "plugin.invoke",
-      "scope": "core.xray/core.apply",
-      "reason": "触发 core.xray 应用最新多用户代理配置"
-    },
-    {
-      "name": "plugin.invoke.background",
-      "scope": "core.xray/core.observe",
-      "reason": "后台 30 秒周期采样 core.xray 逐用户流量以执行配额与到期巡检"
-    },
-    {
-      "name": "plugin.invoke.background",
-      "scope": "core.xray/core.status",
-      "reason": "后台巡检核对 core.xray 运行状态"
-    },
-    {
-      "name": "plugin.invoke.background",
-      "scope": "core.xray/core.capabilities",
-      "reason": "首页概览与构建器按需缓存查询 core.xray 能力与 simple-obfs 可用性"
+      "name": "network.proxy",
+      "scope": "direct",
+      "reason": "运行深度内置的 Xray v26.11.9 与 AnyTLS 代理数据面"
     },
     {
       "name": "system.traffic.shape",
@@ -234,7 +194,7 @@
       "risk": "low",
       "idempotent": true,
       "timeout_ms": 5000,
-      "summary": "高级代理多用户与配额概览（首页微件）",
+      "summary": "代理与订阅中心多用户、节点与内置 Xray 引擎概览（首页微件）",
       "capabilities": [
         {
           "name": "state.kv.read",
@@ -243,14 +203,6 @@
         {
           "name": "system.traffic.shape",
           "scope": "self"
-        },
-        {
-          "name": "plugin.invoke",
-          "scope": "core.xray/core.capabilities"
-        },
-        {
-          "name": "plugin.invoke.background",
-          "scope": "core.xray/core.capabilities"
         }
       ],
       "request_schema": "schemas/proxy.overview.request.json",
@@ -293,16 +245,8 @@
           "scope": "self"
         },
         {
-          "name": "plugin.config.read",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.config.write",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.invoke",
-          "scope": "core.xray/core.apply"
+          "name": "network.proxy",
+          "scope": "direct"
         },
         {
           "name": "system.traffic.shape",
@@ -340,17 +284,13 @@
       "risk": "low",
       "idempotent": false,
       "approval": "ai_confirm",
-      "approval_summary": "将新建代理用户、分配唯一 traffic_mark 与高熵订阅令牌，并同步下发 core.xray 配置与 HTB 限速",
+      "approval_summary": "将新建代理用户、分配唯一 traffic_mark 与高熵订阅令牌，并同步下发内置 Xray 引擎与 HTB 限速",
       "timeout_ms": 30000,
-      "summary": "创建代理用户并同步核心与限速",
+      "summary": "创建代理用户并同步内置核心与限速",
       "capabilities": [
         {
-          "name": "plugin.config.read",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.config.write",
-          "scope": "core.xray"
+          "name": "network.proxy",
+          "scope": "direct"
         },
         {
           "name": "system.traffic.shape",
@@ -390,17 +330,13 @@
       "risk": "low",
       "idempotent": true,
       "approval": "ai_confirm",
-      "approval_summary": "将修改代理用户启停状态并同步更新 core.xray 生效用户与内核限速规则",
+      "approval_summary": "将修改代理用户启停状态并同步更新内置 Xray 引擎与内核限速规则",
       "timeout_ms": 30000,
-      "summary": "启用或停用代理用户并同步核心",
+      "summary": "启用或停用代理用户并同步内置核心",
       "capabilities": [
         {
-          "name": "plugin.config.read",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.config.write",
-          "scope": "core.xray"
+          "name": "network.proxy",
+          "scope": "direct"
         },
         {
           "name": "system.traffic.shape",
@@ -832,10 +768,6 @@
         {
           "name": "state.kv.read",
           "scope": "self"
-        },
-        {
-          "name": "plugin.config.read",
-          "scope": "core.xray"
         }
       ],
       "request_schema": "schemas/warp.status.request.json",
@@ -862,16 +794,8 @@
           "scope": "chain"
         },
         {
-          "name": "plugin.config.read",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.config.write",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.invoke",
-          "scope": "core.xray/core.apply"
+          "name": "network.proxy",
+          "scope": "direct"
         },
         {
           "name": "secret.reveal",
@@ -881,7 +805,7 @@
       "request_schema": "schemas/warp.register.request.json",
       "response_schema": "schemas/warp.register.response.json",
       "approval": "ai_confirm",
-      "approval_summary": "将向 Cloudflare 注册新的 WARP 账号并加密保存 WireGuard 私钥，同时按选定端口同步到 core.xray",
+      "approval_summary": "将向 Cloudflare 注册新的 WARP 账号并加密保存 WireGuard 私钥，同时按选定端口同步到内置 Xray 引擎",
       "ui_route": "/proxy/chains"
     },
     {
@@ -893,23 +817,15 @@
       "risk": "low",
       "idempotent": true,
       "timeout_ms": 20000,
-      "summary": "调整 Cloudflare WARP 端口绑定、解锁域名、端点或手动导入密钥并同步至 core.xray 生效",
+      "summary": "调整 Cloudflare WARP 端口绑定、解锁域名、端点或手动导入密钥并同步至内置 Xray 引擎生效",
       "capabilities": [
         {
           "name": "state.kv.write",
           "scope": "self"
         },
         {
-          "name": "plugin.config.read",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.config.write",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.invoke",
-          "scope": "core.xray/core.apply"
+          "name": "network.proxy",
+          "scope": "direct"
         },
         {
           "name": "secret.reveal",
@@ -919,7 +835,7 @@
       "request_schema": "schemas/warp.configure.request.json",
       "response_schema": "schemas/warp.configure.response.json",
       "approval": "ai_confirm",
-      "approval_summary": "将更新 Cloudflare WARP 代理端口绑定与分流规则，并热重载 core.xray",
+      "approval_summary": "将更新 Cloudflare WARP 代理端口绑定与分流规则，并热重载内置 Xray 引擎",
       "ui_route": "/proxy/chains"
     },
     {
@@ -962,22 +878,14 @@
           "scope": "self"
         },
         {
-          "name": "plugin.config.read",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.config.write",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.invoke",
-          "scope": "core.xray/core.apply"
+          "name": "network.proxy",
+          "scope": "direct"
         }
       ],
       "request_schema": "schemas/warp.delete.request.json",
       "response_schema": "schemas/warp.delete.response.json",
       "approval": "confirm",
-      "approval_summary": "将删除本地保存的 Cloudflare WARP 凭据并从 core.xray 移除 WARP 出口路由",
+      "approval_summary": "将删除本地保存的 Cloudflare WARP 凭据并从内置 Xray 引擎移除 WARP 出口路由",
       "ui_route": "/proxy/chains"
     },
     {
@@ -994,10 +902,6 @@
         {
           "name": "state.kv.read",
           "scope": "self"
-        },
-        {
-          "name": "plugin.config.read",
-          "scope": "core.xray"
         }
       ],
       "request_schema": "schemas/nodes.list.request.json",
@@ -1013,29 +917,21 @@
       "risk": "low",
       "idempotent": true,
       "timeout_ms": 20000,
-      "summary": "以极简模式或专家模式创建/更新全协议代理节点并同步至 core.xray",
+      "summary": "以极简模式或专家模式创建/更新全协议代理节点并同步至内置 Xray 引擎",
       "capabilities": [
         {
           "name": "state.kv.write",
           "scope": "self"
         },
         {
-          "name": "plugin.config.read",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.config.write",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.invoke",
-          "scope": "core.xray/core.apply"
+          "name": "network.proxy",
+          "scope": "direct"
         }
       ],
       "request_schema": "schemas/nodes.upsert.request.json",
       "response_schema": "schemas/nodes.upsert.response.json",
       "approval": "ai_confirm",
-      "approval_summary": "将保存代理节点配置并在宿主就绪时同步下发至 core.xray 监听端口",
+      "approval_summary": "将保存代理节点配置并立即同步下发至内置 Xray 引擎监听端口",
       "ui_route": "/proxy"
     },
     {
@@ -1047,29 +943,21 @@
       "risk": "high",
       "idempotent": true,
       "timeout_ms": 15000,
-      "summary": "删除指定托管或外部代理节点并重新同步 core.xray",
+      "summary": "删除指定托管或外部代理节点并重新同步内置 Xray 引擎",
       "capabilities": [
         {
           "name": "state.kv.write",
           "scope": "self"
         },
         {
-          "name": "plugin.config.read",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.config.write",
-          "scope": "core.xray"
-        },
-        {
-          "name": "plugin.invoke",
-          "scope": "core.xray/core.apply"
+          "name": "network.proxy",
+          "scope": "direct"
         }
       ],
       "request_schema": "schemas/nodes.delete.request.json",
       "response_schema": "schemas/nodes.delete.response.json",
       "approval": "confirm",
-      "approval_summary": "将移除指定代理节点并在托管节点变更时重新同步 core.xray",
+      "approval_summary": "将移除指定代理节点并在托管节点变更时重新同步内置 Xray 引擎",
       "ui_route": "/proxy"
     },
     {
@@ -1157,6 +1045,73 @@
       "request_schema": "schemas/nodes.test.request.json",
       "response_schema": "schemas/nodes.test.response.json",
       "ui_route": "/proxy"
+    },
+    {
+      "name": "xray.status",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "查询深度内置的 Xray v26.11.9 与 AnyTLS 数据面进程健康与监听状态",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/xray.status.request.json",
+      "response_schema": "schemas/xray.status.response.json",
+      "ui_route": "/proxy"
+    },
+    {
+      "name": "tls.reload",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "timeout_ms": 30000,
+      "summary": "核验并热重载宿主部署到内置 Xray / AnyTLS 引擎的 TLS 证书代际",
+      "capabilities": [
+        {
+          "name": "network.proxy",
+          "scope": "direct"
+        },
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        },
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/tls.reload.request.json",
+      "response_schema": "schemas/tls.reload.response.json",
+      "approval": "auto"
+    },
+    {
+      "name": "tls.inspect",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 10000,
+      "summary": "只读观测内置 Xray / AnyTLS 引擎上已生效的 TLS 证书代际与指纹",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/tls.inspect.request.json",
+      "response_schema": "schemas/tls.inspect.response.json"
     }
   ],
   "ui": {
@@ -1166,26 +1121,26 @@
     "routes": [
       {
         "path": "/proxy",
-        "title": "高级代理",
+        "title": "代理与订阅",
         "nav": true,
         "permission": "proxy.advanced:read"
       },
       {
         "path": "/proxy/nodes",
         "title": "节点管理",
-        "nav": true,
+        "nav": false,
         "permission": "proxy.advanced:read"
       },
       {
         "path": "/proxy/chains",
         "title": "链式代理",
-        "nav": true,
+        "nav": false,
         "permission": "proxy.advanced:read"
       },
       {
         "path": "/proxy/tuning",
         "title": "网络调优",
-        "nav": true,
+        "nav": false,
         "permission": "proxy.advanced:read"
       }
     ],
@@ -1196,7 +1151,9 @@
         "operation": "proxy.overview",
         "refresh_seconds": 15,
         "size": "s",
-        "title": "高级代理"
+        "title": "代理与订阅",
+        "color": "orange",
+        "icon": "net"
       }
     ]
   }

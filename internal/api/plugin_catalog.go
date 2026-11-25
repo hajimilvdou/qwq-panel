@@ -105,11 +105,11 @@ type builtinOfficialPluginMeta struct {
 
 var officialCatalogDefaults = []builtinOfficialPluginMeta{
 	{
-		ID:          "monitor.basic",
-		Name:        "历史监控曲线",
-		Summary:     "扩展更长时间窗口的 CPU、内存、磁盘与网络历史趋势图表（主页已自带实时资源监控）",
-		Category:    "observe",
-		MemoryMaxMB: 24,
+		ID:          "proxy.advanced",
+		Name:        "代理与订阅中心",
+		Summary:     "内置 Xray 核心的一站式科学上网工作台：可视化搭建 VLESS Reality / Hysteria2 / Trojan / SS2022 / AnyTLS 节点，多用户流量限速与 Clash / sing-box / Base64 订阅",
+		Category:    "proxy",
+		MemoryMaxMB: 256,
 	},
 	{
 		ID:          "web.ingress",
@@ -145,21 +145,6 @@ var officialCatalogDefaults = []builtinOfficialPluginMeta{
 		Summary:     "汇总监控多台 VPS 的实时状态、90 天在线率与三网延迟测速，自带公开状态页与自定义主题",
 		Category:    "observe",
 		MemoryMaxMB: 32,
-	},
-	{
-		ID:          "core.xray",
-		Name:        "Xray 代理核心",
-		Summary:     "科学上网与代理转发底层引擎，支持 VLESS(Reality)、VMess、Trojan、SS2022、Hysteria2、AnyTLS 等主流协议",
-		Category:    "proxy",
-		MemoryMaxMB: 256,
-	},
-	{
-		ID:           "proxy.advanced",
-		Name:         "高级代理与订阅中心",
-		Summary:      "科学上网节点图形化搭建、多用户流量限速与 Clash / sing-box / Base64 订阅分发（自动连带 Xray 核心）",
-		Category:     "proxy",
-		MemoryMaxMB:  64,
-		Dependencies: []string{"core.xray"},
 	},
 	{
 		ID:          "ai.relay",
@@ -434,7 +419,7 @@ func buildCatalogItemsFromIndex(
 	out := make([]pluginCatalogItemDTO, 0, len(idx.OptionalPlugins))
 	for _, rec := range idx.OptionalPlugins {
 		pid := strings.TrimSpace(rec.ID)
-		if pid == "" {
+		if pid == "" || pid == "core.xray" || pid == "monitor.basic" {
 			continue
 		}
 		asset, ok := rec.Packages[platform]

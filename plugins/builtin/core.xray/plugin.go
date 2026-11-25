@@ -11,7 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
+	"github.com/qwq-panel/qwq/internal/xraycore/state"
 	"github.com/qwq-panel/qwq/sdk/coreapi"
 	corev2 "github.com/qwq-panel/qwq/sdk/coreapi/v2"
 	"github.com/qwq-panel/qwq/sdk/manifest"

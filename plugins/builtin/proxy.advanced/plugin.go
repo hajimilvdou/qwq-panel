@@ -74,6 +74,7 @@ func (p *Plugin) NewInstance(_ context.Context, info pluginsdk.InstanceInfo) (pl
 		shapingSupported:     true,
 		spark:                make([]float64, 0, 12),
 	}
+	inst.xray = newEmbeddedXrayEngine(info.DataDir, inst.Go)
 	inst.register()
 	return inst, nil
 }
@@ -247,6 +248,7 @@ type instance struct {
 
 	syncMu               sync.Mutex
 	store                *proxyStore
+	xray                 *embeddedXrayEngine
 	connLim              *connLimiter
 	brutalMgr            *brutalManager
 	sysctlTargetPath     string
@@ -265,6 +267,20 @@ func (i *instance) configSnapshot() proxyConfig {
 }
 
 func (i *instance) Activate(ctx context.Context) error {
+	if i.xray != nil && i.xray.Available() {
+		if err := i.xray.Activate(ctx); err != nil {
+			i.setSyncError("初始化内置 Xray 引擎失败：" + err.Error())
+		} else {
+			managedNodes, nerr := i.store.ListNodes(ctx, "managed", "", "", "", false)
+			if nerr == nil && len(managedNodes) > 0 {
+				activeUsers, _ := i.store.ListUsers(ctx, "active", "", 10000)
+				warpCfg, _ := i.store.GetWARP(ctx)
+				if _, _, _, serr := i.xray.Sync(ctx, managedNodes, activeUsers, warpCfg); serr != nil {
+					i.setSyncError("恢复内置 Xray 节点失败：" + serr.Error())
+				}
+			}
+		}
+	}
 	if i.brutalMgr != nil {
 		if bindings, err := i.store.ListBrutalBindings(ctx); err == nil && len(bindings) > 0 {
 			_, _ = i.brutalMgr.Reconcile(bindings)
@@ -272,21 +288,30 @@ func (i *instance) Activate(ctx context.Context) error {
 	}
 	return i.Go(i.syncLoop)
 }
-func (i *instance) Deactivate(context.Context) error {
+func (i *instance) Deactivate(ctx context.Context) error {
 	if i.brutalMgr != nil {
 		i.brutalMgr.CloseAll()
+	}
+	if i.xray != nil {
+		_ = i.xray.Shutdown(ctx)
 	}
 	return nil
 }
-func (i *instance) Stop(context.Context) error {
+func (i *instance) Stop(ctx context.Context) error {
 	if i.brutalMgr != nil {
 		i.brutalMgr.CloseAll()
 	}
+	if i.xray != nil {
+		_ = i.xray.Shutdown(ctx)
+	}
 	return i.store.Close()
 }
-func (i *instance) Release(context.Context) error {
+func (i *instance) Release(ctx context.Context) error {
 	if i.brutalMgr != nil {
 		i.brutalMgr.CloseAll()
+	}
+	if i.xray != nil {
+		_ = i.xray.Shutdown(ctx)
 	}
 	return i.store.Close()
 }
@@ -326,6 +351,9 @@ func (i *instance) Health(context.Context) pluginsdk.Health {
 
 func (i *instance) register() {
 	i.HandleInvoke("proxy.overview", i.handleOverview)
+	i.HandleInvoke("xray.status", i.handleXrayStatus)
+	i.HandleInvoke("tls.reload", i.handleTLSReload)
+	i.HandleInvoke("tls.inspect", i.handleTLSInspect)
 	i.HandleInvoke("plans.list", i.handlePlansList)
 	i.HandleJob("plans.upsert", i.handlePlansUpsert)
 	i.HandleInvoke("users.list", i.handleUsersList)
@@ -342,25 +370,26 @@ type overviewRequest struct {
 }
 
 type overviewResponse struct {
-	Value                 float64   `json:"value"`
-	Unit                  string    `json:"unit"`
-	Percent               float64   `json:"percent"`
-	Sub                   string    `json:"sub"`
-	Level                 string    `json:"level"`
-	Spark                 []float64 `json:"spark"`
-	TotalPlans            int       `json:"total_plans"`
-	TotalUsers            int       `json:"total_users"`
-	ActiveUsers           int       `json:"active_users"`
-	SuspendedQuotaUsers   int       `json:"suspended_quota_users"`
-	ExpiredUsers          int       `json:"expired_users"`
-	DisabledUsers         int       `json:"disabled_users"`
-	PeriodUpBytes         int64     `json:"period_up_bytes"`
-	PeriodDownBytes       int64     `json:"period_down_bytes"`
-	UsedTrafficMarks      int       `json:"used_traffic_marks"`
-	ShapingSupported      bool      `json:"shaping_supported"`
-	ShapingDegradedReason string    `json:"shaping_degraded_reason"`
-	DetectedPublicHost    string    `json:"detected_public_host,omitempty"`
-	CoreObfsAvailable     *bool     `json:"core_obfs_available,omitempty"`
+	Value                 float64             `json:"value"`
+	Unit                  string              `json:"unit"`
+	Percent               float64             `json:"percent"`
+	Sub                   string              `json:"sub"`
+	Level                 string              `json:"level"`
+	Spark                 []float64           `json:"spark"`
+	TotalPlans            int                 `json:"total_plans"`
+	TotalUsers            int                 `json:"total_users"`
+	ActiveUsers           int                 `json:"active_users"`
+	SuspendedQuotaUsers   int                 `json:"suspended_quota_users"`
+	ExpiredUsers          int                 `json:"expired_users"`
+	DisabledUsers         int                 `json:"disabled_users"`
+	PeriodUpBytes         int64               `json:"period_up_bytes"`
+	PeriodDownBytes       int64               `json:"period_down_bytes"`
+	UsedTrafficMarks      int                 `json:"used_traffic_marks"`
+	ShapingSupported      bool                `json:"shaping_supported"`
+	ShapingDegradedReason string              `json:"shaping_degraded_reason"`
+	DetectedPublicHost    string              `json:"detected_public_host,omitempty"`
+	CoreObfsAvailable     *bool               `json:"core_obfs_available,omitempty"`
+	XrayEngine            *embeddedXrayStatus `json:"xray_engine,omitempty"`
 }
 
 type plansListRequest struct {
@@ -524,43 +553,51 @@ func (i *instance) handleOverview(ctx context.Context, req pluginsdk.Request) (p
 		level = "warn"
 		sub = "内核限速已降级：" + degradedReason
 	} else if stats.TotalUsers == 0 {
-		level = "muted"
-		sub = "尚未创建代理用户"
+		level = "ok"
+		sub = "Xray 引擎就绪 · 尚未创建代理用户"
 	}
 
+	var xraySt *embeddedXrayStatus
 	var obfsAvail *bool
-	now := i.now()
-	i.mu.RLock()
-	if i.coreObfsAvail != nil && now.Sub(i.coreObfsCheckedAt) < 60*time.Second {
-		v := *i.coreObfsAvail
+	if i.xray != nil && i.xray.Available() {
+		st := i.xray.Status(ctx)
+		xraySt = &st
+		v := st.ObfsAvailable
 		obfsAvail = &v
-	}
-	i.mu.RUnlock()
-	if obfsAvail == nil {
-		if host := req.Host(); host != nil && host.Conn() != nil {
-			// proxy.overview is a read-only invoke (unpersisted op.ID); use a
-			// fresh background context so host routes it through invokeBackgroundRead
-			// authorized by plugin.invoke.background without parent_not_dispatched.
-			capCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			capResp, cerr := host.InvokePlugin(capCtx, pluginsdk.InvokeRequest{
-				TargetPluginID: "core.xray",
-				Operation:      "core.capabilities",
-				APIVersion:     "v1",
-				Payload:        []byte("{}"),
-			})
-			cancel()
-			if cerr == nil && capResp.GetError() == nil && len(capResp.GetPayloadJson()) > 0 {
-				var capDoc struct {
-					ObfsAvailable *bool `json:"obfs_available"`
-				}
-				if json.Unmarshal(capResp.GetPayloadJson(), &capDoc) == nil && capDoc.ObfsAvailable != nil {
-					v := *capDoc.ObfsAvailable
-					obfsAvail = &v
-					i.mu.Lock()
-					vCopy := v
-					i.coreObfsAvail = &vCopy
-					i.coreObfsCheckedAt = now
-					i.mu.Unlock()
+		if st.State == "RUNNING" && stats.TotalUsers == 0 {
+			sub = fmt.Sprintf("内置 Xray 运行中 · %d 个节点 · 待建用户", st.ActiveProfiles)
+		}
+	} else {
+		now := i.now()
+		i.mu.RLock()
+		if i.coreObfsAvail != nil && now.Sub(i.coreObfsCheckedAt) < 60*time.Second {
+			v := *i.coreObfsAvail
+			obfsAvail = &v
+		}
+		i.mu.RUnlock()
+		if obfsAvail == nil {
+			if host := req.Host(); host != nil && host.Conn() != nil {
+				capCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				capResp, cerr := host.InvokePlugin(capCtx, pluginsdk.InvokeRequest{
+					TargetPluginID: "core.xray",
+					Operation:      "core.capabilities",
+					APIVersion:     "v1",
+					Payload:        []byte("{}"),
+				})
+				cancel()
+				if cerr == nil && capResp.GetError() == nil && len(capResp.GetPayloadJson()) > 0 {
+					var capDoc struct {
+						ObfsAvailable *bool `json:"obfs_available"`
+					}
+					if json.Unmarshal(capResp.GetPayloadJson(), &capDoc) == nil && capDoc.ObfsAvailable != nil {
+						v := *capDoc.ObfsAvailable
+						obfsAvail = &v
+						i.mu.Lock()
+						vCopy := v
+						i.coreObfsAvail = &vCopy
+						i.coreObfsCheckedAt = now
+						i.mu.Unlock()
+					}
 				}
 			}
 		}
@@ -587,6 +624,7 @@ func (i *instance) handleOverview(ctx context.Context, req pluginsdk.Request) (p
 		ShapingDegradedReason: degradedReason,
 		DetectedPublicHost:    detectedHost,
 		CoreObfsAvailable:     obfsAvail,
+		XrayEngine:            xraySt,
 	})
 }
 

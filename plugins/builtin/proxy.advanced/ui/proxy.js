@@ -34,10 +34,10 @@
 
   const VALID_ROUTES = ['/proxy', '/proxy/nodes', '/proxy/chains', '/proxy/tuning'];
   const ROUTE_TITLES = {
-    '/proxy': '高级代理管理 · 用户配额与连接限制',
-    '/proxy/nodes': '代理节点管理 · 简易 / 专家双模式构建器',
-    '/proxy/chains': '链式代理管理 · Cloudflare WARP 与多跳落地',
-    '/proxy/tuning': '网络调优 & TCP Brutal 端口透明接管',
+    '/proxy': '代理与订阅中心',
+    '/proxy/nodes': '代理与订阅中心 · 节点管理',
+    '/proxy/chains': '代理与订阅中心 · 链式与 WARP',
+    '/proxy/tuning': '代理与订阅中心 · 网络调优与 Brutal',
   };
 
   function detectInitialRoute() {
@@ -72,6 +72,8 @@
   const userCreateModal = { open: false };
   const userSubModal = { open: false, token: '', baseUrl: '' };
   const userHistoryModal = { open: false, userId: '', displayName: '', hours: 24 };
+  const planEditModal = { open: false, editingId: '' };
+  let xrayStatusLoaded = false;
 
   const send = (msg) => {
     if (port) port.postMessage(msg);
@@ -339,7 +341,7 @@
       hostViewportTop = vpTop;
       root.style.setProperty('--qwq-vp-top', `${vpTop}px`);
       root.style.setProperty('--qwq-vp-h', `${vpH}px`);
-      notifyResize();
+      if (hasOpenModal()) notifyResize();
       return;
     }
 
@@ -353,41 +355,91 @@
     }
   }
 
-  // ==================== 视图 1: 套餐与多用户渲染 ====================
+  // ==================== 视图 1: 套餐卡片与多用户渲染 ====================
+
+  function openPlanEditModal(plan = null) {
+    planEditModal.open = true;
+    planEditModal.editingId = plan ? plan.id : '';
+    $('pe-modal-title').textContent = plan ? `编辑套餐 · ${plan.name || plan.id}` : '新建套餐模板';
+    const idEl = $('p-id');
+    idEl.value = plan ? plan.id : '';
+    idEl.readOnly = Boolean(plan);
+    $('p-name').value = plan ? (plan.name || '') : '';
+    $('p-quota-gb').value = plan
+      ? String(plan.quota_bytes > 0 ? Math.round((plan.quota_bytes / (1024 * 1024 * 1024)) * 100) / 100 : 0)
+      : '100';
+    $('p-reset-day').value = plan ? String(plan.billing_reset_day ?? 1) : '1';
+    $('p-down').value = plan ? String(plan.down_limit_kbps ?? 0) : '50000';
+    $('p-up').value = plan ? String(plan.up_limit_kbps ?? 0) : '20000';
+    $('p-max-conns').value = plan ? String(plan.max_connections ?? 0) : '64';
+    $('p-max-ips').value = plan ? String(plan.max_ips ?? 0) : '4';
+    $('p-validity').value = plan ? String(plan.validity_days ?? 0) : '30';
+    $('plan-edit-modal').classList.remove('hidden');
+  }
+
+  function closePlanEditModal() {
+    planEditModal.open = false;
+    planEditModal.editingId = '';
+    $('plan-edit-modal').classList.add('hidden');
+  }
 
   function renderPlans(plans) {
     cachedPlans = plans;
     renderPlanSelects();
-    const tbody = $('plans-body');
-    clearNode(tbody);
+    const grid = $('plans-cards');
+    if (grid) clearNode(grid);
     $('plans-summary').textContent = `${plans.length} 个套餐`;
-    $('plans-detail').textContent = plans.length ? '含流量、速率、最大连接数与在线 IP 默认策略' : '尚未配置套餐';
+    if (!grid) return;
     if (!plans.length) {
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
-      td.colSpan = 6;
-      td.className = 'muted';
-      td.textContent = '暂无套餐';
-      tr.appendChild(td);
-      tbody.appendChild(tr);
+      const empty = document.createElement('div');
+      empty.className = 'empty-card muted';
+      empty.textContent = '暂无套餐模板，点击右上角「+ 新建套餐」创建后即可供多用户复用。';
+      grid.appendChild(empty);
       return;
     }
     for (const p of plans) {
-      const tr = document.createElement('tr');
-      const cells = [
-        p.id,
-        p.name,
-        p.quota_bytes > 0 ? formatBytes(p.quota_bytes) : '不限',
-        `${formatRate(p.down_limit_kbps)} / ${formatRate(p.up_limit_kbps)}`,
-        `${formatLimit(p.max_connections)} 连接 / ${formatLimit(p.max_ips)} IP`,
-        `${p.billing_reset_day > 0 ? `每月 ${p.billing_reset_day} 日` : '不重置'} / ${p.validity_days > 0 ? `${p.validity_days} 天` : '长期'}`,
+      const card = document.createElement('article');
+      card.className = 'plan-card';
+
+      const head = document.createElement('div');
+      head.className = 'plan-card-head';
+      const titleBox = document.createElement('div');
+      const title = document.createElement('div');
+      title.className = 'plan-card-title';
+      title.textContent = p.name || p.id;
+      const subId = document.createElement('div');
+      subId.className = 'plan-card-id mono';
+      subId.textContent = p.id;
+      titleBox.append(title, subId);
+
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'btn xs ghost';
+      editBtn.textContent = '编辑';
+      editBtn.addEventListener('click', () => openPlanEditModal(p));
+      head.append(titleBox, editBtn);
+
+      const kv = document.createElement('div');
+      kv.className = 'plan-kv';
+      const rows = [
+        ['周期流量', p.quota_bytes > 0 ? formatBytes(p.quota_bytes) : '不限流量'],
+        ['下 / 上行限速', `${formatRate(p.down_limit_kbps)} / ${formatRate(p.up_limit_kbps)}`],
+        ['并发 / IP 上限', `${formatLimit(p.max_connections)} 连接 · ${formatLimit(p.max_ips)} IP`],
+        ['周期与重置', `${p.billing_reset_day > 0 ? `每月 ${p.billing_reset_day} 日` : '不重置'} · ${p.validity_days > 0 ? `${p.validity_days} 天` : '长期'}`],
       ];
-      for (const text of cells) {
-        const td = document.createElement('td');
-        td.textContent = String(text);
-        tr.appendChild(td);
+      for (const [k, v] of rows) {
+        const item = document.createElement('div');
+        item.className = 'plan-kv-item';
+        const span = document.createElement('span');
+        span.textContent = k;
+        const strong = document.createElement('strong');
+        strong.textContent = v;
+        item.append(span, strong);
+        kv.appendChild(item);
       }
-      tbody.appendChild(tr);
+
+      card.append(head, kv);
+      grid.appendChild(card);
     }
   }
 
@@ -626,6 +678,8 @@
   }
 
   function fillUserLimitsForm(u) {
+    const det = $('user-limits-details');
+    if (det) det.open = true;
     $('ul-user').value = u.id;
     $('ul-conns').value = String(u.max_connections_override ?? -1);
     $('ul-ips').value = String(u.max_ips_override ?? -1);
@@ -711,10 +765,16 @@
       tdPlan.textContent = u.plan_id;
       tr.appendChild(tdPlan);
 
+      const USER_STATUS_LABELS = {
+        active: '活跃',
+        disabled: '已停用',
+        suspended_quota: '超额暂停',
+        expired: '已到期',
+      };
       const tdStatus = document.createElement('td');
       const badge = document.createElement('span');
       badge.className = `badge ${u.status}`;
-      badge.textContent = u.status;
+      badge.textContent = USER_STATUS_LABELS[u.status] || u.status;
       tdStatus.appendChild(badge);
       tr.appendChild(tdStatus);
 
@@ -764,7 +824,7 @@
         const nextStatus = isActive ? 'disabled' : 'active';
         const ok = await hostConfirm({
           title: `${isActive ? '停用' : '启用'}代理用户`,
-          body: `确认将用户「${u.display_name} (${u.id})」切换为 ${nextStatus} 并同步 core.xray 与 HTB 限速？`,
+          body: `确认将用户「${u.display_name} (${u.id})」切换为 ${isActive ? '已停用' : '活跃'} 并同步内置 Xray 引擎与带宽限速？`,
           confirmLabel: isActive ? '确认停用' : '确认启用',
           danger: isActive,
         });
@@ -1305,6 +1365,41 @@
     }
   }
 
+  function renderXrayEngineStatus(eng) {
+    const pill = $('xray-engine-pill');
+    const pillText = $('xray-engine-text');
+    const statVal = $('xray-stat-val');
+    const statSub = $('xray-stat-sub');
+    if (!eng || typeof eng !== 'object') {
+      if (pill) pill.className = 'engine-pill';
+      if (pillText) pillText.textContent = '内置 Xray 引擎就绪';
+      if (statVal) statVal.textContent = '待检测';
+      return;
+    }
+    xrayStatusLoaded = true;
+    const ver = eng.core_version || 'v26.11.9';
+    const state = String(eng.state || '').toUpperCase();
+    const profiles = Number(eng.active_profiles || 0);
+    if (state === 'RUNNING') {
+      if (pill) pill.className = 'engine-pill ok';
+      if (pillText) pillText.textContent = `内置 Xray ${ver} · 运行中 (${profiles} 节点)`;
+      if (statVal) statVal.textContent = `运行中 (${profiles} 入站)`;
+      if (statSub) {
+        statSub.textContent = `Xray ${ver}${eng.anytls_active ? ' · AnyTLS 活跃' : ''}${eng.revision ? ` · ${eng.revision}` : ''}`;
+      }
+    } else if (eng.binary_trusted) {
+      if (pill) pill.className = 'engine-pill ok';
+      if (pillText) pillText.textContent = `内置 Xray ${ver} · 就绪待命`;
+      if (statVal) statVal.textContent = '就绪待命';
+      if (statSub) statSub.textContent = `Xray ${ver} 已内置，添加并启用节点后自动热启动`;
+    } else {
+      if (pill) pill.className = 'engine-pill warn';
+      if (pillText) pillText.textContent = '内置 Xray 引擎未就绪';
+      if (statVal) statVal.textContent = '未就绪';
+      if (statSub) statSub.textContent = eng.last_error || '未检测到内嵌 Xray 核心二进制';
+    }
+  }
+
   function applyOverviewCapabilities(overview) {
     if (!overview) return;
     if (typeof overview.detected_public_host === 'string' && overview.detected_public_host.trim()) {
@@ -1313,6 +1408,9 @@
     if (typeof overview.core_obfs_available === 'boolean') {
       coreObfsAvailable = overview.core_obfs_available;
       syncObfsAvailabilityUI();
+    }
+    if (overview.xray_engine) {
+      renderXrayEngineStatus(overview.xray_engine);
     }
   }
 
@@ -2221,8 +2319,8 @@
       : 'reserved: —';
     $('w-ep-summary').textContent = w.endpoint || 'engage.cloudflareclient.com:2408';
     $('w-mode-summary').textContent = WARP_MODE_LABELS[w.routing_mode] || w.routing_mode || '—';
-    $('w-sync-state').textContent = w.registered ? (w.last_synced_rev ? '已同步至 core.xray' : '待同步生效') : '未配置';
-    $('w-sync-rev').textContent = w.last_synced_rev ? `core.xray rev: ${w.last_synced_rev}` : '保存绑定后自动热重载 Xray';
+    $('w-sync-state').textContent = w.registered ? (w.last_synced_rev ? '已同步至内置 Xray 引擎' : '待同步生效') : '未配置';
+    $('w-sync-rev').textContent = w.last_synced_rev ? `内置 Xray rev: ${w.last_synced_rev}` : '保存绑定后自动热重载 Xray';
 
     $('w-endpoint').value = w.endpoint || 'engage.cloudflareclient.com:2408';
     $('w-mode').value = w.routing_mode || 'bound_ports';
@@ -2236,7 +2334,7 @@
     if (!inbounds.length) {
       const sp = document.createElement('span');
       sp.className = 'muted';
-      sp.textContent = '尚未检测到 core.xray 代理入站端口，请先初始化代理核心或直接选择“全局/域名模式”。';
+      sp.textContent = '尚未检测到已启用的托管代理入站端口，请先在「节点管理」创建节点，或直接选择“全局/域名模式”。';
       box.appendChild(sp);
     } else {
       for (const ib of inbounds) {
@@ -2285,6 +2383,9 @@
     const pct = Math.min(250, Math.max(100, Number($('b-oversend').value) || 125));
     const eff = ((bw * pct) / 100).toFixed(1);
     $('b-eff-preview').textContent = `折算等效发包速率：${eff} Mbps（基准 ${bw} Mbps × ${pct}%）`;
+    for (const btn of document.querySelectorAll('#b-oversend-presets button[data-oversend]')) {
+      btn.classList.toggle('active', Number(btn.dataset.oversend) === pct);
+    }
   }
 
   function renderTuningPlan(plan) {
@@ -2533,6 +2634,9 @@
     ]);
     renderChains(chainsRes.chains || []);
     renderWARPStatus(warpRes);
+    if (!xrayStatusLoaded) {
+      invoke('xray.status', {}).then(renderXrayEngineStatus).catch(() => {});
+    }
   }
 
   async function refreshTuningAndBrutal() {
@@ -2542,6 +2646,9 @@
     ]);
     renderTuningStatus(tRes);
     renderBrutalStatus(bRes);
+    if (!xrayStatusLoaded) {
+      invoke('xray.status', {}).then(renderXrayEngineStatus).catch(() => {});
+    }
   }
 
   async function refreshActiveView() {
@@ -2563,14 +2670,31 @@
   for (const btn of document.querySelectorAll('#nav-tabs button')) {
     btn.addEventListener('click', () => switchRoute(btn.dataset.route, true));
   }
+  $('btn-quick-add-node')?.addEventListener('click', () => {
+    if (activeRoute !== '/proxy/nodes') switchRoute('/proxy/nodes', true);
+    openNodeBuilder(null);
+  });
   $('refresh').addEventListener('click', () => {
     void refreshActiveView();
+  });
+
+  $('btn-plan-create-open')?.addEventListener('click', () => openPlanEditModal(null));
+  $('pe-close')?.addEventListener('click', closePlanEditModal);
+  $('pe-cancel')?.addEventListener('click', closePlanEditModal);
+  $('plan-edit-modal')?.addEventListener('click', (e) => {
+    if (e.target === $('plan-edit-modal')) closePlanEditModal();
   });
 
   $('btn-plan-save').addEventListener('click', async () => {
     const id = $('p-id').value.trim();
     const name = $('p-name').value.trim();
+    if (!id || !name) {
+      showBanner('请填写套餐 ID 与套餐名称', 'warn');
+      return;
+    }
     const quotaGB = Math.max(0, Number($('p-quota-gb').value) || 0);
+    const resetDay = Math.min(28, Math.max(0, Math.floor(Number($('p-reset-day').value) || 0)));
+    const validityDays = Math.min(3650, Math.max(0, Math.floor(Number($('p-validity').value) || 0)));
     const payload = {
       id,
       name,
@@ -2579,12 +2703,13 @@
       up_limit_kbps: Math.max(0, Number($('p-up').value) || 0),
       max_connections: Math.max(0, Number($('p-max-conns').value) || 0),
       max_ips: Math.max(0, Number($('p-max-ips').value) || 0),
-      billing_reset_day: 1,
-      validity_days: 30,
+      billing_reset_day: resetDay,
+      validity_days: validityDays,
     };
     const r = await runAction('保存套餐', () => invoke('plans.upsert', payload));
     if (r) {
-      showBanner(`套餐 ${r.plan?.id || id} 已保存（默认最大连接 ${r.plan?.max_connections ?? 0} / 最大 IP ${r.plan?.max_ips ?? 0}）`, 'ok');
+      closePlanEditModal();
+      showBanner(`套餐 ${r.plan?.name || name} (${r.plan?.id || id}) 已保存`, 'ok');
       void refreshProxyHome();
     }
   });
@@ -2677,8 +2802,8 @@
         token: r.subscription_token,
         path: r.subscription_path,
         subtitle: r.shaping_degraded
-          ? `已同步 core.xray (rev ${r.core_revision || '-'}) · 限速降级提示：${r.shaping_degraded_reason}`
-          : `已同步 core.xray (rev ${r.core_revision || '-'}) 与内核限速`,
+          ? `已同步内置 Xray 引擎 (rev ${r.core_revision || '-'}) · 限速降级提示：${r.shaping_degraded_reason}`
+          : `已同步内置 Xray 引擎 (rev ${r.core_revision || '-'}) 与内核限速`,
       });
     } else {
       showBanner(`用户 ${id} 已创建`, 'ok');
@@ -2864,7 +2989,7 @@
       };
       const r = await runAction(`${nextEnabled ? '启用' : '停用'}节点 ${node.name || node.id}`, () => invoke('nodes.upsert', payload));
       if (r) {
-        const syncMsg = r.core_synced ? '并已同步 core.xray' : (r.core_sync_note || '已更新本地状态');
+        const syncMsg = r.core_synced ? '并已同步内置 Xray 引擎' : (r.core_sync_note || '已更新本地状态');
         showBanner(`节点 ${node.name || node.id} 已${nextEnabled ? '启用' : '停用'}（${syncMsg}）`, 'ok');
         void refreshNodes();
       }
@@ -2874,7 +2999,7 @@
     if (action === 'delete') {
       const ok = await hostConfirm({
         title: '删除代理节点',
-        body: `确认删除节点「${node.name || node.id}」(${node.protocol.toUpperCase()} :${node.port})？${node.source === 'managed' ? '删除后将同步重载 core.xray。' : ''}`,
+        body: `确认删除节点「${node.name || node.id}」(${node.protocol.toUpperCase()} :${node.port})？${node.source === 'managed' ? '删除后将同步重载内置 Xray 引擎。' : ''}`,
         confirmLabel: '确认删除',
         danger: true,
       });
@@ -2882,7 +3007,7 @@
       const r = await runAction(`删除节点 ${node.id}`, () => invoke('nodes.delete', { id: node.id, sync_core: true }));
       if (r) {
         showBanner(
-          `已删除节点 ${node.name || node.id}${r.core_synced ? `（core.xray rev: ${r.core_revision || '最新'}）` : ''}`,
+          `已删除节点 ${node.name || node.id}${r.core_synced ? `（内置 Xray rev: ${r.core_revision || '最新'}）` : ''}`,
           'ok',
         );
         void refreshNodes();
@@ -3102,7 +3227,7 @@
       if (!r) return;
       const saved = r.node || {};
       const syncText = r.core_synced
-        ? `已同步至 core.xray${r.core_revision ? ` (rev ${r.core_revision})` : ''}${r.core_sync_note ? ` · ${r.core_sync_note}` : ''}`
+        ? `已同步至内置 Xray 引擎${r.core_revision ? ` (rev ${r.core_revision})` : ''}${r.core_sync_note ? ` · ${r.core_sync_note}` : ''}`
         : (r.core_sync_note || '已保存到本地节点库');
       showBanner(
         `${r.created ? '已创建' : '已更新'}节点「${saved.name || saved.id}」(${(saved.protocol || payload.protocol).toUpperCase()} :${saved.port || ''}) · ${syncText}`,
@@ -3137,7 +3262,7 @@
       $('w-license').value = '';
       const msg = r.sync_warning
         ? `Cloudflare WARP 注册成功（${r.warp?.address_v4 || ''}），提示：${r.sync_warning}`
-        : `Cloudflare WARP 注册成功并已同步至 core.xray（IPv4: ${r.warp?.address_v4 || ''}）`;
+        : `Cloudflare WARP 注册成功并已同步至内置 Xray 引擎（IPv4: ${r.warp?.address_v4 || ''}）`;
       showBanner(msg, r.sync_warning ? 'warn' : 'ok');
       void refreshChains();
     }
@@ -3173,7 +3298,7 @@
       $('w-manual-priv').value = '';
       const msg = r.sync_warning
         ? `WARP 配置已保存，提示：${r.sync_warning}`
-        : `WARP 端口绑定与分流规则已同步生效（core.xray rev: ${r.core_revision || '最新'}）`;
+        : `WARP 端口绑定与分流规则已同步生效（内置 Xray rev: ${r.core_revision || '最新'}）`;
       showBanner(msg, r.sync_warning ? 'warn' : 'ok');
       void refreshChains();
     }
@@ -3332,14 +3457,13 @@
     $('b-listen').value = String((found.target_port || 443) + 2000);
   });
 
-  $('b-oversend-range').addEventListener('input', () => {
-    $('b-oversend').value = $('b-oversend-range').value;
+  $('b-oversend-presets')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-oversend]');
+    if (!btn) return;
+    $('b-oversend').value = btn.dataset.oversend;
     updateOversendPreview();
   });
-  $('b-oversend').addEventListener('input', () => {
-    $('b-oversend-range').value = $('b-oversend').value;
-    updateOversendPreview();
-  });
+  $('b-oversend').addEventListener('input', updateOversendPreview);
   $('b-bw').addEventListener('input', updateOversendPreview);
 
   $('btn-brutal-save').addEventListener('click', async () => {
@@ -3376,11 +3500,176 @@
     }
   });
 
+  // ==================== 主题同步自定义下拉框 (.qwq-sel) ====================
+
+  let closeAllCustomSelects = () => {};
+  function initThemedSelects() {
+    const openWraps = new Set();
+    const closeAll = (except = null) => {
+      for (const w of openWraps) {
+        if (w === except) continue;
+        w.classList.remove('open', 'drop-up');
+        const b = w.querySelector('.qwq-sel-btn');
+        if (b) b.setAttribute('aria-expanded', 'false');
+        openWraps.delete(w);
+      }
+    };
+    closeAllCustomSelects = closeAll;
+
+    const valDesc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+    const idxDesc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'selectedIndex');
+
+    function enhanceSelect(sel) {
+      if (!sel || sel.dataset.qwqSel === '1' || sel.multiple || sel.size > 1) return;
+      if (!sel.parentNode) return;
+      sel.dataset.qwqSel = '1';
+
+      const wrap = document.createElement('div');
+      wrap.className = 'qwq-sel';
+      sel.parentNode.insertBefore(wrap, sel);
+      wrap.appendChild(sel);
+      sel.classList.add('qwq-sel-native');
+      sel.tabIndex = -1;
+      sel.setAttribute('aria-hidden', 'true');
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'qwq-sel-btn';
+      btn.setAttribute('aria-haspopup', 'listbox');
+      btn.setAttribute('aria-expanded', 'false');
+      const labelEl = document.createElement('span');
+      labelEl.className = 'qwq-sel-label';
+      btn.appendChild(labelEl);
+
+      const menu = document.createElement('div');
+      menu.className = 'qwq-sel-menu';
+      menu.setAttribute('role', 'listbox');
+      wrap.append(btn, menu);
+
+      let syncing = false;
+      function sync() {
+        if (syncing) return;
+        syncing = true;
+        try {
+          btn.disabled = sel.disabled;
+          const opts = Array.from(sel.options);
+          const activeOpt = sel.selectedIndex >= 0 ? opts[sel.selectedIndex] : opts[0];
+          labelEl.textContent = activeOpt ? activeOpt.textContent : '';
+          menu.replaceChildren();
+          for (let idx = 0; idx < opts.length; idx += 1) {
+            const opt = opts[idx];
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = `qwq-sel-opt${idx === sel.selectedIndex ? ' selected' : ''}`;
+            item.setAttribute('role', 'option');
+            item.setAttribute('aria-selected', idx === sel.selectedIndex ? 'true' : 'false');
+            item.disabled = opt.disabled;
+            item.textContent = opt.textContent;
+            item.addEventListener('click', () => {
+              if (opt.disabled) return;
+              const changed = sel.selectedIndex !== idx;
+              if (idxDesc?.set) idxDesc.set.call(sel, idx);
+              else sel.selectedIndex = idx;
+              sync();
+              closeAll();
+              btn.focus();
+              if (changed) {
+                sel.dispatchEvent(new Event('input', { bubbles: true }));
+                sel.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            });
+            menu.appendChild(item);
+          }
+        } finally {
+          syncing = false;
+        }
+      }
+
+      if (valDesc && valDesc.get && valDesc.set) {
+        Object.defineProperty(sel, 'value', {
+          configurable: true,
+          get() { return valDesc.get.call(this); },
+          set(v) { valDesc.set.call(this, v); sync(); },
+        });
+      }
+      if (idxDesc && idxDesc.get && idxDesc.set) {
+        Object.defineProperty(sel, 'selectedIndex', {
+          configurable: true,
+          get() { return idxDesc.get.call(this); },
+          set(v) { idxDesc.set.call(this, v); sync(); },
+        });
+      }
+
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (sel.disabled) return;
+        const willOpen = !wrap.classList.contains('open');
+        closeAll(wrap);
+        if (willOpen) {
+          sync();
+          const rect = btn.getBoundingClientRect();
+          const spaceBelow = window.innerHeight - rect.bottom;
+          wrap.classList.toggle('drop-up', spaceBelow < 220 && rect.top > 200);
+          wrap.classList.add('open');
+          btn.setAttribute('aria-expanded', 'true');
+          openWraps.add(wrap);
+        } else {
+          closeAll();
+        }
+      });
+
+      btn.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (!wrap.classList.contains('open')) btn.click();
+          const items = Array.from(menu.querySelectorAll('.qwq-sel-opt:not(:disabled)'));
+          if (items.length) {
+            const cur = items.findIndex((x) => x.classList.contains('selected'));
+            const next = e.key === 'ArrowDown' ? (cur + 1) % items.length : (cur - 1 + items.length) % items.length;
+            items[next]?.focus();
+          }
+        } else if (e.key === 'Escape' && wrap.classList.contains('open')) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeAll();
+          btn.focus();
+        }
+      });
+
+      sel.addEventListener('change', sync);
+      const optMo = new MutationObserver(sync);
+      optMo.observe(sel, { childList: true, subtree: true, attributes: true, characterData: true });
+      sync();
+    }
+
+    document.querySelectorAll('select').forEach(enhanceSelect);
+    const bodyMo = new MutationObserver((muts) => {
+      for (const m of muts) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType !== 1) continue;
+          if (node.tagName === 'SELECT') enhanceSelect(node);
+          else if (node.querySelectorAll) node.querySelectorAll('select').forEach(enhanceSelect);
+        }
+      }
+    });
+    bodyMo.observe(document.body, { childList: true, subtree: true });
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest?.('.qwq-sel')) closeAll();
+    });
+  }
+
   // ==================== 键盘 ESC 关闭弹窗 ====================
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (userSubModal.open) closeUserSubModal();
+    if (document.querySelector('.qwq-sel.open')) {
+      closeAllCustomSelects();
+      return;
+    }
+    if (planEditModal.open) closePlanEditModal();
+    else if (userSubModal.open) closeUserSubModal();
     else if (userHistoryModal.open) closeUserHistoryModal();
     else if (userCreateModal.open) closeUserCreateModal();
     else if (configViewer.open) closeConfigViewer();
@@ -3389,12 +3678,15 @@
 
   // ==================== 初始化路由与宿主桥接 ====================
 
+  initThemedSelects();
   switchRoute(activeRoute, false);
   updateOversendPreview();
   populateSNISelects(DEFAULT_SNI_CANDIDATES[0]);
 
   let hostViewportTop = 0;
+  let lastSentHeight = 0;
   const MODAL_BACKDROP_IDS = [
+    'plan-edit-modal',
     'user-sub-modal',
     'user-create-modal',
     'user-history-modal',
@@ -3402,18 +3694,28 @@
     'node-builder-modal',
   ];
 
+  function hasOpenModal() {
+    for (const id of MODAL_BACKDROP_IDS) {
+      const el = $(id);
+      if (el && !el.classList.contains('hidden')) return true;
+    }
+    return false;
+  }
+
   function notifyResize() {
     const rootEl = $('proxy-root');
     if (!rootEl) return;
-    let height = Math.ceil(rootEl.getBoundingClientRect().height) + 16;
+    let height = Math.ceil(rootEl.getBoundingClientRect().height) + 56;
     for (const id of MODAL_BACKDROP_IDS) {
       const backdrop = $(id);
       if (backdrop && !backdrop.classList.contains('hidden')) {
         const dialog = backdrop.querySelector('.modal-dialog');
         const modalH = dialog ? Math.ceil(dialog.getBoundingClientRect().height) : 480;
-        height = Math.max(height, hostViewportTop + modalH + 64);
+        height = Math.max(height, hostViewportTop + modalH + 72);
       }
     }
+    if (Math.abs(height - lastSentHeight) < 2) return;
+    lastSentHeight = height;
     send({ t: 'ui.resize', height });
   }
 

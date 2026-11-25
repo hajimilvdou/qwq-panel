@@ -20,11 +20,9 @@ export function collectWidgets(list: readonly Plugin[] | undefined): WidgetSlot[
     const st = p.runtime?.state;
     const ready = !st || st === 'running' || st === 'standby';
     if (!ready) continue;
-    /* 基础安全封禁球不再放到主页 C 位（可在「基础安全」页内随时查看） */
-    if (p.plugin_id === 'security.basic') continue;
+    /* 基础安全封禁球、旧版基础监控与已并入代理中心的旧 Xray 核心不再抢占主页空间 */
+    if (p.plugin_id === 'security.basic' || p.plugin_id === 'monitor.basic' || p.plugin_id === 'core.xray') continue;
     for (const w of (p.ui?.widgets ?? []).slice(0, 16)) {
-      /* 避免与主页内置实时资源监控重复堆叠 CPU/内存/磁盘基础单值卡 */
-      if (p.plugin_id === 'monitor.basic' && w.kind === 'stat') continue;
       out.push({ key: `${p.plugin_id}/${w.id}`, plugin: p, widget: w });
     }
   }

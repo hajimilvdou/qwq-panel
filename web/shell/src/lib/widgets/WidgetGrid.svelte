@@ -29,11 +29,17 @@
     health.level = overall;
     onlevel?.(overall);
   });
+  function spanFor(s: WidgetSlot): number {
+    const base = SPAN[s.widget.size] ?? 6;
+    /* 当只剩 1–2 个小型卡片时自动拉宽到半行，避免孤零零地缩在左侧四分之一格里 */
+    if (base === 3 && slots.length <= 2) return 6;
+    return base;
+  }
 </script>
 
 <section class="grid" aria-label={label}>
   {#each slots as s (s.key)}
-    <div class="cell span-{SPAN[s.widget.size] ?? 6}">
+    <div class="cell span-{spanFor(s)}">
       <WidgetCard slot={s} onlevel={(l) => levels.set(s.key, l)} />
     </div>
   {/each}

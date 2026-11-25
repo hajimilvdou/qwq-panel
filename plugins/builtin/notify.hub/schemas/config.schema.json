@@ -1,18 +1,26 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "notify.hub plugin configuration",
+  "title": "告警通知中心配置",
+  "description": "配置消息推送请求超时时间与内网 Webhook 允许策略。",
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "allow_private_endpoints": {
-      "type": "boolean",
-      "default": false
-    },
     "http_timeout_seconds": {
       "type": "integer",
       "minimum": 1,
       "maximum": 60,
-      "default": 10
+      "default": 10,
+      "title": "推送请求超时（秒）",
+      "x-group": "推送通道策略",
+      "x-group-desc": "控制向 Telegram、飞书、钉钉、邮件与自定义 Webhook 发送告警时的网络策略。",
+      "description": "单次发送通知等待目标接口响应的最长时间（默认 10 秒）。"
+    },
+    "allow_private_endpoints": {
+      "type": "boolean",
+      "default": false,
+      "title": "允许推送到内网 / 本机 Webhook 地址",
+      "x-group": "推送通道策略",
+      "description": "仅当你有自建在内网的机器人或通知网关时开启，默认关闭防止内网探测。"
     }
   }
 }

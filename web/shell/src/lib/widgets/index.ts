@@ -70,6 +70,7 @@ function numOrStr(v: unknown, path: string): number | string {
   return typeof v === 'string' ? str(v, path) : num(v, path);
 }
 function level(v: unknown, path: string): Level {
+  if (v === 'muted') return 'ok';
   if (!LEVELS.includes(v as Level)) throw new WidgetShapeError(path);
   return v as Level;
 }

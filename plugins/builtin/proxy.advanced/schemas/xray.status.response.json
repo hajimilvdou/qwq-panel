@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "state": { "type": "string" },
+    "core_version": { "type": "string" },
+    "binary_trusted": { "type": "boolean" },
+    "process_state": { "type": "string" },
+    "api_state": { "type": "string" },
+    "proxy_available": { "type": "boolean" },
+    "active_profiles": { "type": "integer" },
+    "obfs_available": { "type": "boolean" },
+    "anytls_active": { "type": "boolean" },
+    "reset_epoch": { "type": "string" },
+    "revision": { "type": "string" },
+    "last_error": { "type": "string" }
+  }
+}

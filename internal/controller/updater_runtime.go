@@ -520,7 +520,7 @@ func unitSpecFor(m *manifest.Manifest, versionDir, dataRoot string) (sandbox.Uni
 		}
 	}
 	relaxations := sandbox.DeriveSandboxRelaxations(caps)
-	if networkProxyDirect && m.ID == "core.xray" {
+	if networkProxyDirect && (m.ID == "core.xray" || m.ID == "proxy.advanced") {
 		relaxations.BindPrivilegedPorts = true
 	}
 	dataDir, err := derivePluginDataDir(dataRoot, m.ID, m.State.BackupPaths)

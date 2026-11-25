@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
+	"github.com/qwq-panel/qwq/internal/xraycore/state"
 	pb "github.com/qwq-panel/qwq/sdk/gen/qwq/platform/v1"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 	"github.com/santhosh-tekuri/jsonschema/v6"

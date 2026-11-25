@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayapi/wire"
+	"github.com/qwq-panel/qwq/internal/xraycore/xrayapi/wire"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

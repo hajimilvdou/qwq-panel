@@ -21,7 +21,7 @@
     "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "attestations/sbom.spdx.json": "sha256:ce656c7f7234f16ef3507fb673bebf03f42f85cb15f69870263322c4c753323d",
     "schemas/checks.response.json": "sha256:ddafab2ab01b1da2df7e66256923fd59c988ed77c39b619f188131dc05fda94a",
-    "schemas/config.schema.json": "sha256:808de5382ab91fd3398964f5c669981f3a31ea6a3ea78185b238d29f49bdca2a",
+    "schemas/config.schema.json": "sha256:1240ac82c8c043ee47889a8fd252f6b466657bc6e592392b55973e26c732b10d",
     "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
     "schemas/notify.ai.digest.response.json": "sha256:0d0eb839ee78e0b2f8d532ce3f174151b2d1420f53f876b26ed52691b434540e",
     "schemas/notify.channel.test.request.json": "sha256:9d745776dde074c0170758ae214e826aeec4136911a629daf4b0e1189fb67ea5",
@@ -37,8 +37,8 @@
     "schemas/notify.rule.upsert.response.json": "sha256:81b9b6d31807b67ad8f4c2584b5b71b53668431bd73b0ed3cf7e98771775775f",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
     "ui/index.html": "sha256:8ab34bdccce7ba49d6779855ea3ed5f7345bb451f9702d0c92dee10fd6bba64c",
-    "ui/plugin.css": "sha256:f47e3a3cff4f7a1f0f47ec7155b8f9e8321a41c48b9fdb201341c81dd60022f1",
-    "ui/plugin.js": "sha256:c565ed34e65965083cf4aaeed51f5e92ab36dcdb246650b84a3e96a0259d276c"
+    "ui/plugin.css": "sha256:481eb484e91ad93879e1e27981eab8a098071a180d348394e2336c85a762f15c",
+    "ui/plugin.js": "sha256:cbdc20ae1e13648651fa13a2c7234b514b41e8c699e98ed55256247512fbe865"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

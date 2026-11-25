@@ -9,7 +9,7 @@
 #    qwq-vX.Y.Z-linux-{amd64,arm64}.tar.gz               极简必装主包（原面板底座 + 必装 security.basic.qwqpkg）
 #    qwq-compat-polkit-vX.Y.Z-linux-{amd64,arm64}.tar.gz 旧版 polkit 兼容补丁（仅 Ubuntu 22.04 / Debian 11 自动下载）
 #    install.sh                                          内嵌发布公钥与镜像地址的在线安装脚本
-#    <id>-vX.Y.Z-linux-{amd64,arm64}.qwqpkg              10 款独立可选官方插件包（按需下载安装）
+#    <id>-vX.Y.Z-linux-{amd64,arm64}.qwqpkg              8 款独立可选官方插件包（按需下载安装）
 #    plugins-index.json                                  官方可选插件元数据与依赖索引
 #    sbom.cdx.json                                       CycloneDX SBOM（cmd/qwq，linux/amd64）
 #    SHA256SUMS                                          覆盖主包 + 兼容补丁 + install.sh + *.qwqpkg + plugins-index.json + sbom
@@ -207,7 +207,7 @@ pack_official_plugin() {
   mkdir -p "$stage/bin"
   GOARCH=$arch go build -trimpath -ldflags "$plugin_ldf" -o "$stage/bin/plugin" "./$src_dir"
   chmod 0755 "$stage/bin/plugin"
-  if [[ "$src_dir" == "plugins/builtin/core.xray" ]]; then
+  if [[ "$src_dir" == "plugins/builtin/core.xray" || "$src_dir" == "plugins/builtin/proxy.advanced" ]]; then
     ensure_pinned_xray_assets "$arch" "$stage/bin"
   fi
   if [[ "$src_dir" == "plugins/builtin/server.probe" ]]; then
@@ -234,10 +234,10 @@ pathlib.Path(dst).write_text(json.dumps(m, ensure_ascii=False, indent=2) + "\n",
 PY
   "$W/qwqctl" pack -src "$stage" -out "$out_pkg" -key "$PLUGIN_PRIV" >/dev/null
   "$W/qwqctl" verify -trust "$PLUGIN_PUB" "$out_pkg" >/dev/null
-  if [[ "$src_dir" == "plugins/builtin/core.xray" ]]; then
-    python3 - "$out_pkg" "$arch" <<'PY'
+  if [[ "$src_dir" == "plugins/builtin/core.xray" || "$src_dir" == "plugins/builtin/proxy.advanced" ]]; then
+    python3 - "$out_pkg" "$arch" "$src_dir" <<'PY'
 import json, sys, tarfile
-pkg_path, arch = sys.argv[1:3]
+pkg_path, arch, src_dir = sys.argv[1:4]
 want = {
     "amd64": "sha256:e87bce586acdb9136aa5b1f1d9c8db9f1ea1d145b6d86368c7f6f662f9f6a66d",
     "arm64": "sha256:c2d1e66a130556d32089adcf38202fcb6f9027e41fb456cc2cda9a5fabdc093a",
@@ -245,27 +245,25 @@ want = {
 with tarfile.open(pkg_path, "r:gz") as tf:
     member = tf.extractfile("manifest.json")
     if member is None:
-        raise SystemExit(f"core.xray({arch}) 打包校验失败: 缺少 manifest.json")
+        raise SystemExit(f"{src_dir}({arch}) 打包校验失败: 缺少 manifest.json")
     m = json.load(member)
 files = m.get("files", {})
 got = files.get("bin/xray")
 if got != want:
-    raise SystemExit(f"core.xray({arch}) 打包校验失败: bin/xray={got!r}, want={want!r}")
+    raise SystemExit(f"{src_dir}({arch}) 打包校验失败: bin/xray={got!r}, want={want!r}")
 for asset in ("bin/geoip.dat", "bin/geosite.dat"):
     digest = files.get(asset, "")
     if not isinstance(digest, str) or not digest.startswith("sha256:") or len(digest) < 71:
-        raise SystemExit(f"core.xray({arch}) 缺少必要路由资产: {asset}={digest!r}")
+        raise SystemExit(f"{src_dir}({arch}) 缺少必要路由资产: {asset}={digest!r}")
 PY
   fi
 }
 
-# 10 款独立可选插件（源码目录 -> 插件 ID）
+# 8 款独立可选插件（源码目录 -> 插件 ID；实时监控已并入面板底座，Xray 引擎已深度合并入 proxy.advanced）
 OPTIONAL_SPECS=(
-  "plugins/builtin/monitor:monitor.basic"
   "plugins/builtin/server.probe:server.probe"
   "plugins/builtin/domain.dns:domain.dns"
   "plugins/builtin/tls.certificates:tls.certificates"
-  "plugins/builtin/core.xray:core.xray"
   "plugins/builtin/proxy.advanced:proxy.advanced"
   "plugins/builtin/ai.relay:ai.relay"
   "plugins/builtin/web.ingress:web.ingress"
@@ -323,11 +321,9 @@ import hashlib, json, pathlib, sys
 out_dir = pathlib.Path(sys.argv[1])
 tag_ver, clean_ver = sys.argv[2], sys.argv[3]
 specs = [
-    ("plugins/builtin/monitor", "monitor.basic"),
     ("plugins/builtin/server.probe", "server.probe"),
     ("plugins/builtin/domain.dns", "domain.dns"),
     ("plugins/builtin/tls.certificates", "tls.certificates"),
-    ("plugins/builtin/core.xray", "core.xray"),
     ("plugins/builtin/proxy.advanced", "proxy.advanced"),
     ("plugins/builtin/ai.relay", "ai.relay"),
     ("plugins/builtin/web.ingress", "web.ingress"),

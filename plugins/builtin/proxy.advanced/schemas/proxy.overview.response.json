@@ -42,6 +42,25 @@
     "shaping_supported": { "type": "boolean", "description": "内核 HTB 带宽限速是否可用。" },
     "shaping_degraded_reason": { "type": "string", "description": "内核限速不可用或降级时的原因说明。" },
     "detected_public_host": { "type": "string", "description": "已配置或自动探测到的本机公网连接地址（IP 或域名）。" },
-    "core_obfs_available": { "type": "boolean", "description": "core.xray 是否具备可用的 simple-obfs (obfs-server) 二进制。" }
+    "core_obfs_available": { "type": "boolean", "description": "内置 Xray 引擎是否具备可用的 simple-obfs (obfs-server) 二进制。" },
+    "xray_engine": {
+      "type": "object",
+      "description": "内置 Xray / AnyTLS 引擎运行状态摘要。",
+      "additionalProperties": false,
+      "properties": {
+        "state": { "type": "string" },
+        "core_version": { "type": "string" },
+        "binary_trusted": { "type": "boolean" },
+        "process_state": { "type": "string" },
+        "api_state": { "type": "string" },
+        "proxy_available": { "type": "boolean" },
+        "active_profiles": { "type": "integer", "minimum": 0 },
+        "obfs_available": { "type": "boolean" },
+        "anytls_active": { "type": "boolean" },
+        "reset_epoch": { "type": "string" },
+        "revision": { "type": "string" },
+        "last_error": { "type": "string" }
+      }
+    }
   }
 }

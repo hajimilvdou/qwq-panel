@@ -82,11 +82,38 @@ func (i *instance) runSyncCycle(ctx context.Context) {
 		return
 	}
 	host := i.Host()
+
+	// 优先使用深度合并后的进程内 Xray 引擎读取实时流量，彻底消除对独立 core.xray 插件的依赖。
+	if i.xray != nil && i.xray.Available() {
+		epoch, samples, ok, err := i.xray.ObserveUsers(ctx)
+		if err != nil {
+			i.setSyncError("采样内置 Xray 流量失败：" + err.Error())
+			return
+		}
+		if !ok {
+			i.setSyncError("")
+			return
+		}
+		needsCoreSync, err := i.store.IngestXrayObservation(ctx, epoch, samples)
+		if err != nil {
+			i.setSyncError("写入流量统计失败：" + err.Error())
+			return
+		}
+		if needsCoreSync {
+			if _, err := i.syncCoreAndTraffic(ctx, host); err != nil {
+				i.setSyncError("同步内置 Xray/限速失败：" + err.Error())
+				return
+			}
+		}
+		i.setSyncError("")
+		return
+	}
+
 	if host == nil || host.Conn() == nil {
 		return
 	}
 
-	// 后台 goroutine 中不携带 parent operation_id，走宿主 H3 plugin.invoke.background 鉴权路径。
+	// 兼容独立测试夹具：若未内嵌 bin/xray，回退走宿主 H3 plugin.invoke.background 调用 core.xray。
 	obsResp, err := host.InvokePlugin(ctx, pluginsdk.InvokeRequest{
 		TargetPluginID: "core.xray",
 		Operation:      "core.observe",
@@ -174,6 +201,25 @@ func (i *instance) syncCoreXrayLocked(ctx context.Context, host *pluginsdk.Host)
 }
 
 func (i *instance) syncCoreXrayLockedWithWARP(ctx context.Context, host *pluginsdk.Host, writeNewWARPSecret bool) (string, error) {
+	if i.xray != nil && i.xray.Available() {
+		activeUsers, err := i.store.ListUsers(ctx, "active", "", 10000)
+		if err != nil {
+			return "", err
+		}
+		managedNodes, err := i.store.ListNodes(ctx, "managed", "", "", "", false)
+		if err != nil {
+			return "", err
+		}
+		warpCfg, err := i.store.GetWARP(ctx)
+		if err != nil {
+			return "", err
+		}
+		_, rev, _, serr := i.xray.Sync(ctx, managedNodes, activeUsers, warpCfg)
+		if serr != nil {
+			return "", serr
+		}
+		return rev, nil
+	}
 	if host == nil || host.Conn() == nil {
 		return "", pluginsdk.ErrNoHost
 	}

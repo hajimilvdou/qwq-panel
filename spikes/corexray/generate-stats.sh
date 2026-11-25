@@ -5,7 +5,7 @@
 # =============================================================================
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-WIRE="$ROOT/plugins/builtin/core.xray/internal/xrayapi/wire"
+WIRE="$ROOT/internal/xraycore/xrayapi/wire"
 CHECK=0
 if [[ ${1:-} == --check ]]; then CHECK=1; fi
 cd "$WIRE"

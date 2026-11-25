@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "running": { "type": "boolean" },
+    "binding_ref": { "type": "string" },
+    "generation": { "type": "integer" },
+    "policy_revision": { "type": "string" },
+    "fullchain_sha256": { "type": "string" },
+    "leaf_fingerprint": { "type": "string" },
+    "sni": { "type": "string" },
+    "endpoint": { "type": "string" }
+  }
+}

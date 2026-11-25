@@ -102,7 +102,7 @@ func locateForTarget(executable, target, digest string, trust sandbox.TrustPolic
 		return nil, ErrBinary
 	}
 	m, err := manifest.Parse(raw)
-	if err != nil || m.ID != "core.xray" || m.Entrypoint != "bin/plugin" || m.Target != target || m.Files["bin/xray"] != "sha256:"+digest {
+	if err != nil || (m.ID != "core.xray" && m.ID != "proxy.advanced") || m.Entrypoint != "bin/plugin" || m.Target != target || m.Files["bin/xray"] != "sha256:"+digest {
 		return nil, ErrBinary
 	}
 	f, err = openRegular(r, "bin/xray", trust.UID, 128<<20, true)

@@ -32,7 +32,7 @@ func binaryFixture(t *testing.T, script string) (string, string, sandbox.TrustPo
 	if err := os.WriteFile(filepath.Join(bin, "xray"), []byte(script), 0o555); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile("../../manifest.json")
+	raw, err := os.ReadFile("../../../plugins/builtin/core.xray/manifest.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestLocatorSupportsARM64AndRejectsTargetMismatch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "xray"), []byte(script), 0o555); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile("../../manifest.json")
+	raw, err := os.ReadFile("../../../plugins/builtin/core.xray/manifest.json")
 	if err != nil {
 		t.Fatal(err)
 	}

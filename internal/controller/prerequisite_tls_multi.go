@@ -38,6 +38,11 @@ var SupportedTLSConsumerPlugins = map[string]TLSConsumerSpec{
 		ReloadOperation: "tls.reload",
 		InspectOp:       "tls.inspect",
 	},
+	"proxy.advanced": {
+		PluginID:        "proxy.advanced",
+		ReloadOperation: "tls.reload",
+		InspectOp:       "tls.inspect",
+	},
 	"web.ingress": {
 		PluginID:        "web.ingress",
 		ReloadOperation: "ingress.tls.reload",

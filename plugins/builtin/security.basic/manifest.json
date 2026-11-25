@@ -25,7 +25,7 @@
     "schemas/bans.add.response.json": "sha256:859a3b4c0df7f617da4ab94bb4b65380f287e5b20ad26aa02f0bca0d218c008c",
     "schemas/bans.list.response.json": "sha256:d774083bd28a103382e89034da413868dcb0b614864233dc71ca9ea36bebeab4",
     "schemas/bans.remove.request.json": "sha256:0c36b8f8016b0f772e036790dda3a25527c63c19e4f63dcef6309802da7fb404",
-    "schemas/config.schema.json": "sha256:2377dcfd165a6a2b6c6bbed9156f57b93bdefc19774370aa3c74fff6acb70e4c",
+    "schemas/config.schema.json": "sha256:78040b45fc3d488cfdeb329db4495656a24a51d74a19c5e07007576dbbdc2860",
     "schemas/conflicts.detect.response.json": "sha256:2b4e3d9a94aa4b11e4e8f92bdedeb8f46b37905183eabffebfa654d82f837c90",
     "schemas/empty.request.json": "sha256:74c931cca7887a4806a898b30616bae25c4929638eaf5d77fe4cd1f3656522bf",
     "schemas/firewall.apply.request.json": "sha256:e7e352139b453dd417f3786034aa3a99f31ebc4640975b6a326360cf3ddbcf7f",
@@ -49,8 +49,8 @@
     "schemas/sshd.status.request.json": "sha256:8797461339fd07222572571dff7c67658ad403cd5df23c515dfd2923e10428a9",
     "schemas/sshd.status.response.json": "sha256:514d8c4c63524c8c02b51ebcf2395b2b9ec1f0f1d994d6148b4b74360e328c19",
     "ui/index.html": "sha256:cbec98b6aad8862ecbc1a14d115eb990285c70ce20163abcd1baee3d6ade945c",
-    "ui/plugin.css": "sha256:4de45d59baff7f7286dfa16796afa8ec9de65e95782004a540f65354c2c61e4d",
-    "ui/security.js": "sha256:300c938d9e01509a016a22dfd6650f2b312729a7cfa5814f81bc221a84645094"
+    "ui/plugin.css": "sha256:cd76cdf24728cd240f7d56f49eb8f67c8b8f0cc9a4423cca269bdbd9692cd520",
+    "ui/security.js": "sha256:2acc3eb34201573e1a739865329b3f6891b3111438b5f2c8b3be6979298fdf0a"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

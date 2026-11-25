@@ -432,13 +432,16 @@ func TestProxyAdvancedManifestAndPackageDigests(t *testing.T) {
 		!parsed.Lifecycle.Background || parsed.Lifecycle.UpdateStrategy != "restart" || parsed.Lifecycle.EffectiveOverlapSafe() {
 		t.Fatalf("manifest 生命周期或定位不符: %+v", parsed.Lifecycle)
 	}
-	if parsed.Resources.MemoryMaxMB != 64 || parsed.Resources.CPUQuotaPercent != 25 ||
-		parsed.Resources.PIDsMax != 16 || parsed.Resources.FDsMax != 4096 ||
-		parsed.Resources.DiskMaxMB != 32 || parsed.Resources.KVMaxKB != 128 {
+	if parsed.Resources.MemoryMaxMB != 256 || parsed.Resources.CPUQuotaPercent != 100 ||
+		parsed.Resources.PIDsMax != 64 || parsed.Resources.FDsMax != 4096 ||
+		parsed.Resources.DiskMaxMB != 96 || parsed.Resources.KVMaxKB != 512 {
 		t.Fatalf("资源预算不符: %+v", parsed.Resources)
 	}
-	if len(parsed.Operations) != 37 {
-		t.Fatalf("操作数量=%d，期望=37", len(parsed.Operations))
+	if len(parsed.Operations) != 40 {
+		t.Fatalf("操作数量=%d，期望=40", len(parsed.Operations))
+	}
+	if len(parsed.Dependencies) != 0 {
+		t.Fatalf("深度合并 Xray 核心后 proxy.advanced 不应再依赖独立插件，实际: %+v", parsed.Dependencies)
 	}
 	if parsed.UI == nil || len(parsed.UI.Routes) != 4 {
 		t.Fatalf("UI 路由数量应为 4（/proxy, /proxy/nodes, /proxy/chains, /proxy/tuning），实际: %+v", parsed.UI)

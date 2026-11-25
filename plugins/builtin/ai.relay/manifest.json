@@ -20,7 +20,7 @@
   "files": {
     "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "attestations/sbom.spdx.json": "sha256:543c26aedc5150cfd58113d5ea7f5498a5f19649161c9de4b0e60525f631ef69",
-    "schemas/config.schema.json": "sha256:8ba8f24a36443c97df95a135e878f46dba2ce43e2d36cebbe6141e6ab44457c3",
+    "schemas/config.schema.json": "sha256:a3bca7b76e091aa10807a792d05cdacaa81360841243eecaabcc7f6852d70b48",
     "schemas/relay.channels.list.request.json": "sha256:b6cb0d78770a3a9a7bbc7177af4505accd98d5b0ef8f27332418a024e2449dd7",
     "schemas/relay.channels.list.response.json": "sha256:61db70fb4714c266d8b07c6ccff34153e9559cc87a91c8de15e83b98a3e48bd1",
     "schemas/relay.channels.remove.request.json": "sha256:883355f9a61ac502709fe5189dba9906ddf63f179ad269bab3f0caac4ee12593",
@@ -48,8 +48,8 @@
     "schemas/relay.users.list.request.json": "sha256:1c7603b39dccd443ebb27ada12c2e70ab4902abfab9a2a2a710d9aaf45a6d579",
     "schemas/relay.users.list.response.json": "sha256:8c02e068c4bd7ba3c171e24257d2ee4336194ac3490037b8ff89e57aa8665a18",
     "ui/index.html": "sha256:c28fb0a00518c1bc40a7b85019094355dcc6c469e986eb875ae22ddaadad9af4",
-    "ui/plugin.css": "sha256:9c1f27b2be24ce090ee05d39be5103b091650fe5acf613c84b3e8988425935ed",
-    "ui/plugin.js": "sha256:d1da11ef56a5d811dfa774fbd0576c88438a5f83b78b64ee9ab293bb5c725d60"
+    "ui/plugin.css": "sha256:c3de0eb436a87bc851ded01f53e624684a12e72dff76ff90cbf45d0d929a014b",
+    "ui/plugin.js": "sha256:2c6208660866b07225bc52f1d15621e256a16da1537d08fe3bb47fdbbcbe0ed0"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

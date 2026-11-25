@@ -54,7 +54,12 @@ function installCrashReporter() {
       toasts.error('页面出了点意外，部分功能可能不正常', undefined, { label: '刷新', run: () => location.reload() });
     }
   };
-  addEventListener('error', (e) => record(String(e.message)));
+  addEventListener('error', (e) => {
+    const msg = String(e.message ?? '');
+    /* 浏览器 ResizeObserver 循环节流提示属于无害告警，绝不能弹全局崩溃红条 */
+    if (msg.includes('ResizeObserver loop')) return;
+    record(msg);
+  });
   addEventListener('unhandledrejection', (e) => {
     const r = e.reason as { name?: string } | undefined;
     /* 取消与已由业务处理的 API 错误不算崩溃 */

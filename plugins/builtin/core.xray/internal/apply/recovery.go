@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/coreproc"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayconfig"
+	"github.com/qwq-panel/qwq/internal/xraycore/coreproc"
+	"github.com/qwq-panel/qwq/internal/xraycore/state"
+	"github.com/qwq-panel/qwq/internal/xraycore/xrayconfig"
 	corev2 "github.com/qwq-panel/qwq/sdk/coreapi/v2"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )

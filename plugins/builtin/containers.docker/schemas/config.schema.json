@@ -1,19 +1,27 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "containers.docker plugin configuration",
+  "title": "Docker 容器管理配置",
+  "description": "配置宿主机 Docker 守护进程通信路径与接口请求超时时间。",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "docker_socket": {
       "type": "string",
       "maxLength": 255,
-      "default": "/var/run/docker.sock"
+      "default": "/var/run/docker.sock",
+      "title": "Docker Socket 路径",
+      "x-group": "守护进程连接",
+      "x-group-desc": "绝大多数 Linux 宿主机保持默认 /var/run/docker.sock 即可自动连接。",
+      "description": "本机 Docker Engine Unix Socket 路径。"
     },
     "http_timeout_seconds": {
       "type": "integer",
       "minimum": 1,
       "maximum": 60,
-      "default": 10
+      "default": 10,
+      "title": "接口请求超时（秒）",
+      "x-group": "守护进程连接",
+      "description": "查询容器列表、启停容器与拉取日志时的单次通信超时时间（默认 10 秒）。"
     }
   }
 }

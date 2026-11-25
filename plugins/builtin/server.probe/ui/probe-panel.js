@@ -949,8 +949,119 @@
     });
   });
 
+  function initThemedSelects() {
+    const openWraps = new Set();
+    const closeAll = (except = null) => {
+      for (const w of openWraps) {
+        if (w === except) continue;
+        w.classList.remove('open', 'drop-up');
+        w.querySelector('.qwq-sel-btn')?.setAttribute('aria-expanded', 'false');
+        openWraps.delete(w);
+      }
+    };
+    const valDesc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+    const idxDesc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'selectedIndex');
+    function enhance(sel) {
+      if (!sel || sel.dataset.qwqSel === '1' || sel.multiple || sel.size > 1 || !sel.parentNode) return;
+      sel.dataset.qwqSel = '1';
+      const wrap = document.createElement('div');
+      wrap.className = 'qwq-sel';
+      sel.parentNode.insertBefore(wrap, sel);
+      wrap.appendChild(sel);
+      sel.classList.add('qwq-sel-native');
+      sel.tabIndex = -1;
+      sel.setAttribute('aria-hidden', 'true');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'qwq-sel-btn';
+      btn.setAttribute('aria-haspopup', 'listbox');
+      btn.setAttribute('aria-expanded', 'false');
+      const lbl = document.createElement('span');
+      lbl.className = 'qwq-sel-label';
+      btn.appendChild(lbl);
+      const menu = document.createElement('div');
+      menu.className = 'qwq-sel-menu';
+      menu.setAttribute('role', 'listbox');
+      wrap.append(btn, menu);
+      let syncing = false;
+      const sync = () => {
+        if (syncing) return;
+        syncing = true;
+        try {
+          btn.disabled = sel.disabled;
+          const opts = Array.from(sel.options);
+          const cur = sel.selectedIndex >= 0 ? opts[sel.selectedIndex] : opts[0];
+          lbl.textContent = cur ? cur.textContent : '';
+          menu.replaceChildren();
+          opts.forEach((opt, idx) => {
+            const it = document.createElement('button');
+            it.type = 'button';
+            it.className = `qwq-sel-opt${idx === sel.selectedIndex ? ' selected' : ''}`;
+            it.setAttribute('role', 'option');
+            it.setAttribute('aria-selected', idx === sel.selectedIndex ? 'true' : 'false');
+            it.disabled = opt.disabled;
+            it.textContent = opt.textContent;
+            it.addEventListener('click', () => {
+              if (opt.disabled) return;
+              const changed = sel.selectedIndex !== idx;
+              if (idxDesc?.set) idxDesc.set.call(sel, idx);
+              else sel.selectedIndex = idx;
+              sync();
+              closeAll();
+              btn.focus();
+              if (changed) {
+                sel.dispatchEvent(new Event('input', { bubbles: true }));
+                sel.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            });
+            menu.appendChild(it);
+          });
+        } finally { syncing = false; }
+      };
+      if (valDesc?.get && valDesc?.set) {
+        Object.defineProperty(sel, 'value', { configurable: true, get() { return valDesc.get.call(this); }, set(v) { valDesc.set.call(this, v); sync(); } });
+      }
+      if (idxDesc?.get && idxDesc?.set) {
+        Object.defineProperty(sel, 'selectedIndex', { configurable: true, get() { return idxDesc.get.call(this); }, set(v) { idxDesc.set.call(this, v); sync(); } });
+      }
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (sel.disabled) return;
+        const willOpen = !wrap.classList.contains('open');
+        closeAll(wrap);
+        if (willOpen) {
+          sync();
+          const r = btn.getBoundingClientRect();
+          wrap.classList.toggle('drop-up', window.innerHeight - r.bottom < 220 && r.top > 200);
+          wrap.classList.add('open');
+          btn.setAttribute('aria-expanded', 'true');
+          openWraps.add(wrap);
+        } else closeAll();
+      });
+      sel.addEventListener('change', sync);
+      new MutationObserver(sync).observe(sel, { childList: true, subtree: true, attributes: true, characterData: true });
+      sync();
+    }
+    document.querySelectorAll('select').forEach(enhance);
+    new MutationObserver((muts) => {
+      for (const m of muts) for (const n of m.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        if (n.tagName === 'SELECT') enhance(n);
+        else if (n.querySelectorAll) n.querySelectorAll('select').forEach(enhance);
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+    document.addEventListener('click', (e) => { if (!e.target.closest?.('.qwq-sel')) closeAll(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
+  }
+  initThemedSelects();
+
+  let lastSentHeight = 0;
   const ro = new ResizeObserver(() => {
-    send({ t: 'ui.resize', height: Math.ceil($('probe-app').getBoundingClientRect().height) + 24 });
+    const height = Math.ceil($('probe-app').getBoundingClientRect().height) + 52;
+    if (Math.abs(height - lastSentHeight) < 2) return;
+    lastSentHeight = height;
+    send({ t: 'ui.resize', height });
   });
   ro.observe($('probe-app'));
 

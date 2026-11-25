@@ -28,6 +28,9 @@ export interface SchemaField {
   kind: SchemaFieldKind;
   label: string;
   hint?: string;
+  group?: string;
+  groupDesc?: string;
+  placeholder?: string;
   required: boolean;
   minimum?: number;
   maximum?: number;
@@ -36,6 +39,12 @@ export interface SchemaField {
   options?: { value: string; label: string }[];
   format?: string;
   default?: unknown;
+}
+
+export interface SchemaFieldGroup {
+  title?: string;
+  desc?: string;
+  fields: SchemaField[];
 }
 
 /** 表单内部值：一律可绑定的原始类型；密文字段为 SecretValue */
@@ -68,7 +77,7 @@ function kindOf(p: Json): SchemaFieldKind {
     case 'boolean':
       return 'boolean';
     case 'string':
-      return (num(p.maxLength) ?? 0) > 200 || p.format === 'textarea' ? 'text' : 'string';
+      return (num(p.maxLength) ?? 0) > 1000 || p.format === 'textarea' || p['x-multiline'] === true ? 'text' : 'string';
     default:
       return 'json';
   }
@@ -88,6 +97,9 @@ export function fieldsOf(schema: unknown): SchemaField[] {
         kind,
         label: str(p.title) ?? name,
         hint: str(p.description),
+        group: str(p['x-group']),
+        groupDesc: str(p['x-group-desc']),
+        placeholder: str(p['x-placeholder']),
         required: required.has(name),
         minimum: num(p.minimum),
         maximum: num(p.maximum),
@@ -97,10 +109,29 @@ export function fieldsOf(schema: unknown): SchemaField[] {
         default: p.default,
         options:
           kind === 'enum'
-            ? (p.enum as string[]).map((v) => ({ value: v, label: str(titles[v]) ?? v }))
+            ? (p.enum as string[]).map((v) => ({ value: v, label: str(titles[v]) ?? (v === '' ? '默认（自动）' : v) }))
             : undefined,
       } satisfies SchemaField;
     });
+}
+
+/** 按 x-group 聚合字段为清晰卡片分区，保持声明顺序 */
+export function groupFields(fields: readonly SchemaField[]): SchemaFieldGroup[] {
+  const byTitle = new Map<string, SchemaFieldGroup>();
+  const out: SchemaFieldGroup[] = [];
+  for (const f of fields) {
+    const key = f.group ?? '';
+    let grp = byTitle.get(key);
+    if (!grp) {
+      grp = { title: f.group, desc: f.groupDesc, fields: [] };
+      byTitle.set(key, grp);
+      out.push(grp);
+    } else if (!grp.desc && f.groupDesc) {
+      grp.desc = f.groupDesc;
+    }
+    grp.fields.push(f);
+  }
+  return out;
 }
 
 /** schema 顶层 x-qwq-hot-apply（缺省 true）：false 时保存后需重启生效 */

@@ -63,35 +63,27 @@ export function pluginLook(p: Plugin): { color: CategoryColor; icon: IconName } 
   };
 }
 
+/** 每个活跃插件在左侧栏只呈现唯一 1 个入口，内部子功能全部收口到插件页面自身分页中 */
 export function pluginNav(list: readonly Plugin[]): NavItem[] {
   const out: NavItem[] = [];
+  const hasProxy = list.some((x) => x.plugin_id === 'proxy.advanced' && isPluginActiveReady(x));
   for (const p of list) {
     if (!isPluginActiveReady(p)) continue;
+    /* monitor.basic 已深度并入主页底座；若已安装合并后的 proxy.advanced 则不再重复列出旧 core.xray */
+    if (p.plugin_id === 'monitor.basic') continue;
+    if (p.plugin_id === 'core.xray' && hasProxy) continue;
     const { color, icon } = pluginLook(p);
-    const navRoutes = (p.ui?.routes ?? []).filter((r) => r.nav);
-    if (navRoutes.length > 0) {
-      for (const r of navRoutes) {
-        const sub = r.path.replace(/^\/+/, '');
-        out.push({
-          href: `/plugins/${encodeURIComponent(p.plugin_id)}${sub ? '/' + sub : ''}`,
-          label: r.title || p.name,
-          icon,
-          color,
-          perm: r.permission || undefined,
-          pluginId: p.plugin_id,
-        });
-      }
-    } else {
-      /* 即使插件未声明独立前端 iframe（如 core.xray 核心引擎），也必须在左侧应用栏提供直达入口 */
-      out.push({
-        href: `/plugins/${encodeURIComponent(p.plugin_id)}`,
-        label: p.name,
-        icon,
-        color,
-        perm: 'host.plugins:read',
-        pluginId: p.plugin_id,
-      });
-    }
+    const routes = p.ui?.routes ?? [];
+    const primary = routes.find((r) => r.nav) ?? routes[0];
+    const sub = primary ? primary.path.replace(/^\/+/, '') : '';
+    out.push({
+      href: `/plugins/${encodeURIComponent(p.plugin_id)}${sub ? '/' + sub : ''}`,
+      label: p.name || primary?.title || p.plugin_id,
+      icon,
+      color,
+      perm: primary?.permission || 'host.plugins:read',
+      pluginId: p.plugin_id,
+    });
   }
   return out;
 }

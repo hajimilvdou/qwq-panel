@@ -46,7 +46,7 @@ curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/ins
 curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- --minimal
 
 # 底座 + 指定官方插件（逗号分隔，或 --plugins all 安装全部）
-curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- --plugins monitor.basic,web.ingress,tls.certificates,containers.docker
+curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- --plugins proxy.advanced,web.ingress,tls.certificates,containers.docker
 ```
 
 **首次登录**：安装完成后直接在浏览器打开终端打印的公网初始化链接即可创建管理员账号（如云厂商控制台单独开启了安全组/云防火墙，请放行对应 TCP 端口；2FA 为可选项，按需开启）。如需仅本机回环监听，可追加 `--listen 127.0.0.1`；登录后也可随时在 **「设置 → 系统 → 面板入口与安全伪装」** 热切换监听地址、端口或反向代理域名。
@@ -55,17 +55,17 @@ curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/ins
 
 ## 官方插件一览
 
+> **内置实时监控**：面板主页原生自带主机 CPU / 内存 / 磁盘 / 网络实时状态、Top 占用进程悬停洞察与平滑趋势曲线，无需额外安装监控插件。
+
 | 插件 ID | 安装方式 | 核心能力 |
 | :--- | :---: | :--- |
-| `security.basic` | **默认必装** | `nftables` 防火墙（含 IPv6 NDP 与防锁死保护）、`sshd` 防爆破、SSH 密钥与安全改端口 |
-| `monitor.basic` | 可选 | CPU / 内存 / 磁盘 / 网络实时趋势与首页微件 |
+| `security.basic` | **默认必装** | `nftables` 防火墙（含 IPv6 NDP 与防锁死保护）、`sshd` 防爆破、SSH 密钥与安全改端口、一键接管/还原 `ufw`/`firewalld`/`fail2ban` |
+| `proxy.advanced` | 可选 | **内置 Xray v26.11.9 引擎**，一站式全协议建节点（VLESS Reality / VMess / Trojan / SS2022 / Hysteria2 / AnyTLS）、WARP 解锁、多用户限速与 Clash/sing-box/Base64 订阅 |
 | `server.probe` | 可选 | 单向零入站多机探针、SLA 与三网拨测、双内置风格及 `.qwqtheme.zip` 自定义主题 |
 | `web.ingress` | 可选 | 轻量反向代理与站点托管（内置 Go 反代 / Caddy & Nginx 渲染 / 快照回滚） |
 | `domain.dns` | 可选 | Cloudflare / 阿里云等 DNS 解析集中管理 |
 | `tls.certificates` | 可选 | ACME（DNS-01 / HTTP-01）证书自动签发、续期与多插件热分发 |
 | `containers.docker` | 可选 | Docker 容器与 Compose 安全编排、动态限额与实时尾部日志 |
-| `core.xray` | 可选 | 9 协议代理核心驱动、简易/专家构建器、Reality SNI 测速与 WARP 分流 |
-| `proxy.advanced` | 可选 | 多用户配额、HTB 限速与 Base64/Clash/Sing-box 订阅中心（自动连带 `core.xray`） |
 | `ai.relay` | 可选 | OpenAI / Anthropic / Gemini 多协议中转、令牌配额计费与自服务分发门户 |
 | `notify.hub` | 可选 | Telegram / 飞书 / 钉钉 / 企微 / Discord / SMTP / Webhook 统一告警通知 |
 

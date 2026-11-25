@@ -24,12 +24,28 @@
     unknown: { label: '状态未知', tone: 'neutral' },
   };
   const stateOf = (p: Plugin) => STATE[p.runtime?.state ?? 'unknown'] ?? STATE.unknown;
-  const running = $derived(plugins.filter((p) => p.runtime?.state === 'running' || p.runtime?.state === 'standby').length);
+  const visiblePlugins = $derived.by(() => {
+    const hasProxy = plugins.some((x) => x.plugin_id === 'proxy.advanced' && x.enabled !== false);
+    return plugins.filter((p) => {
+      if (p.plugin_id === 'monitor.basic') return false;
+      if (p.plugin_id === 'core.xray' && hasProxy) return false;
+      return true;
+    });
+  });
+  const running = $derived(
+    visiblePlugins.filter((p) => p.runtime?.state === 'running' || p.runtime?.state === 'standby').length,
+  );
+  function pluginHref(p: Plugin): string {
+    const routes = p.ui?.routes ?? [];
+    const primary = routes.find((r) => r.nav) ?? routes[0];
+    const sub = primary ? primary.path.replace(/^\/+/, '') : '';
+    return `/plugins/${encodeURIComponent(p.plugin_id)}${sub ? '/' + sub : ''}`;
+  }
 </script>
 
 <Card
   title="我的应用"
-  subtitle={plugins.length ? `${running} 个应用正在运行` : '还没有安装应用'}
+  subtitle={visiblePlugins.length ? `${running} 个应用正在运行` : '还没有安装应用'}
   icon="apps"
   color="violet"
 >
@@ -38,11 +54,11 @@
   {/snippet}
 
   <ul class="apps">
-    {#each plugins as p (p.plugin_id)}
+    {#each visiblePlugins as p (p.plugin_id)}
       {@const look = pluginLook(p)}
       {@const st = stateOf(p)}
       <li>
-        <a class="app" href="/plugins/{encodeURIComponent(p.plugin_id)}">
+        <a class="app" href={pluginHref(p)}>
           <Tile icon={look.icon} color={look.color} size="lg" />
           <span class="text">
             <b class="ellipsis">{p.name}</b>

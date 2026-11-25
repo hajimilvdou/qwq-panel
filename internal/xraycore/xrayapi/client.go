@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/sandbox"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayapi/wire"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayconfig"
+	"github.com/qwq-panel/qwq/internal/xraycore/xrayapi/wire"
+	"github.com/qwq-panel/qwq/internal/xraycore/xrayconfig"
 	"github.com/qwq-panel/qwq/sdk/coreapi"
 	corev2 "github.com/qwq-panel/qwq/sdk/coreapi/v2"
 	"google.golang.org/grpc"

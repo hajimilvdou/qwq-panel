@@ -21,7 +21,7 @@
     "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "attestations/sbom.spdx.json": "sha256:aa94fcbc643101bdeab31233077031406c2c828732a143fccacd71af8a5ce5c9",
     "schemas/checks.response.json": "sha256:ddafab2ab01b1da2df7e66256923fd59c988ed77c39b619f188131dc05fda94a",
-    "schemas/config.schema.json": "sha256:56aa81670f47e0e7d75abacb8bfe35c8cf4f66f4a37e95bca28f31131d0ba1a1",
+    "schemas/config.schema.json": "sha256:eebdeb306eb2f2870957ef378b518bcce5ab998d190e328c52deadd0d8623b4e",
     "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
     "schemas/ingress.acme.cleanup.request.json": "sha256:47b69cdc0efe5ab279c4e08b90b424ba911e169070a3234b1448bed837dbbbd6",
     "schemas/ingress.acme.present.request.json": "sha256:2a4a3a99acce41f511675e39a1e33b13e276fba94a1b45e2d8fa0bb05c2fabac",
@@ -45,8 +45,8 @@
     "schemas/ingress.tls.reload.response.json": "sha256:eceedced80fbbcb25df8fa534bc2f7117a0eeeea8ef2a8e1ba9600bd44c09171",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
     "ui/index.html": "sha256:7474d7bd04edc0e35036561f85a63160cbad3cc873c6bdc0d02253c49e8cd72c",
-    "ui/plugin.css": "sha256:1066df353359c68e09bc33cc8f693441672bc55e08bb0ab6563af942ed16a837",
-    "ui/plugin.js": "sha256:7adc132b9a9b317d903fb9d8a561f540adb735efa073ed69d1e7d05e5ffdc64d"
+    "ui/plugin.css": "sha256:1039d418caa4ef803284d4142ee8140aa9d39e3941096bf837bcb13953b56178",
+    "ui/plugin.js": "sha256:a0c2fb7fc26a4c2e9c904a7ac09ee67f5086d639e6bb15f3db627afa1d1c3021"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

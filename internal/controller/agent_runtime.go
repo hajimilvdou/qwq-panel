@@ -841,14 +841,12 @@ type builtinCatalogEntry struct {
 
 var hostBuiltinOfficialCatalog = []builtinCatalogEntry{
 	{PluginID: "security.basic", Name: "基础安全", Summary: "管理服务器防火墙端口、安全改 SSH 端口、管理 SSH 密钥密码及防爆破封禁", Category: "security", MemoryMaxMB: 32, Dependencies: []string{}},
-	{PluginID: "monitor.basic", Name: "历史监控曲线", Summary: "记录更长时间段的 CPU、内存、磁盘与网络历史趋势图表", Category: "observe", MemoryMaxMB: 24, Dependencies: []string{}},
+	{PluginID: "proxy.advanced", Name: "代理与订阅中心", Summary: "内置 Xray 核心的一站式科学上网工作台：全协议节点搭建、多用户流量限速与 Clash / sing-box / Base64 订阅", Category: "proxy", MemoryMaxMB: 256, Dependencies: []string{}},
 	{PluginID: "web.ingress", Name: "反向代理与建站", Summary: "把域名反向代理到本机端口或容器、托管静态站点，自动配好 HTTPS 与限流", Category: "network", MemoryMaxMB: 32, Dependencies: []string{}},
 	{PluginID: "tls.certificates", Name: "SSL / TLS 证书", Summary: "免费自动申请和续期单域名 / 泛域名 HTTPS 证书并自动分发", Category: "security", MemoryMaxMB: 32, Dependencies: []string{}},
 	{PluginID: "domain.dns", Name: "域名 DNS 解析", Summary: "直接在面板管理 Cloudflare、阿里云等域名解析记录", Category: "network", MemoryMaxMB: 32, Dependencies: []string{}},
 	{PluginID: "containers.docker", Name: "Docker 容器管理", Summary: "可视化管理 Docker 容器、镜像、日志、端口与 Compose 项目", Category: "infra", MemoryMaxMB: 32, Dependencies: []string{}},
 	{PluginID: "server.probe", Name: "多机服务器探针", Summary: "汇总监控多台 VPS 状态、90 天在线率与三网延迟测速及公开状态页", Category: "observe", MemoryMaxMB: 32, Dependencies: []string{}},
-	{PluginID: "core.xray", Name: "Xray 代理核心", Summary: "科学上网与代理转发核心引擎，支持 VLESS(Reality)、VMess、Trojan、SS2022、Hysteria2 等协议", Category: "proxy", MemoryMaxMB: 256, Dependencies: []string{}},
-	{PluginID: "proxy.advanced", Name: "高级代理与订阅中心", Summary: "科学上网节点图形化搭建、多用户流量限速与 Clash / sing-box 订阅分发", Category: "proxy", MemoryMaxMB: 64, Dependencies: []string{"core.xray"}},
 	{PluginID: "ai.relay", Name: "AI API 中转站", Summary: "聚合 OpenAI / Claude / Gemini 密钥与订阅，支持协议互转与额度分发", Category: "ai", MemoryMaxMB: 64, Dependencies: []string{}},
 	{PluginID: "notify.hub", Name: "告警与消息通知", Summary: "把服务器告警推送到 Telegram、飞书、钉钉、企微、Discord 或邮箱", Category: "observe", MemoryMaxMB: 24, Dependencies: []string{}},
 }

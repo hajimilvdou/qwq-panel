@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qwq-panel/qwq/internal/xraycore/coreproc"
+	"github.com/qwq-panel/qwq/internal/xraycore/state"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/apply"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/coreproc"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
 )
 
 // runtimeImage 保存单阶段的真实私有磁盘事实，进程死亡由显式 fake 模拟。

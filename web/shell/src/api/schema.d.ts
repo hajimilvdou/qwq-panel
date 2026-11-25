@@ -4483,6 +4483,31 @@ export type components = {
             /** @description When true */
             reset_default?: boolean;
         };
+        /** @description Lightweight summary of a top host process by CPU or memory usage. */
+        SystemHostProcess: {
+            /**
+             * Format: int32
+             * @description Process identifier.
+             */
+            pid: number;
+            /** @description Process command name from /proc/<pid>/stat. */
+            name: string;
+            /**
+             * Format: double
+             * @description Recent host-wide CPU usage percentage.
+             */
+            cpu_percent: number;
+            /**
+             * Format: int64
+             * @description Resident set size in bytes.
+             */
+            mem_bytes: number;
+            /**
+             * Format: double
+             * @description Share of total host RAM percentage.
+             */
+            mem_percent: number;
+        };
         /** @description Real-time built-in host resource metrics snapshot. */
         SystemHostMetrics: {
             /**
@@ -4506,7 +4531,7 @@ export type components = {
                  */
                 uptime_seconds: number;
             };
-            /** @description CPU utilization, load averages, and recent history. */
+            /** @description CPU utilization, load averages, breakdown, top processes, and recent history. */
             cpu: {
                 /**
                  * Format: double
@@ -4518,6 +4543,23 @@ export type components = {
                  * @description Logical CPU core count.
                  */
                 cores: number;
+                /** @description CPU model string from /proc/cpuinfo. */
+                model?: string;
+                /**
+                 * Format: double
+                 * @description User-space CPU percentage.
+                 */
+                user_percent?: number;
+                /**
+                 * Format: double
+                 * @description Kernel-space CPU percentage.
+                 */
+                system_percent?: number;
+                /**
+                 * Format: double
+                 * @description I/O wait CPU percentage.
+                 */
+                iowait_percent?: number;
                 /**
                  * Format: double
                  * @description 1-minute load average.
@@ -4535,8 +4577,10 @@ export type components = {
                 load_15: number;
                 /** @description Recent CPU usage percentages. */
                 history: number[];
+                /** @description Top CPU-consuming processes. */
+                top_processes?: components["schemas"]["SystemHostProcess"][];
             };
-            /** @description Memory and swap utilization. */
+            /** @description Memory and swap utilization with top processes. */
             memory: {
                 /**
                  * Format: int64
@@ -4559,6 +4603,11 @@ export type components = {
                  */
                 cached_bytes: number;
                 /**
+                 * Format: int64
+                 * @description Kernel buffer memory bytes.
+                 */
+                buffers_bytes?: number;
+                /**
                  * Format: double
                  * @description Memory usage percentage.
                  */
@@ -4575,8 +4624,10 @@ export type components = {
                 swap_total_bytes: number;
                 /** @description Recent memory usage percentages. */
                 history: number[];
+                /** @description Top memory-consuming processes. */
+                top_processes?: components["schemas"]["SystemHostProcess"][];
             };
-            /** @description Primary mount and monitored filesystem capacities. */
+            /** @description Primary mount, real-time disk I/O throughput, and monitored filesystem capacities. */
             disk: {
                 /** @description Primary mount point. */
                 mount: string;
@@ -4595,6 +4646,16 @@ export type components = {
                  * @description Disk usage percentage.
                  */
                 usage_percent: number;
+                /**
+                 * Format: double
+                 * @description Aggregate block device read throughput in bytes per second.
+                 */
+                read_bytes_per_sec?: number;
+                /**
+                 * Format: double
+                 * @description Aggregate block device write throughput in bytes per second.
+                 */
+                write_bytes_per_sec?: number;
                 /** @description Individual filesystem mounts. */
                 mounts: {
                     /** @description Mount point path. */
@@ -4618,7 +4679,7 @@ export type components = {
                     usage_percent: number;
                 }[];
             };
-            /** @description Aggregate non-loopback network throughput and cumulative bytes. */
+            /** @description Aggregate non-loopback network throughput, active TCP connections, per-interface rates, and cumulative bytes. */
             network: {
                 /**
                  * Format: double
@@ -4640,11 +4701,69 @@ export type components = {
                  * @description Total transmitted bytes.
                  */
                 tx_total_bytes: number;
+                /**
+                 * Format: int32
+                 * @description Count of active established TCP connections.
+                 */
+                tcp_connections?: number;
                 /** @description Recent inbound throughput samples. */
                 rx_history: number[];
                 /** @description Recent outbound throughput samples. */
                 tx_history: number[];
+                /** @description Per-interface live throughput and cumulative counters. */
+                interfaces?: {
+                    /** @description Network interface name. */
+                    name: string;
+                    /**
+                     * Format: double
+                     * @description Interface inbound bytes per second.
+                     */
+                    rx_bytes_per_sec: number;
+                    /**
+                     * Format: double
+                     * @description Interface outbound bytes per second.
+                     */
+                    tx_bytes_per_sec: number;
+                    /**
+                     * Format: int64
+                     * @description Interface cumulative received bytes.
+                     */
+                    rx_total_bytes: number;
+                    /**
+                     * Format: int64
+                     * @description Interface cumulative transmitted bytes.
+                     */
+                    tx_total_bytes: number;
+                }[];
             };
+            /** @description Timestamped host resource trend samples for built-in Home charts. */
+            history_points?: {
+                /**
+                 * Format: int64
+                 * @description Sample Unix timestamp in seconds.
+                 */
+                ts: number;
+                /**
+                 * Format: double
+                 * @description CPU usage percentage at ts.
+                 */
+                cpu: number;
+                /**
+                 * Format: double
+                 * @description Memory usage percentage at ts.
+                 */
+                mem: number;
+                /**
+                 * Format: double
+                 * @description Inbound bytes per second at ts.
+                 */
+                rx_bps: number;
+                /**
+                 * Format: double
+                 * @description Outbound bytes per second at ts.
+                 */
+                tx_bps: number;
+            }[];
         };
         /** @description Target coexistence manager for takeover or restoration. */
         SecurityTakeoverRequest: {

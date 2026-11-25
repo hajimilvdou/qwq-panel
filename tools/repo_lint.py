@@ -24,9 +24,9 @@ APACHE_PREFIXES = ('api/', 'sdk/', 'web/kit/', 'ui-design/prototype/kit/')
 APACHE_FILES = {'ui-design/tokens.css', 'plugins/builtin/monitor/ui/tokens.css'}
 # 仅锁定的第三方统计 wire 子集沿用 MPL；外围实现仍按原目录要求 AGPL。
 MPL_FILES = {
-    'plugins/builtin/core.xray/internal/xrayapi/wire/stats.proto',
-    'plugins/builtin/core.xray/internal/xrayapi/wire/stats.pb.go',
-    'plugins/builtin/core.xray/internal/xrayapi/wire/stats_grpc.pb.go',
+    'internal/xraycore/xrayapi/wire/stats.proto',
+    'internal/xraycore/xrayapi/wire/stats.pb.go',
+    'internal/xraycore/xrayapi/wire/stats_grpc.pb.go',
 }
 
 SOURCE_EXT = {'.go', '.proto', '.py', '.sh', '.js', '.mjs', '.ts', '.tsx', '.css', '.html', '.svelte', '.vue'}

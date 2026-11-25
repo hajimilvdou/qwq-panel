@@ -1,47 +1,62 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AI 中转分发插件配置",
-  "description": "控制上游 SSRF 策略、默认预冻结额度、微批写库日志保留天数与周期回血检查间隔。",
+  "title": "AI 中转分发配置",
+  "description": "控制公网回调地址、上游超时、额度预冻结与消费日志保留天数。",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "public_origin": {
       "type": "string",
       "maxLength": 253,
-      "description": "可选公开访问基地址（用于拼装 LinuxDo OAuth2 回调 URI）。"
-    },
-    "allow_private_upstream": {
-      "type": "boolean",
-      "default": false,
-      "description": "是否允许连接 loopback 或 RFC1918 内网上游地址（默认 false 防 SSRF）。"
-    },
-    "default_reserve_micros": {
-      "type": "integer",
-      "minimum": 1000,
-      "maximum": 10000000,
-      "default": 50000,
-      "description": "单次流式请求在内存账本中的默认预冻结微点额度（默认 50,000 micros = $0.05）。"
-    },
-    "log_retention_days": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 365,
-      "default": 30,
-      "description": "调用消费明细在 SQLite 中的保留天数。"
-    },
-    "refill_check_interval_seconds": {
-      "type": "integer",
-      "minimum": 30,
-      "maximum": 86400,
-      "default": 300,
-      "description": "后台周期定额回血与 OAuth 令牌刷新检查间隔秒数。"
+      "title": "公开访问地址 (Origin)",
+      "x-group": "访问入口与上游安全",
+      "x-group-desc": "设置外部访问本中转网关的完整域名（如 https://api.example.com），并控制上游网络策略。",
+      "x-placeholder": "https://api.example.com",
+      "description": "用于拼装客户端调用示例与 OAuth 回调地址；留空时自动跟随当前访问地址。"
     },
     "upstream_timeout_seconds": {
       "type": "integer",
       "minimum": 5,
       "maximum": 600,
       "default": 120,
-      "description": "上游模型服务商 HTTP 响应头超时秒数。"
+      "title": "上游接口响应超时（秒）",
+      "x-group": "访问入口与上游安全",
+      "description": "等待上游模型返回首个响应头的最长时间；思考型长耗时模型建议 120–300 秒。"
+    },
+    "allow_private_upstream": {
+      "type": "boolean",
+      "default": false,
+      "title": "允许转发至本机或内网上游地址",
+      "x-group": "访问入口与上游安全",
+      "description": "如需对接本机 Ollama / vLLM 等内网模型可开启；仅转发公网 API 时建议保持关闭以防 SSRF。"
+    },
+    "default_reserve_micros": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 10000000,
+      "default": 50000,
+      "title": "单次流式请求预冻结额度（微美元）",
+      "x-group": "计费与日志留存",
+      "x-group-desc": "管理并发流式请求的临时扣费缓冲与历史消费明细保留周期。",
+      "description": "防止高并发透支余额；默认 50,000（即 $0.05），响应结束后按真实 Token 消耗多退少补。"
+    },
+    "log_retention_days": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 365,
+      "default": 30,
+      "title": "消费明细日志保留天数",
+      "x-group": "计费与日志留存",
+      "description": "超过此天数的历史调用明细会自动清理，释放磁盘空间（默认 30 天）。"
+    },
+    "refill_check_interval_seconds": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 86400,
+      "default": 300,
+      "title": "额度回血与令牌刷新间隔（秒）",
+      "x-group": "计费与日志留存",
+      "description": "后台检查周期性用户额度重置与 OAuth 令牌续期的间隔（默认 300 秒）。"
     }
   }
 }

@@ -37,9 +37,9 @@
     "schemas/records.reconcile.request.json": "sha256:e9d91054fdbb130ada7d9ed124bc6b33413400281f9f078dd18d81c83d3cbf98",
     "schemas/zones.mutate.response.json": "sha256:c10817149ffccb66152d3b5b8a59b70ef2b7bf4a12099e218dfbd8eae35e5114",
     "schemas/zones.target.request.json": "sha256:119bafb85cca5b533a3308cbe0ceb4f95248afa18fb115d9f694a22a3d1dd5f7",
-    "ui/dns.js": "sha256:79c7c82d8659c9ddfd09dd7e57a890e4dea54dd12c82d37c5a28a4feaca57b08",
+    "ui/dns.js": "sha256:08cf44ce4a4a06e9047385473d4b5a38fc8f7123df05620c77978eb1bc2a85cf",
     "ui/index.html": "sha256:a4dc322cd4defaceca554a88214db93b7b1549f2bf9087463c7216c52e89b6f4",
-    "ui/plugin.css": "sha256:353196194b06b98440e1d17ecbc52a045977a62b7c0dd6bd7bfb03579ae46506"
+    "ui/plugin.css": "sha256:3dfd17256dad98b7ca6e01ff70fc3e002ccc3af34c0bde180306fa5ff540b1fd"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

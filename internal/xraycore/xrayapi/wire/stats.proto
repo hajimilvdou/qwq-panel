@@ -5,7 +5,7 @@ syntax = "proto3";
 
 package xray.app.stats.command;
 
-option go_package = "github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayapi/wire";
+option go_package = "github.com/qwq-panel/qwq/internal/xraycore/xrayapi/wire";
 
 message Stat {
   string name = 1;

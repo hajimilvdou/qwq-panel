@@ -6665,6 +6665,17 @@ components:
         fds_max: { type: integer, format: int64, minimum: 16, maximum: 65536, description: Maximum open file descriptors. }
         disk_max_mb: { type: integer, format: int64, minimum: 1, maximum: 1048576, description: Advisory persistent disk budget in MiB. }
         reset_default: { type: boolean, description: When true, removes custom overrides and restores manifest defaults. }
+    SystemHostProcess:
+      type: object
+      additionalProperties: false
+      description: Lightweight summary of a top host process by CPU or memory usage.
+      required: [pid, name, cpu_percent, mem_bytes, mem_percent]
+      properties:
+        pid: { type: integer, format: int32, minimum: 1, maximum: 4194304, description: Process identifier. }
+        name: { type: string, maxLength: 64, description: Process command name from /proc/<pid>/stat. }
+        cpu_percent: { type: number, format: double, minimum: 0, maximum: 100, description: Recent host-wide CPU usage percentage. }
+        mem_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Resident set size in bytes. }
+        mem_percent: { type: number, format: double, minimum: 0, maximum: 100, description: Share of total host RAM percentage. }
     SystemHostMetrics:
       type: object
       additionalProperties: false
@@ -6686,39 +6697,48 @@ components:
         cpu:
           type: object
           additionalProperties: false
-          description: CPU utilization, load averages, and recent history.
+          description: CPU utilization, load averages, breakdown, top processes, and recent history.
           required: [usage_percent, cores, load_1, load_5, load_15, history]
           properties:
             usage_percent: { type: number, format: double, minimum: 0, maximum: 100, description: CPU usage percentage. }
             cores: { type: integer, format: int32, minimum: 0, maximum: 65536, description: Logical CPU core count. }
+            model: { type: string, maxLength: 160, description: CPU model string from /proc/cpuinfo. }
+            user_percent: { type: number, format: double, minimum: 0, maximum: 100, description: User-space CPU percentage. }
+            system_percent: { type: number, format: double, minimum: 0, maximum: 100, description: Kernel-space CPU percentage. }
+            iowait_percent: { type: number, format: double, minimum: 0, maximum: 100, description: I/O wait CPU percentage. }
             load_1: { type: number, format: double, minimum: 0, description: 1-minute load average. }
             load_5: { type: number, format: double, minimum: 0, description: 5-minute load average. }
             load_15: { type: number, format: double, minimum: 0, description: 15-minute load average. }
             history: { type: array, maxItems: 64, items: { type: number, format: double }, description: Recent CPU usage percentages. }
+            top_processes: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/SystemHostProcess' }, description: Top CPU-consuming processes. }
         memory:
           type: object
           additionalProperties: false
-          description: Memory and swap utilization.
+          description: Memory and swap utilization with top processes.
           required: [used_bytes, total_bytes, available_bytes, cached_bytes, usage_percent, swap_used_bytes, swap_total_bytes, history]
           properties:
             used_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Used RAM bytes. }
             total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Total RAM bytes. }
             available_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Available RAM bytes. }
             cached_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Buffers and cache bytes. }
+            buffers_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Kernel buffer memory bytes. }
             usage_percent: { type: number, format: double, minimum: 0, maximum: 100, description: Memory usage percentage. }
             swap_used_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Used swap bytes. }
             swap_total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Total swap bytes. }
             history: { type: array, maxItems: 64, items: { type: number, format: double }, description: Recent memory usage percentages. }
+            top_processes: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/SystemHostProcess' }, description: Top memory-consuming processes. }
         disk:
           type: object
           additionalProperties: false
-          description: Primary mount and monitored filesystem capacities.
+          description: Primary mount, real-time disk I/O throughput, and monitored filesystem capacities.
           required: [mount, used_bytes, total_bytes, usage_percent, mounts]
           properties:
             mount: { type: string, maxLength: 512, description: Primary mount point. }
             used_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Used bytes on primary mount. }
             total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Total bytes on primary mount. }
             usage_percent: { type: number, format: double, minimum: 0, maximum: 100, description: Disk usage percentage. }
+            read_bytes_per_sec: { type: number, format: double, minimum: 0, description: Aggregate block device read throughput in bytes per second. }
+            write_bytes_per_sec: { type: number, format: double, minimum: 0, description: Aggregate block device write throughput in bytes per second. }
             mounts:
               type: array
               maxItems: 32
@@ -6736,15 +6756,44 @@ components:
         network:
           type: object
           additionalProperties: false
-          description: Aggregate non-loopback network throughput and cumulative bytes.
+          description: Aggregate non-loopback network throughput, active TCP connections, per-interface rates, and cumulative bytes.
           required: [rx_bytes_per_sec, tx_bytes_per_sec, rx_total_bytes, tx_total_bytes, rx_history, tx_history]
           properties:
             rx_bytes_per_sec: { type: number, format: double, minimum: 0, description: Current inbound bytes per second. }
             tx_bytes_per_sec: { type: number, format: double, minimum: 0, description: Current outbound bytes per second. }
             rx_total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Total received bytes. }
             tx_total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Total transmitted bytes. }
+            tcp_connections: { type: integer, format: int32, minimum: 0, maximum: 1048576, description: Count of active established TCP connections. }
             rx_history: { type: array, maxItems: 64, items: { type: number, format: double }, description: Recent inbound throughput samples. }
             tx_history: { type: array, maxItems: 64, items: { type: number, format: double }, description: Recent outbound throughput samples. }
+            interfaces:
+              type: array
+              maxItems: 16
+              description: Per-interface live throughput and cumulative counters.
+              items:
+                type: object
+                additionalProperties: false
+                required: [name, rx_bytes_per_sec, tx_bytes_per_sec, rx_total_bytes, tx_total_bytes]
+                properties:
+                  name: { type: string, maxLength: 64, description: Network interface name. }
+                  rx_bytes_per_sec: { type: number, format: double, minimum: 0, description: Interface inbound bytes per second. }
+                  tx_bytes_per_sec: { type: number, format: double, minimum: 0, description: Interface outbound bytes per second. }
+                  rx_total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Interface cumulative received bytes. }
+                  tx_total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Interface cumulative transmitted bytes. }
+        history_points:
+          type: array
+          maxItems: 160
+          description: Timestamped host resource trend samples for built-in Home charts.
+          items:
+            type: object
+            additionalProperties: false
+            required: [ts, cpu, mem, rx_bps, tx_bps]
+            properties:
+              ts: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Sample Unix timestamp in seconds. }
+              cpu: { type: number, format: double, minimum: 0, maximum: 100, description: CPU usage percentage at ts. }
+              mem: { type: number, format: double, minimum: 0, maximum: 100, description: Memory usage percentage at ts. }
+              rx_bps: { type: number, format: double, minimum: 0, description: Inbound bytes per second at ts. }
+              tx_bps: { type: number, format: double, minimum: 0, description: Outbound bytes per second at ts. }
     SecurityTakeoverRequest:
       type: object
       additionalProperties: false

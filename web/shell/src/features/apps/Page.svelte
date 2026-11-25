@@ -63,13 +63,11 @@
 
   const VISUAL_MAP: Record<string, { icon: IconName; color: CategoryColor }> = {
     'security.basic': { icon: 'shield', color: 'green' },
-    'monitor.basic': { icon: 'activity', color: 'blue' },
     'web.ingress': { icon: 'net', color: 'teal' },
     'tls.certificates': { icon: 'lock', color: 'green' },
     'domain.dns': { icon: 'external', color: 'cyan' },
     'containers.docker': { icon: 'apps', color: 'indigo' },
     'server.probe': { icon: 'cpu', color: 'violet' },
-    'core.xray': { icon: 'shield', color: 'orange' },
     'proxy.advanced': { icon: 'net', color: 'amber' },
     'ai.relay': { icon: 'ai', color: 'pink' },
     'notify.hub': { icon: 'send', color: 'red' },

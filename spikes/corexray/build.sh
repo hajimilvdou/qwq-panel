@@ -16,7 +16,7 @@ EXPECTED=e87bce586acdb9136aa5b1f1d9c8db9f1ea1d145b6d86368c7f6f662f9f6a66d
 mkdir -p "$OUT/bin"
 chmod u+w "$OUT" "$OUT/bin"
 CGO_ENABLED=0 go test -c -trimpath -buildvcs=false -tags x6spike -ldflags="$QWQ_BASE_LDFLAGS" \
-  -o "$OUT/bin/plugin" ./plugins/builtin/core.xray/internal/xraybin
+  -o "$OUT/bin/plugin" ./internal/xraycore/xraybin
 cp "$XRAY" "$OUT/bin/xray"
 python3 - "$OUT" <<'PY'
 import hashlib,json,pathlib,sys

@@ -784,11 +784,28 @@ func normalizeWARPRoutingMode(raw string) (string, error) {
 	}
 }
 
-// discoverCoreXrayInboundPorts 从 core.xray 脱敏配置读取真实代理入站端口列表，方便前端一键勾选绑定。
+// discoverCoreXrayInboundPorts 优先从本插件托管节点表读取代理入站端口列表，方便前端一键勾选绑定。
 func (i *instance) discoverCoreXrayInboundPorts(ctx context.Context, boundIDs []string) []xrayInboundPortInfo {
 	boundSet := make(map[string]bool, len(boundIDs))
 	for _, id := range boundIDs {
 		boundSet[id] = true
+	}
+	if i.store != nil {
+		if nodes, err := i.store.ListNodes(ctx, "managed", "", "", "", false); err == nil && len(nodes) > 0 {
+			out := make([]xrayInboundPortInfo, 0, len(nodes))
+			for _, n := range nodes {
+				out = append(out, xrayInboundPortInfo{
+					ProfileID: n.ID,
+					Protocol:  n.Protocol,
+					Listen:    n.Listen,
+					Port:      n.Port,
+					Enabled:   n.Enabled,
+					Bound:     boundSet[n.ID],
+					Label:     fmt.Sprintf("%s · %s (:%d)", firstNonEmpty(n.Name, n.ID), strings.ToUpper(n.Protocol), n.Port),
+				})
+			}
+			return out
+		}
 	}
 	host := i.Host()
 	if host != nil && host.Conn() != nil {
@@ -945,7 +962,7 @@ func buildCoreXrayWARPSection(w *warpWithSecrets, existingProfiles map[string]bo
 
 func (i *instance) syncWARPToCoreXray(ctx context.Context, writeNewSecret bool) (string, string) {
 	host := i.Host()
-	if host == nil || host.Conn() == nil {
+	if (i.xray == nil || !i.xray.Available()) && (host == nil || host.Conn() == nil) {
 		return "", "宿主连接未就绪，配置已保存在本地，待连接后可再次同步"
 	}
 	i.syncMu.Lock()
@@ -953,7 +970,7 @@ func (i *instance) syncWARPToCoreXray(ctx context.Context, writeNewSecret bool) 
 
 	rev, err := i.syncCoreXrayLockedWithWARP(ctx, host, writeNewSecret)
 	if err != nil {
-		return "", "WARP 已保存，但同步到 core.xray 暂未生效：" + err.Error()
+		return "", "WARP 已保存，但同步到内置 Xray 引擎暂未生效：" + err.Error()
 	}
 	if cur, gerr := i.store.GetWARP(ctx); gerr == nil && cur != nil {
 		cur.LastSyncedRev = rev

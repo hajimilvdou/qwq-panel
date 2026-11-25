@@ -172,6 +172,22 @@ export type PanelAccessUpdateRequest = operations['putSystemAccess']['requestBod
 export type SystemBackupEntry = S['SystemBackupEntry'];
 export type SystemBackupList = S['SystemBackupList'];
 
+export interface SystemHostProcess {
+  pid: number;
+  name: string;
+  cpu_percent: number;
+  mem_bytes: number;
+  mem_percent: number;
+}
+
+export interface SystemHostMetricsPoint {
+  ts: number;
+  cpu: number;
+  mem: number;
+  rx_bps: number;
+  tx_bps: number;
+}
+
 export interface SystemHostMetrics {
   collected_at: string;
   host: {
@@ -184,26 +200,35 @@ export interface SystemHostMetrics {
   cpu: {
     usage_percent: number;
     cores: number;
+    model?: string;
+    user_percent?: number;
+    system_percent?: number;
+    iowait_percent?: number;
     load_1: number;
     load_5: number;
     load_15: number;
     history: number[];
+    top_processes?: SystemHostProcess[];
   };
   memory: {
     used_bytes: number;
     total_bytes: number;
     available_bytes: number;
     cached_bytes: number;
+    buffers_bytes?: number;
     usage_percent: number;
     swap_used_bytes: number;
     swap_total_bytes: number;
     history: number[];
+    top_processes?: SystemHostProcess[];
   };
   disk: {
     mount: string;
     used_bytes: number;
     total_bytes: number;
     usage_percent: number;
+    read_bytes_per_sec?: number;
+    write_bytes_per_sec?: number;
     mounts: {
       mount: string;
       device?: string;
@@ -217,9 +242,18 @@ export interface SystemHostMetrics {
     tx_bytes_per_sec: number;
     rx_total_bytes: number;
     tx_total_bytes: number;
+    tcp_connections?: number;
     rx_history: number[];
     tx_history: number[];
+    interfaces?: {
+      name: string;
+      rx_bytes_per_sec: number;
+      tx_bytes_per_sec: number;
+      rx_total_bytes: number;
+      tx_total_bytes: number;
+    }[];
   };
+  history_points?: SystemHostMetricsPoint[];
 }
 
 export interface PluginResourceOverrideRequest {

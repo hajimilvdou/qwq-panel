@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/sandbox"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/coreproc"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/metrics"
+	"github.com/qwq-panel/qwq/internal/xraycore/coreproc"
+	"github.com/qwq-panel/qwq/internal/xraycore/metrics"
 	"github.com/qwq-panel/qwq/sdk/coreapi"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"
 )

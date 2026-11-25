@@ -21,12 +21,10 @@ export interface PaletteGroup {
 /** 官方插件中英文检索关键词索引，确保在 ⌘K 输入英文缩写/协议名能直接命中中文插件页 */
 export const OFFICIAL_PLUGIN_SEARCH_KEYWORDS: Readonly<Record<string, string>> = {
   'security.basic': 'security firewall ssh nftables ban 防火墙 安全 防爆破',
-  'monitor.basic': 'monitor cpu memory disk load 监控 负载 性能',
   'server.probe': 'probe status ping sla uptime 探针 延迟 在线率 监控墙',
   'domain.dns': 'dns cloudflare aliyun dnspod domain 域名 解析 记录',
   'tls.certificates': 'tls ssl https cert acme letsencrypt 证书 续期 泛域名',
-  'core.xray': 'xray vless vmess trojan shadowsocks hysteria2 anytls warp 核心 协议',
-  'proxy.advanced': 'proxy node sub clash singbox v2ray reality warp 代理 节点 订阅 分流',
+  'proxy.advanced': 'proxy xray vless vmess trojan shadowsocks hysteria2 anytls node sub clash singbox v2ray reality warp 代理 节点 订阅 核心 协议 分流',
   'web.ingress': 'ingress nginx caddy reverse proxy site static 反代 建站 网关 网站',
   'containers.docker': 'docker container compose image volume 容器 镜像 编排',
   'ai.relay': 'ai relay oneapi newapi openai claude gemini token 中转 渠道 额度',

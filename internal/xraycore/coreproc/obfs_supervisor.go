@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayconfig"
+	"github.com/qwq-panel/qwq/internal/xraycore/xrayconfig"
 )
 
 // ======================== 受控 simple-obfs 子进程监管器 ========================

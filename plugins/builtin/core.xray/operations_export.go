@@ -10,9 +10,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/qwq-panel/qwq/internal/xraycore/xrayconfig"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/export"
 	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/secretmap"
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayconfig"
 	"github.com/qwq-panel/qwq/sdk/coreapi"
 	corev2 "github.com/qwq-panel/qwq/sdk/coreapi/v2"
 	"github.com/qwq-panel/qwq/sdk/pluginsdk"

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
+	"github.com/qwq-panel/qwq/internal/xraycore/state"
 	"github.com/qwq-panel/qwq/sdk/coreapi"
 )
 

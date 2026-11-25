@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/state"
+	"github.com/qwq-panel/qwq/internal/xraycore/state"
 )
 
 func TestFakeConcurrentRuntimeReadsDoNotMixGenerationAndProcess(t *testing.T) {

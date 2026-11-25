@@ -21,7 +21,7 @@
     "bin/plugin": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "attestations/sbom.spdx.json": "sha256:96d52cb06056302286a21b3f4b163eb05331a25f9184b2463bd505c91d753f93",
     "schemas/checks.response.json": "sha256:ddafab2ab01b1da2df7e66256923fd59c988ed77c39b619f188131dc05fda94a",
-    "schemas/config.schema.json": "sha256:ef61e31cabdd57ce8b76b89d70bfd1e691b081122e9ddeeb33e619b9a8dd0528",
+    "schemas/config.schema.json": "sha256:2d432691e866bdd564959234be59ac445b9f03c1324bb3a6b8382d725755b822",
     "schemas/docker.ai.digest.response.json": "sha256:ecce6f7c2dbee53ea71977162ab6e9602acf854af31bdbf30b6fb3a6161ee63e",
     "schemas/docker.compose.deploy.request.json": "sha256:8e115a58115ba4ef1f0d5dff77f51e2b258c9e7716d9cbde94b8ca2f6b86bff6",
     "schemas/docker.compose.deploy.response.json": "sha256:4ebb5dab6b8919e7b9d6c01921dda7857a94f728979b74644c2418d6ae0a96cd",
@@ -63,8 +63,8 @@
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
     "ui/container-drawer.js": "sha256:a3bc8eb418ac8c99f7427002d4588c3aaf99f216a30ab319998ba7894afac6b5",
     "ui/index.html": "sha256:9cd350f140cc16ac3924e2763b2f8df9d79d0cb9839c7b49e2c58c4204cf0294",
-    "ui/plugin.css": "sha256:4035b5b03a629d9b2ec96b87b89c48237676f33f1956e403e2cd5f77b1373b25",
-    "ui/plugin.js": "sha256:25b5978cc498bb04b2c723bf40f934b782ef0582ed76da625462fa4457c406e3"
+    "ui/plugin.css": "sha256:f69f57ec5fae9d754d6d555fef55fb5488c4358b8b8ab88310496a5e4e4e1df9",
+    "ui/plugin.js": "sha256:a3445e544625fe24025e39903e1dc7bf57b4d6b2a121e07626e2421ed0dc0a9b"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

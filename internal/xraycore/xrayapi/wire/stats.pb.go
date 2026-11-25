@@ -190,7 +190,7 @@ const file_stats_proto_rawDesc = "" +
 	"\x04stat\x18\x01 \x03(\v2\x1c.xray.app.stats.command.StatR\x04stat2u\n" +
 	"\fStatsService\x12e\n" +
 	"\n" +
-	"QueryStats\x12).xray.app.stats.command.QueryStatsRequest\x1a*.xray.app.stats.command.QueryStatsResponse\"\x00BJZHgithub.com/qwq-panel/qwq/plugins/builtin/core.xray/internal/xrayapi/wireb\x06proto3"
+	"QueryStats\x12).xray.app.stats.command.QueryStatsRequest\x1a*.xray.app.stats.command.QueryStatsResponse\"\x00B9Z7github.com/qwq-panel/qwq/internal/xraycore/xrayapi/wireb\x06proto3"
 
 var (
 	file_stats_proto_rawDescOnce sync.Once

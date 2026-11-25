@@ -9,9 +9,9 @@
 #    sudo bash install.sh --offline qwq-vX.Y.Z-linux-amd64.tar.gz [--minimal | --plugins <csv|all> --plugin-dir <dir>] [--listen HOST] [--port N] [--entry-path PATH]
 #
 #  默认必装范围（Track 10 架构）：
-#    初始强制必装且仅必装：原面板底座（qwq / qwq-privileged / qwq-capability）+ 基础安全插件（security.basic）。
-#    其余 10 款官方插件（monitor.basic / server.probe / domain.dns / tls.certificates / core.xray /
-#    proxy.advanced / ai.relay / web.ingress / containers.docker / notify.hub）全部为独立可选 .qwqpkg 包：
+#    初始强制必装且仅必装：原面板底座（内置实时监控 + 趋势曲线）+ 基础安全插件（security.basic）。
+#    其余 8 款官方插件（server.probe / domain.dns / tls.certificates / proxy.advanced(内置Xray) /
+#    ai.relay / web.ingress / containers.docker / notify.hub）全部为独立可选 .qwqpkg 包：
 #    交互终端下可勾选安装（直接回车仅装必装底座），非交互可用 --plugins 按需选装。
 #
 #  网络与防火墙：默认监听 0.0.0.0:<随机高位端口> + 随机安全密道，并自动识别系统防火墙（ufw/firewalld/nftables/iptables）放行面板端口；
@@ -30,11 +30,9 @@ UNIT_DIR=/etc/systemd/system
 ETC=/etc/qwq
 
 readonly OPTIONAL_PLUGIN_IDS=(
-  "monitor.basic"
   "server.probe"
   "domain.dns"
   "tls.certificates"
-  "core.xray"
   "proxy.advanced"
   "ai.relay"
   "web.ingress"
@@ -43,12 +41,10 @@ readonly OPTIONAL_PLUGIN_IDS=(
 )
 
 declare -A PLUGIN_SUMMARY=(
-  ["monitor.basic"]="基础监控（CPU / 内存 / 磁盘 / 网络实时趋势微件，~18 MiB）"
   ["server.probe"]="服务器探针中心（多机单向安全探针 / 90天SLA / 三网拨测 / 前后台切换，~32 MiB）"
   ["domain.dns"]="域名与 DNS 管理（Cloudflare / 阿里云解析管理，按需唤醒）"
   ["tls.certificates"]="TLS 证书与 ACME DNS-01 自动签发续期（按需唤醒）"
-  ["core.xray"]="全协议代理核心驱动（VLESS / VMess / Trojan / SS / SS2022 / Hysteria2 / AnyTLS v2+UoT / SOCKS5 / HTTP + WARP）"
-  ["proxy.advanced"]="高级代理多用户配额、HTB 限速与订阅中心（自动连带安装 core.xray）"
+  ["proxy.advanced"]="代理与订阅中心（内置 Xray v26.11.9 引擎，全协议节点 + 多用户限速 + Clash/sing-box 订阅）"
   ["ai.relay"]="AI API 聚合中转、四协议互转与团体自服务分发门户"
   ["web.ingress"]="轻量反向代理与站点托管（零依赖内置 Go 反代 / Caddy & Nginx 渲染 / 快照回滚，按需唤醒）"
   ["containers.docker"]="轻量容器与 Compose 管理（直连 Unix Socket / 动态限额 / 有界日志 / 安全扫描，按需唤醒）"
@@ -157,6 +153,14 @@ select_optional_plugins() {
       for item in "${raw_items[@]}"; do
         item=${item//[[:space:]]/}
         [[ -z $item || $item == "security.basic" ]] && continue
+        if [[ $item == "monitor.basic" ]]; then
+          log "提示：monitor.basic 已完全内置到面板主页，无需再单独安装"
+          continue
+        fi
+        if [[ $item == "core.xray" ]]; then
+          log "提示：core.xray 已深度合并至 proxy.advanced（单插件内置 Xray 引擎），自动映射安装 proxy.advanced"
+          item="proxy.advanced"
+        fi
         [[ -n ${PLUGIN_SUMMARY[$item]+x} ]] || die "未知的官方可选插件 ID：$item"
         SELECTED_PLUGINS+=("$item")
       done
@@ -193,25 +197,17 @@ select_optional_plugins() {
     done
   fi
 
-  local need_xray=0 has_certs=0 has_dns=0 p
+  local has_certs=0 has_dns=0 p
   for p in "${SELECTED_PLUGINS[@]}"; do
-    [[ $p == "proxy.advanced" ]] && need_xray=1
     [[ $p == "tls.certificates" ]] && has_certs=1
     [[ $p == "domain.dns" ]] && has_dns=1
   done
-  if ((need_xray)); then
-    log "已自动补齐 proxy.advanced 的前置依赖插件：core.xray"
-  fi
   if ((has_certs && !has_dns)); then
     echo "提示：已选择 tls.certificates 但未选 domain.dns；如需使用 DNS-01 自动签发证书，建议后续在面板内补装 domain.dns。" >&2
   fi
 
   local ordered=() candidate
   for candidate in "${OPTIONAL_PLUGIN_IDS[@]}"; do
-    if [[ $candidate == "core.xray" && $need_xray == 1 ]]; then
-      ordered+=("core.xray")
-      continue
-    fi
     for p in "${SELECTED_PLUGINS[@]}"; do
       if [[ $p == "$candidate" ]]; then
         ordered+=("$candidate")
