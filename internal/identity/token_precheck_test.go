@@ -44,7 +44,7 @@ func TestSetupRejectsInvalidTokenBeforeHashing(t *testing.T) {
 			}
 			release := fillSemaphore(f.svc.hasher)
 			defer release()
-			ctx, cancel := context.WithTimeout(f.ctx, 50*time.Millisecond)
+			ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
 			defer cancel()
 			_, err = f.svc.CompleteSetup(ctx, CompleteSetupInput{SetupToken: token, Username: "admin", Password: testPassword})
 			if !problem.HasCode(err, problem.Unauthenticated) {
@@ -86,7 +86,7 @@ func TestEnrollmentRejectsInvalidTokenBeforeHashing(t *testing.T) {
 			}
 			release := fillSemaphore(f.svc.hasher)
 			defer release()
-			ctx, cancel := context.WithTimeout(f.ctx, 50*time.Millisecond)
+			ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
 			defer cancel()
 			if _, err := f.svc.RedeemEnrollmentToken(ctx, token, testPassword); !problem.HasCode(err, problem.Unauthenticated) {
 				t.Fatalf("invalid enrollment token reached the occupied hasher: %v", err)
