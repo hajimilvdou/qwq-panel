@@ -31,20 +31,22 @@
 
 > 系统要求：Linux（`amd64` / `arm64`）、`systemd >= 247`、`cgroup v2`、内存 `>= 1 GiB`。与其他面板共存不改动现有 Nginx / 防火墙配置。
 
-拉取官方签名版安装脚本，**自动安装最新正式版**（无需手动填写版本号）：
+### 一键安装（自动获取最新正式版）
 
 ```bash
-# 下载最新官方安装脚本（内嵌 Ed25519 发布公钥）
-curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh -o /tmp/qwq-install.sh
+curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash
+```
 
-# 方式 1：交互式安装（默认装面板底座 + security.basic，可按编号勾选可选插件）
-sudo bash /tmp/qwq-install.sh
+> 运行后会自动完成 Ed25519 与 SHA-256 验签，并在终端列出可选官方插件：**直接回车**仅安装面板底座 + `security.basic`，也可输入编号按需勾选。
 
-# 方式 2：极简底座安装（非交互，仅装面板底座 + security.basic，适合与其他面板共存）
-sudo bash /tmp/qwq-install.sh --minimal
+### 便捷一键命令（非交互）
 
-# 方式 3：底座 + 指定官方插件（多插件逗号分隔，或 --plugins all 安装全部）
-sudo bash /tmp/qwq-install.sh --plugins monitor.basic,web.ingress,tls.certificates,containers.docker
+```bash
+# 极简底座（仅面板 + 必装安全插件，适合与其他面板共存）
+curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- --minimal
+
+# 底座 + 指定官方插件（逗号分隔，或 --plugins all 安装全部）
+curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- --plugins monitor.basic,web.ingress,tls.certificates,containers.docker
 ```
 
 **首次登录**：安装完成后终端会输出随机高位端口、入口密道与一次性初始化链接。通过本地 SSH 隧道打开链接即可创建管理员账号（2FA 为可选项，按需开启）；登录后可在 **「设置 → 系统 → 面板入口与安全伪装」** 中按需切换公网直连或反代域名：
@@ -83,11 +85,10 @@ ssh -L <随机端口>:127.0.0.1:<随机端口> root@<服务器IP>
 # （推荐）升级前创建全量加密备份
 sudo qwq backup create
 
-# 拉取最新脚本并原地升级到最新版本（底座 + 必装安全插件）
-curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh -o /tmp/qwq-install.sh
-sudo bash /tmp/qwq-install.sh --minimal
+# 一键原地升级到最新正式版（底座 + 必装安全插件）
+curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- --minimal
 
-# 如需连同已启用的可选插件一起升级，附加 --plugins <逗号分隔ID> 或 --plugins all
+# 如需连同已启用的可选插件一起升级，将 --minimal 替换为 --plugins <逗号分隔ID> 或 --plugins all
 ```
 
 <details>
@@ -95,12 +96,12 @@ sudo bash /tmp/qwq-install.sh --minimal
 
 - **指定版本或回滚旧版**：追加 `--version <tag>` 即可（例如 `--version v0.1.15`）：
   ```bash
-  sudo bash /tmp/qwq-install.sh --version <目标版本号> --minimal
+  curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- --version <目标版本号> --minimal
   ```
 - **面板网页升级或回滚单个插件**：进入 **「应用中心」** 选择插件，支持在线拉取或上传 `.qwqpkg` 更新，失败自动回滚，也可在版本页一键回退。
-- **离线安装 / 升级**：从 [Releases](https://github.com/hajimilvdou/qwq-panel/releases) 下载对应架构的主包与 `.qwqpkg` 到同一目录：
+- **离线安装 / 升级**：从 [Releases](https://github.com/hajimilvdou/qwq-panel/releases) 下载对应架构的主包与 `.qwqpkg` 到同一目录后解包出 `install.sh` 或直接执行：
   ```bash
-  sudo bash /tmp/qwq-install.sh --offline ./qwq-<版本号>-linux-<amd64|arm64>.tar.gz --minimal
+  sudo bash install.sh --offline ./qwq-<版本号>-linux-<amd64|arm64>.tar.gz --minimal
   # 同时离线安装可选插件：追加 --plugins <插件ID列表> --plugin-dir ./
   ```
 

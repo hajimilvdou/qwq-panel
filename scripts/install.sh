@@ -56,7 +56,15 @@ declare -A PLUGIN_SUMMARY=(
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 log() { echo "==> $*"; }
-usage() { sed -n '5,8p' "$0" | sed 's/^#  //' >&2; exit 2; }
+usage() {
+  cat >&2 <<'EOF'
+用法：
+  curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash
+  curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- [--minimal | --plugins <csv|all>] [--version <vX.Y.Z|latest>] [--port N] [--entry-path PATH]
+  sudo bash install.sh --offline qwq-vX.Y.Z-linux-amd64.tar.gz [--minimal | --plugins <csv|all> --plugin-dir <dir>] [--port N] [--entry-path PATH]
+EOF
+  exit 2
+}
 
 # ── 参数 ─────────────────────────────────────────────────────────────────────
 offline='' version='' mirror=$DEFAULT_MIRROR
@@ -151,7 +159,7 @@ select_optional_plugins() {
         SELECTED_PLUGINS+=("$item")
       done
     fi
-  elif [[ -t 0 && -t 1 && ( -n $version || -n $offline_plugin_dir ) ]]; then
+  elif [[ -n $version || -n $offline_plugin_dir ]] && { [[ -t 0 && -t 1 ]] || { [[ -t 1 ]] && (: </dev/tty) 2>/dev/null; }; }; then
     echo ""
     echo "==> 默认必装组件（已锁定）："
     echo "    [*] qwq 原面板底座 + security.basic（基础安全防护：防火墙 / 防失联改 SSH / 公钥 / 防爆破）"
@@ -164,7 +172,11 @@ select_optional_plugins() {
     done
     echo ""
     local reply=""
-    read -r -p "请输入要额外安装的编号（多个用空格或逗号分隔，直接回车仅安装面板+安全插件）: " reply || reply=""
+    if [[ -t 0 ]]; then
+      read -r -p "请输入要额外安装的编号（多个用空格或逗号分隔，直接回车仅安装面板+安全插件）: " reply || reply=""
+    else
+      read -r -p "请输入要额外安装的编号（多个用空格或逗号分隔，直接回车仅安装面板+安全插件）: " reply </dev/tty || reply=""
+    fi
     reply=${reply//,/ }
     local tok
     for tok in $reply; do
