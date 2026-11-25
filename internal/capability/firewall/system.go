@@ -374,5 +374,15 @@ func (g SystemGuard) Managers(ctx context.Context) ([]Manager, error) {
 			managers[0].Detail = "UFW 已明确停用，未发现残留原生规则"
 		}
 	}
+	// If qwq explicitly backed up and took over a manager (ufw / firewalld / fail2ban)
+	// and its unit is stopped, clear Uncertain so qwq firewall & ban rules operate natively.
+	for i := range managers {
+		if !managers[i].Active && isManageableManager(managers[i].Kind) {
+			if _, ok := readTakeoverRecord(rootPath, managers[i].Kind); ok {
+				managers[i].Uncertain = false
+				managers[i].Detail = "已由 qwq 备份原配置并接管（可随时一键还原）"
+			}
+		}
+	}
 	return managers, nil
 }

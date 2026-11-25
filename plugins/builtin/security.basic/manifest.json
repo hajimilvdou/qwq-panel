@@ -3,8 +3,8 @@
   "id": "security.basic",
   "version": "0.1.0",
   "name": "基础安全",
-  "summary": "防火墙规则、SSH 安全基线、密钥账号与轻量防爆破",
-  "description": "节点级基础安全插件：提供受限 inet qwq 防火墙规则集管理、7 步双端口零断连 SSH 改端口事务、登录策略防锁死配置、SSH 公钥与密文口令管理以及轻量级增量防爆破巡检（检测到 fail2ban 活跃时自动切入只读旁观模式）。",
+  "summary": "管理服务器防火墙端口、安全修改 SSH 端口、管理 SSH 密钥密码以及防 SSH 暴力破解封禁",
+  "description": "服务器基础安全工具箱：可视化开关防火墙端口、零断连安全修改 SSH 端口、管理登录密码与 SSH 公钥、自动封禁暴力破解 IP，并支持一键备份接管或还原现有的 ufw / firewalld / fail2ban。",
   "license": "AGPL-3.0-only",
   "publisher": {
     "id": "qwq-builtin",
@@ -49,8 +49,8 @@
     "schemas/sshd.status.request.json": "sha256:8797461339fd07222572571dff7c67658ad403cd5df23c515dfd2923e10428a9",
     "schemas/sshd.status.response.json": "sha256:514d8c4c63524c8c02b51ebcf2395b2b9ec1f0f1d994d6148b4b74360e328c19",
     "ui/index.html": "sha256:cbec98b6aad8862ecbc1a14d115eb990285c70ce20163abcd1baee3d6ade945c",
-    "ui/plugin.css": "sha256:09f66168c7d39e2ffbc7c8b875a7877498ab3fc8318506c175284e2c2a6d8bd9",
-    "ui/security.js": "sha256:49394f26e283434a49355e1a7342077ae3c8b29fd4a73abc686d12172a725d7d"
+    "ui/plugin.css": "sha256:4de45d59baff7f7286dfa16796afa8ec9de65e95782004a540f65354c2c61e4d",
+    "ui/security.js": "sha256:300c938d9e01509a016a22dfd6650f2b312729a7cfa5814f81bc221a84645094"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"

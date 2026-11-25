@@ -14,14 +14,58 @@ import (
 //
 // The key is principal + action: a widget is bound to one read operation, so the
 // operation identifies the card without the client having to name it.
+type cachedWidgetResp struct {
+	body      []byte
+	expiresAt time.Time
+}
+
 type widgetReads struct {
 	mu       sync.Mutex
 	last     map[string]time.Time
 	inflight map[string]struct{}
+	cache    map[string]cachedWidgetResp
 }
 
 func newWidgetReads() *widgetReads {
-	return &widgetReads{last: map[string]time.Time{}, inflight: map[string]struct{}{}}
+	return &widgetReads{
+		last:     map[string]time.Time{},
+		inflight: map[string]struct{}{},
+		cache:    map[string]cachedWidgetResp{},
+	}
+}
+
+// lookup returns a still-fresh cached successful 200 response for key so page
+// navigation or plugin tab switches inside refresh_seconds render instantly
+// instead of tripping HTTP 429 RATE_LIMITED.
+func (w *widgetReads) lookup(key string, now time.Time) ([]byte, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	ent, ok := w.cache[key]
+	if !ok || !now.Before(ent.expiresAt) {
+		return nil, false
+	}
+	return append([]byte(nil), ent.body...), true
+}
+
+// store caches a successful 200 response for floor so subsequent reads within
+// the refresh window receive the cached snapshot cleanly.
+func (w *widgetReads) store(key string, body []byte, now time.Time, floor time.Duration) {
+	if len(body) == 0 || floor <= 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.cache) >= widgetReadsMax {
+		for k, ent := range w.cache {
+			if !now.Before(ent.expiresAt) {
+				delete(w.cache, k)
+			}
+		}
+	}
+	w.cache[key] = cachedWidgetResp{
+		body:      append([]byte(nil), body...),
+		expiresAt: now.Add(floor),
+	}
 }
 
 // widgetReadsMax bounds the remembered keys. Principals are real accounts, so the

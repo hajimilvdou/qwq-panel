@@ -143,15 +143,24 @@
     }
   }
 
+  let activeTab = 'overview';
+  const loadedTabs = new Set();
+
   function switchTab(tabName) {
+    activeTab = tabName;
     for (const btn of document.querySelectorAll('#nav-tabs button[data-tab]')) {
       btn.classList.toggle('active', btn.dataset.tab === tabName);
     }
     for (const pane of document.querySelectorAll('[data-pane]')) {
       pane.hidden = pane.dataset.pane !== tabName;
     }
-    if (tabName === 'keys' && port && state.keys.length === 0) {
+    if (!port) return;
+    if (tabName === 'keys' && state.keys.length === 0) {
       void loadKeys();
+    } else if (tabName === 'firewall' && !loadedTabs.has('firewall')) {
+      void loadFirewall();
+    } else if (tabName === 'bans' && !loadedTabs.has('bans')) {
+      void loadBans();
     }
   }
 
@@ -836,35 +845,70 @@
     }
   }
 
-  async function refresh() {
+  async function loadFirewall() {
     if (!port) return;
-    setStatus('正在同步安全状态…');
     try {
-      const [overview, fw, conflicts, sshd, bans] = await Promise.all([
-        invoke('security.overview', {}),
-        invoke('security.firewall.status', {}),
-        invoke('security.conflicts.detect', {}),
-        invoke('security.sshd.status', {}),
-        invoke('security.bans.list', {}),
-      ]);
-      state.overview = overview;
+      const fw = await invoke('security.firewall.status', {});
       state.fw = fw;
       const parsedFw = parseNftRuleset(fw.ruleset);
       state.fwPolicy = parsedFw.policy;
       state.fwRules = parsedFw.rules;
       state.fwGuards = parsedFw.guards;
       state.fwDirty = false;
-      state.conflicts = conflicts;
-      state.sshd = sshd;
-      state.bans = bans;
-
-      renderOverview();
+      loadedTabs.add('firewall');
       renderFirewall();
-      renderSSHD();
-      renderBans();
-      setStatus('已连接');
     } catch (err) {
-      setStatus(`读取失败：${err.message || '未知错误'}`);
+      showGlobalAlert(`读取防火墙状态失败：${err.message || '未知错误'}`, 'warn');
+    }
+  }
+
+  async function loadBans() {
+    if (!port) return;
+    try {
+      state.bans = await invoke('security.bans.list', {});
+      loadedTabs.add('bans');
+      renderBans();
+      renderOverview();
+    } catch (err) {
+      showGlobalAlert(`读取封禁列表失败：${err.message || '未知错误'}`, 'warn');
+    }
+  }
+
+  async function refresh(full = false) {
+    if (!port) return;
+    setStatus('正在同步安全状态…');
+    const errs = [];
+    // 首屏优先并行加载概览必需的 3 个轻量接口，逐项返回即刻渲染，避免阻塞首开
+    await Promise.allSettled([
+      invoke('security.overview', {}).then((res) => {
+        state.overview = res;
+        renderOverview();
+      }).catch((err) => errs.push(err)),
+      invoke('security.conflicts.detect', {}).then((res) => {
+        state.conflicts = res;
+        renderOverview();
+      }).catch((err) => errs.push(err)),
+      invoke('security.sshd.status', {}).then((res) => {
+        state.sshd = res;
+        renderOverview();
+        renderSSHD();
+      }).catch((err) => errs.push(err)),
+    ]);
+
+    if (errs.length === 0) {
+      setStatus('已连接');
+    } else if (state.overview || state.sshd || state.conflicts) {
+      setStatus('已连接（部分状态待刷新）');
+    } else {
+      setStatus(`读取失败：${errs[0]?.message || '未知错误'}`);
+    }
+
+    // 防火墙与封禁列表在首屏渲染完后再后台按需拉取，避免 5 个特权调用在首开时互相抢锁
+    if (full || activeTab === 'firewall' || loadedTabs.has('firewall')) {
+      void loadFirewall();
+    }
+    if (full || activeTab === 'bans' || loadedTabs.has('bans')) {
+      void loadBans();
     }
   }
 
@@ -876,7 +920,7 @@
     switchTab(btn.dataset.tab);
   });
 
-  $('refresh').addEventListener('click', () => { void refresh(); });
+  $('refresh').addEventListener('click', () => { void refresh(true); });
   $('btn-jump-saga').addEventListener('click', () => { switchTab('sshd'); });
 
   // Tab 2: 防火墙操作

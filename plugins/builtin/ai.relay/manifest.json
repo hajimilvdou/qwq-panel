@@ -3,8 +3,8 @@
   "id": "ai.relay",
   "version": "0.1.0",
   "name": "AI API 聚合中转与分发中心",
-  "summary": "低占用多源 Key / Sub2API 订阅池聚合、四协议流式互转与团体自服务分发门户",
-  "description": "面向个人与团体的高性能 AI API 网关：聚合标准 API Key 与 Claude/Codex/Gemini OAuth 订阅池，支持 OpenAI Chat / Responses / Anthropic Messages / Gemini 原生流式双向互转，内置管理员发号/邀请码/邮箱 OTP/LinuxDo 四种注册与六种虚拟统计额度体系，零商业收付款冗余。",
+  "summary": "自建 AI API 中转站：聚合 OpenAI / Claude / Gemini 密钥与订阅，统一分发 API Key 与额度计费",
+  "description": "AI 大模型接口中转与分发站：把多个 OpenAI、Claude、Gemini 等 API Key 或订阅账号聚合到一个统一接口，支持协议自动互转、多渠道负载均衡与故障切换、创建子令牌分配额度，并自带用户自助查询门户。",
   "license": "AGPL-3.0-only",
   "publisher": {
     "id": "qwq-builtin",

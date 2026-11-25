@@ -3,8 +3,8 @@
   "id": "domain.dns",
   "version": "0.1.0",
   "name": "DNS 托管",
-  "summary": "受控 DNS 提供商登记、托管域授权、解析记录变更与传播校验",
-  "description": "按需启动的控制器插件，通过宿主受控 DNS 能力管理提供商、域授权与解析记录；明文 API 凭据由宿主在派发前提取并加密托管，不落入插件内存或状态。",
+  "summary": "在面板内直接管理 Cloudflare、阿里云等域名 DNS 解析记录",
+  "description": "域名解析管理：接入 Cloudflare、阿里云等常见 DNS 服务商后，可直接在面板内新增、修改、删除 A / AAAA / CNAME / TXT 解析记录，并配合 TLS 证书插件自动完成泛域名证书验证。",
   "license": "AGPL-3.0-only",
   "publisher": {
     "id": "qwq-builtin",

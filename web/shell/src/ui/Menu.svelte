@@ -1,16 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!--
-  Menu · 下拉菜单（头像菜单、行内"更多"）
-  ───────────────────────────────────────────────────────────────
-  <Menu label="账户菜单" items={[
-    { label: '账户', icon: 'user', href: '/settings/account' },
-    { label: '登出', icon: 'logout', tone: 'danger', onselect: logout },
-  ]}>
-    {#snippet trigger(props)}<button {...props}><Avatar name="Alice" /></button>{/snippet}
-  </Menu>
-
-  键盘：Enter/Space/↓ 打开并聚焦首项，↑↓ 移动，Esc 关闭并还焦点，Tab 关闭。
-  点外部关闭。align：菜单靠右（end，默认）或靠左（start）。
+  Menu · 下拉菜单（支持自动向上翻转，避免贴底被裁切）
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
@@ -37,18 +27,31 @@
     label: string;
     items: readonly MenuItem[];
     align?: 'start' | 'end';
+    placement?: 'auto' | 'down' | 'up';
     trigger: Snippet<[TriggerProps]>;
   }
-  let { label, items, align = 'end', trigger }: Props = $props();
+  let { label, items, align = 'end', placement = 'auto', trigger }: Props = $props();
 
   const uid = $props.id();
   let open = $state(false);
+  let openUp = $state(false);
   let root: HTMLDivElement;
   let menu = $state<HTMLDivElement>();
 
   const focusables = () => [...(menu?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])') ?? [])];
 
+  function computeDirection(): boolean {
+    if (placement === 'up') return true;
+    if (placement === 'down' || !root || typeof window === 'undefined') return false;
+    const rect = root.getBoundingClientRect();
+    const estH = Math.min(items.length * 40 + 18, 300);
+    const spaceBelow = window.innerHeight - rect.bottom - 12;
+    const spaceAbove = rect.top - 12;
+    return spaceBelow < estH && spaceAbove > spaceBelow;
+  }
+
   function show(focusFirst: boolean) {
+    openUp = computeDirection();
     open = true;
     if (focusFirst) queueMicrotask(() => focusables()[0]?.focus());
   }
@@ -108,7 +111,16 @@
 <div class="menu-root" bind:this={root}>
   {@render trigger(triggerProps)}
   {#if open}
-    <div bind:this={menu} id="{uid}-menu" class="menu {align}" role="menu" aria-label={label} tabindex="-1" onkeydown={onMenuKey}>
+    <div
+      bind:this={menu}
+      id="{uid}-menu"
+      class="menu {align}"
+      class:up={openUp}
+      role="menu"
+      aria-label={label}
+      tabindex="-1"
+      onkeydown={onMenuKey}
+    >
       {#each items as it (it.label)}
         {#if it.href && !it.disabled}
           <a role="menuitem" href={it.href} class:danger={it.tone === 'danger'} onclick={() => pick(it)}>
@@ -142,12 +154,19 @@
     display: flex;
     flex-direction: column;
     min-width: 180px;
+    max-width: min(320px, calc(100vw - 24px));
+    max-height: min(320px, 60dvh);
+    overflow-y: auto;
     padding: 6px;
     border-radius: var(--r-md);
     background: var(--surface);
     border: 1px solid var(--line);
     box-shadow: var(--shadow-3);
     animation: qwq-rise-in var(--dur-2) var(--ease-out);
+  }
+  .menu.up {
+    top: auto;
+    bottom: calc(100% + 6px);
   }
   .end {
     right: 0;
@@ -160,13 +179,15 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    height: 38px;
+    min-height: 36px;
     padding: 0 10px;
     border-radius: 9px;
     color: var(--text);
     font-weight: var(--fw-medium);
     text-align: left;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   a:hover,
   button:hover,

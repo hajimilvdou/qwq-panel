@@ -44,7 +44,8 @@ func (r Runner) Run(ctx context.Context, request sandbox.CapabilityRequest) (san
 		return sandbox.CapabilityResponse{Code: "VALIDATION_FAILED", Error: "能力请求无效"}, nil
 	}
 	switch request.Op {
-	case "firewall.get", "firewall.apply", "firewall.reset", "firewall.detect", "firewall.restore", "firewall.sync-panel-port":
+	case "firewall.get", "firewall.apply", "firewall.reset", "firewall.detect", "firewall.restore", "firewall.sync-panel-port",
+		"firewall.takeover_status", "firewall.takeover", "firewall.restore_manager":
 		if r.Firewall != nil {
 			return r.Firewall.Run(ctx, request)
 		}

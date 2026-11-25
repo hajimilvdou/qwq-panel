@@ -106,72 +106,72 @@ type builtinOfficialPluginMeta struct {
 var officialCatalogDefaults = []builtinOfficialPluginMeta{
 	{
 		ID:          "monitor.basic",
-		Name:        "基础系统监控",
-		Summary:     "CPU、内存、磁盘与网络实时趋势微件与历史曲线，轻量常驻（~18 MiB）",
+		Name:        "历史监控曲线",
+		Summary:     "扩展更长时间窗口的 CPU、内存、磁盘与网络历史趋势图表（主页已自带实时资源监控）",
 		Category:    "observe",
-		MemoryMaxMB: 18,
+		MemoryMaxMB: 24,
 	},
 	{
 		ID:          "web.ingress",
-		Name:        "反向代理与站点托管",
-		Summary:     "内置零依赖 Go 反代网关、Caddy/Nginx 配置渲染、HTTPS 自动续期、大文件上传限额与快照回滚",
+		Name:        "反向代理与建站",
+		Summary:     "把域名反向代理到本机端口或 Docker 容器、托管静态网站，自动配好 HTTPS 与访问限流",
 		Category:    "network",
 		MemoryMaxMB: 32,
 	},
 	{
 		ID:          "tls.certificates",
-		Name:        "TLS 证书与 ACME 管理",
-		Summary:     "ACME DNS-01 自动签发与泛域名证书集中续期，一键热分发至反代、代理与探针",
+		Name:        "SSL / TLS 证书",
+		Summary:     "免费自动申请和续期单域名 / 泛域名 HTTPS 证书，自动同步给反代、代理节点和探针使用",
 		Category:    "security",
-		MemoryMaxMB: 24,
+		MemoryMaxMB: 32,
 	},
 	{
 		ID:          "domain.dns",
-		Name:        "域名与 DNS 解析托管",
-		Summary:     "Cloudflare、阿里云等主流 DNS 服务商解析记录管理与证书自动验证支持",
+		Name:        "域名 DNS 解析",
+		Summary:     "直接在面板内管理 Cloudflare、阿里云等域名解析记录，配合自动签发泛域名证书",
 		Category:    "network",
-		MemoryMaxMB: 24,
+		MemoryMaxMB: 32,
 	},
 	{
 		ID:          "containers.docker",
-		Name:        "轻量容器与 Compose 管理",
-		Summary:     "五分页容器设置工作台、隔离网络热插拔、无损换端口回滚、一键反代绑域名与受管 Compose 编排",
+		Name:        "Docker 容器管理",
+		Summary:     "可视化管理 Docker 容器、镜像、日志、端口与 Compose 项目，支持一键绑定域名反代",
 		Category:    "infra",
 		MemoryMaxMB: 32,
 	},
 	{
 		ID:          "server.probe",
-		Name:        "服务器探针中心",
-		Summary:     "单向安全多机探针、90 天 SLA 与三网延迟曲线、经典与液态水玻璃双风格、支持自定义主题沙箱",
+		Name:        "多机服务器探针",
+		Summary:     "汇总监控多台 VPS 的实时状态、90 天在线率与三网延迟测速，自带公开状态页与自定义主题",
 		Category:    "observe",
 		MemoryMaxMB: 32,
 	},
 	{
 		ID:          "core.xray",
-		Name:        "全协议代理核心驱动",
-		Summary:     "托管 Xray 核心与原生硬化 AnyTLS v2（含 UoT）、9 大协议支持、Reality 测速与 WARP 分流",
+		Name:        "Xray 代理核心",
+		Summary:     "科学上网与代理转发底层引擎，支持 VLESS(Reality)、VMess、Trojan、SS2022、Hysteria2、AnyTLS 等主流协议",
 		Category:    "proxy",
-		MemoryMaxMB: 64,
+		MemoryMaxMB: 256,
 	},
 	{
 		ID:           "proxy.advanced",
-		Name:         "高级代理工作台与订阅中心",
-		Summary:      "多用户流量配额、HTB 限速、可视化节点构建器与 Base64/Clash/Sing-box 订阅分发（连带 core.xray）",
+		Name:         "高级代理与订阅中心",
+		Summary:      "科学上网节点图形化搭建、多用户流量限速与 Clash / sing-box / Base64 订阅分发（自动连带 Xray 核心）",
 		Category:     "proxy",
-		MemoryMaxMB:  32,
+		MemoryMaxMB:  64,
 		Dependencies: []string{"core.xray"},
 	},
 	{
 		ID:          "ai.relay",
-		Name:        "AI API 聚合中转站",
-		Summary:     "OpenAI / Anthropic / Gemini 协议互转、渠道负载均衡、令牌配额计费与独立自服务门户",
+		Name:        "AI API 中转站",
+		Summary:     "聚合 OpenAI / Claude / Gemini 密钥与订阅账号，支持协议互转、负载均衡与分发额度计费",
 		Category:    "ai",
-		MemoryMaxMB: 48,
+		MemoryMaxMB: 64,
 	},
 	{
 		ID:          "notify.hub",
-		Name:        "统一告警与通知中枢",
-		Summary:     "Telegram、飞书、钉钉、企业微信、Discord、SMTP 与签名 Webhook 告警聚合与静默去重",
+		Name:        "告警与消息通知",
+		Summary:     "把服务器异常、防爆破、证书到期等提醒推送到 Telegram、飞书、钉钉、企业微信或邮箱",
 		Category:    "observe",
 		MemoryMaxMB: 24,
 	},
@@ -465,13 +465,25 @@ func buildCatalogItemsFromIndex(
 			}
 		}
 		name := strings.TrimSpace(rec.Name)
+		summary := strings.TrimSpace(rec.Summary)
+		for _, def := range officialCatalogDefaults {
+			if def.ID == pid {
+				if def.Name != "" {
+					name = def.Name
+				}
+				if def.Summary != "" {
+					summary = def.Summary
+				}
+				break
+			}
+		}
 		if name == "" {
 			name = pid
 		}
 		out = append(out, pluginCatalogItemDTO{
 			PluginID:     pid,
 			Name:         name,
-			Summary:      strings.TrimSpace(rec.Summary),
+			Summary:      summary,
 			Version:      strings.TrimPrefix(strings.TrimSpace(rec.Version), "v"),
 			Category:     officialCategoryFor(pid),
 			MemoryMaxMB:  rec.MemoryMaxMB,

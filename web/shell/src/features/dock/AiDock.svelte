@@ -2,15 +2,9 @@
 <!--
   AiDock · AI 悬浮窗（SPEC §4）
   ───────────────────────────────────────────────────────────────
-  状态（数据面在 $lib/ai/dock.svelte）：
-    rest     56 极光小球，慢呼吸光
-    working  球上环形转动；悬停提示"第 n/m 步"
-    reach    球向左伸出胶囊："AI 想创建用户 bob · 看一下"，直到被查看
-    open     <dialog> 顶层：上方聊天窗 + 下方输入窗 + 遮罩；点外部 / Esc 收回
-
-  布局：两窗水平居中同宽；聊天窗右上角可拖拽缩放（dock-layout.ts），尺寸存 localStorage。
-  在 /agent 页（dock.chatSuppressed）：只保留球形提醒；展开时只有待确认，没有输入窗。
-  焦点：showModal 自带焦点陷阱；收回时还给展开前的元素。输入框草稿收回后保留。
+  - 会话切换与「+ 新对话」置于顶栏，永不贴底裁切
+  - 输入框支持附件上传 + 底部常驻 Token/速率/上下文遥测条
+  - 独立置顶审批区，审批卡片绝不闪退
 -->
 <script lang="ts">
   import { tick } from 'svelte';
@@ -29,6 +23,7 @@
   import { navigate } from '$lib/router.svelte';
   import { session } from '$lib/session.svelte';
   import Composer from '../ai/Composer.svelte';
+  import TelemetryStrip from '../ai/TelemetryStrip.svelte';
   import Transcript from '../ai/Transcript.svelte';
   import ApprovalStack from './ApprovalStack.svelte';
   import DockBall from './DockBall.svelte';
@@ -56,8 +51,12 @@
   const progress = $derived(stream ? turnProgress(stream.transcript) : { done: 0, total: 0 });
   const current = $derived(sessions.data?.find((s) => s.session_id === dockSession.id));
   const sessionBusy = $derived(stream?.busy ?? (current ? BUSY.has(current.status) : false));
+  const curCfg = $derived((stream?.session?.config ?? {}) as Record<string, unknown>);
+  const curModel = $derived(
+    (typeof curCfg.model === 'string' && curCfg.model) || stream?.transcript.telemetry?.model || '',
+  );
+  const curMaxCtx = $derived(typeof curCfg.max_context_tokens === 'number' ? curCfg.max_context_tokens : 0);
 
-  /* 实时推导 AI 表情态（覆盖离线/待审批/API出错/工具调用/流式回复/思考/暂停/常驻） */
   const liveAiState = $derived.by<OrbState>(() => {
     if (events.offline) return 'offline';
     if (pending.length > 0) return 'approval';
@@ -74,21 +73,16 @@
     return 'idle';
   });
 
-  /* 有新审批到来或带 focusApprovalId 打开时自动展开顶置审批区 */
   $effect(() => {
-    if (dock.expanded && (dock.focusApprovalId || pending.length > 0)) {
-      approvalsOpen = true;
-    }
+    if (dock.expanded && (dock.focusApprovalId || pending.length > 0)) approvalsOpen = true;
   });
 
-  /* working：任一会话在跑（全局流 agent.session.updated 刷新列表） */
   $effect(() => {
     dock.busy = canChat && !!sessions.data?.some((s) => s.status === 'running');
   });
 
-  /* 展开或当前会话在跑时才保持会话流；在 Agent 页或只读角色不需要 */
   $effect(() => {
-    const want = chat && (dock.expanded || (current?.status === 'running'));
+    const want = chat && (dock.expanded || current?.status === 'running');
     if (want) dockSession.attach();
     else dockSession.detach();
   });
@@ -97,10 +91,8 @@
     if (stream?.phase === 'gone') dockSession.forgetIfGone();
   });
 
-  /* 登出卸载：关流，不把上一个用户的会话带进下一次登录 */
   $effect(() => () => dockSession.reset());
 
-  /* 打开 / 收回 <dialog> */
   $effect(() => {
     const el = dlg;
     if (!el) return;
@@ -135,7 +127,6 @@
     returnFocus = null;
   }
 
-  /* 点遮罩收回：点到 dialog 本身（两窗之外的透明区）才算 */
   function onDialogClick(e: MouseEvent) {
     if (e.target === dlg) dock.close();
   }
@@ -153,7 +144,6 @@
     }
   }
 
-  /* ---------------------------------------------------------------- 缩放 */
   function startResize(e: PointerEvent) {
     if (!chatEl) return;
     e.preventDefault();
@@ -178,7 +168,6 @@
     saveSize(null);
   }
 
-  /* ---------------------------------------------------------------- 会话切换菜单 */
   const sessionItems = $derived([
     { label: '新对话', icon: 'plus' as const, onselect: () => dockSession.switchTo(null) },
     ...(sessions.data ?? []).slice(0, 8).map((s) => ({
@@ -196,12 +185,10 @@
   ]);
 </script>
 
-<!-- ============================================================ 球 + 胶囊 -->
 {#if showDock}
   <DockBall {progress} aiState={liveAiState} onopen={openFromBall} />
 {/if}
 
-<!-- ============================================================ 展开 -->
 <dialog
   bind:this={dlg}
   class="sheet"
@@ -217,7 +204,22 @@
     <section class="chat" bind:this={chatEl} aria-label="AI 对话">
       <header class="chat-head">
         <Orb size={22} state={liveAiState} />
-        <h2>{chat ? (current?.title ?? 'AI 助手') : '待确认'}</h2>
+        {#if chat}
+          <Menu label="切换对话" items={sessionItems} align="start" placement="down">
+            {#snippet trigger(props)}
+              <button type="button" class="head-pick" {...props}>
+                <span class="head-ttl">{dockSession.id ? (current?.title || '当前对话') : '新对话'}</span>
+                <Icon name="chevron-down" size={14} />
+              </button>
+            {/snippet}
+          </Menu>
+          <button type="button" class="tag" title="开启新对话" onclick={() => dockSession.switchTo(null)}>
+            <Icon name="plus" size={13} /> 新对话
+          </button>
+        {:else}
+          <h2>待确认</h2>
+        {/if}
+
         {#if pending.length}
           <button
             type="button"
@@ -231,6 +233,18 @@
           </button>
         {/if}
         <span class="grow"></span>
+        {#if chat}
+          <IconButton
+            icon="external"
+            label="在 AI 助手页打开"
+            size="sm"
+            variant="plain"
+            onclick={() => {
+              dock.close();
+              navigate(dockSession.id ? `/agent/${encodeURIComponent(dockSession.id)}` : '/agent');
+            }}
+          />
+        {/if}
         {#if size}<IconButton icon="undo" label="恢复默认大小" size="sm" variant="plain" onclick={resetSize} />{/if}
         <IconButton icon="x" label="收起" size="sm" variant="plain" onclick={() => dock.close()} />
         <button type="button" class="grip" aria-label="拖拽改变大小" title="拖拽改变大小" onpointerdown={startResize}>
@@ -238,7 +252,6 @@
         </button>
       </header>
 
-      <!-- 独立置顶审批区：不与消息流共用滚动容器，彻底解决聊天加载滚底导致审批卡片闪现消失的问题 -->
       {#if pending.length && approvalsOpen}
         <section class="approval-tray" class:only={!chat} aria-label="待确认操作">
           <div class="tray-bar">
@@ -261,7 +274,7 @@
             {:else if !dockSession.id && !pending.length}
               <div class="hello">
                 <Orb size={44} state="idle" />
-                <p>有什么可以帮你？我会先说明要做什么，重要操作会先问你。</p>
+                <p>有什么可以帮你？支持直接拖拽或粘贴文件，重要操作会先向你确认。</p>
               </div>
             {/if}
           {:else if !pending.length}
@@ -276,6 +289,7 @@
         <Composer
           bind:value={draft}
           bind:el={inputEl}
+          allowUpload={true}
           busy={sessionBusy}
           disabled={events.offline}
           disabledReason="连接中断，恢复后再发"
@@ -283,14 +297,6 @@
           onstop={stream && stream.transcript.status === 'running' ? () => pauseSession(stream) : undefined}
         >
           {#snippet tools()}
-            <Menu label="切换对话" items={sessionItems} align="start">
-              {#snippet trigger(props)}
-                <button type="button" class="tag" {...props}>
-                  <Icon name="clock" size={14} />
-                  <span class="tag-t">{dockSession.id ? (current?.title ?? '当前对话') : '新对话'}</span>
-                </button>
-              {/snippet}
-            </Menu>
             {#if current}
               <span class="tag mode" class:danger={current.permission_mode === 'full'} title="权限模式">
                 <Icon name="shield" size={14} />{MODE_META[current.permission_mode]?.short}
@@ -306,16 +312,16 @@
             {/if}
           {/snippet}
         </Composer>
+        <TelemetryStrip compact telemetry={stream?.transcript.telemetry} model={curModel} maxContextTokens={curMaxCtx} />
       </section>
     {/if}
   {/if}
 </dialog>
 
 <style>
-  /* ------------------------------------------------------------ 展开 */
   .sheet {
-    --gap: 24px;
-    --w: var(--dock-w, min(720px, calc(100vw - 32px)));
+    --gap: 20px;
+    --w: var(--dock-w, min(820px, calc(100vw - 32px)));
     position: fixed;
     inset: 0;
     width: 100vw;
@@ -345,29 +351,30 @@
   }
   .chat {
     top: var(--gap);
-    bottom: calc(var(--gap) + var(--input-h) + 16px);
+    bottom: calc(var(--gap) + var(--input-h) + 14px);
     display: flex;
     flex-direction: column;
     border-radius: var(--r-xl);
     background: var(--surface);
     box-shadow: var(--shadow-3);
-    overflow: hidden;
+    overflow: visible;
     animation: from-top var(--dur-3) var(--ease-out);
   }
   .with-size .chat {
     top: auto;
-    height: min(var(--chat-h), calc(100dvh - 2 * var(--gap) - var(--input-h) - 16px));
+    height: min(var(--chat-h), calc(100dvh - 2 * var(--gap) - var(--input-h) - 14px));
   }
   .input {
     bottom: var(--gap);
-    padding: 0;
     border-radius: var(--r-lg);
     background: var(--surface);
+    border: 1px solid var(--line-strong);
     box-shadow: var(--shadow-3);
     animation: from-bottom var(--dur-3) var(--ease-out);
   }
   .input :global(.composer) {
-    border-color: var(--line-strong);
+    border: 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
   }
   .input :global(.composer:focus-within) {
     box-shadow: none;
@@ -375,20 +382,19 @@
   @keyframes from-top {
     from {
       opacity: 0;
-      transform: translateY(-32px);
+      transform: translateY(-28px);
     }
   }
   @keyframes from-bottom {
     from {
       opacity: 0;
-      transform: translateY(32px);
+      transform: translateY(28px);
     }
   }
   :global(:root[data-motion='reduced']) .chat,
   :global(:root[data-motion='reduced']) .input {
     animation: qwq-fade-in var(--dur-1) linear;
   }
-
   .chat-head {
     position: relative;
     display: flex;
@@ -399,9 +405,24 @@
   }
   .chat-head h2 {
     margin: 0;
-    min-width: 0;
     font-size: var(--fs-md);
+  }
+  .head-pick {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 280px;
+    padding: 4px 10px;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: var(--fs-sm);
     font-weight: var(--fw-semibold);
+  }
+  .head-pick:hover {
+    background: var(--surface-3);
+  }
+  .head-ttl {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -412,14 +433,11 @@
     align-items: center;
     gap: 4px;
     padding: 2px 8px;
-    border: 0;
     border-radius: var(--r-pill);
     background: var(--warn-soft);
     color: var(--warn-text);
-    font: inherit;
     font-size: var(--fs-xs);
     font-weight: var(--fw-medium);
-    cursor: pointer;
   }
   .approval-tray {
     flex: none;
@@ -448,13 +466,9 @@
     color: var(--warn-text);
   }
   .tray-toggle {
-    border: 0;
-    background: none;
     padding: 2px 6px;
     border-radius: var(--r-sm);
     color: var(--text-2);
-    font: inherit;
-    cursor: pointer;
   }
   .tray-toggle:hover {
     background: var(--surface);
@@ -479,8 +493,6 @@
     width: 28px;
     height: 28px;
     padding: 6px;
-    border: 0;
-    background: none;
     color: var(--text-3);
     cursor: nesw-resize;
     touch-action: none;
@@ -497,6 +509,7 @@
     padding: var(--s-4);
     overflow-y: auto;
     overscroll-behavior: contain;
+    border-radius: 0 0 var(--r-xl) var(--r-xl);
   }
   .hello {
     display: grid;
@@ -507,45 +520,32 @@
     color: var(--text-2);
   }
   .hello p {
-    margin: 0;
-    max-width: 320px;
+    max-width: 340px;
   }
   .quiet {
     margin: var(--s-6) 0;
     text-align: center;
     color: var(--text-3);
   }
-
   .tag {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    height: 30px;
-    max-width: 180px;
-    padding: 0 var(--s-2);
-    border: 0;
+    height: 28px;
+    padding: 0 10px;
     border-radius: var(--r-pill);
     background: var(--surface-2);
     color: var(--text-2);
-    font: inherit;
     font-size: var(--fs-xs);
     white-space: nowrap;
   }
-  button.tag {
-    cursor: pointer;
-  }
   button.tag:hover {
     background: var(--surface-3);
-  }
-  .tag-t {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    color: var(--text);
   }
   .tag.danger {
     color: var(--bad-text);
   }
-
-  /* ------------------------------------------------------------ 窄屏 */
   @media (max-width: 860px) {
     .sheet {
       --gap: 12px;

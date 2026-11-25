@@ -64,6 +64,9 @@ const (
 	// HelperOpBackupPluginCleanup removes a root-owned plugin backup staging
 	// directory created by HelperOpBackupPluginData after archiving completes.
 	HelperOpBackupPluginCleanup = "backup-plugin-cleanup"
+	// HelperOpUpdateResources writes or removes the user resource limit override
+	// drop-in (20-user-resources.conf) for a plugin systemd unit and reloads systemd.
+	HelperOpUpdateResources = "update-resources"
 )
 
 // Log limits of the helper. MaxLogLines keeps one response well inside
@@ -117,6 +120,9 @@ type HelperRequest struct {
 	// BackupSpecs and BackupStageName are the backup-plugin-data fields.
 	BackupSpecs     []PluginBackupSpec `json:"backup_specs,omitempty"`
 	BackupStageName string             `json:"backup_stage_name,omitempty"`
+	// Limits and ResetResources are the update-resources fields.
+	Limits         *Limits `json:"limits,omitempty"`
+	ResetResources bool    `json:"reset_resources,omitempty"`
 }
 
 // PluginBackupSpec declares which relative paths inside one plugin's private
@@ -290,6 +296,18 @@ func (c *HelperClient) Publish(ctx context.Context, req HelperPublish) (PublishR
 			"The privileged helper did not report the published version.")
 	}
 	return *resp.Publish, nil
+}
+
+// UpdateResources asks the helper to write or remove the user resource limit
+// drop-in (20-user-resources.conf) for plugin id and reload systemd.
+func (c *HelperClient) UpdateResources(ctx context.Context, id string, limits *Limits, reset bool) error {
+	_, err := c.call(ctx, HelperRequest{
+		Op:             HelperOpUpdateResources,
+		ID:             id,
+		Limits:         limits,
+		ResetResources: reset,
+	})
+	return err
 }
 
 // Remove asks the helper to delete a version directory and, unless KeepUnit is

@@ -17,6 +17,7 @@ import type {
   PluginLogPage,
   PluginPackageFetchRequest,
   PluginPackageInspection,
+  PluginResourceOverrideRequest,
   PluginTrustKey,
   PluginTrustKeyCreateRequest,
   PluginTrustKeyList,
@@ -68,8 +69,14 @@ export const plugins = {
         mfa ? { headers: { 'X-QWQ-MFA-Code': mfa } } : undefined,
       )
       .then(() => undefined),
-  install: (body: { upload_id: string; accepted_capabilities: { name: string; scope: string }[] }, key: string) =>
-    http.post<PluginVersion>('/api/v1/plugins', body, { idempotency: key }).then((r) => r.data),
+  install: (
+    body: {
+      upload_id: string;
+      accepted_capabilities: { name: string; scope: string }[];
+      resources?: PluginResourceOverrideRequest;
+    },
+    key: string,
+  ) => http.post<PluginVersion>('/api/v1/plugins', body, { idempotency: key }).then((r) => r.data),
   /** 尝试通过宿主官方内置目录接口安装并启用指定内置插件（需宿主支持该端点） */
   installBuiltin: (id: string, key: string, autoEnable = true): Promise<OpResult> =>
     http
@@ -98,6 +105,8 @@ export const plugins = {
   getConfig: (id: string) => http.get<PluginConfig>(`/api/v1/plugins/${enc(id)}/config`).then((r) => r.data),
   putConfig: (id: string, config: Record<string, unknown>, expected_revision: string, key: string) =>
     http.put<PluginConfig>(`/api/v1/plugins/${enc(id)}/config`, { config, expected_revision }, { idempotency: key }).then((r) => r.data),
+  putResources: (id: string, body: PluginResourceOverrideRequest) =>
+    http.put<Plugin>(`/api/v1/plugins/${enc(id)}/resources`, body).then((r) => r.data),
   configSchema: (id: string) =>
     http.get<Record<string, unknown>>(`/api/v1/plugins/${enc(id)}/config-schema`).then((r) => r.data),
   /** 不产生 operation（运行时自身生命周期，catalog-exempt）；200 返回刷新后的 Plugin */

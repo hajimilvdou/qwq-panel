@@ -5,8 +5,10 @@ import type { MfaChallenge, Node, Page, Plugin, Session, SetupStatus } from './t
 import type {
   PanelAccessSettings,
   PanelAccessUpdateRequest,
+  SecurityTakeoverStatus,
   SystemBackupEntry,
   SystemBackupList,
+  SystemHostMetrics,
   SystemInfo,
 } from './additions';
 
@@ -49,6 +51,12 @@ export const system = {
   health: () => http.get<{ status: string }>('/healthz'),
   ready: () => http.get<{ status: string }>('/readyz'),
   info: () => http.get<SystemInfo>('/api/v1/system').then((r) => r.data),
+  metrics: (opts?: RequestOptions) => http.get<SystemHostMetrics>('/api/v1/system/metrics', opts).then((r) => r.data),
+  securityTakeoverStatus: () => http.get<SecurityTakeoverStatus>('/api/v1/system/security/takeover').then((r) => r.data),
+  securityTakeover: (manager: 'ufw' | 'firewalld' | 'fail2ban') =>
+    http.post<SecurityTakeoverStatus>('/api/v1/system/security/takeover', { manager }).then((r) => r.data),
+  securityRestore: (manager: 'ufw' | 'firewalld' | 'fail2ban') =>
+    http.post<SecurityTakeoverStatus>('/api/v1/system/security/restore', { manager }).then((r) => r.data),
   access: () => http.get<PanelAccessSettings>('/api/v1/system/access').then((r) => r.data),
   updateAccess: (body: PanelAccessUpdateRequest, mfaCode?: string) =>
     http

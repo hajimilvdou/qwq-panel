@@ -101,15 +101,19 @@
 <style>
   .top {
     position: sticky;
-    top: 0;
+    top: 12px;
     z-index: var(--z-sticky);
     display: flex;
     align-items: center;
     gap: var(--s-4);
-    height: var(--top-h);
-    padding: 0 var(--s-5);
-    background: color-mix(in oklab, var(--bg) 86%, transparent);
-    backdrop-filter: blur(12px) saturate(1.2);
+    height: calc(var(--top-h) - 8px);
+    margin: 14px var(--s-5) var(--s-2);
+    padding: 0 var(--s-4);
+    border-radius: var(--r-xl);
+    background: color-mix(in oklab, var(--surface) 88%, transparent);
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow-1);
+    backdrop-filter: blur(14px) saturate(1.25);
   }
   h1 {
     min-width: 120px;
@@ -230,12 +234,16 @@
   }
   @media (max-width: 1180px) {
     .top {
-      padding: 0 var(--s-5);
+      margin-inline: var(--s-4);
+      padding: 0 var(--s-4);
     }
   }
   @media (max-width: 860px) {
     .top {
-      padding: 0 var(--s-4);
+      top: 8px;
+      margin: 8px var(--s-3) var(--s-2);
+      padding: 0 var(--s-3);
+      border-radius: var(--r-lg);
     }
     .t-nav,
     .actions :global(.layout-btn),

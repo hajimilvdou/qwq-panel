@@ -3,8 +3,8 @@
   "id": "proxy.advanced",
   "version": "0.1.0",
   "name": "高级代理管理",
-  "summary": "多用户配额与连接限制、链式代理出口、tcpfit 动态调优与 TCP Brutal 端口透明接管",
-  "description": "基于本地 WAL SQLite 管理代理套餐、多用户凭证、并发连接/在线 IP 限制、AES-256-GCM 加密链式代理落地、tcpfit 动态 BDP 宿主机网络栈调优与 TCP Brutal 端口透明接管（可按 TCP 订阅独立开启并手调超发倍率）；通过受控公开路由提供 Clash/sing-box/v2ray 订阅并跨插件同步 core.xray 与 TrafficService。",
+  "summary": "科学上网节点可视化管理与订阅中心：多用户流量限额、一键建节点、生成 Clash / sing-box / Base64 订阅",
+  "description": "科学上网与代理管理工作台：提供图形化节点搭建向导（VLESS Reality、VMess、Trojan、Hysteria2、Shadowsocks 2022、AnyTLS）、多用户流量配额与限速、链式代理中转落地、网络加速调优，以及一键生成 Base64 / Clash / sing-box 客户端订阅链接（安装时自动连带安装 Xray 核心）。",
   "license": "AGPL-3.0-only",
   "publisher": {
     "id": "qwq-builtin",

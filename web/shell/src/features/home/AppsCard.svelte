@@ -42,7 +42,7 @@
       {@const look = pluginLook(p)}
       {@const st = stateOf(p)}
       <li>
-        <a class="app" href="/apps/{encodeURIComponent(p.plugin_id)}">
+        <a class="app" href="/plugins/{encodeURIComponent(p.plugin_id)}">
           <Tile icon={look.icon} color={look.color} size="lg" />
           <span class="text">
             <b class="ellipsis">{p.name}</b>

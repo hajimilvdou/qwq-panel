@@ -3,8 +3,8 @@
   "id": "web.ingress",
   "version": "0.1.0",
   "name": "轻量反向代理与站点托管",
-  "summary": "零依赖内置 Go 反代与 Caddy/Nginx 确定性渲染、WebSocket、限流、BasicAuth 与快照回滚",
-  "description": "面向 1C1G 低内存 VPS 的轻量反向代理与站点托管插件：内置无锁热重载纯 Go 反向代理引擎（支持 WebSocket、bcrypt BasicAuth、单 IP 令牌桶有界限流、自定义安全头与强制 HTTPS），并可同步生成防注入的 Caddyfile 与 Nginx 配置块；可选关联 domain.dns 与 tls.certificates 自动衔接域名与证书，提供最近 20 个配置快照一键回滚与 <2KiB 原生 AI 诊断摘要。",
+  "summary": "搭建网站与反向代理：把域名绑定到本机端口或静态站点，自动配好 HTTPS 与限流",
+  "description": "网站与反向代理工具：轻松把域名反向代理到本机服务、Docker 容器或后端端口，支持 WebSocket、HTTPS 自动跳转、网站访问密码保护、IP 限流，也可托管静态网站，修改前自动保存快照支持随时回滚。",
   "license": "AGPL-3.0-only",
   "publisher": {
     "id": "qwq-builtin",

@@ -367,6 +367,8 @@ func (s *helperServer) handle(ctx context.Context, req sandbox.HelperRequest) (r
 		return s.backupPluginData(ctx, req)
 	case sandbox.HelperOpBackupPluginCleanup:
 		return s.cleanupPluginBackup(ctx, req)
+	case sandbox.HelperOpUpdateResources:
+		return s.updateResources(ctx, req)
 	case sandbox.HelperOpReload:
 		return s.reload(ctx)
 	case sandbox.HelperOpPing:
@@ -407,6 +409,35 @@ func (s *helperServer) install(ctx context.Context, req sandbox.HelperRequest) s
 		warnings = append(warnings, warning)
 	}
 	return sandbox.HelperResponse{OK: true, Install: &res, Warnings: warnings}
+}
+
+// updateResources writes or removes a plugin's 20-user-resources.conf drop-in
+// and reloads systemd so administrator-configured limits take effect cleanly.
+func (s *helperServer) updateResources(ctx context.Context, req sandbox.HelperRequest) sandbox.HelperResponse {
+	if err := sandbox.ValidateID(req.ID); err != nil {
+		return helperFailure(problem.ValidationFailed, err.Error())
+	}
+	var lim sandbox.Limits
+	if !req.ResetResources {
+		if req.Limits == nil {
+			return helperFailure(problem.ValidationFailed, "Resource limits must be provided unless reset_resources is true.")
+		}
+		lim = *req.Limits
+		if err := lim.Validate(); err != nil {
+			return helperFailure(problem.ValidationFailed, err.Error())
+		}
+	}
+	if _, err := s.installer.UpdateResources(req.ID, lim, req.ResetResources); err != nil {
+		s.logger.Error("privileged update-resources failed", "id", req.ID, "err", err)
+		return helperFailure(problem.Internal,
+			fmt.Sprintf("Resource limits for plugin %s could not be updated.", req.ID))
+	}
+	if err := s.daemonReload(ctx); err != nil {
+		s.logger.Error("systemctl daemon-reload failed after update-resources", "id", req.ID, "err", err)
+		return helperFailure(problem.Internal,
+			"Resource override was written, but systemd could not reload unit definitions.")
+	}
+	return sandbox.HelperResponse{OK: true}
 }
 
 // remove deletes a version directory and, unless KeepUnit is set, the unit

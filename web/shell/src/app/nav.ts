@@ -40,10 +40,13 @@ export const pluginsResource: ResourceOptions<Plugin[]> = {
 };
 
 const ICON_GUESS: [RegExp, IconName][] = [
-  [/monitor|metric|stat/, 'cpu'],
-  [/secur|firewall|guard|ssh/, 'shield'],
+  [/monitor|metric|stat|probe/, 'cpu'],
+  [/secur|firewall|guard|ssh|xray/, 'shield'],
   [/backup|snapshot/, 'backup'],
-  [/net|dns|proxy/, 'net'],
+  [/net|dns|proxy|ingress/, 'net'],
+  [/cert|tls/, 'lock'],
+  [/ai\.relay/, 'ai'],
+  [/notify/, 'send'],
   [/disk|storage|file/, 'disk'],
 ];
 
@@ -65,15 +68,27 @@ export function pluginNav(list: readonly Plugin[]): NavItem[] {
   for (const p of list) {
     if (!isPluginActiveReady(p)) continue;
     const { color, icon } = pluginLook(p);
-    for (const r of p.ui?.routes ?? []) {
-      if (!r.nav) continue;
-      const sub = r.path.replace(/^\/+/, '');
+    const navRoutes = (p.ui?.routes ?? []).filter((r) => r.nav);
+    if (navRoutes.length > 0) {
+      for (const r of navRoutes) {
+        const sub = r.path.replace(/^\/+/, '');
+        out.push({
+          href: `/plugins/${encodeURIComponent(p.plugin_id)}${sub ? '/' + sub : ''}`,
+          label: r.title || p.name,
+          icon,
+          color,
+          perm: r.permission || undefined,
+          pluginId: p.plugin_id,
+        });
+      }
+    } else {
+      /* 即使插件未声明独立前端 iframe（如 core.xray 核心引擎），也必须在左侧应用栏提供直达入口 */
       out.push({
-        href: `/plugins/${encodeURIComponent(p.plugin_id)}${sub ? '/' + sub : ''}`,
-        label: r.title || p.name,
+        href: `/plugins/${encodeURIComponent(p.plugin_id)}`,
+        label: p.name,
         icon,
         color,
-        perm: r.permission || undefined,
+        perm: 'host.plugins:read',
         pluginId: p.plugin_id,
       });
     }

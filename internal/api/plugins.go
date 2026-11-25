@@ -33,9 +33,10 @@ import (
 
 // pluginInstallRequest is the PluginInstallRequest schema.
 type pluginInstallRequest struct {
-	UploadID             string                  `json:"upload_id"`
-	AcceptedCapabilities []acceptedCapabilityDTO `json:"accepted_capabilities"`
-	ExpectedRevision     string                  `json:"expected_revision,omitempty"`
+	UploadID             string                          `json:"upload_id"`
+	AcceptedCapabilities []acceptedCapabilityDTO         `json:"accepted_capabilities"`
+	ExpectedRevision     string                          `json:"expected_revision,omitempty"`
+	Resources            *pluginResourcesOverrideRequest `json:"resources,omitempty"`
 }
 
 // pluginUpdateRequest is the PluginUpdateRequest schema.
@@ -344,6 +345,12 @@ func (a *api) pluginDTO(p Plugin) pluginDTO {
 	return d
 }
 
+func (a *api) pluginDTOWithOverrides(ctx context.Context, p Plugin) pluginDTO {
+	d := a.pluginDTO(p)
+	a.mergePluginResourceOverride(ctx, &d)
+	return d
+}
+
 // pluginUIURL composes a URL under the versioned plugin static prefix
 // (ADR-0018). path comes from the signed manifest, never from a request.
 func pluginUIURL(pluginID, version, path string) string {
@@ -507,7 +514,7 @@ func (a *api) listPlugins(w http.ResponseWriter, r *http.Request) {
 		var page []Plugin
 		page, next = pagePlugins(plugins, q.Cursor, q.Limit)
 		for _, p := range page {
-			items = append(items, a.pluginDTO(p))
+			items = append(items, a.pluginDTOWithOverrides(r.Context(), p))
 		}
 	}
 	a.writeList(w, r, listResponse{Items: items, NextCursor: next, Revision: a.watermark()}, q.Fields)
@@ -538,7 +545,7 @@ func (a *api) getPlugin(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.writeResource(w, r, http.StatusOK, a.pluginDTO(p), fields)
+	a.writeResource(w, r, http.StatusOK, a.pluginDTOWithOverrides(r.Context(), p), fields)
 }
 
 // installPlugin installs a staged package. The version comes from the signed
@@ -591,6 +598,15 @@ func (a *api) installPlugin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.fail(w, r, err)
 		return
+	}
+	if req.Resources != nil && !req.Resources.ResetDefault {
+		if pInfo, gerr := a.d.Plugins.Get(r.Context(), version.PluginID); gerr == nil {
+			if rerr := a.applyAndPersistPluginResources(r.Context(), version.PluginID, pInfo.Resources, *req.Resources); rerr == nil {
+				if pInfo.Runtime != nil && pInfo.Runtime.State == "running" {
+					_, _ = a.d.Plugins.Restart(lifecycleContext(r), version.PluginID, "initial resource limits")
+				}
+			}
+		}
 	}
 	a.discardUpload(r, uploadID)
 	w.Header().Set("Location", "/api/v1/plugins/"+version.PluginID)
@@ -1321,17 +1337,28 @@ func (a *api) invokePlugin(w http.ResponseWriter, r *http.Request, target operat
 	}
 	// 同步 read+invoke widget 才进入轮询限额，不为轮询创建 operation。
 	// 显式 read+job 使用持久任务和幂等预算，不借 widget 通道重复派发。
+	var widgetCacheScope string
+	var widgetCacheFloor time.Duration
 	if entry != nil && entry.Effect == operations.EffectRead && entry.Mode == operations.ModeInvoke && entry.WidgetRefreshSeconds > 0 {
 		floor := time.Duration(entry.WidgetRefreshSeconds) * time.Second
 		scope := principalScope(act) + "\x00" + actionID
-		wait, ok := a.widgets.begin(scope, a.d.Clock.Now(), floor)
+		now := a.d.Clock.Now()
+		wait, ok := a.widgets.begin(scope, now, floor)
 		if !ok {
+			if cached, hit := a.widgets.lookup(scope, now); hit {
+				if err := gateway.WriteJSON(w, http.StatusOK, json.RawMessage(cached)); err != nil {
+					a.d.Logger.Warn("api: write cached widget response", "error", err)
+				}
+				return
+			}
 			limited := problem.New(problem.RateLimited, "The widget refresh interval has not elapsed.")
 			limited.RetryAfterSec = max(1, int((wait+time.Second-1)/time.Second))
 			a.fail(w, r, limited)
 			return
 		}
 		defer a.widgets.end(scope)
+		widgetCacheScope = scope
+		widgetCacheFloor = floor
 
 		// 对于处于休眠（stopped）状态的 on_demand 插件，直接读取其宿主持久 KV 中的
 		// summary/* 快照返回，绝不因打开首页概览而唤醒全部闲置插件。
@@ -1356,6 +1383,9 @@ func (a *api) invokePlugin(w http.ResponseWriter, r *http.Request, target operat
 	if err != nil {
 		a.fail(w, r, err)
 		return
+	}
+	if widgetCacheScope != "" && resp != nil && resp.Status == http.StatusOK && len(resp.Body) > 0 {
+		a.widgets.store(widgetCacheScope, resp.Body, a.d.Clock.Now(), widgetCacheFloor)
 	}
 	a.writeOperationResponse(w, resp)
 }

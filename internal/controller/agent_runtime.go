@@ -840,17 +840,17 @@ type builtinCatalogEntry struct {
 }
 
 var hostBuiltinOfficialCatalog = []builtinCatalogEntry{
-	{PluginID: "security.basic", Name: "基础安全", Summary: "防火墙规则、SSH 安全基线、密钥账号与防爆破", Category: "security", MemoryMaxMB: 24, Dependencies: []string{}},
-	{PluginID: "monitor.basic", Name: "基础系统监控", Summary: "CPU、内存、磁盘与网络实时趋势微件与历史曲线", Category: "observe", MemoryMaxMB: 18, Dependencies: []string{}},
-	{PluginID: "web.ingress", Name: "反向代理与站点托管", Summary: "内置零依赖 Go 反代网关、HTTPS 自动续期与 :443 SNI 共存分流", Category: "network", MemoryMaxMB: 32, Dependencies: []string{}},
-	{PluginID: "tls.certificates", Name: "TLS 证书与 ACME 管理", Summary: "ACME HTTP-01 / DNS-01 自动签发与集中续期分发", Category: "security", MemoryMaxMB: 24, Dependencies: []string{}},
-	{PluginID: "domain.dns", Name: "域名与 DNS 解析托管", Summary: "Cloudflare、阿里云、腾讯云 DNSPod 解析记录托管", Category: "network", MemoryMaxMB: 24, Dependencies: []string{}},
-	{PluginID: "containers.docker", Name: "轻量容器与 Compose 管理", Summary: "容器生命周期、快速建容器向导、反代绑域名与受管 Compose 编排", Category: "infra", MemoryMaxMB: 32, Dependencies: []string{}},
-	{PluginID: "server.probe", Name: "服务器探针中心", Summary: "单向安全多机探针、90 天 SLA 与三网延迟曲线", Category: "observe", MemoryMaxMB: 32, Dependencies: []string{}},
-	{PluginID: "core.xray", Name: "全协议代理核心驱动", Summary: "托管 Xray 核心与原生硬化 AnyTLS v2、Reality 与 WARP 分流", Category: "proxy", MemoryMaxMB: 64, Dependencies: []string{}},
-	{PluginID: "proxy.advanced", Name: "高级代理工作台与订阅中心", Summary: "多用户配额、节点构建器与 Base64/Clash/Sing-box 订阅分发", Category: "proxy", MemoryMaxMB: 32, Dependencies: []string{"core.xray"}},
-	{PluginID: "ai.relay", Name: "AI API 聚合中转站", Summary: "OpenAI / Anthropic / Gemini 协议互转、渠道负载均衡与自服务门户", Category: "ai", MemoryMaxMB: 48, Dependencies: []string{}},
-	{PluginID: "notify.hub", Name: "统一告警与通知中枢", Summary: "Telegram、飞书、钉钉、企业微信、Discord、SMTP 与 Webhook 告警聚合", Category: "observe", MemoryMaxMB: 24, Dependencies: []string{}},
+	{PluginID: "security.basic", Name: "基础安全", Summary: "管理服务器防火墙端口、安全改 SSH 端口、管理 SSH 密钥密码及防爆破封禁", Category: "security", MemoryMaxMB: 32, Dependencies: []string{}},
+	{PluginID: "monitor.basic", Name: "历史监控曲线", Summary: "记录更长时间段的 CPU、内存、磁盘与网络历史趋势图表", Category: "observe", MemoryMaxMB: 24, Dependencies: []string{}},
+	{PluginID: "web.ingress", Name: "反向代理与建站", Summary: "把域名反向代理到本机端口或容器、托管静态站点，自动配好 HTTPS 与限流", Category: "network", MemoryMaxMB: 32, Dependencies: []string{}},
+	{PluginID: "tls.certificates", Name: "SSL / TLS 证书", Summary: "免费自动申请和续期单域名 / 泛域名 HTTPS 证书并自动分发", Category: "security", MemoryMaxMB: 32, Dependencies: []string{}},
+	{PluginID: "domain.dns", Name: "域名 DNS 解析", Summary: "直接在面板管理 Cloudflare、阿里云等域名解析记录", Category: "network", MemoryMaxMB: 32, Dependencies: []string{}},
+	{PluginID: "containers.docker", Name: "Docker 容器管理", Summary: "可视化管理 Docker 容器、镜像、日志、端口与 Compose 项目", Category: "infra", MemoryMaxMB: 32, Dependencies: []string{}},
+	{PluginID: "server.probe", Name: "多机服务器探针", Summary: "汇总监控多台 VPS 状态、90 天在线率与三网延迟测速及公开状态页", Category: "observe", MemoryMaxMB: 32, Dependencies: []string{}},
+	{PluginID: "core.xray", Name: "Xray 代理核心", Summary: "科学上网与代理转发核心引擎，支持 VLESS(Reality)、VMess、Trojan、SS2022、Hysteria2 等协议", Category: "proxy", MemoryMaxMB: 256, Dependencies: []string{}},
+	{PluginID: "proxy.advanced", Name: "高级代理与订阅中心", Summary: "科学上网节点图形化搭建、多用户流量限速与 Clash / sing-box 订阅分发", Category: "proxy", MemoryMaxMB: 64, Dependencies: []string{"core.xray"}},
+	{PluginID: "ai.relay", Name: "AI API 中转站", Summary: "聚合 OpenAI / Claude / Gemini 密钥与订阅，支持协议互转与额度分发", Category: "ai", MemoryMaxMB: 64, Dependencies: []string{}},
+	{PluginID: "notify.hub", Name: "告警与消息通知", Summary: "把服务器告警推送到 Telegram、飞书、钉钉、企微、Discord 或邮箱", Category: "observe", MemoryMaxMB: 24, Dependencies: []string{}},
 }
 
 func (r *AgentRunner) readPluginsCatalog(ctx context.Context, owner actor.Actor, rawArgs json.RawMessage) (any, error) {

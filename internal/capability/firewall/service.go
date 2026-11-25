@@ -73,6 +73,15 @@ func (s *Service) Run(ctx context.Context, request sandbox.CapabilityRequest) (s
 	if request.Op == "firewall.sync-panel-port" {
 		return s.syncPanelPort(ctx, params), nil
 	}
+	if request.Op == "firewall.takeover_status" {
+		return s.takeoverStatusOp(ctx), nil
+	}
+	if request.Op == "firewall.takeover" {
+		return s.takeoverManagerOp(ctx, params), nil
+	}
+	if request.Op == "firewall.restore_manager" {
+		return s.restoreManagerOp(ctx, params), nil
+	}
 	if request.Op == "firewall.detect" {
 		if decodeObject(params, new(struct{})) != nil {
 			return failure("VALIDATION_FAILED", "检测请求格式无效"), nil

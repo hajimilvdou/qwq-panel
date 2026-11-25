@@ -172,6 +172,79 @@ export type PanelAccessUpdateRequest = operations['putSystemAccess']['requestBod
 export type SystemBackupEntry = S['SystemBackupEntry'];
 export type SystemBackupList = S['SystemBackupList'];
 
+export interface SystemHostMetrics {
+  collected_at: string;
+  host: {
+    hostname: string;
+    os: string;
+    kernel: string;
+    arch: string;
+    uptime_seconds: number;
+  };
+  cpu: {
+    usage_percent: number;
+    cores: number;
+    load_1: number;
+    load_5: number;
+    load_15: number;
+    history: number[];
+  };
+  memory: {
+    used_bytes: number;
+    total_bytes: number;
+    available_bytes: number;
+    cached_bytes: number;
+    usage_percent: number;
+    swap_used_bytes: number;
+    swap_total_bytes: number;
+    history: number[];
+  };
+  disk: {
+    mount: string;
+    used_bytes: number;
+    total_bytes: number;
+    usage_percent: number;
+    mounts: {
+      mount: string;
+      device?: string;
+      used_bytes: number;
+      total_bytes: number;
+      usage_percent: number;
+    }[];
+  };
+  network: {
+    rx_bytes_per_sec: number;
+    tx_bytes_per_sec: number;
+    rx_total_bytes: number;
+    tx_total_bytes: number;
+    rx_history: number[];
+    tx_history: number[];
+  };
+}
+
+export interface PluginResourceOverrideRequest {
+  memory_max_mb: number;
+  cpu_quota_percent: number;
+  pids_max?: number;
+  fds_max?: number;
+  disk_max_mb?: number;
+  reset_default?: boolean;
+}
+
+export interface SecurityTakeoverEntry {
+  manager: 'ufw' | 'firewalld' | 'fail2ban';
+  active: boolean;
+  taken_over: boolean;
+  backup_exists: boolean;
+  backup_at?: string;
+  imported_ports?: number[];
+  detail: string;
+}
+
+export interface SecurityTakeoverStatus {
+  managers: SecurityTakeoverEntry[];
+}
+
 /* ------------------------------------------------------------------ 小组件结果形状（manifest 1.3，插件负责，宿主不校验） */
 
 export type Level = 'ok' | 'warn' | 'bad';

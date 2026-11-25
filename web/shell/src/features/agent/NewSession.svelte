@@ -1,12 +1,8 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!--
-  NewSession · 新建会话面板（SPEC §3.3 / ADR-0028）
+  NewSession · 新建会话面板
   ───────────────────────────────────────────────────────────────────────────────
-  支持：
-  - 核心选择（内置原生 / Claude Code / Codex / OpenCode）
-  - 外部 CLI 明确区分「官方登录态」与「自定义 API 服务（URL/Key）」，互不串线
-  - 选择具体模型（自动带出该服务已拉取的模型列表，也支持手填）、思考挡位（Effort）、
-    上下文窗口大小（Max Context）与计划模式（Plan Mode）
+  支持传统对话附件上传（选文件/拖拽/粘贴）、视觉高亮可删除引用条、常驻 Token/上下文条。
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
@@ -19,21 +15,24 @@
   import { coreLabel, MODE_META, MODES } from '$lib/ai/agent-sessions.svelte';
   import ContextField from '../ai/ContextField.svelte';
   import EffortField from '../ai/EffortField.svelte';
+  import TelemetryStrip from '../ai/TelemetryStrip.svelte';
   import { useResource } from '$lib/resource.svelte';
   import { reportError } from '$lib/errors';
   import { navigate } from '$lib/router.svelte';
   import { resources } from '$lib/resource.svelte';
   import { session } from '$lib/session.svelte';
-  import Composer from '../ai/Composer.svelte';
+  import Composer, { type ComposerCitation } from '../ai/Composer.svelte';
 
   let {
     prompt = '',
-    pendingInsert = null,
-    ontoggleexchange,
+    citations = [],
+    onremovecitation,
+    onclearcitations,
   }: {
     prompt?: string;
-    pendingInsert?: { seq: number; text: string } | null;
-    ontoggleexchange?: () => void;
+    citations?: readonly ComposerCitation[];
+    onremovecitation?: (path: string) => void;
+    onclearcitations?: () => void;
   } = $props();
 
   const cores = useResource({ key: 'agent-cores', load: () => agent.cores().then((r) => r.items) });
@@ -49,14 +48,6 @@
   let maxContext = $state('0');
   let planMode = $state(false);
   let text = $state(untrack(() => prompt));
-  let lastInsertSeq = 0;
-
-  $effect(() => {
-    if (!pendingInsert || pendingInsert.seq === lastInsertSeq) return;
-    lastInsertSeq = pendingInsert.seq;
-    const prefix = text.trim() ? `${text.trimEnd()}\n` : '';
-    text = `${prefix}${pendingInsert.text} `;
-  });
 
   const isAdmin = $derived(session.role === 'admin');
   const canWriteAgent = $derived(session.can('host.agent_sessions:write'));
@@ -95,14 +86,13 @@
   const noProvider = $derived(providers.status === 'ready' && !providers.data?.length);
   const unavailableReason = $derived(cores.data?.find((c) => c.core === core && !c.available)?.reason);
   const needsProvider = $derived(core === 'native' || authMode === 'provider');
+  const effectiveModel = $derived(modelOverride.trim() || activeProvider?.model || '');
 
-  /* 默认选中默认提供方 */
   $effect(() => {
     if (!providerId && providers.data?.length)
       providerId = (providers.data.find((p) => p.is_default) ?? providers.data[0]!).provider_id;
   });
 
-  /* 切换外部 CLI 核心时：若已登录官方账号默认选官方登录，否则若配了自定义服务则默认自定义 Key */
   $effect(() => {
     if (!isExternalCli) return;
     if (activeCoreAuth?.logged_in) authMode = 'oauth';
@@ -118,9 +108,7 @@
         cfg.enable_plan_tool = true;
       } else {
         cfg.auth_mode = authMode;
-        if (authMode === 'provider' && providerId) {
-          cfg.provider_id = providerId;
-        }
+        if (authMode === 'provider' && providerId) cfg.provider_id = providerId;
       }
       if (modelOverride.trim()) cfg.model = modelOverride.trim();
       if (effort) cfg.reasoning_effort = effort;
@@ -146,9 +134,9 @@
 
 <div class="new">
   <header class="hero">
-    <div class="hero-orb"><Orb size={58} state="idle" /></div>
+    <div class="hero-orb"><Orb size={56} state="idle" /></div>
     <h2>你好{session.user?.display_name ? `，${session.user.display_name}` : ''}，想让我做点什么？</h2>
-    <p>我可以执行服务器命令、读写排查配置、原生管理面板插件，也能通过右侧「交互文件夹」和你双向交换文件。</p>
+    <p>我可以执行服务器命令、读写排查配置、原生管理面板插件，也支持直接上传文件或通过交互文件夹协作。</p>
   </header>
 
   <section class="opts" aria-label="对话设置">
@@ -209,12 +197,12 @@
         {/if}
         <EffortField
           label="思考挡位（Effort，可自定义或自动匹配清单）"
-          model={modelOverride.trim() || activeProvider?.model || ''}
+          model={effectiveModel}
           bind:value={effort}
         />
         <ContextField
           label="上下文窗口大小（自动识别主流模型）"
-          model={modelOverride.trim() || activeProvider?.model || ''}
+          model={effectiveModel}
           bind:value={maxContext}
         />
       </div>
@@ -252,18 +240,15 @@
   <div class="compose">
     <Composer
       bind:value={text}
+      {citations}
+      {onremovecitation}
+      {onclearcitations}
+      allowUpload={canWriteAgent}
       onsend={start}
       disabled={!canWriteAgent || (needsProvider && noProvider) || !!unavailableReason}
       disabledReason={!canWriteAgent ? '当前角色仅支持只读查看，无法发起 AI 会话' : '先选一个可用的核心或 AI 服务'}
-    >
-      {#snippet tools()}
-        {#if ontoggleexchange}
-          <button type="button" class="pill" onclick={ontoggleexchange}>
-            <Icon name="folder" size={14} /> 交互文件夹（上传/查看文件）
-          </button>
-        {/if}
-      {/snippet}
-    </Composer>
+    />
+    <TelemetryStrip model={effectiveModel} maxContextTokens={Number.parseInt(maxContext, 10) || 0} />
   </div>
 </div>
 
@@ -272,9 +257,9 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-5);
-    width: min(880px, 100%);
+    width: min(960px, 100%);
     margin: 0 auto;
-    padding: var(--s-6) var(--s-5) var(--s-5);
+    padding: var(--s-5) var(--s-5) var(--s-4);
   }
   .hero {
     display: grid;
@@ -289,10 +274,8 @@
   h2 {
     margin: 0;
     font-size: var(--fs-2xl);
-    font-weight: var(--fw-semibold);
   }
   .hero p {
-    margin: 0;
     color: var(--text-2);
   }
   .opts {
@@ -308,7 +291,6 @@
   .lbl {
     width: 58px;
     flex: none;
-    padding: 0;
     font-size: var(--fs-sm);
     color: var(--text-2);
   }
@@ -332,9 +314,7 @@
     border: 1px solid var(--line);
     background: var(--surface);
     color: var(--text-2);
-    font: inherit;
     font-size: var(--fs-xs);
-    cursor: pointer;
   }
   .pill.on {
     border-color: var(--accent);
@@ -345,7 +325,6 @@
   .go-link {
     font-size: var(--fs-xs);
     color: var(--accent-text);
-    text-decoration: none;
   }
   .params-stack {
     flex: 1;
@@ -354,7 +333,6 @@
     min-width: 0;
   }
   .hint {
-    margin: 0;
     font-size: var(--fs-sm);
     color: var(--text-3);
   }
@@ -382,9 +360,7 @@
     border: 1px solid var(--line);
     background: var(--surface);
     cursor: pointer;
-    transition:
-      border-color var(--dur-1) var(--ease),
-      background var(--dur-1) var(--ease);
+    transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
   }
   .mode:hover {
     border-color: var(--line-strong);
@@ -430,6 +406,8 @@
   }
   .compose {
     margin-top: auto;
+    display: grid;
+    gap: 8px;
   }
   @media (max-width: 860px) {
     .modes {

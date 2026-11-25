@@ -1,27 +1,37 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!--
-  AppShell · 登录后的整体布局（SPEC §2）
-  ───────────────────────────────────────────────────────────────
-  ┌──────────┬───────────────────────────────┐
-  │ Sidebar  │ Topbar（sticky，毛玻璃）       │
-  │  248     │ ConnectionBar（断线时）        │
-  │          │ main（max 1280，居中）         │
-  └──────────┴───────────────────────────────┘
-  ≤860：侧栏隐藏，底部 TabBar（5 项），内容区底部留白 150。
+  AppShell · 登录后的整体布局（含宽屏模式 + 插件保活驻留池）
 -->
 <script lang="ts">
-  import type { Snippet } from 'svelte';
+  import { onDestroy, type Snippet } from 'svelte';
   import { palette } from '$lib/palette.svelte';
   import { prefs } from '$lib/prefs.svelte';
+  import { useResource } from '$lib/resource.svelte';
+  import { router } from '$lib/router.svelte';
+  import { pluginFramePool } from '../features/plugins/plugin-frame-pool.svelte';
   import ConnectionBar from './ConnectionBar.svelte';
+  import { pluginsResource } from './nav';
   import Sidebar from './Sidebar.svelte';
   import TabBar from './TabBar.svelte';
   import Topbar from './Topbar.svelte';
 
   let { children }: { children: Snippet } = $props();
 
-  /* 悬浮窗与命令面板均动态按需加载，避免拖慢首屏 */
+  const plugins = useResource(pluginsResource);
+  const wideMode = $derived(router.path.startsWith('/agent'));
+
+  /* 插件状态变化时同步淘汰已停用/已卸载/已升级的保活 iframe */
+  $effect(() => {
+    if (plugins.data) pluginFramePool.syncWithPlugins(plugins.data);
+  });
+
+  onDestroy(() => pluginFramePool.clear());
+
+  /* 悬浮窗、命令面板与 PluginFrame 均按需动态加载，保持首屏最小化 */
   const dockMod = import('../features/dock/AiDock.svelte');
+  let frameMod: Promise<typeof import('../features/plugins/PluginFrame.svelte')> | null = null;
+  const loadPluginFrame = () => (frameMod ??= import('../features/plugins/PluginFrame.svelte'));
+
   let paletteMounted = $state(false);
   let paletteMod: Promise<typeof import('../features/palette/CommandPalette.svelte')> | null = null;
   const loadPalette = () => (paletteMod ??= import('../features/palette/CommandPalette.svelte'));
@@ -39,8 +49,24 @@
   <div class="stage">
     <Topbar />
     <ConnectionBar />
-    <main id="main" class="main" tabindex="-1">
+    <main id="main" class="main" class:wide={wideMode} tabindex="-1">
       {@render children()}
+
+      {#if pluginFramePool.entries.length > 0}
+        {#await loadPluginFrame() then mod}
+          {#each pluginFramePool.entries as entry (entry.key)}
+            {@const isActive = pluginFramePool.activeKey === entry.key}
+            <div class="pool-slot" class:inactive={!isActive} aria-hidden={!isActive}>
+              <mod.default
+                plugin={entry.plugin}
+                path={entry.path}
+                active={isActive}
+                reloadTick={entry.reloadTick}
+              />
+            </div>
+          {/each}
+        {/await}
+      {/if}
     </main>
   </div>
 </div>
@@ -78,6 +104,13 @@
     padding: var(--s-2) var(--s-5) 88px;
     outline: none;
   }
+  .main.wide {
+    max-width: none;
+    padding: var(--s-1) var(--s-4) var(--s-3);
+  }
+  .pool-slot.inactive {
+    display: none;
+  }
   .skip {
     position: fixed;
     top: 8px;
@@ -96,12 +129,16 @@
     .main {
       padding-inline: var(--s-5);
     }
+    .main.wide {
+      padding-inline: var(--s-3);
+    }
   }
   @media (max-width: 860px) {
     .app {
       grid-template-columns: minmax(0, 1fr);
     }
-    .main {
+    .main,
+    .main.wide {
       padding: var(--s-2) var(--s-4) 150px;
     }
   }

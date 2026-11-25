@@ -9,6 +9,11 @@
         单飞——上一次没回来不发下一次；卸载即中止。
   失败：只在本卡显示错误与重试，健康度上报 undefined（不把未知当故障）。
 -->
+<script module lang="ts">
+  import type { WidgetData as CachedWidgetData } from './index';
+  const widgetCache = new Map<string, { data: CachedWidgetData; fetchedAt: number }>();
+</script>
+
 <script lang="ts">
   import { untrack } from 'svelte';
   import { plugins as pluginsApi } from '$api/endpoints';
@@ -50,7 +55,8 @@
   );
 
   /* ---------------------------------------------------------------- 状态 */
-  let data = $state<WidgetData | null>(null);
+  const initialHit = untrack(() => widgetCache.get(slot.key));
+  let data = $state<WidgetData | null>(initialHit?.data ?? null);
   let failure = $state<{ message: string; fromPlugin?: string; requestId?: string } | null>(null);
   let retryNow = $state(0);
   let detailDlg = $state<HTMLDialogElement>();
@@ -109,9 +115,11 @@
           failure = { message: r.error?.title ?? '应用没有给出数据', fromPlugin: r.error?.detail, requestId: r.error?.request_id };
           onlevel?.(undefined);
         } else {
-          data = parseWidget(widget.kind, r.result);
+          const parsed = parseWidget(widget.kind, r.result);
+          data = parsed;
+          widgetCache.set(slot.key, { data: parsed, fetchedAt: Date.now() });
           failure = null;
-          onlevel?.(levelOf(data));
+          onlevel?.(levelOf(parsed));
         }
       } catch (err) {
         if (ctrl.signal.aborted) return;
@@ -126,7 +134,19 @@
       if (!paused() && !timer && !ctrl) void tick();
     };
     document.addEventListener('visibilitychange', resume);
-    untrack(() => void tick()); /* 断线由下方边沿监听负责，这里不追踪 events.offline */
+    untrack(() => {
+      const hit = widgetCache.get(slot.key);
+      if (hit) {
+        data = hit.data;
+        onlevel?.(levelOf(hit.data));
+        const age = Date.now() - hit.fetchedAt;
+        if (age < every && retryNow === 0) {
+          timer = setTimeout(tick, Math.max(500, every - age));
+          return;
+        }
+      }
+      void tick();
+    });
 
     return () => {
       disposed = true;

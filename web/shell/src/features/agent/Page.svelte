@@ -1,11 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!--
-  原生 Agent 页（SPEC §3.3）
-  ───────────────────────────────────────────────────────────────
-  三栏自适应：左 238 会话列表 · 中 对话或新建面板 · 右 可折叠 356 交互文件夹；
-  ≤860 会话列表收进左抽屉，≤1180 交互文件夹收进右抽屉。
-  在本页时悬浮窗只保留球形提醒（dock.chatSuppressed），避免同屏两个输入框。
-  会话切换时 Conversation 以 id 为 key 重建：各自的流互不串线。
+  原生 Agent 页（宽屏三栏自适应：会话列表 + 对话 + 交互文件夹）
 -->
 <script lang="ts">
   import { Drawer } from '$ui';
@@ -13,6 +8,7 @@
   import { sessionsResource } from '$lib/ai/agent-sessions.svelte';
   import { useResource } from '$lib/resource.svelte';
   import { session } from '$lib/session.svelte';
+  import type { ComposerCitation } from '../ai/Composer.svelte';
   import Conversation from './Conversation.svelte';
   import NewSession from './NewSession.svelte';
   import SessionList from './SessionList.svelte';
@@ -33,8 +29,7 @@
   let workspaceTab = $state<WorkspaceTab>('prompts');
   let exchangeOpen = $state(false);
   let exchangeTick = $state(0);
-  let insertSeq = 0;
-  let pendingInsert = $state<{ seq: number; text: string } | null>(null);
+  let citations = $state<ComposerCitation[]>([]);
 
   function openWorkspace(tab: WorkspaceTab = 'prompts') {
     if (!isAdmin) return;
@@ -50,10 +45,19 @@
   }
   const exchangeTrigger = $derived(canReadAgent ? toggleExchange : undefined);
 
-  function handleInsertRef(refText: string) {
-    insertSeq += 1;
-    pendingInsert = { seq: insertSeq, text: refText };
+  function handleInsertRef(ref: ComposerCitation) {
+    if (!citations.some((c) => c.path === ref.path)) {
+      citations = [...citations, ref];
+    }
     if (compactExchange) exchangeOpen = false;
+  }
+
+  function removeCitation(path: string) {
+    citations = citations.filter((c) => c.path !== path);
+  }
+
+  function clearCitations() {
+    citations = [];
   }
 
   $effect(() => {
@@ -95,7 +99,9 @@
         <Conversation
           {id}
           {exchangeOpen}
-          {pendingInsert}
+          {citations}
+          onremovecitation={removeCitation}
+          onclearcitations={clearCitations}
           onmenu={narrow ? () => (drawer = true) : undefined}
           onopenworkspace={workspaceTrigger}
           ontoggleexchange={exchangeTrigger}
@@ -115,7 +121,7 @@
             {/if}
           </div>
         {/if}
-        <NewSession {pendingInsert} ontoggleexchange={exchangeTrigger} />
+        <NewSession {citations} onremovecitation={removeCitation} onclearcitations={clearCitations} />
       {/if}
     {/key}
   </div>
@@ -149,10 +155,7 @@
 {#if compactExchange && canReadAgent && exchangeOpen}
   <Drawer bind:open={exchangeOpen} title="交互文件夹" side="right">
     {#await import('./ExchangePanel.svelte') then mod}
-      <mod.default
-        refreshTick={exchangeTick}
-        oninsertref={handleInsertRef}
-      />
+      <mod.default refreshTick={exchangeTick} oninsertref={handleInsertRef} />
     {/await}
   </Drawer>
 {/if}
@@ -164,12 +167,11 @@
 {/if}
 
 <style>
-  /* 占满宽屏工作区（支持三栏协同：会话列表 + 对话 + 交互文件夹） */
   .agent {
     display: grid;
-    grid-template-columns: 238px 1fr;
-    height: calc(100dvh - var(--top-h) - var(--s-5));
-    min-height: 520px;
+    grid-template-columns: 224px minmax(0, 1fr);
+    height: calc(100dvh - var(--top-h) - 38px);
+    min-height: 540px;
     border-radius: var(--r-xl);
     background: var(--surface);
     border: 1px solid var(--line);
@@ -177,7 +179,7 @@
     overflow: hidden;
   }
   .agent.with-exchange {
-    grid-template-columns: 238px minmax(0, 1fr) 356px;
+    grid-template-columns: 220px minmax(0, 1fr) 336px;
   }
   .side {
     min-height: 0;
@@ -213,14 +215,12 @@
     border-radius: var(--r-pill);
     background: var(--surface);
     color: var(--text-2);
-    font: inherit;
     font-size: var(--fs-sm);
-    cursor: pointer;
   }
   @media (max-width: 860px) {
     .agent {
       grid-template-columns: 1fr;
-      height: calc(100dvh - var(--top-h) - var(--tabbar-h) - var(--s-4));
+      height: calc(100dvh - var(--top-h) - var(--tabbar-h) - var(--s-5));
       border-radius: var(--r-lg);
     }
   }

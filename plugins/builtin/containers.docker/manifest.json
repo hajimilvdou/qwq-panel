@@ -3,8 +3,8 @@
   "id": "containers.docker",
   "version": "0.1.0",
   "name": "轻量容器与 Compose 管理",
-  "summary": "直连 Docker Unix Socket 的极简容器运维、动态资源限额、有界日志、镜像清理与受管 Compose 编排",
-  "description": "面向 1C1G 低内存 VPS 的轻量容器与 Compose 插件：零重型 Docker SDK 依赖，直接通过标准库 Unix Socket 通信 Docker Engine API；支持容器健康与 OOMKilled 检测、64KiB/500行有界多路复用日志解包、动态内存/CPU 限额调整、悬空镜像清理，以及内置特权/宿主机挂载安全静态扫描的 Compose 编排栈管理；原生提供 <2KiB AI 异常诊断摘要与审批护栏。",
+  "summary": "可视化管理 Docker 容器、镜像、网络、端口映射与 Docker Compose 项目",
+  "description": "Docker 容器管理工具：一眼查看所有容器运行状态、实时日志与资源占用，支持启动/停止/重启、在线修改端口与资源限额、一键绑定反向代理域名、清理无用镜像以及部署管理 Docker Compose 项目。",
   "license": "AGPL-3.0-only",
   "publisher": {
     "id": "qwq-builtin",

@@ -196,7 +196,8 @@ type api struct {
 	inspections *inspectionCache
 	// widgets holds the refresh floor and the in-flight reservation of every
 	// widget read (GAPS gap 7).
-	widgets *widgetReads
+	widgets     *widgetReads
+	hostMetrics *hostMetricsTracker
 	// catalogCache caches the official GitHub Release plugins-index.json for 5 minutes.
 	catalogCache cachedPluginCatalog
 	// startedAt stands in for the node's created_at: a standalone node is the
@@ -222,7 +223,7 @@ func Register(g *gateway.Gateway, d Deps) error {
 		return err
 	}
 	a := &api{g: g, d: d, id: newReplayCache(d.Clock), inspections: newInspectionCache(d.Clock),
-		widgets: newWidgetReads(), startedAt: d.Clock.Now().UTC(),
+		widgets: newWidgetReads(), hostMetrics: newHostMetricsTracker(), startedAt: d.Clock.Now().UTC(),
 		routing: routingrules.NewEngine(nil), selector: netfacts.NewCandidateSelector(),
 		netFactsFn:     d.NetFacts,
 		trustedProxies: panelaccess.ParseTrustedProxies(d.Config.HTTP.TrustedProxies),
@@ -299,6 +300,7 @@ func (a *api) routes() []gateway.Route {
 		{Method: http.MethodPost, Pattern: "/api/v1/plugins/{plugin_id}/disable", Access: sessionOrService, RequireIdempotency: true, Handler: http.HandlerFunc(a.disablePlugin)},
 		{Method: http.MethodGet, Pattern: "/api/v1/plugins/{plugin_id}/config", Access: sessionOrService, Handler: http.HandlerFunc(a.getPluginConfig)},
 		{Method: http.MethodPut, Pattern: "/api/v1/plugins/{plugin_id}/config", Access: sessionOrService, Body: gateway.BodyJSON, RequireIdempotency: true, Handler: http.HandlerFunc(a.putPluginConfig)},
+		{Method: http.MethodPut, Pattern: "/api/v1/plugins/{plugin_id}/resources", Access: sessionOrService, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.putPluginResources)},
 		{Method: http.MethodGet, Pattern: "/api/v1/plugins/{plugin_id}/config-schema", Access: sessionOrService, Handler: http.HandlerFunc(a.getPluginConfigSchema)},
 		{Method: http.MethodGet, Pattern: "/api/v1/plugins/{plugin_id}/logs", Access: sessionOrService, Handler: http.HandlerFunc(a.getPluginLogs)},
 		{Method: http.MethodPost, Pattern: "/api/v1/plugin-packages", Access: sessionOrService, Body: gateway.BodyPackage, Handler: http.HandlerFunc(a.uploadPluginPackage)},
@@ -328,8 +330,12 @@ func (a *api) routes() []gateway.Route {
 		{Method: http.MethodGet, Pattern: "/api/v1/actions/{action_id}", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.getAction)},
 		// audit log (GAP-7)
 		{Method: http.MethodGet, Pattern: "/api/v1/audit", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.listAudit)},
-		// system overview (GAP-7), live panel access / stealth disguise & backup/support-bundle
+		// system overview (GAP-7), built-in host metrics, live panel access / stealth disguise & backup/support-bundle
 		{Method: http.MethodGet, Pattern: "/api/v1/system", Access: sessionOrService, Handler: http.HandlerFunc(a.getSystem)},
+		{Method: http.MethodGet, Pattern: "/api/v1/system/metrics", Access: sessionOrService, Handler: http.HandlerFunc(a.getSystemMetrics)},
+		{Method: http.MethodGet, Pattern: "/api/v1/system/security/takeover", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.getSecurityTakeover)},
+		{Method: http.MethodPost, Pattern: "/api/v1/system/security/takeover", Access: gateway.AccessSession, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.postSecurityTakeover)},
+		{Method: http.MethodPost, Pattern: "/api/v1/system/security/restore", Access: gateway.AccessSession, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.postSecurityRestore)},
 		{Method: http.MethodGet, Pattern: "/api/v1/system/access", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.getSystemAccess)},
 		{Method: http.MethodPut, Pattern: "/api/v1/system/access", Access: gateway.AccessSession, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.putSystemAccess)},
 		{Method: http.MethodGet, Pattern: "/api/v1/system/backups", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.listSystemBackups)},

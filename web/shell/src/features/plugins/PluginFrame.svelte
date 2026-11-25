@@ -1,14 +1,14 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!--
-  PluginFrame · 单个插件 iframe + 宿主桥（ENG §9 + STEP-16）
+  PluginFrame · 单个插件 iframe + 宿主桥（ENG §9 + STEP-16 + Keep-Alive）
   ───────────────────────────────────────────────────────────────
-  attempt 每 +1：重建 <iframe>（{#key}）并重新 attach，等于全新握手。
-  设置变化（主题 / 动效 / 密度 / 可见性 / public_origin）即推 ui.settings；path 变化推 ui.route。
+  支持保活驻留：active=false 时隐藏且向插件下发 visible=false，切回时 0ms 显现。
+  attempt / reloadTick 递增时重建 <iframe> 并重新握手。
   沙箱内 ui.confirm 由本宿主组件弹出统一风格的 <ConfirmDialog>，绝不开启 allow-modals。
 -->
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
-  import { Button, ConfirmDialog, ErrorState, Skeleton } from '$ui';
+  import { Button, ConfirmDialog, ErrorState, Spinner } from '$ui';
   import { system } from '$api/endpoints';
   import type { Plugin } from '$api/types';
   import { PluginBridge, HEIGHT_MIN, type BridgeConfirmRequest, type HostViewport } from '$lib/plugin-host';
@@ -21,8 +21,10 @@
   interface Props {
     plugin: Plugin;
     path: string;
+    active?: boolean;
+    reloadTick?: number;
   }
-  let { plugin, path }: Props = $props();
+  let { plugin, path, active = true, reloadTick = 0 }: Props = $props();
 
   /* Shell 固定策略：插件不能影响 sandbox 取值 */
   const SANDBOX = 'allow-scripts allow-forms allow-downloads';
@@ -33,10 +35,12 @@
     load: () => system.info(),
   });
   let phase = $state<'loading' | 'ready' | 'timeout'>('loading');
-  let height = $state(Math.max(HEIGHT_MIN, 560));
+  let height = $state(Math.max(HEIGHT_MIN, 420));
   let attempt = $state(0);
-  let visible = $state(typeof document === 'undefined' || document.visibilityState === 'visible');
+  let docVisible = $state(typeof document === 'undefined' || document.visibilityState === 'visible');
   let frame = $state<HTMLIFrameElement>();
+
+  const effectiveVisible = $derived(docVisible && active);
 
   /* 宿主受控确认弹窗（代理沙箱内 ui.confirm） */
   interface PendingConfirm extends BridgeConfirmRequest {
@@ -75,16 +79,20 @@
     }),
   );
 
+  /* 外部主动触发重载（如强制接管/恢复安全管理器后刷新安全插件） */
+  let lastReloadTick = untrack(() => reloadTick);
+  $effect(() => {
+    if (reloadTick === lastReloadTick) return;
+    lastReloadTick = reloadTick;
+    untrack(() => retry());
+  });
+
   /* 首帧 src 只在每次重建时计算一次；之后的路径变化走 ui.route，不重载 iframe */
   const src = $derived.by(() => {
     void attempt;
     return untrack(() => pluginFrameSrc(p.ui!.entry_url, hostSettings(), path));
   });
 
-  /*
-   * iframe 一插入 DOM 就 attach（不能等 load 事件：插件脚本在 load 之前就会发
-   * hello）。contentWindow 是稳定的 WindowProxy，从 about:blank 导航到 entry 不变。
-   */
   $effect(() => {
     void attempt;
     if (frame) bridge.attach(frame.contentWindow);
@@ -96,15 +104,15 @@
     attempt++;
   }
 
-  /* 主题等变化 → ui.settings（读这些响应式值即建立依赖） */
+  /* 主题与可见性变化 → ui.settings */
   $effect(() => {
     void prefs.resolvedTheme;
     void prefs.resolvedMotion;
     void prefs.density;
     void prefs.accent;
-    void visible;
+    const vis = effectiveVisible;
     void sysInfo.data;
-    untrack(() => bridge.settings({ ...hostSettings(), visible }));
+    untrack(() => bridge.settings({ ...hostSettings(), visible: vis }));
   });
 
   /* 浏览器前进后退 / 插件内导航回写后的路径 → ui.route */
@@ -115,7 +123,7 @@
     bridge.route(path);
   });
 
-  /* 跨 iframe 视口同步：让长自适应 iframe（2000~16000px）内弹窗/抽屉始终停在用户可视区 */
+  /* 跨 iframe 视口同步 */
   function computeViewport(el: HTMLIFrameElement): HostViewport {
     const rect = el.getBoundingClientRect();
     const winH = window.innerHeight || document.documentElement.clientHeight || 720;
@@ -144,7 +152,7 @@
   let vpRaf = 0;
   let lastVpKey = '';
   function syncViewport(force = false) {
-    if (!frame) return;
+    if (!frame || !active) return;
     const vp = computeViewport(frame);
     const key = `${vp.offsetTopPx}:${vp.viewportHeightPx}:${vp.viewport_width}`;
     if (!force && key === lastVpKey) return;
@@ -152,7 +160,7 @@
     bridge.viewport(vp);
   }
   function scheduleViewportSync() {
-    if (vpRaf) return;
+    if (vpRaf || !active) return;
     vpRaf = requestAnimationFrame(() => {
       vpRaf = 0;
       syncViewport(false);
@@ -161,12 +169,13 @@
 
   $effect(() => {
     void height;
-    if (phase === 'ready' && frame) {
-      untrack(() => syncViewport(true));
+    const isAct = active;
+    if (phase === 'ready' && isAct && frame) {
+      untrack(() => requestAnimationFrame(() => syncViewport(true)));
     }
   });
 
-  const onVisibility = () => (visible = document.visibilityState === 'visible');
+  const onVisibility = () => (docVisible = document.visibilityState === 'visible');
   window.addEventListener('message', bridge.onWindowMessage);
   window.addEventListener('scroll', scheduleViewportSync, { passive: true });
   window.addEventListener('resize', scheduleViewportSync, { passive: true });
@@ -190,7 +199,10 @@
     </div>
   {:else}
     {#if phase === 'loading'}
-      <div class="skeleton" aria-hidden="true"><Skeleton height={height} radius={20} label="正在打开 {p.name}" /></div>
+      <div class="frame-loader" role="status">
+        <Spinner size={20} />
+        <span class="small muted">正在加载 {p.name}…</span>
+      </div>
     {/if}
     {#key attempt}
       <iframe
@@ -221,7 +233,7 @@
 <style>
   .host {
     position: relative;
-    min-height: 240px;
+    min-height: 220px;
   }
   iframe {
     display: block;
@@ -236,9 +248,17 @@
   .ready iframe {
     opacity: 1;
   }
-  .skeleton {
+  .frame-loader {
     position: absolute;
-    inset: 0;
+    inset: 0 0 auto 0;
+    height: 220px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    border-radius: var(--r-lg);
+    background: var(--surface);
+    border: 1px solid var(--line);
     pointer-events: none;
   }
   .state {

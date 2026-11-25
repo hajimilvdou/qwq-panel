@@ -1037,6 +1037,29 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plugins/{plugin_id}/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plugin identifier from its manifest. */
+                plugin_id: components["parameters"]["PluginIdPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update or reset a plugin's runtime resource limits
+         * @description Persists administrator-configured cgroup resource limits (memory, CPU quota, PIDs, FDs, disk) for the plugin and synchronizes the systemd drop-in override.
+         */
+        put: operations["putPluginResources"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plugins/{plugin_id}/config": {
         parameters: {
             query?: never;
@@ -1476,6 +1499,70 @@ export type paths = {
         get: operations["getSystem"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read built-in real-time host CPU, memory, disk, and network metrics
+         * @description Returns lightweight host resource telemetry and short in-memory sparkline history directly from the core panel framework without requiring external monitoring plugins.
+         */
+        get: operations["getSystemMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/security/takeover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List coexistence firewall and fail2ban takeover status
+         * @description Reports whether ufw, firewalld, or fail2ban is active, backed up, and taken over by qwq. Administrators only.
+         */
+        get: operations["getSecurityTakeover"];
+        put?: never;
+        /**
+         * Back up and take over an existing firewall or fail2ban manager
+         * @description Atomically backs up existing configuration, preserves active open ports in inet qwq, and disables the competing service so qwq manages it natively. Administrators only.
+         */
+        post: operations["postSecurityTakeover"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/security/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore a previously taken-over firewall or fail2ban manager
+         * @description Clears qwq's conflicting takeover policy and re-enables the backed-up original manager service. Administrators only.
+         */
+        post: operations["postSecurityRestore"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4364,6 +4451,233 @@ export type components = {
                 scope?: string;
             }[];
             expected_revision?: components["schemas"]["Revision"];
+            resources?: components["schemas"]["PluginResourcesOverrideRequest"];
+        };
+        /** @description Optional administrator resource limit overrides for a plugin systemd unit. */
+        PluginResourcesOverrideRequest: {
+            /**
+             * Format: int64
+             * @description Hard memory limit in MiB.
+             */
+            memory_max_mb?: number;
+            /**
+             * Format: int64
+             * @description CPU quota percentage.
+             */
+            cpu_quota_percent?: number;
+            /**
+             * Format: int64
+             * @description Maximum tasks/processes limit.
+             */
+            pids_max?: number;
+            /**
+             * Format: int64
+             * @description Maximum open file descriptors.
+             */
+            fds_max?: number;
+            /**
+             * Format: int64
+             * @description Advisory persistent disk budget in MiB.
+             */
+            disk_max_mb?: number;
+            /** @description When true */
+            reset_default?: boolean;
+        };
+        /** @description Real-time built-in host resource metrics snapshot. */
+        SystemHostMetrics: {
+            /**
+             * Format: date-time
+             * @description RFC 3339 sample timestamp.
+             */
+            collected_at: string;
+            /** @description Basic host identity and uptime. */
+            host: {
+                /** @description Hostname. */
+                hostname: string;
+                /** @description Operating system name. */
+                os: string;
+                /** @description Kernel release. */
+                kernel: string;
+                /** @description CPU architecture. */
+                arch: string;
+                /**
+                 * Format: int64
+                 * @description Host uptime in seconds.
+                 */
+                uptime_seconds: number;
+            };
+            /** @description CPU utilization, load averages, and recent history. */
+            cpu: {
+                /**
+                 * Format: double
+                 * @description CPU usage percentage.
+                 */
+                usage_percent: number;
+                /**
+                 * Format: int32
+                 * @description Logical CPU core count.
+                 */
+                cores: number;
+                /**
+                 * Format: double
+                 * @description 1-minute load average.
+                 */
+                load_1: number;
+                /**
+                 * Format: double
+                 * @description 5-minute load average.
+                 */
+                load_5: number;
+                /**
+                 * Format: double
+                 * @description 15-minute load average.
+                 */
+                load_15: number;
+                /** @description Recent CPU usage percentages. */
+                history: number[];
+            };
+            /** @description Memory and swap utilization. */
+            memory: {
+                /**
+                 * Format: int64
+                 * @description Used RAM bytes.
+                 */
+                used_bytes: number;
+                /**
+                 * Format: int64
+                 * @description Total RAM bytes.
+                 */
+                total_bytes: number;
+                /**
+                 * Format: int64
+                 * @description Available RAM bytes.
+                 */
+                available_bytes: number;
+                /**
+                 * Format: int64
+                 * @description Buffers and cache bytes.
+                 */
+                cached_bytes: number;
+                /**
+                 * Format: double
+                 * @description Memory usage percentage.
+                 */
+                usage_percent: number;
+                /**
+                 * Format: int64
+                 * @description Used swap bytes.
+                 */
+                swap_used_bytes: number;
+                /**
+                 * Format: int64
+                 * @description Total swap bytes.
+                 */
+                swap_total_bytes: number;
+                /** @description Recent memory usage percentages. */
+                history: number[];
+            };
+            /** @description Primary mount and monitored filesystem capacities. */
+            disk: {
+                /** @description Primary mount point. */
+                mount: string;
+                /**
+                 * Format: int64
+                 * @description Used bytes on primary mount.
+                 */
+                used_bytes: number;
+                /**
+                 * Format: int64
+                 * @description Total bytes on primary mount.
+                 */
+                total_bytes: number;
+                /**
+                 * Format: double
+                 * @description Disk usage percentage.
+                 */
+                usage_percent: number;
+                /** @description Individual filesystem mounts. */
+                mounts: {
+                    /** @description Mount point path. */
+                    mount: string;
+                    /** @description Backing block device. */
+                    device?: string;
+                    /**
+                     * Format: int64
+                     * @description Used bytes.
+                     */
+                    used_bytes: number;
+                    /**
+                     * Format: int64
+                     * @description Total bytes.
+                     */
+                    total_bytes: number;
+                    /**
+                     * Format: double
+                     * @description Usage percentage.
+                     */
+                    usage_percent: number;
+                }[];
+            };
+            /** @description Aggregate non-loopback network throughput and cumulative bytes. */
+            network: {
+                /**
+                 * Format: double
+                 * @description Current inbound bytes per second.
+                 */
+                rx_bytes_per_sec: number;
+                /**
+                 * Format: double
+                 * @description Current outbound bytes per second.
+                 */
+                tx_bytes_per_sec: number;
+                /**
+                 * Format: int64
+                 * @description Total received bytes.
+                 */
+                rx_total_bytes: number;
+                /**
+                 * Format: int64
+                 * @description Total transmitted bytes.
+                 */
+                tx_total_bytes: number;
+                /** @description Recent inbound throughput samples. */
+                rx_history: number[];
+                /** @description Recent outbound throughput samples. */
+                tx_history: number[];
+            };
+        };
+        /** @description Target coexistence manager for takeover or restoration. */
+        SecurityTakeoverRequest: {
+            /**
+             * @description System security manager service name.
+             * @enum {string}
+             */
+            manager: "ufw" | "firewalld" | "fail2ban";
+        };
+        /** @description Coexistence and backup status for one system firewall or brute-force manager. */
+        SecurityTakeoverEntry: {
+            /**
+             * @description Manager identifier.
+             * @enum {string}
+             */
+            manager: "ufw" | "firewalld" | "fail2ban";
+            /** @description Whether the systemd unit is currently active. */
+            active: boolean;
+            /** @description Whether qwq has backed up and taken over this manager. */
+            taken_over: boolean;
+            /** @description Whether a restorable takeover backup exists on disk. */
+            backup_exists: boolean;
+            /** @description RFC 3339 timestamp when the backup was created. */
+            backup_at?: string;
+            /** @description Ports imported into inet qwq during takeover. */
+            imported_ports?: number[];
+            /** @description Human-readable status summary. */
+            detail: string;
+        };
+        /** @description Snapshot of all manageable coexistence managers. */
+        SecurityTakeoverStatus: {
+            /** @description Status entries for ufw, firewalld, and fail2ban. */
+            managers: components["schemas"]["SecurityTakeoverEntry"][];
         };
         /**
          * @description Replace the active version with the package staged by `POST /api/v1/plugin-packages`. The
@@ -7644,6 +7958,41 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    putPluginResources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plugin identifier from its manifest. */
+                plugin_id: components["parameters"]["PluginIdPath"];
+            };
+            cookie?: never;
+        };
+        /** @description Desired plugin resource limits or reset flag. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PluginResourcesOverrideRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated plugin view with effective resource limits. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Plugin"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["Unavailable"];
+            default: components["responses"]["Error"];
+        };
+    };
     getPluginConfig: {
         parameters: {
             query?: {
@@ -8393,6 +8742,119 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getSystemMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current host resource metrics snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemHostMetrics"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getSecurityTakeover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current takeover status of manageable coexistence services. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityTakeoverStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    postSecurityTakeover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Target manager to back up and take over. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityTakeoverRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated coexistence takeover status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityTakeoverStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["Unavailable"];
+            default: components["responses"]["Error"];
+        };
+    };
+    postSecurityRestore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Target manager to restore from backup. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityTakeoverRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated coexistence takeover status after restoration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityTakeoverStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["Unavailable"];
             default: components["responses"]["Error"];
         };
     };

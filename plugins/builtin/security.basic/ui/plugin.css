@@ -9,7 +9,7 @@ html[data-theme="light"] {
   --border-strong: #cfc4b5;
   --text: #2a211b;
   --muted: #6e6055;
-  --accent: #6b4c3b;
+  --accent: #9b2c5c;
   --on-accent: #fdfbf8;
   --ok: #1e9c8b;
   --ok-soft: #e2f5f2;
@@ -29,7 +29,7 @@ html[data-theme="dark"] {
   --border-strong: #4a3f36;
   --text: #f3ede6;
   --muted: #b0a397;
-  --accent: #a67c63;
+  --accent: #e06a99;
   --on-accent: #17120e;
   --ok: #32c2ae;
   --ok-soft: rgba(50, 194, 174, 0.16);
@@ -42,6 +42,19 @@ html[data-theme="dark"] {
 }
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 110, 100, 0.28) transparent;
+}
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(120, 110, 100, 0.28);
 }
 body {
   margin: 0;
@@ -98,6 +111,11 @@ main {
   font-size: 13px;
   font-weight: 550;
   cursor: pointer;
+  transition: background 180ms ease, color 180ms ease;
+}
+.tabs button:hover:not(.active) {
+  background: var(--surface-2);
+  color: var(--text);
 }
 .tabs button.active {
   background: var(--accent);

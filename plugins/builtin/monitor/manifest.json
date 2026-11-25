@@ -3,8 +3,8 @@
   "id": "monitor.basic",
   "version": "0.1.0",
   "name": "基础监控",
-  "summary": "宿主指标与有限内存历史",
-  "description": "通过宿主只读 metrics 能力采样，保持默认插件沙箱；历史在内存环中保留，重启后重建。",
+  "summary": "记录服务器更长时间段的 CPU、内存、磁盘与网络历史曲线和趋势图表",
+  "description": "扩展系统历史监控图表：主页框架已自带实时资源监控，安装本插件后可额外查看更长时间窗口的 CPU、内存、磁盘 IO 和网络流量详细趋势曲线。",
   "license": "AGPL-3.0-only",
   "publisher": {
     "id": "qwq-builtin",

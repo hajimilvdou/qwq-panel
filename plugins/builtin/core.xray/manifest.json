@@ -3,8 +3,8 @@
   "id": "core.xray",
   "version": "0.1.0",
   "name": "Xray 核心驱动",
-  "summary": "Core Intent v1/v2 的只读状态、预演、受控应用、TLS 绑定热重载与快照恢复",
-  "description": "使用锁定 Xray 版本，保持期望与运行版本独立，提供受控预演、私有快照、失败补偿和按需只读统计。真实客户端转发与资源峰值验收按后续任务交付。",
+  "summary": "用于科学上网与代理转发的 Xray 核心引擎，支持 VLESS(Reality)、VMess、Trojan、SS2022、Hysteria2、AnyTLS 等协议",
+  "description": "科学上网与代理转发核心引擎：内置 Xray 与 AnyTLS 核心，支持 VLESS (Reality/Vision)、VMess、Trojan、Shadowsocks 2022、Hysteria2、WireGuard/WARP 出站分流等主流代理协议，支持导出节点分享链接及 Clash / sing-box 客户端配置。建议搭配「高级代理」插件一起使用以获得完整可视化节点与多用户订阅管理界面。",
   "license": "AGPL-3.0-only",
   "publisher": {
     "id": "qwq-builtin",

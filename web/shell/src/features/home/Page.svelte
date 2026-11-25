@@ -14,9 +14,9 @@
   import { useResource } from '$lib/resource.svelte';
   import { session } from '$lib/session.svelte';
   import { collectWidgets } from '$lib/widgets/collect';
-  import Mood from '$ui/Mood.svelte';
   import Skeleton from '$ui/Skeleton.svelte';
   import Greeting from './Greeting.svelte';
+  import HostMetricsDashboard from './HostMetricsDashboard.svelte';
 
   let widgetGridMod: Promise<typeof import('$lib/widgets/WidgetGrid.svelte')> | null = null;
   const loadWidgetGrid = () => (widgetGridMod ??= import('$lib/widgets/WidgetGrid.svelte'));
@@ -36,25 +36,25 @@
     : null;
 
   const slots = $derived(collectWidgets(plugins?.data));
-  let level = $state<Level>('ok');
+  let hostLevel = $state<Level>('ok');
+  let widgetLevel = $state<Level>('ok');
 
-  /* 没有小组件时不声称监测了什么：问候固定"一切安好"，侧栏表情复位 */
-  const shown = $derived<Level>(slots.length ? level : 'ok');
+  const ORDER: Record<Level, number> = { ok: 0, warn: 1, bad: 2 };
+  const shown = $derived<Level>(
+    slots.length && ORDER[widgetLevel] > ORDER[hostLevel] ? widgetLevel : hostLevel,
+  );
   $effect(() => {
-    if (!slots.length) health.level = 'ok';
+    health.level = shown;
   });
 
   const pluginsFailed = $derived(plugins?.status === 'error');
 </script>
 
-{#snippet skGrid()}
-  <div class="sk-grid" aria-hidden="true">
-    {#each [0, 1, 2, 3] as i (i)}<div class="panel"><Skeleton lines={3} /></div>{/each}
-  </div>
-{/snippet}
-
 <div class="home">
   <Greeting level={shown} />
+
+  <!-- 主页 C 位：底层框架内置实时资源监控（CPU / 内存 / 磁盘 / 网络），开箱即用无需额外部署 -->
+  <HostMetricsDashboard onlevel={(l) => (hostLevel = l)} />
 
   {#if plugins}
     {#if pluginsFailed}
@@ -62,25 +62,10 @@
         <p>没能加载应用概览，请稍后重试。</p>
         <button type="button" class="guide-btn" onclick={() => void plugins.refresh()}>重试</button>
       </div>
-    {:else if !plugins.data}
-      {@render skGrid()}
     {:else if slots.length}
-      {#await loadWidgetGrid()}
-        {@render skGrid()}
-      {:then mod}
-        <mod.default {slots} label="服务器概览" onlevel={(l) => (level = l)} />
+      {#await loadWidgetGrid() then mod}
+        <mod.default {slots} label="应用扩展概览" onlevel={(l) => (widgetLevel = l)} />
       {/await}
-    {:else}
-      <div class="panel">
-        <div class="guide">
-          <Mood mood="ok" size="md" />
-          <div>
-            <h2>装上系统监控，这里就能看到服务器状态</h2>
-            <p>CPU、内存、磁盘和网络都由应用提供，装好后会自动出现在主页。</p>
-          </div>
-          <a class="guide-btn" href="/apps">去应用中心</a>
-        </div>
-      </div>
     {/if}
   {/if}
 
@@ -113,29 +98,6 @@
     gap: var(--s-3);
     color: var(--text-2);
   }
-  .sk-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: var(--gap);
-  }
-  .guide {
-    display: flex;
-    align-items: center;
-    gap: var(--s-4);
-  }
-  .guide div {
-    flex: 1;
-    min-width: 0;
-  }
-  .guide h2 {
-    font-size: var(--fs-lg);
-    font-weight: var(--fw-semibold);
-  }
-  .guide p {
-    margin-top: 4px;
-    color: var(--text-3);
-    font-size: var(--fs-sm);
-  }
   .guide-btn {
     display: inline-flex;
     align-items: center;
@@ -147,17 +109,5 @@
     font-size: var(--fs-sm);
     font-weight: var(--fw-semibold);
     white-space: nowrap;
-  }
-
-  @media (max-width: 1180px) {
-    .sk-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-  @media (max-width: 860px) {
-    .guide {
-      flex-direction: column;
-      align-items: flex-start;
-    }
   }
 </style>

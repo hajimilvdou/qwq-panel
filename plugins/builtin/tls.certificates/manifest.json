@@ -3,8 +3,8 @@
   "id": "tls.certificates",
   "version": "0.1.0",
   "name": "TLS 证书",
-  "summary": "受控 ACME 证书签发、外部导入、消费者部署回滚与自动续期策略管理",
-  "description": "按需启动的控制器插件，通过宿主受控证书能力执行签发、导入、消费者部署验证与续期策略管理；私钥全程由宿主加密材料库托管，插件与状态库不接触明文私钥。",
+  "summary": "免费自动申请、续期和管理 HTTPS / SSL 网站证书（支持泛域名）",
+  "description": "SSL/TLS 证书管家：一键通过 Let’s Encrypt 等免费自动申请单域名或泛域名 HTTPS 证书，到期前自动续期，也可导入已有证书，并自动同步分发给反向代理、代理节点和探针使用。",
   "license": "AGPL-3.0-only",
   "publisher": {
     "id": "qwq-builtin",

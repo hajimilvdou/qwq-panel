@@ -92,16 +92,14 @@
     color: var(--text-2);
     font-weight: var(--fw-medium);
     white-space: nowrap;
-    transition: color var(--dur-1) var(--ease);
+    transition: color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
+    border-radius: var(--r-sm) var(--r-sm) 0 0;
   }
   button:hover {
     color: var(--text);
+    background: color-mix(in oklab, var(--surface-2) 60%, transparent);
   }
-  button[aria-selected='true'] {
-    color: var(--text);
-    font-weight: var(--fw-semibold);
-  }
-  button[aria-selected='true']::after {
+  button::after {
     content: '';
     position: absolute;
     left: 10px;
@@ -110,6 +108,17 @@
     height: 2px;
     border-radius: 2px;
     background: var(--accent);
+    transform: scaleX(0);
+    opacity: 0;
+    transition: transform var(--dur-2) var(--ease-out), opacity var(--dur-2) var(--ease);
+  }
+  button[aria-selected='true'] {
+    color: var(--text);
+    font-weight: var(--fw-semibold);
+  }
+  button[aria-selected='true']::after {
+    transform: scaleX(1);
+    opacity: 1;
   }
   .count {
     min-width: 20px;

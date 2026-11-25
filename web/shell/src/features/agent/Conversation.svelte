@@ -1,9 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!--
-  Conversation · 会话右栏：会话头 + 消息流 + 输入（SPEC §3.3）
-  ───────────────────────────────────────────────────────────────
-  会话头：标题（点击改名）· 状态 · 模式切换 · 暂停（运行中）· 接管 · 删除
-  切到"按授权直接做"需二次确认（包含可能影响连接的操作）。
+  Conversation · 会话右栏：会话头 + 消息流 + 输入 + 常驻遥测条
 -->
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
@@ -23,6 +20,7 @@
   } from '$lib/ai/agent-sessions.svelte';
   import ContextField from '../ai/ContextField.svelte';
   import EffortField from '../ai/EffortField.svelte';
+  import TelemetryStrip from '../ai/TelemetryStrip.svelte';
   import { changeMode, pauseSession, takeOver } from '$lib/ai/controls';
   import { SessionStream } from '$lib/ai/session-stream.svelte';
   import { describeError, reportError } from '$lib/errors';
@@ -31,14 +29,16 @@
   import { resources } from '$lib/resource.svelte';
   import { session } from '$lib/session.svelte';
   import { toasts } from '$lib/toast.svelte';
-  import Composer from '../ai/Composer.svelte';
+  import Composer, { type ComposerCitation } from '../ai/Composer.svelte';
   import Transcript from '../ai/Transcript.svelte';
   import TurnNavigator from '../ai/TurnNavigator.svelte';
 
   interface Props {
     id: string;
     exchangeOpen?: boolean;
-    pendingInsert?: { seq: number; text: string } | null;
+    citations?: readonly ComposerCitation[];
+    onremovecitation?: (path: string) => void;
+    onclearcitations?: () => void;
     onmenu?: () => void;
     onopenworkspace?: (tab?: 'prompts' | 'skills' | 'mcp' | 'registry') => void;
     ontoggleexchange?: () => void;
@@ -47,14 +47,15 @@
   let {
     id,
     exchangeOpen = false,
-    pendingInsert = null,
+    citations = [],
+    onremovecitation,
+    onclearcitations,
     onmenu,
     onopenworkspace,
     ontoggleexchange,
     onturnsettled,
   }: Props = $props();
 
-  /* 父组件以 {#key id} 重建本组件，id 在生命周期内不变 */
   const stream = new SessionStream(untrack(() => id));
   stream.start();
   lastSession.set(stream.id);
@@ -69,9 +70,8 @@
   let deleteError = $state<string>();
   let planOpen = $state(false);
   let cmdOpen = $state(false);
-  let metricPop = $state<'speed' | 'cache' | 'ctx' | null>(null);
 
-  /* 会话实时运行参数弹窗（模型、思考挡位、上下文大小、Plan 模式） */
+  /* 会话实时运行参数弹窗 */
   let cfgOpen = $state(false);
   let cfgSaving = $state(false);
   let cfgModel = $state('');
@@ -97,7 +97,7 @@
     return cfgProviders.find((x) => x.provider_id === pid) ?? cfgProviders.find((x) => x.is_default);
   });
   const activeModelName = $derived(typeof sessionCfg.model === 'string' ? sessionCfg.model : '');
-  const effectiveModelName = $derived(activeModelName.trim() || selectedProvider?.model || '');
+  const effectiveModelName = $derived(activeModelName.trim() || tel?.model || selectedProvider?.model || '');
   const activeEffort = $derived(
     typeof sessionCfg.reasoning_effort === 'string' ? (sessionCfg.reasoning_effort as ReasoningEffort) : '',
   );
@@ -181,30 +181,14 @@
     text = prompt;
   }
 
-  function toggleMetric(k: 'speed' | 'cache' | 'ctx') {
-    metricPop = metricPop === k ? null : k;
-  }
-
   $effect(() => {
     if (s?.title) page.setTitle(s.title);
   });
 
-  /* 接收来自交互文件夹的「引用到对话」文本 */
-  let lastInsertSeq = 0;
-  $effect(() => {
-    if (!pendingInsert || pendingInsert.seq === lastInsertSeq) return;
-    lastInsertSeq = pendingInsert.seq;
-    const prefix = text.trim() ? `${text.trimEnd()}\n` : '';
-    text = `${prefix}${pendingInsert.text} `;
-  });
-
-  /* AI 回合结束时通知父级刷新交互文件夹（立即可见 Agent 刚生成的文件） */
   let wasRunning = false;
   $effect(() => {
     const curRunning = stream.transcript.status === 'running';
-    if (wasRunning && !curRunning) {
-      onturnsettled?.();
-    }
+    if (wasRunning && !curRunning) onturnsettled?.();
     wasRunning = curRunning;
   });
 
@@ -340,13 +324,7 @@
       {#if s}
         <div class="acts">
           {#if ontoggleexchange}
-            <Button
-              size="sm"
-              variant={exchangeOpen ? 'soft' : 'ghost'}
-              icon="folder"
-              onclick={ontoggleexchange}
-              title="打开交互文件夹（上传原始文件、查看和下载 Agent 输出）"
-            >
+            <Button size="sm" variant={exchangeOpen ? 'soft' : 'ghost'} icon="folder" onclick={ontoggleexchange} title="打开交互文件夹">
               文件
             </Button>
           {/if}
@@ -467,13 +445,17 @@
 
       <Composer
         bind:value={text}
+        {citations}
+        {onremovecitation}
+        {onclearcitations}
+        allowUpload={canWriteAgent}
         busy={stream.busy}
         disabled={stream.phase !== 'ready' || !canWriteAgent}
         placeholder={!canWriteAgent
           ? '当前角色仅可查看，无法发送消息或修改会话'
           : stream.transcript.status === 'waiting_approval'
             ? '先处理上面的确认，再继续对话'
-            : '输入运维需求或问题，输入 / 调用快捷指令与技能…'}
+            : '输入运维需求或问题，输入 / 调用快捷指令，支持拖拽或粘贴文件…'}
         onsend={async (t) => {
           cmdOpen = false;
           await send(t);
@@ -485,18 +467,6 @@
             <button type="button" class="c-pill" class:active={showSlash} onclick={() => (cmdOpen = !cmdOpen)}>
               / 快捷指令
             </button>
-            {#if ontoggleexchange}
-              <button
-                type="button"
-                class="c-pill"
-                class:active={exchangeOpen}
-                onclick={ontoggleexchange}
-                title="打开或收起交互文件夹"
-              >
-                <Icon name="folder" size={13} />
-                <span>交互文件夹</span>
-              </button>
-            {/if}
             {#if s}
               <button
                 type="button"
@@ -510,7 +480,7 @@
                   {activeModelName || '默认模型'}{activeEffort ? ` · ${activeEffort}` : ''}{activePlan ? ' · Plan' : ''}
                 </span>
               </button>
-              <Menu label="权限模式" items={modeItems} align="start">
+              <Menu label="权限模式" items={modeItems} align="start" placement="up">
                 {#snippet trigger(props)}
                   <button type="button" class="c-pill" class:danger={s.permission_mode === 'full'} {...props}>
                     <Icon name="shield" size={13} />
@@ -529,51 +499,7 @@
         {/snippet}
       </Composer>
 
-      <div class="foot-meta">
-        {#if tel}
-          <div class="metrics">
-            <span class="m-wrap">
-              <button type="button" class="m-btn" class:on={metricPop === 'speed'} onclick={() => toggleMetric('speed')}>
-                <Icon name="clock" size={12} /> {tel.turns} 轮 {tel.steps} 步 · {Math.round(tel.tps)} tok/s
-              </button>
-              {#if metricPop === 'speed'}
-                <div class="m-pop">
-                  <b>响应速度明细</b>
-                  <p>首字延迟 TTFT：{tel.ttftMs} ms</p>
-                  <p>模型耗时：{tel.modelMs} ms · 工具耗时：{tel.toolMs} ms</p>
-                  <p>输出速率：{tel.tps.toFixed(1)} tok/s</p>
-                </div>
-              {/if}
-            </span>
-            <span class="m-wrap">
-              <button type="button" class="m-btn" class:on={metricPop === 'cache'} onclick={() => toggleMetric('cache')}>
-                缓存命中 {tel.cacheHitPct.toFixed(0)}%
-              </button>
-              {#if metricPop === 'cache'}
-                <div class="m-pop">
-                  <b>Token 与缓存用量</b>
-                  <p>输入：{tel.promptTokens.toLocaleString()} · 输出：{tel.completionTokens.toLocaleString()}</p>
-                  <p>缓存命中：{tel.cachedTokens.toLocaleString()} ({tel.cacheHitPct.toFixed(1)}%)</p>
-                </div>
-              {/if}
-            </span>
-            <span class="m-wrap">
-              <button type="button" class="m-btn" class:on={metricPop === 'ctx'} onclick={() => toggleMetric('ctx')}>
-                上下文 {tel.contextPct.toFixed(0)}%
-              </button>
-              {#if metricPop === 'ctx'}
-                <div class="m-pop">
-                  <b>上下文窗口分布</b>
-                  <p>系统提示：{tel.systemTokens.toLocaleString()} · 工具定义：{tel.toolDefTokens.toLocaleString()}</p>
-                  <p>会话消息：{tel.messageTokens.toLocaleString()} / {tel.maxContextTokens.toLocaleString()}</p>
-                </div>
-              {/if}
-            </span>
-          </div>
-        {:else}
-          <span class="tip-inline">Enter 发送 · Shift+Enter 换行 · 输入 / 调用指令与技能</span>
-        {/if}
-      </div>
+      <TelemetryStrip telemetry={tel} model={effectiveModelName} maxContextTokens={activeMaxCtx} />
     </div>
   {/if}
 </section>
@@ -610,21 +536,10 @@
       bind:value={cfgModel}
       placeholder="如 claude-sonnet-4-6 / gpt-5 / deepseek-reasoner"
     />
-    <EffortField
-      label="思考挡位（Effort，可自由填写）"
-      model={cfgModel.trim() || effectiveModelName}
-      bind:value={cfgEffort}
-    />
-    <ContextField
-      label="上下文窗口大小（自动识别主流模型）"
-      model={cfgModel.trim() || effectiveModelName}
-      bind:value={cfgMaxCtx}
-    />
-    <Checkbox
-      bind:checked={cfgPlan}
-      label="计划模式（Plan Mode）：先列步骤再执行，适合高风险变更"
-    />
-    <p class="cfg-tip">也可以直接在对话框输入 <code>/effort max</code>、<code>/context auto</code>、<code>/context 200k</code>、<code>/model 名称</code> 或 <code>/plan on</code> 快速生效。</p>
+    <EffortField label="思考挡位（Effort，可自由填写）" model={cfgModel.trim() || effectiveModelName} bind:value={cfgEffort} />
+    <ContextField label="上下文窗口大小（自动识别主流模型）" model={cfgModel.trim() || effectiveModelName} bind:value={cfgMaxCtx} />
+    <Checkbox bind:checked={cfgPlan} label="计划模式（Plan Mode）：先列步骤再执行，适合高风险变更" />
+    <p class="cfg-tip">也可在对话框输入 <code>/effort max</code>、<code>/context 200k</code>、<code>/model 名称</code> 或 <code>/plan on</code> 快速生效。</p>
   </div>
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (cfgOpen = false)}>取消</Button>
@@ -651,7 +566,7 @@
     gap: var(--s-3);
     padding: var(--s-3) var(--s-5);
     border-bottom: 1px solid var(--line);
-    min-height: 60px;
+    min-height: 58px;
   }
   .ttl {
     display: flex;
@@ -668,16 +583,13 @@
     min-height: 36px;
     padding: 0 var(--s-2);
     margin-left: calc(-1 * var(--s-2));
-    border: 0;
     border-radius: var(--r-sm);
-    background: none;
-    color: var(--text);
-    font: inherit;
     font-size: var(--fs-lg);
     font-weight: var(--fw-semibold);
     cursor: text;
   }
-  .title span {
+  .title span,
+  .title-static {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -686,10 +598,6 @@
     min-width: 0;
     font-size: var(--fs-lg);
     font-weight: var(--fw-semibold);
-    color: var(--text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
   .mode.readonly {
     cursor: default;
@@ -715,8 +623,6 @@
     border: 1px solid var(--accent);
     border-radius: var(--r-sm);
     background: var(--surface);
-    color: var(--text);
-    font: inherit;
     font-size: var(--fs-lg);
     font-weight: var(--fw-semibold);
   }
@@ -735,9 +641,7 @@
     border-radius: var(--r-pill);
     background: var(--surface);
     color: var(--text-2);
-    font: inherit;
     font-size: var(--fs-sm);
-    cursor: pointer;
   }
   .mode:hover {
     border-color: var(--line-strong);
@@ -747,7 +651,6 @@
     border-color: var(--bad-soft);
   }
   .link {
-    margin: 0;
     padding: 6px var(--s-5);
     font-size: var(--fs-xs);
     background: var(--warn-soft);
@@ -767,7 +670,7 @@
     overscroll-behavior: contain;
   }
   .inner {
-    width: min(1080px, 100%);
+    width: min(1160px, 100%);
     margin: 0 auto;
     padding: var(--s-5) 48px var(--s-5) var(--s-6);
   }
@@ -776,14 +679,13 @@
     gap: var(--s-3);
   }
   .cfg-tip {
-    margin: 0;
     font-size: var(--fs-xs);
     color: var(--text-3);
     line-height: 1.5;
   }
   .foot {
     position: relative;
-    width: min(1080px, 100%);
+    width: min(1160px, 100%);
     margin: 0 auto;
     padding: 0 var(--s-6) var(--s-3);
     display: grid;
@@ -810,7 +712,6 @@
     border: 1px solid var(--line);
     color: var(--text-2);
     font-size: var(--fs-xs);
-    cursor: pointer;
   }
   .task-bar-btn:hover {
     border-color: var(--line-strong);
@@ -955,7 +856,6 @@
   }
   .slash-lbl {
     font-weight: var(--fw-medium);
-    color: var(--text);
     white-space: nowrap;
   }
   .slash-desc {
@@ -994,64 +894,6 @@
     color: var(--bad-text);
     border-color: var(--bad-soft);
   }
-  .foot-meta {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 22px;
-  }
-  .tip-inline {
-    font-size: var(--fs-xs);
-    color: var(--text-3);
-  }
-  .metrics {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-  .m-wrap {
-    position: relative;
-    display: inline-flex;
-  }
-  .m-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    border-radius: var(--r-pill);
-    font-size: var(--fs-xs);
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-  }
-  .m-btn:hover,
-  .m-btn.on {
-    background: var(--surface-2);
-    color: var(--text);
-  }
-  .m-pop {
-    position: absolute;
-    left: 50%;
-    bottom: calc(100% + 8px);
-    transform: translateX(-50%);
-    z-index: 25;
-    min-width: 240px;
-    padding: 10px 12px;
-    border-radius: var(--r-md);
-    background: var(--surface);
-    border: 1px solid var(--line-strong);
-    box-shadow: var(--shadow-2);
-    display: grid;
-    gap: 4px;
-    font-size: var(--fs-xs);
-    color: var(--text-2);
-    white-space: nowrap;
-  }
-  .m-pop b {
-    color: var(--text);
-    font-weight: var(--fw-semibold);
-  }
   @media (max-width: 860px) {
     .head {
       padding: var(--s-2) var(--s-3);
@@ -1063,9 +905,6 @@
     .slash-pop {
       left: var(--s-3);
       right: var(--s-3);
-    }
-    .tip-inline {
-      display: none;
     }
   }
 </style>

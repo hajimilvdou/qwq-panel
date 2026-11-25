@@ -1935,6 +1935,40 @@ paths:
         '429': { $ref: '#/components/responses/RateLimited' }
         '503': { $ref: '#/components/responses/Unavailable' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/plugins/{plugin_id}/resources:
+    parameters:
+      - $ref: '#/components/parameters/PluginIdPath'
+    put:
+      operationId: putPluginResources
+      tags: [plugins]
+      summary: Update or reset a plugin's runtime resource limits
+      description: Persists administrator-configured cgroup resource limits (memory, CPU quota, PIDs, FDs, disk) for the plugin and synchronizes the systemd drop-in override.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+        - serviceAccountToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Idempotent PUT replacing desired per-plugin resource limit overrides.
+      x-qwq-action-exempt: Direct host runtime resource configuration; audited directly by the host API.
+      requestBody:
+        description: Desired plugin resource limits or reset flag.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PluginResourcesOverrideRequest' }
+      responses:
+        '200':
+          description: Updated plugin view with effective resource limits.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plugin' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/plugins/{plugin_id}/config:
     parameters:
       - $ref: '#/components/parameters/PluginIdPath'
@@ -2610,6 +2644,105 @@ paths:
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/system/metrics:
+    get:
+      operationId: getSystemMetrics
+      tags: [system]
+      summary: Read built-in real-time host CPU, memory, disk, and network metrics
+      description: Returns lightweight host resource telemetry and short in-memory sparkline history directly from the core panel framework without requiring external monitoring plugins.
+      security:
+        - sessionCookie: []
+        - serviceAccountToken: []
+      responses:
+        '200':
+          description: Current host resource metrics snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SystemHostMetrics' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/system/security/takeover:
+    get:
+      operationId: getSecurityTakeover
+      tags: [system]
+      summary: List coexistence firewall and fail2ban takeover status
+      description: Reports whether ufw, firewalld, or fail2ban is active, backed up, and taken over by qwq. Administrators only.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Current takeover status of manageable coexistence services.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SecurityTakeoverStatus' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: postSecurityTakeover
+      tags: [system]
+      summary: Back up and take over an existing firewall or fail2ban manager
+      description: Atomically backs up existing configuration, preserves active open ports in inet qwq, and disables the competing service so qwq manages it natively. Administrators only.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Idempotent takeover backed by an atomic on-disk backup record.
+      x-qwq-action-exempt: Privileged host coexistence takeover; audited directly by the host API.
+      requestBody:
+        description: Target manager to back up and take over.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SecurityTakeoverRequest' }
+      responses:
+        '200':
+          description: Updated coexistence takeover status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SecurityTakeoverStatus' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/system/security/restore:
+    post:
+      operationId: postSecurityRestore
+      tags: [system]
+      summary: Restore a previously taken-over firewall or fail2ban manager
+      description: Clears qwq's conflicting takeover policy and re-enables the backed-up original manager service. Administrators only.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Restores a single named takeover backup record.
+      x-qwq-action-exempt: Privileged host coexistence restoration; audited directly by the host API.
+      requestBody:
+        description: Target manager to restore from backup.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SecurityTakeoverRequest' }
+      responses:
+        '200':
+          description: Updated coexistence takeover status after restoration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SecurityTakeoverStatus' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/system/access:
     get:
@@ -6520,6 +6653,133 @@ components:
               name: { type: string, maxLength: 64, description: Capability name. }
               scope: { type: string, maxLength: 128, description: Capability scope. }
         expected_revision: { $ref: '#/components/schemas/Revision' }
+        resources: { $ref: '#/components/schemas/PluginResourcesOverrideRequest' }
+    PluginResourcesOverrideRequest:
+      type: object
+      additionalProperties: false
+      description: Optional administrator resource limit overrides for a plugin systemd unit.
+      properties:
+        memory_max_mb: { type: integer, format: int64, minimum: 16, maximum: 65536, description: Hard memory limit in MiB. }
+        cpu_quota_percent: { type: integer, format: int64, minimum: 1, maximum: 100000, description: CPU quota percentage. }
+        pids_max: { type: integer, format: int64, minimum: 1, maximum: 4096, description: Maximum tasks/processes limit. }
+        fds_max: { type: integer, format: int64, minimum: 16, maximum: 65536, description: Maximum open file descriptors. }
+        disk_max_mb: { type: integer, format: int64, minimum: 1, maximum: 1048576, description: Advisory persistent disk budget in MiB. }
+        reset_default: { type: boolean, description: When true, removes custom overrides and restores manifest defaults. }
+    SystemHostMetrics:
+      type: object
+      additionalProperties: false
+      description: Real-time built-in host resource metrics snapshot.
+      required: [collected_at, host, cpu, memory, disk, network]
+      properties:
+        collected_at: { type: string, format: date-time, maxLength: 64, description: RFC 3339 sample timestamp. }
+        host:
+          type: object
+          additionalProperties: false
+          description: Basic host identity and uptime.
+          required: [hostname, os, kernel, arch, uptime_seconds]
+          properties:
+            hostname: { type: string, maxLength: 256, description: Hostname. }
+            os: { type: string, maxLength: 256, description: Operating system name. }
+            kernel: { type: string, maxLength: 256, description: Kernel release. }
+            arch: { type: string, maxLength: 64, description: CPU architecture. }
+            uptime_seconds: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Host uptime in seconds. }
+        cpu:
+          type: object
+          additionalProperties: false
+          description: CPU utilization, load averages, and recent history.
+          required: [usage_percent, cores, load_1, load_5, load_15, history]
+          properties:
+            usage_percent: { type: number, format: double, minimum: 0, maximum: 100, description: CPU usage percentage. }
+            cores: { type: integer, format: int32, minimum: 0, maximum: 65536, description: Logical CPU core count. }
+            load_1: { type: number, format: double, minimum: 0, description: 1-minute load average. }
+            load_5: { type: number, format: double, minimum: 0, description: 5-minute load average. }
+            load_15: { type: number, format: double, minimum: 0, description: 15-minute load average. }
+            history: { type: array, maxItems: 64, items: { type: number, format: double }, description: Recent CPU usage percentages. }
+        memory:
+          type: object
+          additionalProperties: false
+          description: Memory and swap utilization.
+          required: [used_bytes, total_bytes, available_bytes, cached_bytes, usage_percent, swap_used_bytes, swap_total_bytes, history]
+          properties:
+            used_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Used RAM bytes. }
+            total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Total RAM bytes. }
+            available_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Available RAM bytes. }
+            cached_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Buffers and cache bytes. }
+            usage_percent: { type: number, format: double, minimum: 0, maximum: 100, description: Memory usage percentage. }
+            swap_used_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Used swap bytes. }
+            swap_total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Total swap bytes. }
+            history: { type: array, maxItems: 64, items: { type: number, format: double }, description: Recent memory usage percentages. }
+        disk:
+          type: object
+          additionalProperties: false
+          description: Primary mount and monitored filesystem capacities.
+          required: [mount, used_bytes, total_bytes, usage_percent, mounts]
+          properties:
+            mount: { type: string, maxLength: 512, description: Primary mount point. }
+            used_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Used bytes on primary mount. }
+            total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Total bytes on primary mount. }
+            usage_percent: { type: number, format: double, minimum: 0, maximum: 100, description: Disk usage percentage. }
+            mounts:
+              type: array
+              maxItems: 32
+              description: Individual filesystem mounts.
+              items:
+                type: object
+                additionalProperties: false
+                required: [mount, used_bytes, total_bytes, usage_percent]
+                properties:
+                  mount: { type: string, maxLength: 512, description: Mount point path. }
+                  device: { type: string, maxLength: 256, description: Backing block device. }
+                  used_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Used bytes. }
+                  total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Total bytes. }
+                  usage_percent: { type: number, format: double, minimum: 0, maximum: 100, description: Usage percentage. }
+        network:
+          type: object
+          additionalProperties: false
+          description: Aggregate non-loopback network throughput and cumulative bytes.
+          required: [rx_bytes_per_sec, tx_bytes_per_sec, rx_total_bytes, tx_total_bytes, rx_history, tx_history]
+          properties:
+            rx_bytes_per_sec: { type: number, format: double, minimum: 0, description: Current inbound bytes per second. }
+            tx_bytes_per_sec: { type: number, format: double, minimum: 0, description: Current outbound bytes per second. }
+            rx_total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Total received bytes. }
+            tx_total_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991, description: Total transmitted bytes. }
+            rx_history: { type: array, maxItems: 64, items: { type: number, format: double }, description: Recent inbound throughput samples. }
+            tx_history: { type: array, maxItems: 64, items: { type: number, format: double }, description: Recent outbound throughput samples. }
+    SecurityTakeoverRequest:
+      type: object
+      additionalProperties: false
+      description: Target coexistence manager for takeover or restoration.
+      required: [manager]
+      properties:
+        manager:
+          type: string
+          maxLength: 32
+          enum: [ufw, firewalld, fail2ban]
+          description: System security manager service name.
+    SecurityTakeoverEntry:
+      type: object
+      additionalProperties: false
+      description: Coexistence and backup status for one system firewall or brute-force manager.
+      required: [manager, active, taken_over, backup_exists, detail]
+      properties:
+        manager: { type: string, maxLength: 32, enum: [ufw, firewalld, fail2ban], description: Manager identifier. }
+        active: { type: boolean, description: Whether the systemd unit is currently active. }
+        taken_over: { type: boolean, description: Whether qwq has backed up and taken over this manager. }
+        backup_exists: { type: boolean, description: Whether a restorable takeover backup exists on disk. }
+        backup_at: { type: string, maxLength: 64, description: RFC 3339 timestamp when the backup was created. }
+        imported_ports: { type: array, maxItems: 128, items: { type: integer, format: int32, minimum: 1, maximum: 65535 }, description: Ports imported into inet qwq during takeover. }
+        detail: { type: string, maxLength: 512, description: Human-readable status summary. }
+    SecurityTakeoverStatus:
+      type: object
+      additionalProperties: false
+      description: Snapshot of all manageable coexistence managers.
+      required: [managers]
+      properties:
+        managers:
+          type: array
+          maxItems: 16
+          items: { $ref: '#/components/schemas/SecurityTakeoverEntry' }
+          description: Status entries for ufw, firewalld, and fail2ban.
     PluginUpdateRequest:
       type: object
       additionalProperties: false

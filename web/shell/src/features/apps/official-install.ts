@@ -10,7 +10,7 @@
  * ========================================================================== */
 import { newIdempotencyKey } from '$api/client';
 import { plugins as pluginsApi } from '$api/endpoints-plugins';
-import type { PluginCatalogItem } from '$api/additions';
+import type { PluginCatalogItem, PluginResourceOverrideRequest } from '$api/additions';
 import { blockers } from './install';
 
 export type OfficialInstallStage = 'downloading' | 'verifying' | 'installing' | 'updating' | 'enabling';
@@ -65,6 +65,7 @@ export async function installOfficialPlugin(
   targetId: string,
   opts: {
     items?: readonly PluginCatalogItem[];
+    resources?: PluginResourceOverrideRequest;
     signal?: AbortSignal;
     onProgress?: (p: OfficialInstallProgress) => void;
   } = {},
@@ -125,10 +126,12 @@ export async function installOfficialPlugin(
         updated.push(item.plugin_id);
       } else {
         emit('installing');
+        const customRes = item.plugin_id === targetId ? opts.resources : undefined;
         await pluginsApi.install(
           {
             upload_id: staged.upload_id,
             accepted_capabilities,
+            ...(customRes ? { resources: customRes } : {}),
           },
           newIdempotencyKey(),
         );

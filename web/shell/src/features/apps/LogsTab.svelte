@@ -1,9 +1,12 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!--
-  LogsTab · 插件日志（GAPS 缺口 7，host.plugins:logs）
-  GET /plugins/{id}/logs?stream=&cursor=&limit=（≤100）；单行已截断 4 KiB，文本 untrusted。
-  页内时间正序；next_cursor 向后跟随（更新的日志），"加载后续"按 cursor 追加到下方。
+  LogsTab · 插件日志（带模块级缓存，换页回来零空白骨架闪烁）
 -->
+<script module lang="ts">
+  import type { PluginLogLine as CachedLogLine } from '$api/additions';
+  const logsCache = new Map<string, { items: CachedLogLine[]; nextCursor?: string; truncated: boolean }>();
+</script>
+
 <script lang="ts">
   import { untrack } from 'svelte';
   import { Button, Card, EmptyState, ErrorState, IconButton, Segmented, Skeleton } from '$ui';
@@ -26,10 +29,13 @@
   ] as const satisfies readonly { value: Stream; label: string }[];
 
   let stream = $state<Stream>('all');
-  let lines = $state<PluginLogLine[]>([]);
-  let cursor = $state<string | undefined>();
-  let truncated = $state(false);
-  let status = $state<'loading' | 'ready' | 'error'>('loading');
+  const cacheKey = (s: Stream) => `${pid}:${s}`;
+  const initialHit = untrack(() => logsCache.get(cacheKey('all')));
+  let lines = $state<PluginLogLine[]>(initialHit?.items ?? []);
+  let cursor = $state<string | undefined>(initialHit?.nextCursor);
+  let truncated = $state(initialHit?.truncated ?? false);
+  let status = $state<'loading' | 'ready' | 'error'>(initialHit ? 'ready' : 'loading');
+  let refreshing = $state(false);
   let error = $state<unknown>(null);
   let more = $state(false);
   let ctrl: AbortController | null = null;
@@ -43,18 +49,31 @@
     ctrl?.abort();
     ctrl = new AbortController();
     const mine = ctrl;
-    status = lines.length ? status : 'loading';
+    const key = cacheKey(stream);
+    const hit = logsCache.get(key);
+    if (hit) {
+      lines = hit.items;
+      cursor = hit.nextCursor;
+      truncated = hit.truncated;
+      status = 'ready';
+      refreshing = true;
+    } else if (!lines.length) {
+      status = 'loading';
+    }
     try {
       const page = await fetchPage();
       if (mine.signal.aborted) return;
       lines = page.items;
       cursor = page.next_cursor;
       truncated = page.truncated;
+      logsCache.set(key, { items: page.items, nextCursor: page.next_cursor, truncated: page.truncated });
       status = 'ready';
     } catch (err) {
       if (mine.signal.aborted) return;
       error = err;
-      status = 'error';
+      if (!lines.length) status = 'error';
+    } finally {
+      if (ctrl === mine) refreshing = false;
     }
   }
 
@@ -65,6 +84,7 @@
       const page = await fetchPage(cursor);
       lines = [...lines, ...page.items];
       cursor = page.next_cursor;
+      logsCache.set(cacheKey(stream), { items: lines, nextCursor: cursor, truncated });
     } catch (err) {
       error = err;
     } finally {
@@ -75,21 +95,20 @@
   $effect(() => {
     void stream;
     untrack(() => {
-      lines = [];
       void reload();
     });
     return () => ctrl?.abort();
   });
 </script>
 
-<Card title="日志" icon="menu" color="slate">
+<Card title="运行日志" subtitle={refreshing ? '正在同步最新日志…' : undefined} icon="menu" color="slate">
   {#snippet actions()}
     <Segmented label="日志流" size="sm" options={STREAMS} bind:value={stream} />
     <IconButton icon="refresh" label="刷新日志" size="sm" onclick={reload} />
   {/snippet}
 
   {#if status === 'loading'}
-    <Skeleton lines={8} height={14} />
+    <Skeleton lines={6} height={14} />
   {:else if status === 'error' && !lines.length}
     <ErrorState compact message={describeError(error).message} requestId={describeError(error).requestId} onretry={reload} />
   {:else if !lines.length}

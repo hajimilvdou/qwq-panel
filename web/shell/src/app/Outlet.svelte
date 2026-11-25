@@ -1,12 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <!--
-  Outlet · 渲染当前路由的页面
-  ───────────────────────────────────────────────────────────────
-  - 动态 import 页面组件（模块缓存），加载中显示骨架
-  - perm 不满足：渲染权限态（不跳走，SPEC §7）
-  - <svelte:boundary> 兜底：页面渲染抛错时显示 ErrorState，可重试
-  - 渲染完成后 router.settle()：恢复/归顶滚动、焦点移到标题
-  页面组件收到 props：{ params }（路由参数，如 { pluginId, rest }）
+  Outlet · 渲染当前路由的页面（零白屏闪烁 + 空闲预加载核心路由 chunk）
 -->
 <script lang="ts">
   import { tick, type Component } from 'svelte';
@@ -14,6 +8,7 @@
   import { page } from '$lib/page.svelte';
   import { router, type Match } from '$lib/router.svelte';
   import { session } from '$lib/session.svelte';
+  import { routes } from './routes';
 
   let errorMod: Promise<typeof import('$ui/ErrorState.svelte')> | null = null;
   const loadErrorState = () => (errorMod ??= import('$ui/ErrorState.svelte'));
@@ -23,34 +18,57 @@
   }
   let { match }: Props = $props();
 
-  const cache = new Map<string, Component<{ params: Record<string, string> }>>();
-  let Page = $state<Component<{ params: Record<string, string> }> | null>(null);
+  type PageComp = Component<{ params: Record<string, string> }>;
+  const cache = new Map<string, PageComp>();
+  let rendered = $state<{ pattern: string; params: Record<string, string>; Comp: PageComp } | null>(null);
   let loadFailed = $state(false);
+  let preloaded = false;
 
   const allowed = $derived(session.can(match.route.perm));
 
-  /* 新页面挂载前复位标题，页面初始化时可再 page.setTitle() 覆盖 */
   $effect.pre(() => {
     page.routeTitle = match.route.title;
     page.setTitle(null);
   });
 
+  /* 首屏渲染完成后空闲预取高频核心路由，切页时 0ms 直接命中 cache */
+  $effect(() => {
+    if (preloaded || !session.user) return;
+    preloaded = true;
+    const warmPatterns = ['/', '/activity', '/agent', '/apps', '/plugins/:pluginId/*', '/settings/:section'];
+    const run = () => {
+      for (const pat of warmPatterns) {
+        if (cache.has(pat)) continue;
+        const def = routes.find((r) => r.pattern === pat);
+        if (!def || !session.can(def.perm)) continue;
+        void def.load().then(
+          (m) => cache.set(pat, m.default),
+          () => {},
+        );
+      }
+    };
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number };
+    if (typeof w.requestIdleCallback === 'function') w.requestIdleCallback(run, { timeout: 1500 });
+    else setTimeout(run, 400);
+  });
+
   $effect(() => {
     const route = match.route;
+    const params = match.params;
     const version = router.version;
     loadFailed = false;
     const hit = cache.get(route.pattern);
     if (hit) {
-      Page = hit;
+      rendered = { pattern: route.pattern, params, Comp: hit };
       void tick().then(() => router.version === version && router.settle());
       return;
     }
-    Page = null;
+    /* 不再清空 rendered：保留上一页直到新 chunk 就绪，彻底消灭先白屏后弹字 */
     route.load().then(
       (m) => {
         cache.set(route.pattern, m.default);
         if (router.version !== version) return;
-        Page = m.default;
+        rendered = { pattern: route.pattern, params, Comp: m.default };
         void tick().then(() => router.settle());
       },
       () => {
@@ -69,20 +87,25 @@
   {#await loadErrorState() then mod}<mod.default kind="permission" />{/await}
 {:else if loadFailed}
   {#await loadErrorState() then mod}<mod.default message="页面没能加载，可能是网络问题或面板刚升级" onretry={retryLoad} />{/await}
-{:else if Page}
-  {#key match.route.pattern}
-    <svelte:boundary>
-      <Page params={match.params} />
-      {#snippet failed(_error, reset)}
-        {#await loadErrorState() then mod}<mod.default message="这个页面出错了" onretry={reset} />{/await}
-      {/snippet}
-    </svelte:boundary>
+{:else if rendered}
+  {#key rendered.pattern}
+    <div class="route-view">
+      <svelte:boundary>
+        <rendered.Comp params={rendered.params} />
+        {#snippet failed(_error, reset)}
+          {#await loadErrorState() then mod}<mod.default message="这个页面出错了" onretry={reset} />{/await}
+        {/snippet}
+      </svelte:boundary>
+    </div>
   {/key}
 {:else}
   <div class="loading"><Skeleton height={28} width="40%" /><Skeleton lines={4} /></div>
 {/if}
 
 <style>
+  .route-view {
+    animation: qwq-fade-in 140ms var(--ease-out);
+  }
   .loading {
     display: flex;
     flex-direction: column;

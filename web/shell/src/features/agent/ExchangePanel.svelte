@@ -2,13 +2,9 @@
 <!--
   ExchangePanel · Agent 交互文件夹（用户 ↔ 服务器 Agent 双向文件交换区）
   ───────────────────────────────────────────────────────────────────────────────
-  功能齐全：
-  - 按子文件夹组织任务（新建子文件夹、面包屑导航、返回上级、搜索筛选）
-  - 拖拽或选择本机文件/文件夹直接上传到当前子文件夹（带进度条）
-  - 在线新建/预览/编辑文本与 Markdown 文件、预览图片
-  - 单文件直接下载 + 子文件夹一键打包 .zip 下载
-  - 重命名 / 删除文件或子文件夹（带确认弹窗）
-  - 一键「引用到对话」把相对路径插入聊天输入框，让 Agent 结合服务器情况读写处理
+  - 支持新建任意常用文件类型（.txt / .md / .json / .yaml / .conf / .sh / .py / .js / .ts / .html / .css / .env / .csv / .sql / .toml / 自定义）
+  - 文件创建后支持一键直接打开「编辑内容」再次修改并保存，与「重命名」清晰分离
+  - 点击「引用到对话」发出结构化引用，在输入框显示高亮可删除引用条
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
@@ -22,6 +18,7 @@
     IconButton,
     Input,
     Markdown,
+    Menu,
     Skeleton,
   } from '$ui';
   import { agentExchange } from '$api/endpoints-agent';
@@ -30,18 +27,35 @@
   import { bytes as fmtBytes, relativeTime } from '$lib/format';
   import { session } from '$lib/session.svelte';
   import { toasts } from '$lib/toast.svelte';
+  import type { ComposerCitation } from '../ai/Composer.svelte';
 
   interface Props {
-    /** 外部回合结束等时机递增以自动刷新 */
     refreshTick?: number;
-    /** 点击「引用到对话」时把路径插进聊天输入框 */
-    oninsertref?: (refText: string) => void;
-    /** 关闭侧栏回调 */
+    oninsertref?: (ref: ComposerCitation) => void;
     onclose?: () => void;
   }
   let { refreshTick = 0, oninsertref, onclose }: Props = $props();
 
   const canWrite = $derived(session.can('host.agent_sessions:write'));
+
+  const FILE_TYPES: readonly { ext: string; label: string; sample?: string }[] = [
+    { ext: '.md', label: 'Markdown (.md)', sample: '# 标题\n\n' },
+    { ext: '.txt', label: '纯文本 (.txt)' },
+    { ext: '.json', label: 'JSON (.json)', sample: '{\n  \n}\n' },
+    { ext: '.yaml', label: 'YAML (.yaml)' },
+    { ext: '.conf', label: '配置 (.conf)' },
+    { ext: '.sh', label: 'Shell (.sh)', sample: '#!/usr/bin/env bash\nset -euo pipefail\n\n' },
+    { ext: '.py', label: 'Python (.py)' },
+    { ext: '.js', label: 'JS (.js)' },
+    { ext: '.ts', label: 'TS (.ts)' },
+    { ext: '.html', label: 'HTML (.html)' },
+    { ext: '.css', label: 'CSS (.css)' },
+    { ext: '.env', label: 'ENV (.env)' },
+    { ext: '.csv', label: 'CSV (.csv)' },
+    { ext: '.sql', label: 'SQL (.sql)' },
+    { ext: '.toml', label: 'TOML (.toml)' },
+    { ext: '', label: '自定义扩展名' },
+  ];
 
   let currentDir = $state('');
   let listing = $state<AgentExchangeListResult | null>(null);
@@ -63,8 +77,9 @@
   let mkdirBusy = $state(false);
   let mkdirErr = $state('');
 
-  /* 新建文本文件 */
+  /* 新建文件（多类型） */
   let newFileOpen = $state(false);
+  let newFileExt = $state('.md');
   let newFileName = $state('');
   let newFileContent = $state('');
   let newFileBusy = $state(false);
@@ -142,13 +157,10 @@
     a.remove();
   }
 
-  function insertRef(entry: AgentExchangeEntry) {
+  function insertRef(entry: Pick<AgentExchangeEntry, 'path' | 'name' | 'is_dir'>) {
     if (!oninsertref) return;
-    const text = entry.is_dir
-      ? `[交互目录: ${entry.path}/]`
-      : `[交互文件: ${entry.path}]`;
-    oninsertref(text);
-    toasts.info(`已引用 ${entry.name} 到输入框`);
+    oninsertref({ path: entry.path, name: entry.name, isDir: entry.is_dir });
+    toasts.info(`已引用 ${entry.name}`);
   }
 
   /* ---------------------------------------------------------------- 上传 */
@@ -217,36 +229,29 @@
     dragDepth = 0;
     dragging = false;
     if (!canWrite || !e.dataTransfer) return;
-
     const items = Array.from(e.dataTransfer.items ?? []);
     const entries: DropEntry[] = [];
     for (const it of items) {
       const ent = (it as unknown as { webkitGetAsEntry?: () => DropEntry | null }).webkitGetAsEntry?.();
       if (ent) entries.push(ent);
     }
-
     if (entries.length > 0) {
       try {
         const collected: { file: File; rel: string }[] = [];
-        for (const ent of entries) {
-          collected.push(...(await collectDroppedEntries(ent)));
-        }
+        for (const ent of entries) collected.push(...(await collectDroppedEntries(ent)));
         if (collected.length) {
-          await uploadFiles(
-            collected.map((x) => x.file),
-            collected.map((x) => x.rel),
-          );
+          await uploadFiles(collected.map((x) => x.file), collected.map((x) => x.rel));
           return;
         }
       } catch {
-        /* 退回普通文件列表 */
+        /* fallback */
       }
     }
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length) void uploadFiles(files);
   }
 
-  /* ---------------------------------------------------------------- 新建子文件夹 / 文件 */
+  /* ---------------------------------------------------------------- 新建子文件夹 / 多类型文件 */
   function openMkdir() {
     mkdirName = '';
     mkdirErr = '';
@@ -273,15 +278,37 @@
   }
 
   function openNewFile() {
+    newFileExt = '.md';
     newFileName = '';
     newFileContent = '';
     newFileErr = '';
     newFileOpen = true;
   }
 
+  function pickFileType(ext: string, sample?: string) {
+    const prevSample = FILE_TYPES.find((t) => t.ext === newFileExt)?.sample ?? '';
+    newFileExt = ext;
+    if (ext && newFileName.trim()) {
+      const base = newFileName.trim().replace(/\.[^./]+$/, '');
+      if (base) newFileName = base + ext;
+    }
+    if (!newFileContent.trim() || newFileContent === prevSample) {
+      newFileContent = sample ?? '';
+    }
+  }
+
+  function resolvedNewFileName(): string {
+    const clean = newFileName.trim().replace(/^\/+|\/+$/g, '');
+    if (!clean) return '';
+    if (!newFileExt) return clean;
+    const leaf = clean.split('/').pop() ?? clean;
+    if (leaf.includes('.')) return clean;
+    return clean + newFileExt;
+  }
+
   async function submitNewFile(e?: SubmitEvent) {
     e?.preventDefault();
-    const clean = newFileName.trim().replace(/^\/+|\/+$/g, '');
+    const clean = resolvedNewFileName();
     if (!clean || newFileBusy) return;
     newFileBusy = true;
     newFileErr = '';
@@ -289,7 +316,7 @@
       const target = currentDir ? `${currentDir}/${clean}` : clean;
       await agentExchange.writeFile(target, newFileContent);
       newFileOpen = false;
-      toasts.success(`已保存文件「${clean}」`);
+      toasts.success(`已创建文件「${clean}」`);
       await loadDir(currentDir, true);
     } catch (err) {
       newFileErr = describeError(err).message;
@@ -298,8 +325,8 @@
     }
   }
 
-  /* ---------------------------------------------------------------- 预览 / 编辑 */
-  async function openPreview(entry: AgentExchangeEntry) {
+  /* ---------------------------------------------------------------- 预览 / 直接编辑内容 */
+  async function openPreview(entry: AgentExchangeEntry, startEditing = false) {
     if (entry.is_dir) {
       enterDir(entry.path);
       return;
@@ -313,6 +340,11 @@
       const res = await agentExchange.preview(entry.path);
       previewData = res;
       editDraft = res.content ?? '';
+      if (startEditing && canWrite && res.is_text && !res.truncated) {
+        editMode = true;
+      } else if (startEditing && !res.is_text) {
+        toasts.info('该文件为二进制格式，仅支持下载查看');
+      }
     } catch (err) {
       previewErr = describeError(err).message;
     } finally {
@@ -423,10 +455,9 @@
   </header>
 
   <p class="ex-desc">
-    在此按子文件夹上传原始文件，让 Agent 结合服务器环境处理并将报告或成果输出到指定子目录后下载。
+    按子文件夹整理任务文件，支持创建/编辑常见文本与代码文件，点击引用图标将文件附入对话。
   </p>
 
-  <!-- 面包屑 + 路径工具 -->
   <div class="crumbs-bar">
     <nav class="crumbs" aria-label="文件夹路径">
       {#each crumbs as c, idx (c.path)}
@@ -438,10 +469,7 @@
     </nav>
     <div class="crumb-ops">
       {#if listing?.root_hint}
-        <CopyButton
-          text={currentDir ? `${listing.root_hint}/${currentDir}` : listing.root_hint}
-          label="复制服务器路径"
-        />
+        <CopyButton text={currentDir ? `${listing.root_hint}/${currentDir}` : listing.root_hint} label="复制服务器路径" />
       {/if}
       <IconButton
         icon="download"
@@ -453,12 +481,11 @@
     </div>
   </div>
 
-  <!-- 操作栏 -->
   {#if canWrite}
     <div class="toolbar">
-      <Button size="sm" variant="soft" icon="folder-plus" onclick={openMkdir}>新建子目录</Button>
-      <Button size="sm" variant="soft" icon="upload" loading={uploading} onclick={() => filePickerEl?.click()}>上传文件</Button>
-      <Button size="sm" variant="ghost" icon="file" onclick={openNewFile}>新建文本</Button>
+      <Button size="sm" variant="soft" icon="folder-plus" onclick={openMkdir}>新建目录</Button>
+      <Button size="sm" variant="soft" icon="file" onclick={openNewFile}>新建文件</Button>
+      <Button size="sm" variant="ghost" icon="upload" loading={uploading} onclick={() => filePickerEl?.click()}>上传</Button>
       <button type="button" class="mini-btn" title="选择本地整个文件夹上传到当前目录" onclick={() => dirPickerEl?.click()}>
         传文件夹
       </button>
@@ -474,7 +501,6 @@
     </div>
   {/if}
 
-  <!-- 目录搜索框 -->
   {#if (listing?.entries.length ?? 0) > 4}
     <div class="search">
       <Icon name="search" size={13} />
@@ -482,7 +508,6 @@
     </div>
   {/if}
 
-  <!-- 文件列表主体 -->
   <div class="body">
     {#if loading && !listing}
       <div class="pad"><Skeleton lines={5} height={36} /></div>
@@ -498,7 +523,7 @@
           <p>当前目录下没有匹配“{filter}”的文件。</p>
         {:else}
           <p>当前目录为空</p>
-          <span class="sub-hint">可将本地文件或整个文件夹直接拖到这里上传，或点击上方「新建子目录」分类存放。</span>
+          <span class="sub-hint">可拖拽本地文件或整个文件夹到此处，或点击上方「新建文件」/「新建目录」。</span>
         {/if}
       </div>
     {:else}
@@ -513,31 +538,23 @@
         {/if}
         {#each filteredEntries as ent (ent.path)}
           <li class="item">
-            <button type="button" class="row" onclick={() => void openPreview(ent)}>
+            <button type="button" class="row" onclick={() => void openPreview(ent, false)}>
               <span class="ico" class:dir={ent.is_dir}>
                 <Icon name={ent.is_dir ? 'folder' : 'file'} size={15} />
               </span>
               <span class="info">
                 <span class="name" title={ent.name}>{ent.name}</span>
                 <span class="sub">
-                  {#if ent.is_dir}
-                    {ent.child_count ?? 0} 项
-                  {:else}
-                    {fmtBytes(ent.size)}
-                  {/if}
-                  · {relativeTime(ent.updated_at)}
+                  {ent.is_dir ? `${ent.child_count ?? 0} 项` : fmtBytes(ent.size)} · {relativeTime(ent.updated_at)}
                 </span>
               </span>
             </button>
             <div class="row-ops">
               {#if oninsertref}
-                <IconButton
-                  icon="paperclip"
-                  size="sm"
-                  variant="plain"
-                  label="引用到对话"
-                  onclick={() => insertRef(ent)}
-                />
+                <IconButton icon="paperclip" size="sm" variant="plain" label="引用到对话" onclick={() => insertRef(ent)} />
+              {/if}
+              {#if canWrite && !ent.is_dir}
+                <IconButton icon="edit" size="sm" variant="plain" label="编辑文件内容" onclick={() => void openPreview(ent, true)} />
               {/if}
               <IconButton
                 icon="download"
@@ -547,8 +564,19 @@
                 onclick={() => triggerDownload(ent.path)}
               />
               {#if canWrite}
-                <IconButton icon="edit" size="sm" variant="plain" label="重命名" onclick={() => openRename(ent)} />
-                <IconButton icon="trash" size="sm" variant="plain" label="删除" onclick={() => openDelete(ent)} />
+                <Menu
+                  label="更多文件操作"
+                  align="end"
+                  items={[
+                    ...(!ent.is_dir ? [{ label: '编辑内容', icon: 'edit' as const, onselect: () => void openPreview(ent, true) }] : []),
+                    { label: '重命名', icon: 'file' as const, onselect: () => openRename(ent) },
+                    { label: '删除', icon: 'trash' as const, tone: 'danger' as const, onselect: () => openDelete(ent) },
+                  ]}
+                >
+                  {#snippet trigger(props)}
+                    <IconButton icon="more" size="sm" variant="plain" label="更多文件操作" {...props} />
+                  {/snippet}
+                </Menu>
               {/if}
             </div>
           </li>
@@ -591,22 +619,34 @@
   {/snippet}
 </Dialog>
 
-<!-- 新建文本文件 -->
-<Dialog bind:open={newFileOpen} title="新建文本文件" size="md">
+<!-- 新建常用类型文件 -->
+<Dialog bind:open={newFileOpen} title="新建文件" size="md">
   <form id="ex-newfile" class="dlg-form" onsubmit={submitNewFile}>
+    <div class="ft-bar" role="group" aria-label="快捷选择文件类型">
+      {#each FILE_TYPES as ft (ft.label)}
+        <button
+          type="button"
+          class="ft-pill"
+          class:on={newFileExt === ft.ext}
+          onclick={() => pickFileType(ft.ext, ft.sample)}
+        >
+          {ft.ext || '自定义'}
+        </button>
+      {/each}
+    </div>
     <Input
-      label="文件名（保存至 /{currentDir || '根目录'}）"
-      placeholder="例如：需求说明.md 或 config.json"
+      label="文件名（保存至 /{currentDir || '根目录'}，省略扩展名时自动补全 {newFileExt || '无'}）"
+      placeholder={newFileExt ? `例如：notes${newFileExt}` : '例如：Dockerfile 或 config.ini'}
       required
       maxlength={160}
       bind:value={newFileName}
     />
-    <textarea class="editor" rows="10" placeholder="输入文件内容…" bind:value={newFileContent}></textarea>
+    <textarea class="editor" rows="10" placeholder="输入文件内容（创建后也可随时打开重新编辑）…" bind:value={newFileContent}></textarea>
     {#if newFileErr}<Alert>{newFileErr}</Alert>{/if}
   </form>
   {#snippet footer()}
     <Button variant="plain" onclick={() => (newFileOpen = false)}>取消</Button>
-    <Button type="submit" form="ex-newfile" variant="primary" loading={newFileBusy} disabled={!newFileName.trim()}>保存</Button>
+    <Button type="submit" form="ex-newfile" variant="primary" loading={newFileBusy} disabled={!newFileName.trim()}>创建并保存</Button>
   {/snippet}
 </Dialog>
 
@@ -635,7 +675,7 @@
 </ConfirmDialog>
 
 <!-- 文件预览与在线编辑 -->
-<Dialog bind:open={previewOpen} title={previewData?.name ?? '文件预览'} size="lg">
+<Dialog bind:open={previewOpen} title={previewData ? `${editMode ? '编辑：' : ''}${previewData.name}` : '文件预览'} size="lg">
   {#if previewLoading}
     <Skeleton lines={6} height={24} />
   {:else if previewErr}
@@ -652,20 +692,19 @@
             variant="soft"
             icon="paperclip"
             onclick={() => {
-              oninsertref(`[交互文件: ${previewData!.path}]`);
+              insertRef({ path: previewData!.path, name: previewData!.name, is_dir: false });
               previewOpen = false;
-              toasts.info(`已引用 ${previewData!.name} 到输入框`);
             }}
           >
             引用到对话
           </Button>
         {/if}
         {#if previewData.is_text && canWrite && !previewData.truncated}
-          <Button size="sm" variant="ghost" icon="edit" onclick={() => (editMode = !editMode)}>
-            {editMode ? '退出编辑' : '在线编辑'}
+          <Button size="sm" variant={editMode ? 'soft' : 'ghost'} icon="edit" onclick={() => (editMode = !editMode)}>
+            {editMode ? '切回预览' : '编辑内容'}
           </Button>
         {/if}
-        <Button size="sm" variant="soft" icon="download" onclick={() => triggerDownload(previewData!.path)}>下载</Button>
+        <Button size="sm" variant="ghost" icon="download" onclick={() => triggerDownload(previewData!.path)}>下载</Button>
       </div>
     </div>
 
@@ -684,7 +723,7 @@
     {:else}
       <div class="pv-bin">
         <Icon name="file" size={32} />
-        <p>该文件为二进制格式（{previewData.mime_type || '未知类型'}），不支持直接在线预览，请点击上方「下载」保存到本机查看。</p>
+        <p>该文件为二进制格式（{previewData.mime_type || '未知类型'}），不支持直接在线编辑，请点击上方「下载」查看。</p>
       </div>
     {/if}
   {/if}
@@ -719,20 +758,19 @@
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    color: var(--text);
   }
   .ex-ttl h3 {
     margin: 0;
     font-size: var(--fs-md);
-    font-weight: var(--fw-semibold);
   }
-  .ex-head-ops {
+  .ex-head-ops,
+  .crumb-ops {
     display: inline-flex;
     align-items: center;
     gap: 2px;
+    flex: none;
   }
   .ex-desc {
-    margin: 0;
     padding: 8px var(--s-3);
     font-size: var(--fs-xs);
     color: var(--text-3);
@@ -757,13 +795,9 @@
     font-size: var(--fs-xs);
   }
   .crumb {
-    border: 0;
-    background: none;
     padding: 2px 5px;
     border-radius: var(--r-xs);
     color: var(--text-2);
-    font: inherit;
-    cursor: pointer;
     max-width: 140px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -780,12 +814,6 @@
   .sep {
     color: var(--text-3);
   }
-  .crumb-ops {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    flex: none;
-  }
   .toolbar {
     display: flex;
     align-items: center;
@@ -798,11 +826,8 @@
     padding: 4px 8px;
     border: 1px dashed var(--line-strong);
     border-radius: var(--r-sm);
-    background: transparent;
     color: var(--text-2);
-    font: inherit;
     font-size: var(--fs-xs);
-    cursor: pointer;
   }
   .mini-btn:hover {
     background: var(--surface-2);
@@ -846,10 +871,8 @@
     flex: 1;
     min-width: 0;
     border: 0;
-    outline: 0;
     background: transparent;
     color: var(--text);
-    font: inherit;
     font-size: var(--fs-xs);
   }
   .body {
@@ -872,7 +895,6 @@
     color: var(--text-3);
   }
   .empty p {
-    margin: 0;
     font-size: var(--fs-sm);
     color: var(--text-2);
     font-weight: var(--fw-medium);
@@ -882,8 +904,6 @@
     line-height: 1.5;
   }
   .entries {
-    list-style: none;
-    margin: 0;
     padding: 6px;
     display: grid;
     gap: 2px;
@@ -904,13 +924,8 @@
     align-items: center;
     gap: 10px;
     padding: 7px 8px;
-    border: 0;
     border-radius: var(--r-md);
-    background: transparent;
-    color: var(--text);
     text-align: left;
-    font: inherit;
-    cursor: pointer;
   }
   .row.up {
     width: 100%;
@@ -954,7 +969,7 @@
     display: inline-flex;
     align-items: center;
     padding-right: 4px;
-    opacity: 0.72;
+    opacity: 0.78;
   }
   .item:hover .row-ops,
   .item:focus-within .row-ops {
@@ -988,13 +1003,36 @@
     display: grid;
     gap: var(--s-3);
   }
+  .ft-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .ft-pill {
+    padding: 3px 9px;
+    border-radius: var(--r-pill);
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-2xs);
+  }
+  .ft-pill:hover {
+    border-color: var(--line-strong);
+    color: var(--text);
+  }
+  .ft-pill.on {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    font-weight: var(--fw-semibold);
+  }
   .editor {
     width: 100%;
     padding: 10px 12px;
     border-radius: var(--r-md);
     border: 1px solid var(--line);
     background: var(--surface-2);
-    color: var(--text);
     font-family: var(--font-mono);
     font-size: var(--fs-xs);
     line-height: 1.55;
@@ -1024,21 +1062,18 @@
     background: var(--warn-soft);
     color: var(--warn-text);
   }
-  .pv-md {
-    max-height: 60vh;
-    overflow-y: auto;
-    padding: var(--s-3);
-    border-radius: var(--r-md);
-    border: 1px solid var(--line);
-    background: var(--surface-2);
-  }
+  .pv-md,
   .pv-code {
-    margin: 0;
     max-height: 60vh;
     overflow: auto;
     padding: var(--s-3);
     border-radius: var(--r-md);
     border: 1px solid var(--line);
+  }
+  .pv-md {
+    background: var(--surface-2);
+  }
+  .pv-code {
     background: var(--surface-sunk);
     font-family: var(--font-mono);
     font-size: var(--fs-xs);

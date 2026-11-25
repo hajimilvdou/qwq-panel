@@ -3,8 +3,8 @@
   "id": "notify.hub",
   "version": "0.1.0",
   "name": "统一告警与通知中枢",
-  "summary": "统一管理 Telegram、飞书、钉钉、企业微信、Discord、SMTP 与签名 Webhook 的告警路由与降噪",
-  "description": "面向 1C1G 低资源 VPS 的统一告警与通知中枢：支持 7 类主流通知渠道（凭据 AES-256-GCM 加密落盘与默认防 SSRF 外发）、来源/级别路由规则、同事件冷却去重、支持跨午夜与时区的静默时段及高危穿透、有界重试与 500 条投递审计；原生提供 <2KiB AI 异常诊断摘要与受审批保护的通道/规则操作面。",
+  "summary": "统一消息推送中心：把服务器告警、登录通知、证书到期提醒发到 Telegram、飞书、钉钉、企微或邮箱",
+  "description": "告警与消息通知中枢：集中配置 Telegram、飞书、钉钉、企业微信、Discord、邮箱 SMTP 和 Webhook 推送渠道，服务器离线、异常爆破、证书续期或磁盘告急时自动发送提醒，支持告警静默去重避免刷屏。",
   "license": "AGPL-3.0-only",
   "publisher": {
     "id": "qwq-builtin",

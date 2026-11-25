@@ -243,6 +243,36 @@ func (in Installer) Install(ctx context.Context, spec UnitSpec, credential []byt
 	return res, nil
 }
 
+const UserResourceDropinName = "20-user-resources.conf"
+
+// UpdateResources writes (or removes when reset=true) the user override drop-in
+// (20-user-resources.conf) inside qwq-plugin@<id>.service.d/.
+func (in Installer) UpdateResources(id string, limits Limits, reset bool) (string, error) {
+	var err error
+	if in, err = in.withDefaults(); err != nil {
+		return "", err
+	}
+	service, _, err := UnitNames(id)
+	if err != nil {
+		return "", err
+	}
+	dropinPath := filepath.Join(in.UnitDir, service+".d", UserResourceDropinName)
+	if reset {
+		if err := os.Remove(dropinPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("sandbox: removing user resource override %s: %w", dropinPath, err)
+		}
+		return dropinPath, nil
+	}
+	data, err := RenderResources(limits)
+	if err != nil {
+		return "", err
+	}
+	if err := WriteFileAtomic(dropinPath, data, UnitFileMode); err != nil {
+		return "", err
+	}
+	return dropinPath, nil
+}
+
 // Remove deletes everything Install created. The plugin must already be
 // stopped: removing a unit file does not stop a running service, and systemd
 // keeps the cgroup until the unit is stopped or killed.

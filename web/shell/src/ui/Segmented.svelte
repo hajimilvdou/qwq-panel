@@ -79,8 +79,9 @@
     font-weight: var(--fw-medium);
     white-space: nowrap;
     transition:
-      background var(--dur-1) var(--ease),
-      color var(--dur-1) var(--ease);
+      background var(--dur-2) var(--ease),
+      color var(--dur-2) var(--ease),
+      box-shadow var(--dur-2) var(--ease);
   }
   .sm button {
     height: calc(var(--ctl-sm) - 6px);
