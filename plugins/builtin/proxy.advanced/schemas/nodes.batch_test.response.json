@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "批量节点连通性测速响应",
+  "description": "返回批量节点测速汇总与逐节点延迟结果。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tested",
+    "reachable",
+    "failed",
+    "results"
+  ],
+  "properties": {
+    "tested": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "本次参与测速的节点总数。"
+    },
+    "reachable": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "连通正常的节点数。"
+    },
+    "failed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "不可达或超时的节点数。"
+    },
+    "results": {
+      "type": "array",
+      "description": "逐节点测速详情。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "ok",
+          "latency_ms"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "节点 ID。"
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "是否连通。"
+          },
+          "latency_ms": {
+            "type": "integer",
+            "minimum": -1,
+            "description": "往返延迟（毫秒，失败为 -1）。"
+          },
+          "error": {
+            "type": "string",
+            "description": "失败时的错误原因。"
+          }
+        }
+      }
+    }
+  }
+}

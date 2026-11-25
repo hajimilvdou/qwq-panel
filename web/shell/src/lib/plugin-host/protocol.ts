@@ -63,6 +63,7 @@ export type PluginToShell =
   | { t: 'ui.resize'; height: number }
   | { t: 'ui.toast'; text: string }
   | { t: 'ui.navigate'; path: string }
+  | { t: 'ui.open_plugin'; plugin_id: string; path?: string }
   | { t: 'ui.confirm'; id: RpcId; title: string; body: string; confirm_label?: string; danger?: boolean }
   | { t: 'ui.copy'; id: RpcId; text: string; label?: string }
   | { t: 'ui.ensure_plugins'; id: RpcId; plugins: string[]; reason?: string }
@@ -179,6 +180,11 @@ export function parsePluginMessage(data: unknown): PluginToShell | null {
       return isStr(data.text, 10_000) ? { t: 'ui.toast', text: data.text } : null;
     case 'ui.navigate':
       return isStr(data.path, 2048) ? { t: 'ui.navigate', path: data.path } : null;
+    case 'ui.open_plugin': {
+      if (!isStr(data.plugin_id, 128)) return null;
+      if (data.path !== undefined && !isStr(data.path, 512)) return null;
+      return { t: 'ui.open_plugin', plugin_id: data.plugin_id, path: data.path as string | undefined };
+    }
     case 'ui.confirm': {
       if (!isRpcId(data.id) || !isStr(data.title, 200)) return null;
       const rawBody = data.body !== undefined ? data.body : data.message;

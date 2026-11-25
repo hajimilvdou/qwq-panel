@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "批量节点连通性测速请求",
+  "description": "对多个代理节点并发执行真实 TCP/TLS/UDP 连通性与延迟探测。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 300,
+      "maximum": 8000,
+      "default": 2500,
+      "description": "单节点测速超时时间（毫秒）。"
+    },
+    "only_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "是否仅测速已启用节点。"
+    }
+  }
+}

@@ -23,6 +23,11 @@
       "maxLength": 64,
       "description": "用户展示备注名称。"
     },
+    "notes": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "可选管理员备注信息。"
+    },
     "plan_id": {
       "type": "string",
       "minLength": 1,

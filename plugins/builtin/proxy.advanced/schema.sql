@@ -4,13 +4,17 @@
 CREATE TABLE IF NOT EXISTS plans (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
     quota_bytes INTEGER NOT NULL DEFAULT 0 CHECK (quota_bytes >= 0),
+    traffic_mode TEXT NOT NULL DEFAULT 'both' CHECK (traffic_mode IN ('both', 'both_2x', 'down_only')),
     down_limit_kbps INTEGER NOT NULL DEFAULT 0 CHECK (down_limit_kbps >= 0),
     up_limit_kbps INTEGER NOT NULL DEFAULT 0 CHECK (up_limit_kbps >= 0),
     max_connections INTEGER NOT NULL DEFAULT 0 CHECK (max_connections >= 0 AND max_connections <= 65535),
     max_ips INTEGER NOT NULL DEFAULT 0 CHECK (max_ips >= 0 AND max_ips <= 1024),
     billing_reset_day INTEGER NOT NULL DEFAULT 1 CHECK (billing_reset_day >= 0 AND billing_reset_day <= 28),
     validity_days INTEGER NOT NULL DEFAULT 0 CHECK (validity_days >= 0),
+    node_ids_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(node_ids_json)),
+    rule_preset TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     revision INTEGER NOT NULL DEFAULT 1
@@ -19,6 +23,7 @@ CREATE TABLE IF NOT EXISTS plans (
 CREATE TABLE IF NOT EXISTS proxy_users (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
     plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE RESTRICT,
     vless_uuid TEXT NOT NULL,
     hy2_password TEXT NOT NULL,
@@ -30,6 +35,7 @@ CREATE TABLE IF NOT EXISTS proxy_users (
     max_ips_override INTEGER NOT NULL DEFAULT -1 CHECK (max_ips_override >= -1 AND max_ips_override <= 1024),
     chain_id TEXT NOT NULL DEFAULT '',
     sub_token_sha256 TEXT NOT NULL UNIQUE,
+    sub_token_enc BLOB NOT NULL DEFAULT X'',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     revision INTEGER NOT NULL DEFAULT 1
@@ -184,3 +190,15 @@ CREATE INDEX IF NOT EXISTS idx_proxy_nodes_source
 
 CREATE INDEX IF NOT EXISTS idx_proxy_nodes_protocol
     ON proxy_nodes(protocol);
+
+CREATE TABLE IF NOT EXISTS subscription_rules (
+    id TEXT PRIMARY KEY CHECK (id = 'default'),
+    preset TEXT NOT NULL DEFAULT 'global' CHECK (preset IN ('global', 'balanced', 'ai_streaming', 'minimal')),
+    enable_ad_block INTEGER NOT NULL DEFAULT 0 CHECK (enable_ad_block IN (0, 1)),
+    enable_ai_group INTEGER NOT NULL DEFAULT 1 CHECK (enable_ai_group IN (0, 1)),
+    enable_streaming_group INTEGER NOT NULL DEFAULT 1 CHECK (enable_streaming_group IN (0, 1)),
+    custom_direct_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(custom_direct_json)),
+    custom_proxy_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(custom_proxy_json)),
+    custom_reject_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(custom_reject_json)),
+    updated_at INTEGER NOT NULL DEFAULT 0
+) STRICT;

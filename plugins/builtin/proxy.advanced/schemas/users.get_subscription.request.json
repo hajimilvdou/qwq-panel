@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "获取用户加密保存的订阅链接请求",
+  "description": "按需解密读取指定代理用户的公开订阅令牌与订阅路径。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "user_id"
+  ],
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9._-]{0,31}$",
+      "description": "目标代理用户 ID。"
+    }
+  }
+}

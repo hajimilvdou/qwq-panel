@@ -38,6 +38,19 @@
           "type": "string",
           "description": "用户显示名称。"
         },
+        "notes": {
+          "type": "string",
+          "description": "管理员备注。"
+        },
+        "has_stored_sub": {
+          "type": "boolean",
+          "description": "是否支持在用户列表一键解密复制订阅链接。"
+        },
+        "traffic_mode": {
+          "type": "string",
+          "enum": ["both", "both_2x", "down_only"],
+          "description": "所属套餐流量统计倍率模式。"
+        },
         "plan_id": {
           "type": "string",
           "description": "绑定套餐 ID。"

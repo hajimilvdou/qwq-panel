@@ -363,6 +363,7 @@ func (i *instance) register() {
 	i.HandleInvoke("users.usage_history", i.handleUsersUsageHistory)
 	i.HandleInvoke("traffic.status", i.handleTrafficStatus)
 	i.registerExtendedOperations()
+	i.registerV2Operations()
 }
 
 type overviewRequest struct {
@@ -403,6 +404,8 @@ type overviewResponse struct {
 	DetectedPublicHost    string              `json:"detected_public_host,omitempty"`
 	CoreObfsAvailable     *bool               `json:"core_obfs_available,omitempty"`
 	XrayEngine            *embeddedXrayStatus `json:"xray_engine,omitempty"`
+	DailyTraffic          []dailyTrafficPoint `json:"daily_traffic,omitempty"`
+	Alerts                []overviewAlert     `json:"alerts,omitempty"`
 }
 
 type plansListRequest struct {
@@ -414,16 +417,20 @@ type plansListResponse struct {
 }
 
 type plansUpsertRequest struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	QuotaBytes       int64  `json:"quota_bytes"`
-	DownLimitKbps    uint32 `json:"down_limit_kbps"`
-	UpLimitKbps      uint32 `json:"up_limit_kbps"`
-	MaxConnections   int    `json:"max_connections"`
-	MaxIPs           int    `json:"max_ips"`
-	BillingResetDay  *int   `json:"billing_reset_day"`
-	ValidityDays     int    `json:"validity_days"`
-	ExpectedRevision string `json:"expected_revision"`
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	QuotaBytes       int64    `json:"quota_bytes"`
+	TrafficMode      string   `json:"traffic_mode"`
+	DownLimitKbps    uint32   `json:"down_limit_kbps"`
+	UpLimitKbps      uint32   `json:"up_limit_kbps"`
+	MaxConnections   int      `json:"max_connections"`
+	MaxIPs           int      `json:"max_ips"`
+	BillingResetDay  *int     `json:"billing_reset_day"`
+	ValidityDays     int      `json:"validity_days"`
+	NodeIDs          []string `json:"node_ids"`
+	RulePreset       *string  `json:"rule_preset"`
+	ExpectedRevision string   `json:"expected_revision"`
 }
 
 type plansUpsertResponse struct {
@@ -446,6 +453,7 @@ type usersListResponse struct {
 type usersCreateRequest struct {
 	ID                     string `json:"id"`
 	DisplayName            string `json:"display_name"`
+	Notes                  string `json:"notes"`
 	PlanID                 string `json:"plan_id"`
 	ExpiresAt              int64  `json:"expires_at"`
 	MaxConnectionsOverride *int   `json:"max_connections_override"`
@@ -669,6 +677,10 @@ func (i *instance) handleOverview(ctx context.Context, req pluginsdk.Request) (p
 		{Label: "带宽限速", Value: shapingText, Level: shapingLevel},
 	}
 
+	dailyTraffic, _ := i.store.GetDailyTraffic30d(ctx)
+	allUsers, _ := i.store.ListUsers(ctx, "", "", 1000)
+	alerts := buildOverviewAlerts(allUsers, allNodes, shapingOK, degradedReason)
+
 	return marshalResponse(overviewResponse{
 		Value:                 float64(stats.ActiveUsers),
 		Unit:                  "位活跃用户",
@@ -692,6 +704,8 @@ func (i *instance) handleOverview(ctx context.Context, req pluginsdk.Request) (p
 		DetectedPublicHost:    detectedHost,
 		CoreObfsAvailable:     obfsAvail,
 		XrayEngine:            xraySt,
+		DailyTraffic:          dailyTraffic,
+		Alerts:                alerts,
 	})
 }
 

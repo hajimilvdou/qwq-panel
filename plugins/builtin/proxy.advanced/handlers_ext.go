@@ -61,6 +61,10 @@ func (i *instance) registerExtendedOperations() {
 func (i *instance) handleUsersSetLimits(ctx context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {
 	var in struct {
 		UserID                 string  `json:"user_id"`
+		DisplayName            *string `json:"display_name"`
+		Notes                  *string `json:"notes"`
+		PlanID                 *string `json:"plan_id"`
+		ExpiresAt              *int64  `json:"expires_at"`
 		MaxConnectionsOverride *int    `json:"max_connections_override"`
 		MaxIPsOverride         *int    `json:"max_ips_override"`
 		ChainID                *string `json:"chain_id"`
@@ -73,9 +77,20 @@ func (i *instance) handleUsersSetLimits(ctx context.Context, req pluginsdk.Reque
 		return pluginsdk.Response{}, invalidField("/user_id", "REQUIRED", "缺少 user_id")
 	}
 	expectedRev := resolveRevision(in.ExpectedRevision, req, "users/"+in.UserID)
-	u, err := i.store.SetUserLimits(ctx, strings.TrimSpace(in.UserID), in.MaxConnectionsOverride, in.MaxIPsOverride, in.ChainID, expectedRev)
+	u, planChanged, err := i.store.UpdateUserProfileAndLimits(ctx, strings.TrimSpace(in.UserID), userPatchInput{
+		DisplayName:            in.DisplayName,
+		Notes:                  in.Notes,
+		PlanID:                 in.PlanID,
+		ExpiresAt:              in.ExpiresAt,
+		MaxConnectionsOverride: in.MaxConnectionsOverride,
+		MaxIPsOverride:         in.MaxIPsOverride,
+		ChainID:                in.ChainID,
+	}, expectedRev)
 	if err != nil {
 		return pluginsdk.Response{}, err
+	}
+	if planChanged && req.Host() != nil && req.Host().Conn() != nil {
+		_, _ = i.syncCoreAndTraffic(ctx, req.Host())
 	}
 	snap := i.connLim.SnapshotUser(u.ID, u.EffectiveMaxConnections, u.EffectiveMaxIPs)
 	u.ActiveConnections = snap.ActiveConnections

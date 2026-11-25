@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "获取用户加密保存的订阅链接响应",
+  "description": "若该用户在数据库保存了 AES-256-GCM 加密的订阅令牌，则按需解密返回；旧版仅存哈希用户返回 available=false。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "user_id",
+    "available"
+  ],
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "description": "目标代理用户 ID。"
+    },
+    "available": {
+      "type": "boolean",
+      "description": "是否可一键读取订阅链接（false 表示需执行一次轮换订阅）。"
+    },
+    "subscription_token": {
+      "type": "string",
+      "description": "当前生效的公开订阅令牌。"
+    },
+    "subscription_path": {
+      "type": "string",
+      "description": "公开订阅相对路径（/p/proxy.advanced/sub/<token>）。"
+    }
+  }
+}

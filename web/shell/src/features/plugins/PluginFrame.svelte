@@ -70,6 +70,8 @@
       onResize: (h) => (height = Math.max(HEIGHT_MIN, h + 12)),
       onToast: (text) => toasts.info(`${p.name}：${text}`),
       onNavigate: (to) => navigate(`/plugins/${encodeURIComponent(p.plugin_id)}${to === '/' ? '' : to}`),
+      onOpenPlugin: (targetPid, subPath) =>
+        navigate(`/plugins/${encodeURIComponent(targetPid)}${subPath && subPath !== '/' ? subPath : ''}`),
       onTimeout: () => (phase = 'timeout'),
       onConfirm: (req) =>
         new Promise<boolean>((resolve) => {

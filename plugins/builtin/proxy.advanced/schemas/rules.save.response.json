@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "保存订阅分流规则配置响应",
+  "description": "返回保存后的分流规则配置与最新 Clash/sing-box 预览。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "config",
+    "clash_preview",
+    "singbox_preview"
+  ],
+  "properties": {
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preset",
+        "enable_ad_block",
+        "enable_ai_group",
+        "enable_streaming_group",
+        "custom_direct_domains",
+        "custom_proxy_domains",
+        "custom_reject_domains",
+        "updated_at"
+      ],
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": ["global", "balanced", "ai_streaming", "minimal"]
+        },
+        "enable_ad_block": { "type": "boolean" },
+        "enable_ai_group": { "type": "boolean" },
+        "enable_streaming_group": { "type": "boolean" },
+        "custom_direct_domains": { "type": "array", "items": { "type": "string" } },
+        "custom_proxy_domains": { "type": "array", "items": { "type": "string" } },
+        "custom_reject_domains": { "type": "array", "items": { "type": "string" } },
+        "updated_at": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "clash_preview": {
+      "type": "string"
+    },
+    "singbox_preview": {
+      "type": "string"
+    }
+  }
+}

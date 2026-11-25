@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "清理重复代理节点请求",
+  "description": "按协议、地址、端口、传输层与核心凭据指纹检测并清理重复节点（优先保留托管节点）。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "dry_run": {
+      "type": "boolean",
+      "default": false,
+      "description": "仅预览将被清理的重复节点而不实际删除。"
+    }
+  }
+}

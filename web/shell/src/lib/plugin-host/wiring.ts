@@ -402,7 +402,7 @@ export function createEnsurePluginsHandler(
 
 type Hooks = Pick<
   BridgeDeps,
-  'onReady' | 'onResize' | 'onToast' | 'onNavigate' | 'onTimeout' | 'onConfirm' | 'onCopy' | 'onEnsurePlugins'
+  'onReady' | 'onResize' | 'onToast' | 'onNavigate' | 'onOpenPlugin' | 'onTimeout' | 'onConfirm' | 'onCopy' | 'onEnsurePlugins'
 >;
 
 export function bridgeDeps(plugin: Plugin, hooks: Hooks): BridgeDeps {

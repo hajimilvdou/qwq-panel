@@ -103,6 +103,7 @@ export interface BridgeDeps {
   onResize: (height: number) => void;
   onToast: (text: string) => void;
   onNavigate: (path: string) => void;
+  onOpenPlugin?: (pluginId: string, path?: string) => void;
   onTimeout: () => void;
   /** 宿主确认弹窗委托（STEP-16） */
   onConfirm?: (req: BridgeConfirmRequest) => Promise<boolean>;
@@ -264,6 +265,14 @@ export class PluginBridge {
       case 'ui.navigate': {
         const p = normalizePluginPath(msg.path);
         if (p !== null && routeAllowed(this.deps.routes, p)) this.deps.onNavigate(p);
+        return;
+      }
+      case 'ui.open_plugin': {
+        const pid = msg.plugin_id.trim();
+        if (isEnsurePluginAllowed(pid) && this.deps.onOpenPlugin) {
+          const p = msg.path ? normalizePluginPath(msg.path) : undefined;
+          this.deps.onOpenPlugin(pid, p ?? undefined);
+        }
         return;
       }
       case 'ui.confirm':

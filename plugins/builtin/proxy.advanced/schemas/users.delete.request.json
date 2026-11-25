@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "删除代理用户请求",
+  "description": "永久删除指定代理用户并同步移除内置 Xray 凭据与 HTB 限速规则。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "user_id"
+  ],
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9._-]{0,31}$",
+      "description": "目标代理用户 ID。"
+    },
+    "expected_revision": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "可选乐观并发修订号。"
+    }
+  }
+}

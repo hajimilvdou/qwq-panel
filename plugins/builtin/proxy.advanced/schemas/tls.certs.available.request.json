@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询面板可用 TLS 证书列表请求",
+  "description": "联动查询面板 tls.certificates 插件已签发的 TLS 证书清单，供创建 TLS/Hysteria2/AnyTLS 节点时下拉直选。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

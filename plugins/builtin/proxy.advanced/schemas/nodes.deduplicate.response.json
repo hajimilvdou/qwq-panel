@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "清理重复代理节点响应",
+  "description": "返回去重清理的节点数量与 ID 列表。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "removed_count",
+    "removed_ids"
+  ],
+  "properties": {
+    "removed_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "清理（或 dry_run 检测到）的重复节点数。"
+    },
+    "removed_ids": {
+      "type": "array",
+      "description": "重复节点 ID 列表。",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

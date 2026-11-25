@@ -14,6 +14,29 @@
       "maxLength": 64,
       "description": "目标代理用户 ID。"
     },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "可选更新用户显示名称。"
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "可选更新管理员备注。"
+    },
+    "plan_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9._-]{0,31}$",
+      "description": "可选切换该用户绑定的套餐 ID。"
+    },
+    "expires_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "可选更新到期时间戳（Unix 毫秒，0 表示长期有效）。"
+    },
     "max_connections_override": {
       "type": "integer",
       "minimum": -1,

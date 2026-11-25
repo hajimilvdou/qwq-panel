@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询订阅分流规则配置请求",
+  "description": "获取当前全局订阅分流规则配置、预设模板与实时预览。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

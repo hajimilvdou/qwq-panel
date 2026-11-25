@@ -67,7 +67,11 @@ func (i *instance) ServePublicRoute(ctx context.Context, req pluginsdk.PublicRou
 	chains, _ := i.store.ListChainsWithSecrets(ctx)
 	brutals, _ := i.store.ListBrutalBindings(ctx)
 	dbNodes, _ := i.store.ListNodes(ctx, "", "", "", "", true)
-	body, contentType, err := renderSubscriptionPayloadWithOptions(cfg, user, format, chains, brutals, dbNodes, sbAtLeast112)
+	rulesCfg, _ := i.store.GetSubscriptionRules(ctx)
+	if strings.TrimSpace(user.PlanRulePreset) != "" {
+		rulesCfg.Preset = normalizeRulePreset(user.PlanRulePreset, false)
+	}
+	body, contentType, err := renderSubscriptionPayloadWithRules(cfg, user, format, chains, brutals, dbNodes, sbAtLeast112, rulesCfg)
 	if err != nil {
 		return plainTextResponse(503, "subscription endpoint not configured"), nil
 	}
@@ -81,7 +85,15 @@ func (i *instance) ServePublicRoute(ctx context.Context, req pluginsdk.PublicRou
 
 	profileTitle := firstNonEmpty(user.DisplayName, "qwq Proxy")
 	metaHdr := http.Header{}
-	WriteSubscriptionMetadataHeaders(metaHdr, profileTitle, user.PeriodUpBytes, user.PeriodDownBytes, user.QuotaBytes, expireSec, format == "clash")
+	hdrUp, hdrDown := user.PeriodUpBytes, user.PeriodDownBytes
+	switch normalizeTrafficMode(user.TrafficMode) {
+	case "down_only":
+		hdrUp = 0
+	case "both_2x":
+		hdrUp *= 2
+		hdrDown *= 2
+	}
+	WriteSubscriptionMetadataHeaders(metaHdr, profileTitle, hdrUp, hdrDown, user.QuotaBytes, expireSec, format == "clash")
 
 	headers := []pluginsdk.HTTPHeader{
 		{Name: "Content-Type", Value: contentType},
@@ -291,13 +303,23 @@ type subNode struct {
 	SingboxOutbound map[string]any
 }
 
-func renderSubscriptionPayloadWithOptions(cfg proxyConfig, user userRecord, format string, chains []chainWithSecret, brutals []brutalBindingRecord, dbNodes []proxyNodeRecord, sbAtLeast112 bool) ([]byte, string, error) {
+func renderSubscriptionPayloadWithRules(cfg proxyConfig, user userRecord, format string, chains []chainWithSecret, brutals []brutalBindingRecord, dbNodes []proxyNodeRecord, sbAtLeast112 bool, rules subscriptionRulesConfig) ([]byte, string, error) {
 	effCfg := applyBrutalSubPortOverrides(cfg, brutals)
 	effPublicHost := detectPrimaryPublicHost(effCfg.PublicHost, "")
 	if strings.TrimSpace(effCfg.PublicHost) == "" && effPublicHost != "" {
 		effCfg.PublicHost = effPublicHost
 	}
-	nodes := buildUserSubscriptionNodes(effCfg, user)
+	var allowedNodeSet map[string]bool
+	if len(user.PlanNodeIDs) > 0 {
+		allowedNodeSet = make(map[string]bool, len(user.PlanNodeIDs))
+		for _, nid := range user.PlanNodeIDs {
+			allowedNodeSet[nid] = true
+		}
+	}
+	var nodes []subNode
+	if len(allowedNodeSet) == 0 {
+		nodes = buildUserSubscriptionNodes(effCfg, user)
+	}
 
 	seenNames := make(map[string]bool, len(nodes)+len(dbNodes))
 	for _, n := range nodes {
@@ -305,6 +327,9 @@ func renderSubscriptionPayloadWithOptions(cfg proxyConfig, user userRecord, form
 	}
 	for _, rec := range dbNodes {
 		if !rec.Enabled {
+			continue
+		}
+		if len(allowedNodeSet) > 0 && !allowedNodeSet[rec.ID] {
 			continue
 		}
 		// 托管节点若未配置 server 且缺少 public_host，自动使用 detectPrimaryPublicHost 兜底。
@@ -342,9 +367,9 @@ func renderSubscriptionPayloadWithOptions(cfg proxyConfig, user userRecord, form
 			}
 		}
 		clashNodes = appendClientDialerChainNodes(clashNodes, user, chains)
-		return []byte(renderClashSubscription(clashNodes)), "text/yaml; charset=utf-8", nil
+		return []byte(renderClashSubscriptionWithRules(clashNodes, rules)), "text/yaml; charset=utf-8", nil
 	case "singbox":
-		raw, err := renderSingboxSubscription(nodes, user, chains, effCfg.PublicHost, sbAtLeast112)
+		raw, err := renderSingboxSubscriptionWithRules(nodes, user, chains, effCfg.PublicHost, sbAtLeast112, rules)
 		if err != nil {
 			return nil, "", err
 		}
@@ -784,6 +809,10 @@ func convertSingboxWireGuardToEndpoint(ob map[string]any) map[string]any {
 }
 
 func renderSingboxSubscription(nodes []subNode, user userRecord, chains []chainWithSecret, publicHost string, atLeast112 bool) ([]byte, error) {
+	return renderSingboxSubscriptionWithRules(nodes, user, chains, publicHost, atLeast112, defaultSubscriptionRules())
+}
+
+func renderSingboxSubscriptionWithRules(nodes []subNode, user userRecord, chains []chainWithSecret, publicHost string, atLeast112 bool, rules subscriptionRulesConfig) ([]byte, error) {
 	filtered := make([]subNode, 0, len(nodes))
 	for _, n := range nodes {
 		if n.SingboxOutbound == nil {
@@ -800,8 +829,9 @@ func renderSingboxSubscription(nodes []subNode, user userRecord, chains []chainW
 	}
 	filtered = appendClientDialerChainNodes(filtered, user, chains)
 
+	preset := normalizeRulePreset(rules.Preset, false)
 	tags := make([]string, 0, len(filtered))
-	outbounds := make([]any, 0, len(filtered)+2)
+	outbounds := make([]any, 0, len(filtered)+6)
 	endpoints := make([]any, 0)
 	for _, n := range filtered {
 		tags = append(tags, n.Name)
@@ -809,11 +839,38 @@ func renderSingboxSubscription(nodes []subNode, user userRecord, chains []chainW
 	if len(tags) == 0 {
 		tags = []string{"direct"}
 	}
+	selectorTags := append([]string(nil), tags...)
+	if (preset == "balanced" || preset == "ai_streaming") && len(tags) > 1 {
+		selectorTags = append([]string{"auto"}, selectorTags...)
+	}
 	outbounds = append(outbounds, map[string]any{
 		"type":      "selector",
 		"tag":       "proxy",
-		"outbounds": tags,
+		"outbounds": selectorTags,
 	})
+	if (preset == "balanced" || preset == "ai_streaming") && len(tags) > 1 {
+		outbounds = append(outbounds, map[string]any{
+			"type":      "urltest",
+			"tag":       "auto",
+			"outbounds": tags,
+			"url":       "http://www.gstatic.com/generate_204",
+			"interval":  "5m",
+		})
+	}
+	if preset == "ai_streaming" && rules.EnableAIGroup {
+		outbounds = append(outbounds, map[string]any{
+			"type":      "selector",
+			"tag":       "ai-services",
+			"outbounds": append([]string{"proxy"}, tags...),
+		})
+	}
+	if preset == "ai_streaming" && rules.EnableStreamingGroup {
+		outbounds = append(outbounds, map[string]any{
+			"type":      "selector",
+			"tag":       "streaming",
+			"outbounds": append([]string{"proxy"}, tags...),
+		})
+	}
 	for _, n := range filtered {
 		if atLeast112 {
 			if obType, _ := n.SingboxOutbound["type"].(string); obType == "wireguard" {
@@ -827,6 +884,13 @@ func renderSingboxSubscription(nodes []subNode, user userRecord, chains []chainW
 		"type": "direct",
 		"tag":  "direct",
 	})
+	hasBlock := rules.EnableAdBlock || len(rules.CustomRejectDomains) > 0
+	if hasBlock && !atLeast112 {
+		outbounds = append(outbounds, map[string]any{
+			"type": "block",
+			"tag":  "block",
+		})
+	}
 
 	antiPoison := routingrules.BuildAntiPoisonDNSConfig(publicHost, nil)
 	bootstrapAddr := firstStringFromAnySlice(antiPoison["bootstrap_dns"], "223.5.5.5")
@@ -836,6 +900,16 @@ func renderSingboxSubscription(nodes []subNode, user userRecord, chains []chainW
 
 	if atLeast112 {
 		dnsBlock, routeRules, defaultResolver := BuildSingbox112DNSAndRoute("proxy", bootstrapAddr, vpsBypass)
+		if hasBlock {
+			rejects := append([]string(nil), rules.CustomRejectDomains...)
+			if rules.EnableAdBlock {
+				rejects = append(rejects, builtinAdBlockSuffixes...)
+			}
+			if len(rejects) > 0 {
+				routeRules = append(routeRules, map[string]any{"domain_suffix": rejects, "action": "reject"})
+			}
+		}
+		routeRules = appendSingboxRouteRules(routeRules, rules, false)
 		doc := map[string]any{
 			"inbounds": []any{
 				map[string]any{
@@ -871,6 +945,14 @@ func renderSingboxSubscription(nodes []subNode, user userRecord, chains []chainW
 		"outbound": []string{"any"},
 		"server":   "bootstrap_dns",
 	})
+	legacyRules := appendSingboxRouteRules([]map[string]any{}, rules, hasBlock)
+	routeObj := map[string]any{
+		"final":                 "proxy",
+		"auto_detect_interface": true,
+	}
+	if len(legacyRules) > 0 {
+		routeObj["rules"] = legacyRules
+	}
 
 	doc := map[string]any{
 		"inbounds": []any{
@@ -893,10 +975,7 @@ func renderSingboxSubscription(nodes []subNode, user userRecord, chains []chainW
 			"strategy": "prefer_ipv4",
 		},
 		"outbounds": outbounds,
-		"route": map[string]any{
-			"final":                 "proxy",
-			"auto_detect_interface": true,
-		},
+		"route":     routeObj,
 	}
 	return json.MarshalIndent(doc, "", "  ")
 }

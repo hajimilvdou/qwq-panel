@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询订阅分流规则配置响应",
+  "description": "返回当前分流规则配置、可用预设清单及 Clash/sing-box 预览片段。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "config",
+    "presets",
+    "clash_preview",
+    "singbox_preview"
+  ],
+  "properties": {
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preset",
+        "enable_ad_block",
+        "enable_ai_group",
+        "enable_streaming_group",
+        "custom_direct_domains",
+        "custom_proxy_domains",
+        "custom_reject_domains",
+        "updated_at"
+      ],
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": ["global", "balanced", "ai_streaming", "minimal"]
+        },
+        "enable_ad_block": { "type": "boolean" },
+        "enable_ai_group": { "type": "boolean" },
+        "enable_streaming_group": { "type": "boolean" },
+        "custom_direct_domains": { "type": "array", "items": { "type": "string" } },
+        "custom_proxy_domains": { "type": "array", "items": { "type": "string" } },
+        "custom_reject_domains": { "type": "array", "items": { "type": "string" } },
+        "updated_at": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "presets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "description", "recommended"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "recommended": { "type": "boolean" }
+        }
+      }
+    },
+    "clash_preview": {
+      "type": "string",
+      "description": "按当前配置渲染的 Clash YAML 示例预览。"
+    },
+    "singbox_preview": {
+      "type": "string",
+      "description": "按当前配置渲染的 sing-box route JSON 示例预览。"
+    }
+  }
+}

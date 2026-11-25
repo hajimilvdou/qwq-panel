@@ -35,6 +35,24 @@
           "type": "string",
           "description": "套餐显示名称。"
         },
+        "description": {
+          "type": "string",
+          "description": "套餐说明简介。"
+        },
+        "traffic_mode": {
+          "type": "string",
+          "enum": ["both", "both_2x", "down_only"],
+          "description": "流量计费方式。"
+        },
+        "node_ids": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "关联节点 ID 白名单（空数组表示不限节点）。"
+        },
+        "rule_preset": {
+          "type": "string",
+          "description": "套餐级分流预设覆盖。"
+        },
         "quota_bytes": {
           "type": "integer",
           "minimum": 0,

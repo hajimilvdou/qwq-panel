@@ -85,6 +85,37 @@
         "revision": { "type": "string" },
         "last_error": { "type": "string" }
       }
+    },
+    "daily_traffic": {
+      "type": "array",
+      "description": "近 30 天每日流量与 7 日滑动均值统计序列。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "up_bytes", "down_bytes", "total_bytes", "avg7_bytes"],
+        "properties": {
+          "date": { "type": "string" },
+          "up_bytes": { "type": "integer", "minimum": 0 },
+          "down_bytes": { "type": "integer", "minimum": 0 },
+          "total_bytes": { "type": "integer", "minimum": 0 },
+          "avg7_bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "alerts": {
+      "type": "array",
+      "description": "按严重程度排序的待处理运营告警列表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["level", "title", "detail", "route"],
+        "properties": {
+          "level": { "type": "string", "enum": ["bad", "warn", "info"] },
+          "title": { "type": "string" },
+          "detail": { "type": "string" },
+          "route": { "type": "string" }
+        }
+      }
     }
   }
 }

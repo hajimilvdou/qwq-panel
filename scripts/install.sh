@@ -137,8 +137,39 @@ if [[ -e /var/lib/qwq/plugin-data || -L /var/lib/qwq/plugin-data ]]; then
 fi
 
 # ── 解析可选插件选择与拓扑依赖排序 ───────────────────────────────────────────
+INSTALLED_OPTIONAL_PLUGINS=()
+detect_installed_optional_plugins() {
+  local -A seen=()
+  local db_checked=0 db_rows="" pid
+  if [[ -f /var/lib/qwq/qwq.db ]] && command -v sqlite3 >/dev/null 2>&1; then
+    if db_rows=$(sqlite3 -readonly /var/lib/qwq/qwq.db "SELECT DISTINCT plugin_id FROM plugin_versions WHERE active = 1 AND install_status = 'INSTALLED';" 2>/dev/null); then
+      db_checked=1
+      while IFS= read -r pid; do
+        pid=${pid//[[:space:]]/}
+        [[ -n $pid ]] && seen[$pid]=1
+      done <<<"$db_rows"
+    fi
+  fi
+  for pid in "${OPTIONAL_PLUGIN_IDS[@]}"; do
+    if ((db_checked)); then
+      [[ -n ${seen[$pid]+x} ]] && INSTALLED_OPTIONAL_PLUGINS+=("$pid")
+    elif [[ -d "/var/lib/qwq-plugins/$pid" ]] && [[ -n $(find "/var/lib/qwq-plugins/$pid" -mindepth 1 -maxdepth 1 -type d 2>/dev/null) ]]; then
+      INSTALLED_OPTIONAL_PLUGINS+=("$pid")
+    fi
+  done
+}
+
+is_installed_optional_plugin() {
+  local needle=$1 p
+  for p in "${INSTALLED_OPTIONAL_PLUGINS[@]}"; do
+    [[ $p == "$needle" ]] && return 0
+  done
+  return 1
+}
+
 SELECTED_PLUGINS=()
 select_optional_plugins() {
+  detect_installed_optional_plugins
   if ((mode_minimal)); then
     return 0
   fi
@@ -169,19 +200,26 @@ select_optional_plugins() {
     echo ""
     echo "==> 默认必装组件（已锁定）："
     echo "    [*] qwq 原面板底座 + security.basic（基础安全防护：防火墙 / 防失联改 SSH / 公钥 / 防爆破）"
+    if ((${#INSTALLED_OPTIONAL_PLUGINS[@]} > 0)); then
+      echo "    [*] 已检测到本机已安装官方插件（本次升级将自动同步更新至最新版）：${INSTALLED_OPTIONAL_PLUGINS[*]}"
+    fi
     echo ""
     echo "==> 可选安装的官方插件（按需选择，安装后也可随时在面板内一键补装或卸载）："
-    local idx pid
+    local idx pid mark
     for idx in "${!OPTIONAL_PLUGIN_IDS[@]}"; do
       pid=${OPTIONAL_PLUGIN_IDS[$idx]}
-      printf "    [%d] %-18s %s\n" "$((idx + 1))" "$pid" "${PLUGIN_SUMMARY[$pid]}"
+      mark=""
+      if is_installed_optional_plugin "$pid"; then
+        mark=" [已安装 · 自动升级]"
+      fi
+      printf "    [%d] %-18s %s%s\n" "$((idx + 1))" "$pid" "${PLUGIN_SUMMARY[$pid]}" "$mark"
     done
     echo ""
     local reply=""
     if [[ -t 0 ]]; then
-      read -r -p "请输入要额外安装的编号（多个用空格或逗号分隔，直接回车仅安装面板+安全插件）: " reply || reply=""
+      read -r -p "请输入要额外安装的编号（多个用空格或逗号分隔，直接回车保持现状/仅升级已装插件）: " reply || reply=""
     else
-      read -r -p "请输入要额外安装的编号（多个用空格或逗号分隔，直接回车仅安装面板+安全插件）: " reply </dev/tty || reply=""
+      read -r -p "请输入要额外安装的编号（多个用空格或逗号分隔，直接回车保持现状/仅升级已装插件）: " reply </dev/tty || reply=""
     fi
     reply=${reply//,/ }
     local tok
@@ -198,7 +236,7 @@ select_optional_plugins() {
   fi
 
   local has_certs=0 has_dns=0 p
-  for p in "${SELECTED_PLUGINS[@]}"; do
+  for p in "${SELECTED_PLUGINS[@]}" "${INSTALLED_OPTIONAL_PLUGINS[@]}"; do
     [[ $p == "tls.certificates" ]] && has_certs=1
     [[ $p == "domain.dns" ]] && has_dns=1
   done
@@ -639,15 +677,28 @@ prune_old_releases() {
 }
 prune_old_releases
 
-# ── 激活默认必装安全插件（security.basic）与用户按需选装的官方插件 ──────────
+# ── 激活默认必装安全插件（security.basic）、自动升级已安装官方插件与用户选装插件 ──
 bootstrap_pkgs=()
 if [[ -f $R/share/bootstrap-plugins/security.basic.qwqpkg ]]; then
   bootstrap_pkgs+=("$R/share/bootstrap-plugins/security.basic.qwqpkg")
 fi
-if ((${#SELECTED_PLUGINS[@]} > 0)); then
+SYNC_PLUGINS=()
+for candidate in "${OPTIONAL_PLUGIN_IDS[@]}"; do
+  for p in "${SELECTED_PLUGINS[@]}" "${INSTALLED_OPTIONAL_PLUGINS[@]}"; do
+    if [[ $p == "$candidate" ]]; then
+      SYNC_PLUGINS+=("$candidate")
+      break
+    fi
+  done
+done
+if ((${#SYNC_PLUGINS[@]} > 0)); then
   rel_tag=$V
   [[ $rel_tag == v* ]] || rel_tag="v$rel_tag"
-  for pid in "${SELECTED_PLUGINS[@]}"; do
+  for pid in "${SYNC_PLUGINS[@]}"; do
+    is_explicit=0
+    for sp in "${SELECTED_PLUGINS[@]}"; do
+      [[ $sp == "$pid" ]] && is_explicit=1 && break
+    done
     fname="${pid}-${rel_tag}-linux-${ARCH}.qwqpkg"
     alt_fname="${pid}-${V}-linux-${ARCH}.qwqpkg"
     if [[ -n $offline_plugin_dir ]]; then
@@ -659,16 +710,22 @@ if ((${#SELECTED_PLUGINS[@]} > 0)); then
         bootstrap_pkgs+=("$offline_plugin_dir/plugins/$fname")
       elif [[ -f "$offline_plugin_dir/plugins/$alt_fname" ]]; then
         bootstrap_pkgs+=("$offline_plugin_dir/plugins/$alt_fname")
-      else
+      elif ((is_explicit)); then
         die "离线插件目录 $offline_plugin_dir 中未找到 $fname"
+      else
+        log "提示：离线目录未包含已安装插件 $pid 的新版包 $fname，跳过自动同步（可稍后在应用中心手动更新）"
       fi
-    else
+    elif [[ -n $version ]]; then
       target_pkg="$T/$fname"
-      log "下载可选插件 $pid ($fname) …"
+      if ((is_explicit)); then
+        log "下载官方插件 $pid ($fname) …"
+      else
+        log "同步升级已安装官方插件 $pid → $rel_tag ($fname) …"
+      fi
       curl -fsSL --proto '=https' --connect-timeout 10 --speed-limit 10240 --speed-time 15 --retry 3 -o "$target_pkg" "$mirror/$rel_tag/$fname" ||
-        die "下载可选插件 $fname 失败"
+        die "下载官方插件 $fname 失败"
       if ! (cd "$T" && awk -v f="$fname" '$2 == f { found = 1; print } END { exit !found }' SHA256SUMS | sha256sum --strict -c - >/dev/null); then
-        die "可选插件 $fname SHA-256 校验失败"
+        die "官方插件 $fname SHA-256 校验失败"
       fi
       bootstrap_pkgs+=("$target_pkg")
     fi

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "删除代理用户响应",
+  "description": "返回用户删除结果与核心配置修订号。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "deleted",
+    "user_id",
+    "core_revision"
+  ],
+  "properties": {
+    "deleted": {
+      "type": "boolean",
+      "description": "是否成功删除目标用户。"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "目标代理用户 ID。"
+    },
+    "core_revision": {
+      "type": "string",
+      "description": "同步下发内置 Xray 核心后的最新修订号。"
+    }
+  }
+}

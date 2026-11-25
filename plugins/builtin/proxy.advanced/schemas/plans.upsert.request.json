@@ -74,6 +74,28 @@
       "maximum": 1024,
       "default": 0,
       "description": "套餐默认最大同时在线 IP 数（0 表示不限）。"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "可选套餐说明简介。"
+    },
+    "traffic_mode": {
+      "type": "string",
+      "enum": ["both", "both_2x", "down_only"],
+      "default": "both",
+      "description": "流量计费倍率模式：both 双向×1、both_2x 双向×2、down_only 仅计下行。"
+    },
+    "node_ids": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "type": "string", "maxLength": 64 },
+      "description": "可选关联节点 ID 白名单（留空数组表示允许全部已启用节点）。"
+    },
+    "rule_preset": {
+      "type": "string",
+      "enum": ["", "global", "balanced", "ai_streaming", "minimal"],
+      "description": "可选套餐级订阅分流规则覆盖（留空跟随全局分流配置）。"
     }
   }
 }

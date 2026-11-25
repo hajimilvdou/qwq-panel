@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -51,50 +52,59 @@ type subAccessEntry struct {
 }
 
 type planRecord struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	QuotaBytes      int64  `json:"quota_bytes"`
-	DownLimitKbps   uint32 `json:"down_limit_kbps"`
-	UpLimitKbps     uint32 `json:"up_limit_kbps"`
-	MaxConnections  int    `json:"max_connections"`
-	MaxIPs          int    `json:"max_ips"`
-	BillingResetDay int    `json:"billing_reset_day"`
-	ValidityDays    int    `json:"validity_days"`
-	CreatedAt       int64  `json:"created_at"`
-	UpdatedAt       int64  `json:"updated_at"`
-	Revision        int64  `json:"revision"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	Description     string   `json:"description,omitempty"`
+	QuotaBytes      int64    `json:"quota_bytes"`
+	TrafficMode     string   `json:"traffic_mode"`
+	DownLimitKbps   uint32   `json:"down_limit_kbps"`
+	UpLimitKbps     uint32   `json:"up_limit_kbps"`
+	MaxConnections  int      `json:"max_connections"`
+	MaxIPs          int      `json:"max_ips"`
+	BillingResetDay int      `json:"billing_reset_day"`
+	ValidityDays    int      `json:"validity_days"`
+	NodeIDs         []string `json:"node_ids"`
+	RulePreset      string   `json:"rule_preset,omitempty"`
+	CreatedAt       int64    `json:"created_at"`
+	UpdatedAt       int64    `json:"updated_at"`
+	Revision        int64    `json:"revision"`
 }
 
 type userRecord struct {
-	ID                      string `json:"id"`
-	DisplayName             string `json:"display_name"`
-	PlanID                  string `json:"plan_id"`
-	VLESSUUID               string `json:"-"`
-	Hy2Password             string `json:"-"`
-	SS2022UserKey           string `json:"-"`
-	TrafficMark             uint32 `json:"traffic_mark"`
-	Status                  string `json:"status"`
-	ExpiresAt               int64  `json:"expires_at"`
-	SubTokenSHA256          string `json:"-"`
-	QuotaBytes              int64  `json:"quota_bytes"`
-	DownLimitKbps           uint32 `json:"down_limit_kbps"`
-	UpLimitKbps             uint32 `json:"up_limit_kbps"`
-	PlanMaxConnections      int    `json:"-"`
-	PlanMaxIPs              int    `json:"-"`
-	MaxConnectionsOverride  int    `json:"max_connections_override"`
-	MaxIPsOverride          int    `json:"max_ips_override"`
-	EffectiveMaxConnections int    `json:"effective_max_connections"`
-	EffectiveMaxIPs         int    `json:"effective_max_ips"`
-	ActiveConnections       int    `json:"active_connections"`
-	ActiveIPs               int    `json:"active_ips"`
-	ChainID                 string `json:"chain_id"`
-	PeriodUpBytes           int64  `json:"period_up_bytes"`
-	PeriodDownBytes         int64  `json:"period_down_bytes"`
-	TotalUpBytes            int64  `json:"total_up_bytes"`
-	TotalDownBytes          int64  `json:"total_down_bytes"`
-	CreatedAt               int64  `json:"created_at"`
-	UpdatedAt               int64  `json:"updated_at"`
-	Revision                int64  `json:"revision"`
+	ID                      string   `json:"id"`
+	DisplayName             string   `json:"display_name"`
+	Notes                   string   `json:"notes,omitempty"`
+	PlanID                  string   `json:"plan_id"`
+	VLESSUUID               string   `json:"-"`
+	Hy2Password             string   `json:"-"`
+	SS2022UserKey           string   `json:"-"`
+	TrafficMark             uint32   `json:"traffic_mark"`
+	Status                  string   `json:"status"`
+	ExpiresAt               int64    `json:"expires_at"`
+	SubTokenSHA256          string   `json:"-"`
+	HasStoredSub            bool     `json:"has_stored_sub"`
+	QuotaBytes              int64    `json:"quota_bytes"`
+	TrafficMode             string   `json:"traffic_mode"`
+	PlanNodeIDs             []string `json:"-"`
+	PlanRulePreset          string   `json:"-"`
+	DownLimitKbps           uint32   `json:"down_limit_kbps"`
+	UpLimitKbps             uint32   `json:"up_limit_kbps"`
+	PlanMaxConnections      int      `json:"-"`
+	PlanMaxIPs              int      `json:"-"`
+	MaxConnectionsOverride  int      `json:"max_connections_override"`
+	MaxIPsOverride          int      `json:"max_ips_override"`
+	EffectiveMaxConnections int      `json:"effective_max_connections"`
+	EffectiveMaxIPs         int      `json:"effective_max_ips"`
+	ActiveConnections       int      `json:"active_connections"`
+	ActiveIPs               int      `json:"active_ips"`
+	ChainID                 string   `json:"chain_id"`
+	PeriodUpBytes           int64    `json:"period_up_bytes"`
+	PeriodDownBytes         int64    `json:"period_down_bytes"`
+	TotalUpBytes            int64    `json:"total_up_bytes"`
+	TotalDownBytes          int64    `json:"total_down_bytes"`
+	CreatedAt               int64    `json:"created_at"`
+	UpdatedAt               int64    `json:"updated_at"`
+	Revision                int64    `json:"revision"`
 }
 
 type usageSample struct {
@@ -266,9 +276,15 @@ func openStore(dataDir string, now func() time.Time) (*proxyStore, error) {
 	for _, colSpec := range [][3]string{
 		{"plans", "max_connections", "max_connections INTEGER NOT NULL DEFAULT 0"},
 		{"plans", "max_ips", "max_ips INTEGER NOT NULL DEFAULT 0"},
+		{"plans", "description", "description TEXT NOT NULL DEFAULT ''"},
+		{"plans", "traffic_mode", "traffic_mode TEXT NOT NULL DEFAULT 'both'"},
+		{"plans", "node_ids_json", "node_ids_json TEXT NOT NULL DEFAULT '[]'"},
+		{"plans", "rule_preset", "rule_preset TEXT NOT NULL DEFAULT ''"},
+		{"proxy_users", "notes", "notes TEXT NOT NULL DEFAULT ''"},
 		{"proxy_users", "max_connections_override", "max_connections_override INTEGER NOT NULL DEFAULT -1"},
 		{"proxy_users", "max_ips_override", "max_ips_override INTEGER NOT NULL DEFAULT -1"},
 		{"proxy_users", "chain_id", "chain_id TEXT NOT NULL DEFAULT ''"},
+		{"proxy_users", "sub_token_enc", "sub_token_enc BLOB NOT NULL DEFAULT X''"},
 		{"tuning_snapshots", "pinned", "pinned INTEGER NOT NULL DEFAULT 0"},
 		{"brutal_bindings", "proxy_protocol_v2", "proxy_protocol_v2 INTEGER NOT NULL DEFAULT 0"},
 	} {
@@ -333,8 +349,8 @@ func (s *proxyStore) ListPlans(ctx context.Context, limit int) ([]planRecord, er
 		limit = 100
 	}
 	rows, err := s.readDB().QueryContext(ctx, `
-		SELECT id, name, quota_bytes, down_limit_kbps, up_limit_kbps, max_connections, max_ips,
-		       billing_reset_day, validity_days, created_at, updated_at, revision
+		SELECT id, name, description, quota_bytes, traffic_mode, down_limit_kbps, up_limit_kbps, max_connections, max_ips,
+		       billing_reset_day, validity_days, node_ids_json, rule_preset, created_at, updated_at, revision
 		FROM plans
 		ORDER BY id ASC
 		LIMIT ?`, limit)
@@ -346,10 +362,13 @@ func (s *proxyStore) ListPlans(ctx context.Context, limit int) ([]planRecord, er
 	out := make([]planRecord, 0)
 	for rows.Next() {
 		var p planRecord
-		if err := rows.Scan(&p.ID, &p.Name, &p.QuotaBytes, &p.DownLimitKbps, &p.UpLimitKbps, &p.MaxConnections, &p.MaxIPs,
-			&p.BillingResetDay, &p.ValidityDays, &p.CreatedAt, &p.UpdatedAt, &p.Revision); err != nil {
+		var nodeIDsJSON string
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.QuotaBytes, &p.TrafficMode, &p.DownLimitKbps, &p.UpLimitKbps, &p.MaxConnections, &p.MaxIPs,
+			&p.BillingResetDay, &p.ValidityDays, &nodeIDsJSON, &p.RulePreset, &p.CreatedAt, &p.UpdatedAt, &p.Revision); err != nil {
 			return nil, err
 		}
+		p.TrafficMode = normalizeTrafficMode(p.TrafficMode)
+		p.NodeIDs = decodeStringArrayJSON(nodeIDsJSON)
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -364,18 +383,20 @@ func (s *proxyStore) UpsertPlan(ctx context.Context, in plansUpsertRequest, expe
 
 	nowMs := s.now().UTC().UnixMilli()
 	var existing planRecord
+	var existNodesJSON string
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, name, quota_bytes, down_limit_kbps, up_limit_kbps, max_connections, max_ips,
-		       billing_reset_day, validity_days, created_at, updated_at, revision
+		SELECT id, name, description, quota_bytes, traffic_mode, down_limit_kbps, up_limit_kbps, max_connections, max_ips,
+		       billing_reset_day, validity_days, node_ids_json, rule_preset, created_at, updated_at, revision
 		FROM plans WHERE id = ?`, in.ID).Scan(
-		&existing.ID, &existing.Name, &existing.QuotaBytes, &existing.DownLimitKbps, &existing.UpLimitKbps,
+		&existing.ID, &existing.Name, &existing.Description, &existing.QuotaBytes, &existing.TrafficMode, &existing.DownLimitKbps, &existing.UpLimitKbps,
 		&existing.MaxConnections, &existing.MaxIPs,
-		&existing.BillingResetDay, &existing.ValidityDays, &existing.CreatedAt, &existing.UpdatedAt, &existing.Revision)
+		&existing.BillingResetDay, &existing.ValidityDays, &existNodesJSON, &existing.RulePreset, &existing.CreatedAt, &existing.UpdatedAt, &existing.Revision)
 
 	created := errors.Is(err, sql.ErrNoRows)
 	if err != nil && !created {
 		return planRecord{}, false, err
 	}
+	existing.NodeIDs = decodeStringArrayJSON(existNodesJSON)
 
 	resetDay := 1
 	if in.BillingResetDay != nil {
@@ -386,6 +407,26 @@ func (s *proxyStore) UpsertPlan(ctx context.Context, in plansUpsertRequest, expe
 	maxConns := in.MaxConnections
 	maxIPs := in.MaxIPs
 
+	desc := strings.TrimSpace(in.Description)
+	if in.Description == "" && !created {
+		desc = existing.Description
+	}
+	trafficMode := normalizeTrafficMode(in.TrafficMode)
+	if in.TrafficMode == "" && !created {
+		trafficMode = normalizeTrafficMode(existing.TrafficMode)
+	}
+	nodeIDs := sanitizeStringList(in.NodeIDs, 256, 64)
+	if in.NodeIDs == nil && !created {
+		nodeIDs = existing.NodeIDs
+	}
+	nodeIDsBytes, _ := json.Marshal(nodeIDs)
+	rulePreset := existing.RulePreset
+	if in.RulePreset != nil {
+		rulePreset = normalizeRulePreset(*in.RulePreset, true)
+	} else if created {
+		rulePreset = ""
+	}
+
 	var result planRecord
 	if created {
 		if expectedRev != "" {
@@ -394,24 +435,28 @@ func (s *proxyStore) UpsertPlan(ctx context.Context, in plansUpsertRequest, expe
 		result = planRecord{
 			ID:              in.ID,
 			Name:            in.Name,
+			Description:     desc,
 			QuotaBytes:      in.QuotaBytes,
+			TrafficMode:     trafficMode,
 			DownLimitKbps:   in.DownLimitKbps,
 			UpLimitKbps:     in.UpLimitKbps,
 			MaxConnections:  maxConns,
 			MaxIPs:          maxIPs,
 			BillingResetDay: resetDay,
 			ValidityDays:    in.ValidityDays,
+			NodeIDs:         nodeIDs,
+			RulePreset:      rulePreset,
 			CreatedAt:       nowMs,
 			UpdatedAt:       nowMs,
 			Revision:        1,
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO plans(id, name, quota_bytes, down_limit_kbps, up_limit_kbps, max_connections, max_ips,
-			                  billing_reset_day, validity_days, created_at, updated_at, revision)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			result.ID, result.Name, result.QuotaBytes, result.DownLimitKbps, result.UpLimitKbps,
+			INSERT INTO plans(id, name, description, quota_bytes, traffic_mode, down_limit_kbps, up_limit_kbps, max_connections, max_ips,
+			                  billing_reset_day, validity_days, node_ids_json, rule_preset, created_at, updated_at, revision)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			result.ID, result.Name, result.Description, result.QuotaBytes, result.TrafficMode, result.DownLimitKbps, result.UpLimitKbps,
 			result.MaxConnections, result.MaxIPs,
-			result.BillingResetDay, result.ValidityDays, result.CreatedAt, result.UpdatedAt, result.Revision); err != nil {
+			result.BillingResetDay, result.ValidityDays, string(nodeIDsBytes), result.RulePreset, result.CreatedAt, result.UpdatedAt, result.Revision); err != nil {
 			return planRecord{}, false, err
 		}
 	} else {
@@ -421,24 +466,28 @@ func (s *proxyStore) UpsertPlan(ctx context.Context, in plansUpsertRequest, expe
 		result = planRecord{
 			ID:              in.ID,
 			Name:            in.Name,
+			Description:     desc,
 			QuotaBytes:      in.QuotaBytes,
+			TrafficMode:     trafficMode,
 			DownLimitKbps:   in.DownLimitKbps,
 			UpLimitKbps:     in.UpLimitKbps,
 			MaxConnections:  maxConns,
 			MaxIPs:          maxIPs,
 			BillingResetDay: resetDay,
 			ValidityDays:    in.ValidityDays,
+			NodeIDs:         nodeIDs,
+			RulePreset:      rulePreset,
 			CreatedAt:       existing.CreatedAt,
 			UpdatedAt:       nowMs,
 			Revision:        existing.Revision + 1,
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE plans
-			SET name = ?, quota_bytes = ?, down_limit_kbps = ?, up_limit_kbps = ?, max_connections = ?, max_ips = ?,
-			    billing_reset_day = ?, validity_days = ?, updated_at = ?, revision = ?
+			SET name = ?, description = ?, quota_bytes = ?, traffic_mode = ?, down_limit_kbps = ?, up_limit_kbps = ?, max_connections = ?, max_ips = ?,
+			    billing_reset_day = ?, validity_days = ?, node_ids_json = ?, rule_preset = ?, updated_at = ?, revision = ?
 			WHERE id = ?`,
-			result.Name, result.QuotaBytes, result.DownLimitKbps, result.UpLimitKbps, result.MaxConnections, result.MaxIPs,
-			result.BillingResetDay, result.ValidityDays, result.UpdatedAt, result.Revision, result.ID); err != nil {
+			result.Name, result.Description, result.QuotaBytes, result.TrafficMode, result.DownLimitKbps, result.UpLimitKbps, result.MaxConnections, result.MaxIPs,
+			result.BillingResetDay, result.ValidityDays, string(nodeIDsBytes), result.RulePreset, result.UpdatedAt, result.Revision, result.ID); err != nil {
 			return planRecord{}, false, err
 		}
 	}
@@ -448,6 +497,17 @@ func (s *proxyStore) UpsertPlan(ctx context.Context, in plansUpsertRequest, expe
 	}
 	return result, created, nil
 }
+
+const userSelectColumns = `
+		SELECT u.id, u.display_name, u.notes, u.plan_id, u.vless_uuid, u.hy2_password, u.ss2022_user_key,
+		       u.traffic_mark, u.status, u.expires_at, u.sub_token_sha256, length(u.sub_token_enc),
+		       p.quota_bytes, p.traffic_mode, p.node_ids_json, p.rule_preset, p.down_limit_kbps, p.up_limit_kbps,
+		       p.max_connections, p.max_ips, u.max_connections_override, u.max_ips_override, u.chain_id,
+		       c.period_up_bytes, c.period_down_bytes, c.total_up_bytes, c.total_down_bytes,
+		       u.created_at, u.updated_at, u.revision
+		FROM proxy_users u
+		JOIN plans p ON p.id = u.plan_id
+		JOIN usage_counters c ON c.user_id = u.id`
 
 func (s *proxyStore) ListUsers(ctx context.Context, statusFilter, planFilter string, limit int) ([]userRecord, error) {
 	if limit <= 0 || limit > maxListUsersLimit {
@@ -463,16 +523,7 @@ func (s *proxyStore) ListUsers(ctx context.Context, statusFilter, planFilter str
 		conds = append(conds, "u.plan_id = ?")
 		args = append(args, planFilter)
 	}
-	query := `
-		SELECT u.id, u.display_name, u.plan_id, u.vless_uuid, u.hy2_password, u.ss2022_user_key,
-		       u.traffic_mark, u.status, u.expires_at, u.sub_token_sha256,
-		       p.quota_bytes, p.down_limit_kbps, p.up_limit_kbps,
-		       p.max_connections, p.max_ips, u.max_connections_override, u.max_ips_override, u.chain_id,
-		       c.period_up_bytes, c.period_down_bytes, c.total_up_bytes, c.total_down_bytes,
-		       u.created_at, u.updated_at, u.revision
-		FROM proxy_users u
-		JOIN plans p ON p.id = u.plan_id
-		JOIN usage_counters c ON c.user_id = u.id`
+	query := userSelectColumns
 	if len(conds) > 0 {
 		query += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -504,18 +555,21 @@ func (s *proxyStore) CreateUser(ctx context.Context, in usersCreateRequest, ssMe
 	defer func() { _ = tx.Rollback() }()
 
 	var plan planRecord
+	var nodeIDsJSON string
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, name, quota_bytes, down_limit_kbps, up_limit_kbps, max_connections, max_ips,
-		       billing_reset_day, validity_days, created_at, updated_at, revision
+		SELECT id, name, description, quota_bytes, traffic_mode, down_limit_kbps, up_limit_kbps, max_connections, max_ips,
+		       billing_reset_day, validity_days, node_ids_json, rule_preset, created_at, updated_at, revision
 		FROM plans WHERE id = ?`, in.PlanID).Scan(
-		&plan.ID, &plan.Name, &plan.QuotaBytes, &plan.DownLimitKbps, &plan.UpLimitKbps, &plan.MaxConnections, &plan.MaxIPs,
-		&plan.BillingResetDay, &plan.ValidityDays, &plan.CreatedAt, &plan.UpdatedAt, &plan.Revision)
+		&plan.ID, &plan.Name, &plan.Description, &plan.QuotaBytes, &plan.TrafficMode, &plan.DownLimitKbps, &plan.UpLimitKbps, &plan.MaxConnections, &plan.MaxIPs,
+		&plan.BillingResetDay, &plan.ValidityDays, &nodeIDsJSON, &plan.RulePreset, &plan.CreatedAt, &plan.UpdatedAt, &plan.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return userRecord{}, "", pluginsdk.Errorf("NOT_FOUND", "指定的套餐 %s 不存在", in.PlanID)
 	}
 	if err != nil {
 		return userRecord{}, "", err
 	}
+	plan.TrafficMode = normalizeTrafficMode(plan.TrafficMode)
+	plan.NodeIDs = decodeStringArrayJSON(nodeIDsJSON)
 
 	var exists int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM proxy_users WHERE id = ?`, in.ID).Scan(&exists); err != nil {
@@ -550,6 +604,10 @@ func (s *proxyStore) CreateUser(ctx context.Context, in usersCreateRequest, ssMe
 		return userRecord{}, "", err
 	}
 	subHash := hashTokenSHA256(subToken)
+	subEnc, err := s.encryptToken(subToken)
+	if err != nil {
+		return userRecord{}, "", err
+	}
 
 	now := s.now().UTC()
 	nowMs := now.UnixMilli()
@@ -572,14 +630,15 @@ func (s *proxyStore) CreateUser(ctx context.Context, in usersCreateRequest, ssMe
 		maxIPsOverride = *in.MaxIPsOverride
 	}
 	chainID := strings.TrimSpace(in.ChainID)
+	notes := strings.TrimSpace(in.Notes)
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO proxy_users(id, display_name, plan_id, vless_uuid, hy2_password, ss2022_user_key,
+		INSERT INTO proxy_users(id, display_name, notes, plan_id, vless_uuid, hy2_password, ss2022_user_key,
 		                        traffic_mark, status, expires_at, max_connections_override, max_ips_override, chain_id,
-		                        sub_token_sha256, created_at, updated_at, revision)
-		VALUES(?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, 1)`,
-		in.ID, in.DisplayName, in.PlanID, vlessUUID, hy2Password, ssUserKey,
-		mark, expiresAt, maxConnsOverride, maxIPsOverride, chainID, subHash, nowMs, nowMs); err != nil {
+		                        sub_token_sha256, sub_token_enc, created_at, updated_at, revision)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		in.ID, in.DisplayName, notes, in.PlanID, vlessUUID, hy2Password, ssUserKey,
+		mark, expiresAt, maxConnsOverride, maxIPsOverride, chainID, subHash, subEnc, nowMs, nowMs); err != nil {
 		return userRecord{}, "", err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -597,6 +656,7 @@ func (s *proxyStore) CreateUser(ctx context.Context, in usersCreateRequest, ssMe
 	user := userRecord{
 		ID:                      in.ID,
 		DisplayName:             in.DisplayName,
+		Notes:                   notes,
 		PlanID:                  in.PlanID,
 		VLESSUUID:               vlessUUID,
 		Hy2Password:             hy2Password,
@@ -605,7 +665,11 @@ func (s *proxyStore) CreateUser(ctx context.Context, in usersCreateRequest, ssMe
 		Status:                  "active",
 		ExpiresAt:               expiresAt,
 		SubTokenSHA256:          subHash,
+		HasStoredSub:            len(subEnc) > 0,
 		QuotaBytes:              plan.QuotaBytes,
+		TrafficMode:             plan.TrafficMode,
+		PlanNodeIDs:             plan.NodeIDs,
+		PlanRulePreset:          plan.RulePreset,
 		DownLimitKbps:           plan.DownLimitKbps,
 		UpLimitKbps:             plan.UpLimitKbps,
 		PlanMaxConnections:      plan.MaxConnections,
@@ -622,46 +686,98 @@ func (s *proxyStore) CreateUser(ctx context.Context, in usersCreateRequest, ssMe
 	return user, subToken, nil
 }
 
+type userPatchInput struct {
+	DisplayName            *string
+	Notes                  *string
+	PlanID                 *string
+	ExpiresAt              *int64
+	MaxConnectionsOverride *int
+	MaxIPsOverride         *int
+	ChainID                *string
+}
+
 func (s *proxyStore) SetUserLimits(ctx context.Context, userID string, maxConnsOverride, maxIPsOverride *int, chainID *string, expectedRev string) (userRecord, error) {
+	u, _, err := s.UpdateUserProfileAndLimits(ctx, userID, userPatchInput{
+		MaxConnectionsOverride: maxConnsOverride,
+		MaxIPsOverride:         maxIPsOverride,
+		ChainID:                chainID,
+	}, expectedRev)
+	return u, err
+}
+
+func (s *proxyStore) UpdateUserProfileAndLimits(ctx context.Context, userID string, patch userPatchInput, expectedRev string) (userRecord, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return userRecord{}, err
+		return userRecord{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	var rev int64
+	var curName, curNotes, curPlan, curChain string
+	var curExp int64
 	var curConn, curIP int
-	var curChain string
 	err = tx.QueryRowContext(ctx,
-		`SELECT revision, max_connections_override, max_ips_override, chain_id FROM proxy_users WHERE id = ?`, userID).
-		Scan(&rev, &curConn, &curIP, &curChain)
+		`SELECT revision, display_name, notes, plan_id, expires_at, max_connections_override, max_ips_override, chain_id FROM proxy_users WHERE id = ?`, userID).
+		Scan(&rev, &curName, &curNotes, &curPlan, &curExp, &curConn, &curIP, &curChain)
 	if errors.Is(err, sql.ErrNoRows) {
-		return userRecord{}, pluginsdk.Errorf("NOT_FOUND", "代理用户 %s 不存在", userID)
+		return userRecord{}, false, pluginsdk.Errorf("NOT_FOUND", "代理用户 %s 不存在", userID)
 	}
 	if err != nil {
-		return userRecord{}, err
+		return userRecord{}, false, err
 	}
 	if expectedRev != "" && expectedRev != strconv.FormatInt(rev, 10) {
-		return userRecord{}, pluginsdk.PreconditionFailed("users/"+userID, strconv.FormatInt(rev, 10))
+		return userRecord{}, false, pluginsdk.PreconditionFailed("users/"+userID, strconv.FormatInt(rev, 10))
 	}
-	if maxConnsOverride != nil {
-		if *maxConnsOverride < -1 || *maxConnsOverride > 65535 {
-			return userRecord{}, pluginsdk.Errorf("INVALID_ARGUMENT", "max_connections_override 须在 -1..65535 之间")
+	planChanged := false
+	if patch.DisplayName != nil {
+		nm := strings.TrimSpace(*patch.DisplayName)
+		if nm == "" || len(nm) > 64 {
+			return userRecord{}, false, pluginsdk.Errorf("INVALID_ARGUMENT", "显示名称不能为空且不超过 64 字符")
 		}
-		curConn = *maxConnsOverride
+		curName = nm
 	}
-	if maxIPsOverride != nil {
-		if *maxIPsOverride < -1 || *maxIPsOverride > 1024 {
-			return userRecord{}, pluginsdk.Errorf("INVALID_ARGUMENT", "max_ips_override 须在 -1..1024 之间")
+	if patch.Notes != nil {
+		nt := strings.TrimSpace(*patch.Notes)
+		if len(nt) > 256 {
+			return userRecord{}, false, pluginsdk.Errorf("INVALID_ARGUMENT", "备注长度不能超过 256 字符")
 		}
-		curIP = *maxIPsOverride
+		curNotes = nt
 	}
-	if chainID != nil {
-		cid := strings.TrimSpace(*chainID)
+	if patch.PlanID != nil {
+		pid := strings.TrimSpace(*patch.PlanID)
+		if pid != "" && pid != curPlan {
+			var cnt int
+			if tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM plans WHERE id = ?`, pid).Scan(&cnt) == nil && cnt == 0 {
+				return userRecord{}, false, pluginsdk.Errorf("NOT_FOUND", "指定的套餐 %s 不存在", pid)
+			}
+			curPlan = pid
+			planChanged = true
+		}
+	}
+	if patch.ExpiresAt != nil {
+		if *patch.ExpiresAt < 0 {
+			return userRecord{}, false, pluginsdk.Errorf("INVALID_ARGUMENT", "到期时间戳不能为负数")
+		}
+		curExp = *patch.ExpiresAt
+	}
+	if patch.MaxConnectionsOverride != nil {
+		if *patch.MaxConnectionsOverride < -1 || *patch.MaxConnectionsOverride > 65535 {
+			return userRecord{}, false, pluginsdk.Errorf("INVALID_ARGUMENT", "max_connections_override 须在 -1..65535 之间")
+		}
+		curConn = *patch.MaxConnectionsOverride
+	}
+	if patch.MaxIPsOverride != nil {
+		if *patch.MaxIPsOverride < -1 || *patch.MaxIPsOverride > 1024 {
+			return userRecord{}, false, pluginsdk.Errorf("INVALID_ARGUMENT", "max_ips_override 须在 -1..1024 之间")
+		}
+		curIP = *patch.MaxIPsOverride
+	}
+	if patch.ChainID != nil {
+		cid := strings.TrimSpace(*patch.ChainID)
 		if cid != "" {
 			var cnt int
 			if tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM proxy_chains WHERE id = ?`, cid).Scan(&cnt) == nil && cnt == 0 {
-				return userRecord{}, pluginsdk.Errorf("NOT_FOUND", "指定的链式代理节点 %s 不存在", cid)
+				return userRecord{}, false, pluginsdk.Errorf("NOT_FOUND", "指定的链式代理节点 %s 不存在", cid)
 			}
 		}
 		curChain = cid
@@ -669,15 +785,16 @@ func (s *proxyStore) SetUserLimits(ctx context.Context, userID string, maxConnsO
 	nowMs := s.now().UTC().UnixMilli()
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE proxy_users
-		SET max_connections_override = ?, max_ips_override = ?, chain_id = ?, updated_at = ?, revision = ?
+		SET display_name = ?, notes = ?, plan_id = ?, expires_at = ?, max_connections_override = ?, max_ips_override = ?, chain_id = ?, updated_at = ?, revision = ?
 		WHERE id = ?`,
-		curConn, curIP, curChain, nowMs, rev+1, userID); err != nil {
-		return userRecord{}, err
+		curName, curNotes, curPlan, curExp, curConn, curIP, curChain, nowMs, rev+1, userID); err != nil {
+		return userRecord{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return userRecord{}, err
+		return userRecord{}, false, err
 	}
-	return s.getUserByID(ctx, userID)
+	u, err := s.getUserByID(ctx, userID)
+	return u, planChanged, err
 }
 
 func (s *proxyStore) RotateSubscriptionToken(ctx context.Context, userID, expectedRev string) (string, int64, error) {
@@ -704,11 +821,15 @@ func (s *proxyStore) RotateSubscriptionToken(ctx context.Context, userID, expect
 		return "", 0, err
 	}
 	newHash := hashTokenSHA256(newToken)
+	newEnc, err := s.encryptToken(newToken)
+	if err != nil {
+		return "", 0, err
+	}
 	nextRev := rev + 1
 	nowMs := s.now().UTC().UnixMilli()
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE proxy_users SET sub_token_sha256 = ?, updated_at = ?, revision = ? WHERE id = ?`,
-		newHash, nowMs, nextRev, userID); err != nil {
+		UPDATE proxy_users SET sub_token_sha256 = ?, sub_token_enc = ?, updated_at = ?, revision = ? WHERE id = ?`,
+		newHash, newEnc, nowMs, nextRev, userID); err != nil {
 		return "", 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -749,16 +870,7 @@ func (s *proxyStore) SetUserStatus(ctx context.Context, userID, status, expected
 }
 
 func (s *proxyStore) getUserByID(ctx context.Context, userID string) (userRecord, error) {
-	rows, err := s.readDB().QueryContext(ctx, `
-		SELECT u.id, u.display_name, u.plan_id, u.vless_uuid, u.hy2_password, u.ss2022_user_key,
-		       u.traffic_mark, u.status, u.expires_at, u.sub_token_sha256,
-		       p.quota_bytes, p.down_limit_kbps, p.up_limit_kbps,
-		       p.max_connections, p.max_ips, u.max_connections_override, u.max_ips_override, u.chain_id,
-		       c.period_up_bytes, c.period_down_bytes, c.total_up_bytes, c.total_down_bytes,
-		       u.created_at, u.updated_at, u.revision
-		FROM proxy_users u
-		JOIN plans p ON p.id = u.plan_id
-		JOIN usage_counters c ON c.user_id = u.id
+	rows, err := s.readDB().QueryContext(ctx, userSelectColumns+`
 		WHERE u.id = ?
 		LIMIT 1`, userID)
 	if err != nil {
@@ -777,16 +889,7 @@ func (s *proxyStore) getUserByID(ctx context.Context, userID string) (userRecord
 // FindUserBySubscriptionToken 使用 sub_token_sha256 唯一索引 O(1) 精确查询，并用常量时间比对核验摘要。
 func (s *proxyStore) FindUserBySubscriptionToken(ctx context.Context, rawToken string) (userRecord, bool, error) {
 	targetHash := hashTokenSHA256(rawToken)
-	rows, err := s.readDB().QueryContext(ctx, `
-		SELECT u.id, u.display_name, u.plan_id, u.vless_uuid, u.hy2_password, u.ss2022_user_key,
-		       u.traffic_mark, u.status, u.expires_at, u.sub_token_sha256,
-		       p.quota_bytes, p.down_limit_kbps, p.up_limit_kbps,
-		       p.max_connections, p.max_ips, u.max_connections_override, u.max_ips_override, u.chain_id,
-		       c.period_up_bytes, c.period_down_bytes, c.total_up_bytes, c.total_down_bytes,
-		       u.created_at, u.updated_at, u.revision
-		FROM proxy_users u
-		JOIN plans p ON p.id = u.plan_id
-		JOIN usage_counters c ON c.user_id = u.id
+	rows, err := s.readDB().QueryContext(ctx, userSelectColumns+`
 		WHERE u.sub_token_sha256 = ?
 		LIMIT 1`, targetHash)
 	if err != nil {
@@ -994,6 +1097,7 @@ func (s *proxyStore) IngestXrayObservation(ctx context.Context, resetEpoch strin
 		status          string
 		expiresAt       int64
 		quotaBytes      int64
+		trafficMode     string
 		billingResetDay int
 		periodUp        int64
 		periodDown      int64
@@ -1006,7 +1110,7 @@ func (s *proxyStore) IngestXrayObservation(ctx context.Context, resetEpoch strin
 	}
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT u.id, u.status, u.expires_at, p.quota_bytes, p.billing_reset_day,
+		SELECT u.id, u.status, u.expires_at, p.quota_bytes, p.traffic_mode, p.billing_reset_day,
 		       c.period_up_bytes, c.period_down_bytes, c.total_up_bytes, c.total_down_bytes,
 		       c.last_xray_epoch, c.last_raw_up, c.last_raw_down, c.period_started_at
 		FROM proxy_users u
@@ -1018,7 +1122,7 @@ func (s *proxyStore) IngestXrayObservation(ctx context.Context, resetEpoch strin
 	states := make(map[string]*userStateRow)
 	for rows.Next() {
 		st := &userStateRow{}
-		if err := rows.Scan(&st.userID, &st.status, &st.expiresAt, &st.quotaBytes, &st.billingResetDay,
+		if err := rows.Scan(&st.userID, &st.status, &st.expiresAt, &st.quotaBytes, &st.trafficMode, &st.billingResetDay,
 			&st.periodUp, &st.periodDown, &st.totalUp, &st.totalDown,
 			&st.lastEpoch, &st.lastRawUp, &st.lastRawDown, &st.periodStartedAt); err != nil {
 			_ = rows.Close()
@@ -1118,7 +1222,7 @@ func (s *proxyStore) IngestXrayObservation(ctx context.Context, resetEpoch strin
 			statusDirty[st.userID] = "expired"
 			needsCoreSync = true
 		}
-		if st.quotaBytes > 0 && st.periodUp+st.periodDown >= st.quotaBytes && st.status == "active" {
+		if st.quotaBytes > 0 && effectiveUsageBytes(st.periodUp, st.periodDown, st.trafficMode) >= st.quotaBytes && st.status == "active" {
 			st.status = "suspended_quota"
 			statusDirty[st.userID] = "suspended_quota"
 			needsCoreSync = true
@@ -1201,14 +1305,19 @@ func billingCycleStart(now time.Time, resetDay int) time.Time {
 
 func scanUserRecord(rows *sql.Rows) (userRecord, error) {
 	var u userRecord
+	var subEncLen int
+	var planNodeIDsJSON string
 	err := rows.Scan(
-		&u.ID, &u.DisplayName, &u.PlanID, &u.VLESSUUID, &u.Hy2Password, &u.SS2022UserKey,
-		&u.TrafficMark, &u.Status, &u.ExpiresAt, &u.SubTokenSHA256,
-		&u.QuotaBytes, &u.DownLimitKbps, &u.UpLimitKbps,
+		&u.ID, &u.DisplayName, &u.Notes, &u.PlanID, &u.VLESSUUID, &u.Hy2Password, &u.SS2022UserKey,
+		&u.TrafficMark, &u.Status, &u.ExpiresAt, &u.SubTokenSHA256, &subEncLen,
+		&u.QuotaBytes, &u.TrafficMode, &planNodeIDsJSON, &u.PlanRulePreset, &u.DownLimitKbps, &u.UpLimitKbps,
 		&u.PlanMaxConnections, &u.PlanMaxIPs, &u.MaxConnectionsOverride, &u.MaxIPsOverride, &u.ChainID,
 		&u.PeriodUpBytes, &u.PeriodDownBytes, &u.TotalUpBytes, &u.TotalDownBytes,
 		&u.CreatedAt, &u.UpdatedAt, &u.Revision,
 	)
+	u.HasStoredSub = subEncLen > 0
+	u.TrafficMode = normalizeTrafficMode(u.TrafficMode)
+	u.PlanNodeIDs = decodeStringArrayJSON(planNodeIDsJSON)
 	u.EffectiveMaxConnections = resolveEffectiveLimit(u.PlanMaxConnections, u.MaxConnectionsOverride)
 	u.EffectiveMaxIPs = resolveEffectiveLimit(u.PlanMaxIPs, u.MaxIPsOverride)
 	return u, err

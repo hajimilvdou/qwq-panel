@@ -437,14 +437,14 @@ func TestProxyAdvancedManifestAndPackageDigests(t *testing.T) {
 		parsed.Resources.DiskMaxMB != 96 || parsed.Resources.KVMaxKB != 512 {
 		t.Fatalf("资源预算不符: %+v", parsed.Resources)
 	}
-	if len(parsed.Operations) != 40 {
-		t.Fatalf("操作数量=%d，期望=40", len(parsed.Operations))
+	if len(parsed.Operations) != 48 {
+		t.Fatalf("操作数量=%d，期望=48", len(parsed.Operations))
 	}
 	if len(parsed.Dependencies) != 0 {
 		t.Fatalf("深度合并 Xray 核心后 proxy.advanced 不应再依赖独立插件，实际: %+v", parsed.Dependencies)
 	}
-	if parsed.UI == nil || len(parsed.UI.Routes) != 6 {
-		t.Fatalf("UI 路由数量应为 6（/proxy, /proxy/nodes, /proxy/users, /proxy/plans, /proxy/chains, /proxy/tuning），实际: %+v", parsed.UI)
+	if parsed.UI == nil || len(parsed.UI.Routes) != 7 {
+		t.Fatalf("UI 路由数量应为 7（/proxy, /proxy/nodes, /proxy/users, /proxy/plans, /proxy/rules, /proxy/chains, /proxy/tuning），实际: %+v", parsed.UI)
 	}
 	for name, digest := range parsed.Files {
 		if name == parsed.Entrypoint {
@@ -976,5 +976,152 @@ func TestBackgroundSyncLoopContainerDegradedShapingAndErrorPassthrough(t *testin
 	errSync := runProxyJob(t, h.srv, "users.set_status", map[string]any{"user_id": "dave", "status": "active"}, nil)
 	if errSync.GetError() == nil || errSync.GetError().GetCode() != "PRECONDITION_FAILED" {
 		t.Fatalf("PluginConfigService ErrorDetail 未完整透传: %+v", errSync.GetError())
+	}
+}
+
+func TestProxyV2PlansNodesRulesAndStoredSub(t *testing.T) {
+	h := newProxyTestHarness(t, `{"public_host":"proxy.example.com","vless_port":443,"reality_sni":"www.apple.com","reality_public_key":"PubKeyBase64"}`, time.Hour)
+
+	// 1. 导入两条相同外部 URI 验证 nodes.deduplicate。
+	imp := invokeProxy(t, h.srv, "nodes.import_uri", map[string]any{
+		"uris": "vless://11111111-1111-4111-8111-111111111111@hk.example.com:443?security=tls&sni=hk.example.com#HK-1\n" +
+			"vless://11111111-1111-4111-8111-111111111111@hk.example.com:443?security=tls&sni=hk.example.com#HK-dup\n" +
+			"vless://22222222-2222-4222-8222-222222222222@jp.example.com:443?security=tls&sni=jp.example.com#JP-1",
+	})
+	if imp.GetError() != nil {
+		t.Fatalf("nodes.import_uri 失败: %+v", imp.GetError())
+	}
+	dedup := invokeProxy(t, h.srv, "nodes.deduplicate", map[string]any{"dry_run": false})
+	if dedup.GetError() != nil {
+		t.Fatalf("nodes.deduplicate 失败: %+v", dedup.GetError())
+	}
+	var dedupOut struct {
+		RemovedCount int      `json:"removed_count"`
+		RemovedIDs   []string `json:"removed_ids"`
+	}
+	if err := json.Unmarshal(dedup.GetPayloadJson(), &dedupOut); err != nil || dedupOut.RemovedCount != 1 {
+		t.Fatalf("nodes.deduplicate 期望移除 1 条重复节点，实际: %+v err=%v", dedupOut, err)
+	}
+
+	listNodes := invokeProxy(t, h.srv, "nodes.list", map[string]any{})
+	var nodesOut struct {
+		Nodes []proxyNodeRecord `json:"nodes"`
+	}
+	if err := json.Unmarshal(listNodes.GetPayloadJson(), &nodesOut); err != nil || len(nodesOut.Nodes) != 2 {
+		t.Fatalf("去重后应剩 2 条节点，实际 %d err=%v", len(nodesOut.Nodes), err)
+	}
+	onlyNodeID := nodesOut.Nodes[0].ID
+
+	// 2. 创建带倍率、描述、绑定节点白名单与分流预设的套餐。
+	pProg := runProxyJob(t, h.srv, "plans.upsert", map[string]any{
+		"id":           "vip-2x",
+		"name":         "VIP 专线",
+		"description":  "仅限精选节点与 AI 分流",
+		"quota_bytes":  10737418240,
+		"traffic_mode": "both_2x",
+		"node_ids":     []string{onlyNodeID},
+		"rule_preset":  "ai_streaming",
+	}, nil)
+	if pProg.GetError() != nil {
+		t.Fatalf("plans.upsert 失败: %+v", pProg.GetError())
+	}
+
+	// 3. 配置全局分流规则并验证预览。
+	rSave := invokeProxy(t, h.srv, "rules.save", map[string]any{
+		"preset":                 "ai_streaming",
+		"enable_ad_block":        true,
+		"enable_ai_group":        true,
+		"enable_streaming_group": true,
+		"custom_direct_domains":  []string{"corp.internal"},
+		"custom_proxy_domains":   []string{"dev.example.org"},
+		"custom_reject_domains":  []string{"tracker.bad.example"},
+	})
+	if rSave.GetError() != nil {
+		t.Fatalf("rules.save 失败: %+v", rSave.GetError())
+	}
+	var rOut struct {
+		ClashPreview   string `json:"clash_preview"`
+		SingboxPreview string `json:"singbox_preview"`
+	}
+	if err := json.Unmarshal(rSave.GetPayloadJson(), &rOut); err != nil ||
+		!strings.Contains(rOut.ClashPreview, "AI-Services") ||
+		!strings.Contains(rOut.ClashPreview, "DOMAIN-SUFFIX,corp.internal,DIRECT") ||
+		!strings.Contains(rOut.ClashPreview, "DOMAIN-SUFFIX,tracker.bad.example,REJECT") {
+		t.Fatalf("rules.save Clash 预览异常: err=%v preview=%s", err, rOut.ClashPreview)
+	}
+
+	// 4. 创建用户并验证加密存储的订阅令牌可一键解密读取，且订阅仅导出套餐绑定的节点。
+	uProg := runProxyJob(t, h.srv, "users.create", map[string]any{
+		"id":           "eva",
+		"display_name": "Eva",
+		"notes":        "主力 MacBook",
+		"plan_id":      "vip-2x",
+	}, nil)
+	if uProg.GetError() != nil {
+		t.Fatalf("users.create 失败: %+v", uProg.GetError())
+	}
+	var created usersCreateResponse
+	if err := json.Unmarshal(uProg.GetResultJson(), &created); err != nil || !created.User.HasStoredSub || created.User.Notes != "主力 MacBook" {
+		t.Fatalf("users.create 新字段不符: %+v err=%v", created.User, err)
+	}
+
+	subGet := invokeProxy(t, h.srv, "users.get_subscription", map[string]any{"user_id": "eva"})
+	if subGet.GetError() != nil {
+		t.Fatalf("users.get_subscription 失败: %+v", subGet.GetError())
+	}
+	var subGetOut struct {
+		Available         bool   `json:"available"`
+		SubscriptionToken string `json:"subscription_token"`
+		SubscriptionPath  string `json:"subscription_path"`
+	}
+	if err := json.Unmarshal(subGet.GetPayloadJson(), &subGetOut); err != nil || !subGetOut.Available || subGetOut.SubscriptionToken != created.SubscriptionToken {
+		t.Fatalf("users.get_subscription 解密令牌不符: %+v want=%s err=%v", subGetOut, created.SubscriptionToken, err)
+	}
+
+	// 验证订阅仅返回套餐绑定的 1 个节点且套用 AI 分流规则。
+	rc := &pb.RequestContext{InstanceId: "default", NodeId: "local", Locale: "zh-CN"}
+	clashResp, err := h.srv.ServePublicRoute(t.Context(), &pb.ServePublicRouteRequest{
+		Context: rc, Route: "sub", Method: "GET", Path: "/sub/" + created.SubscriptionToken, RawQuery: "format=clash",
+	})
+	if err != nil || clashResp.GetStatus() != 200 {
+		t.Fatalf("订阅拉取失败: status=%d err=%v", clashResp.GetStatus(), err)
+	}
+	clashBody := string(clashResp.GetBody())
+	if !strings.Contains(clashBody, "AI-Services") || strings.Contains(clashBody, "jp.example.com") {
+		t.Fatalf("订阅未正确按套餐绑定节点或分流规则渲染:\n%s", clashBody)
+	}
+
+	// 5. users.set_limits 修改备注与显示名。
+	upd := invokeProxy(t, h.srv, "users.set_limits", map[string]any{
+		"user_id":      "eva",
+		"display_name": "Eva Pro",
+		"notes":        "已续费年度",
+	})
+	if upd.GetError() != nil {
+		t.Fatalf("users.set_limits 资料更新失败: %+v", upd.GetError())
+	}
+
+	// 6. 套餐仍被用户绑定时 plans.delete 必须拒绝 CONFLICT；删除用户后可正常删除套餐。
+	delConflict := runProxyJob(t, h.srv, "plans.delete", map[string]any{"id": "vip-2x"}, nil)
+	if delConflict.GetError() == nil || delConflict.GetError().GetCode() != "CONFLICT" {
+		t.Fatalf("存在绑定用户时 plans.delete 应返回 CONFLICT，实际: %+v", delConflict.GetError())
+	}
+	delUser := runProxyJob(t, h.srv, "users.delete", map[string]any{"user_id": "eva"}, nil)
+	if delUser.GetError() != nil {
+		t.Fatalf("users.delete 失败: %+v", delUser.GetError())
+	}
+	delPlan := runProxyJob(t, h.srv, "plans.delete", map[string]any{"id": "vip-2x"}, nil)
+	if delPlan.GetError() != nil {
+		t.Fatalf("users.delete 后 plans.delete 应成功，实际: %+v", delPlan.GetError())
+	}
+
+	// 7. proxy.overview 返回 30 天每日流量与 alerts 数组。
+	ov := invokeProxy(t, h.srv, "proxy.overview", map[string]any{"include_traffic_status": false})
+	if ov.GetError() != nil {
+		t.Fatalf("proxy.overview 失败: %+v", ov.GetError())
+	}
+	var ovOut overviewResponse
+	if err := json.Unmarshal(ov.GetPayloadJson(), &ovOut); err != nil || len(ovOut.DailyTraffic) != 30 {
+		t.Fatalf("proxy.overview daily_traffic 期望 30 天，实际 len=%d err=%v", len(ovOut.DailyTraffic), err)
 	}
 }

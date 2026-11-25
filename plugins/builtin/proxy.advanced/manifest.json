@@ -39,6 +39,10 @@
     "schemas/chains.upsert.request.json": "sha256:66f249b396345414286bd284074e23d12a1a6b8e7553afd619d40776738b9ebf",
     "schemas/chains.upsert.response.json": "sha256:78fef37747b34575d439619f75418bc1a226833135379675713e5fb209f0f9d9",
     "schemas/config.schema.json": "sha256:7fbabd3a38ddc207abc0a4884ea3fe569df55ac5446b94a26068834d554c619c",
+    "schemas/nodes.batch_test.request.json": "sha256:5beec3a4cfc534c20deaa2c91beae4af99fcd8f928e15f9187a1964f8fa02218",
+    "schemas/nodes.batch_test.response.json": "sha256:86247463613854c510c7e34a9946937f1da9cafe26cd10736fd0ff4b4b005d2d",
+    "schemas/nodes.deduplicate.request.json": "sha256:b85ee1e9ccada9d4ec95d7a258a7ed907bfe78ce9b1c51cf8bef598ff330e9c4",
+    "schemas/nodes.deduplicate.response.json": "sha256:6c213fa522960bb272b755db94cc27e947a16abc31881101d11721c8b763c802",
     "schemas/nodes.delete.request.json": "sha256:f69fce7b936b284d82f1a31351ae5ea03bc87a1d5a02f1a8a083006a44e20ca1",
     "schemas/nodes.delete.response.json": "sha256:13cdf446df05cb1e15019cf20cb4daf3093bb8ea2fde55325fa7db210db9c5db",
     "schemas/nodes.import_uri.request.json": "sha256:f9bc73100f14e8ec3de8d163e14e0f7cbf5adb45924b1f1ea4a09eb68e889c4f",
@@ -53,12 +57,20 @@
     "schemas/nodes.test.response.json": "sha256:5d75408c7c03682d6d6e2640720807625cf2714a6de4717e72d6d8709620c9ba",
     "schemas/nodes.upsert.request.json": "sha256:5edc41ace4a7ec1317ef3d04d7b91519f92c0cdda65c2faddd1f4eb7b0817ddf",
     "schemas/nodes.upsert.response.json": "sha256:112caa4af890c317147445576164b783fb769b9242526a0debb411ea00e0c0ab",
+    "schemas/plans.delete.request.json": "sha256:4f06179a28319e2733c6c195d3525b66d14819e67933409aff0fc2be704d794e",
+    "schemas/plans.delete.response.json": "sha256:67eff230646cab15fa27e9676339c179352c4f9e22925cd1ca84cc2151073aae",
     "schemas/plans.list.request.json": "sha256:d94e23cf74b60b53e680ad06c808fba1fc9a6e39889a2bd115c41da455ada3ce",
-    "schemas/plans.list.response.json": "sha256:97a15d7f1ae256d46b89e0c59b21824152b041e29d8645e7f152ef65e6f0876d",
-    "schemas/plans.upsert.request.json": "sha256:fb448ec813273eeb7a12316d485ddf8589c4b5244e4dd58f690053bf451e5a9b",
-    "schemas/plans.upsert.response.json": "sha256:e82cfc9a05526968f6c85389b241f4e1a744ee6af7726005fa49aceaae220ce2",
+    "schemas/plans.list.response.json": "sha256:315e335e2da25297a2e255bee01945d4a546e36c57f7f8e81763f4ca90f439fe",
+    "schemas/plans.upsert.request.json": "sha256:8999d47042a7ca5cc3fb8246989df69fa3dc7d5e3ff6ca3ded5e7479c4071e2a",
+    "schemas/plans.upsert.response.json": "sha256:065bb6096aca47e0144920cc5f3896d9a45dc7770439aa2349a0fd0a463cd9c8",
     "schemas/proxy.overview.request.json": "sha256:d085279016004f0be2a6964cfd4eb04af6e69017a27cd2e1e0ee6e207f133c77",
-    "schemas/proxy.overview.response.json": "sha256:25d24f9d87acc0b7241173375715740d6e8762d955c1bbb95f9942d8a82ac19f",
+    "schemas/proxy.overview.response.json": "sha256:b7b41fee9c6f6a99ad6a2a98a20ce61dc85ec1c15bc962c3d5f13e021ebf67bb",
+    "schemas/rules.get.request.json": "sha256:3a253cc591500e923f976a2351825cef3bb8f2bb03df42a5127cdfb8f62f2960",
+    "schemas/rules.get.response.json": "sha256:48c7e100801e0269ffbb20d25102ebd05a89bffa2beca784883c6541bdcb65a2",
+    "schemas/rules.save.request.json": "sha256:8e2f861ee415332d96419731508845f09b583ef31c2c06e7c7c353fe83bb12f3",
+    "schemas/rules.save.response.json": "sha256:7304668f55e7d754bf0632f913ed2cd8659cad6e5c5fb7717bde325ba976688b",
+    "schemas/tls.certs.available.request.json": "sha256:1205d8e500f232ae31772973abe5472172c15c5cd608d21703676c8d2c1f3b5f",
+    "schemas/tls.certs.available.response.json": "sha256:92727ab8397b1e679106ad1230c4a8c702913f944f16a85f60ca15387f826581",
     "schemas/tls.inspect.request.json": "sha256:86d0568e3680cf519c1c9e22d070652e5c332833dc59314b7a18ed2d803fe2ef",
     "schemas/tls.inspect.response.json": "sha256:78d1474bfaeb02729f1d86fba933ee697f08b67badfe406cb67090eec39e07cc",
     "schemas/tls.reload.request.json": "sha256:527b2bff790b429bf532b486830d6f2d18f0c090f6fc8ecfb4a2a68f1ced3779",
@@ -77,16 +89,20 @@
     "schemas/tuning.sweep.response.json": "sha256:b9ecad0693dfec5d848f3ad6ef46426dba21318f92c836298e42eed5aed35905",
     "schemas/users.connections.status.request.json": "sha256:1d31684eb13c43edf4bc70c8ac99d5a7a1d2f9913785997ae911ad55d4337f31",
     "schemas/users.connections.status.response.json": "sha256:df5360b0c65a5723e8893ddda2f36705bc82c452ff0da2e21399ec7a9cc845ed",
-    "schemas/users.create.request.json": "sha256:c03ae1fff9de030a8a01f3a84eb6cc90a187556be91ba7b9f68f0862e1016c6d",
-    "schemas/users.create.response.json": "sha256:5a2adf2014a1c67d2e95aad74605b32c2ea27c93df6dbda964fb24ba089863f8",
+    "schemas/users.create.request.json": "sha256:caace505af0b83c50ee2cefe010fc5c637786874f5ad418d1032bd17ba9b07f5",
+    "schemas/users.create.response.json": "sha256:e155e2add2a581a7547863e5980a65860c2a3b2745645555a66d40175232a086",
+    "schemas/users.delete.request.json": "sha256:f2f8038e13c68f3f8fb1d030a7b47199428c9bb0af50bd19cc3fbad75346d100",
+    "schemas/users.delete.response.json": "sha256:f6cf98ab10a18e466ed3b8157f2f9bc99419ebe6adfdabbefce475af60cbe1d4",
+    "schemas/users.get_subscription.request.json": "sha256:06d8b39c8ae4b95d1a7f752a424173258f943479711f85cc8fd6ee0cfaff568e",
+    "schemas/users.get_subscription.response.json": "sha256:fa87f4dcf7b59b0c664d5db7f89662a260c3cebd5d56f8983801441970004ccb",
     "schemas/users.list.request.json": "sha256:34747d21bce69af6638ac1c2972015eef876aa91660a012031a03bd1aee1cb6f",
-    "schemas/users.list.response.json": "sha256:a7e5820dc56eaf1bef00793cf755c37f13d14c3ffeaf5b94fb6643a7c2c99638",
+    "schemas/users.list.response.json": "sha256:875db558710ffef3c2943dcf4364e6dcff7cb263bd87cc7bb627d8604b2b25a0",
     "schemas/users.rotate_subscription.request.json": "sha256:f224221baf7e7e87a8b11f785e8ab52da13135675cc075769b6e02d8162a8761",
     "schemas/users.rotate_subscription.response.json": "sha256:70810e87262fbebf98c4860d593392a26321f103bb4733958a1c55008f8e9ab5",
-    "schemas/users.set_limits.request.json": "sha256:651c1784b65230d9f1bca90f05f4e3dec95c738776dd2f5d11979f5d5210845a",
-    "schemas/users.set_limits.response.json": "sha256:d2638db58ff359e0b0afd58b7c1541a93433242d93416ac4bef238094e5f8965",
+    "schemas/users.set_limits.request.json": "sha256:4d47a95bcc6e44ee2ff46dcaa1d46e40580c08ecd9878ed714ef1d59bc548b13",
+    "schemas/users.set_limits.response.json": "sha256:ac03d66a63512a5d9955e3b40c0ad0cc65b901a3bf534bef84c03e2506971a0c",
     "schemas/users.set_status.request.json": "sha256:d40929961f89c3e72d7c6b9367b5c209d19243c018c2277b4d28ad3a29da887e",
-    "schemas/users.set_status.response.json": "sha256:f5a2e51c6ad4c2cb37fae618a44d68a918169ea648e5c21b61bee75add3bac53",
+    "schemas/users.set_status.response.json": "sha256:74ee1ee11b99ed84d4d2a06e7377bff7ca28328e1f01820631adbf420084bd8e",
     "schemas/users.usage_history.request.json": "sha256:8a0cbc374b51078f467077118950a16d5c288737eb26bd2326bb35563c6748a2",
     "schemas/users.usage_history.response.json": "sha256:3961e5626b1934737ba9488427c7c03e633703b8bc07580d57c98cf68ae9c7be",
     "schemas/warp.configure.request.json": "sha256:1e663e84bbf939baeb6364f15c0d2db60bd293a39307ac28284cbf49959e33bd",
@@ -101,9 +117,9 @@
     "schemas/warp.status.response.json": "sha256:ca1da9258a97ab1f47ea5f48657025b16fc3582cf49699b713b36115aa78857b",
     "schemas/xray.status.request.json": "sha256:2656294ca60aa23acaa3e6e1b688fa8b754196e6636657eb146a559936511803",
     "schemas/xray.status.response.json": "sha256:d373163dd75afcb140bf5c1872123193499ebb58e0b68ec0723b5b22f0bc14a6",
-    "ui/index.html": "sha256:0a019131d1c3af2f31f189a956162074751825fca792d65c6b5529e988da186d",
-    "ui/proxy.css": "sha256:87e0c89025457a9212ef9352b7d0037b1b8fa04e0864520a2a8206f1ebd895df",
-    "ui/proxy.js": "sha256:0da743f59e366f45fac3a7f1358ab02c9ee2e233faa8abe15fa591ef5ca71469"
+    "ui/index.html": "sha256:c5c686032e8b1d6f66f673f118cd254529c65928d472793554a4fccf9363d5cd",
+    "ui/proxy.css": "sha256:a038e78c91e516068ddab7fee1c1a765fe313e975ff1a67d80fead641a8b7405",
+    "ui/proxy.js": "sha256:746afa997726d605d3a9ac28a62ac9afa6df1ee00642f6b11393214afc8c7137"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -182,6 +198,11 @@
       "name": "secret.reveal",
       "scope": "operation",
       "reason": "读取一次性提交的许可证与节点密钥"
+    },
+    {
+      "name": "plugin.invoke",
+      "scope": "tls.certificates/certificates.list",
+      "reason": "读取面板已签发的 TLS 证书清单，支持建节点时下拉直选绑定"
     }
   ],
   "operations": [
@@ -393,18 +414,26 @@
       "risk": "low",
       "idempotent": true,
       "timeout_ms": 10000,
-      "summary": "更新单用户并发连接数上限、最大在线 IP 上限与链式代理绑定",
+      "summary": "更新单用户资料、备注、套餐归属、并发连接/IP 覆盖与链式代理绑定",
       "capabilities": [
         {
           "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.proxy",
+          "scope": "direct"
+        },
+        {
+          "name": "system.traffic.shape",
           "scope": "self"
         }
       ],
       "request_schema": "schemas/users.set_limits.request.json",
       "response_schema": "schemas/users.set_limits.response.json",
       "approval": "ai_confirm",
-      "approval_summary": "将修改该代理用户的最大并发连接数、同时在线 IP 限制或链式代理绑定",
-      "ui_route": "/proxy"
+      "approval_summary": "将修改该代理用户的资料备注、套餐、连接/IP 上限或链式代理绑定",
+      "ui_route": "/proxy/users"
     },
     {
       "name": "users.connections.status",
@@ -1112,6 +1141,190 @@
       ],
       "request_schema": "schemas/tls.inspect.request.json",
       "response_schema": "schemas/tls.inspect.response.json"
+    },
+    {
+      "name": "plans.delete",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "job",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "approval": "confirm",
+      "approval_summary": "将永久删除未被用户绑定的指定代理套餐模板",
+      "timeout_ms": 15000,
+      "summary": "删除代理套餐模板",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/plans.delete.request.json",
+      "response_schema": "schemas/plans.delete.response.json",
+      "ui_route": "/proxy/plans"
+    },
+    {
+      "name": "users.delete",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "job",
+      "effect": "destructive",
+      "risk": "high",
+      "idempotent": true,
+      "approval": "confirm",
+      "approval_summary": "将永久删除该代理用户并同步清理内置 Xray 凭据与内核限速规则",
+      "timeout_ms": 30000,
+      "summary": "删除代理用户并同步内置核心",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.proxy",
+          "scope": "direct"
+        },
+        {
+          "name": "system.traffic.shape",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/users.delete.request.json",
+      "response_schema": "schemas/users.delete.response.json",
+      "ui_route": "/proxy/users"
+    },
+    {
+      "name": "users.get_subscription",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "按需解密获取指定代理用户当前生效的订阅链接与令牌",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/users.get_subscription.request.json",
+      "response_schema": "schemas/users.get_subscription.response.json",
+      "ui_route": "/proxy/users"
+    },
+    {
+      "name": "nodes.batch_test",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 25000,
+      "summary": "并发批量探测多个代理节点的真实连通性与往返延迟",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.egress",
+          "scope": "chain"
+        }
+      ],
+      "request_schema": "schemas/nodes.batch_test.request.json",
+      "response_schema": "schemas/nodes.batch_test.response.json",
+      "ui_route": "/proxy/nodes"
+    },
+    {
+      "name": "nodes.deduplicate",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "medium",
+      "idempotent": true,
+      "approval": "ai_confirm",
+      "approval_summary": "将按协议、地址、端口与凭据指纹清理重复代理节点（优先保留托管节点）",
+      "timeout_ms": 15000,
+      "summary": "一键检测并清理重复代理节点",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        },
+        {
+          "name": "network.proxy",
+          "scope": "direct"
+        }
+      ],
+      "request_schema": "schemas/nodes.deduplicate.request.json",
+      "response_schema": "schemas/nodes.deduplicate.response.json",
+      "ui_route": "/proxy/nodes"
+    },
+    {
+      "name": "rules.get",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 5000,
+      "summary": "查询当前订阅分流规则配置、可用预设及 Clash/sing-box 预览",
+      "capabilities": [
+        {
+          "name": "state.kv.read",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/rules.get.request.json",
+      "response_schema": "schemas/rules.get.response.json",
+      "ui_route": "/proxy/rules"
+    },
+    {
+      "name": "rules.save",
+      "api_version": "v1",
+      "permission": "proxy.advanced:manage",
+      "mode": "invoke",
+      "effect": "write",
+      "risk": "low",
+      "idempotent": true,
+      "approval": "ai_confirm",
+      "approval_summary": "将更新 Clash 与 sing-box 订阅分流规则模板与自定义域名列表",
+      "timeout_ms": 10000,
+      "summary": "保存全局订阅分流规则模板与自定义域名",
+      "capabilities": [
+        {
+          "name": "state.kv.write",
+          "scope": "self"
+        }
+      ],
+      "request_schema": "schemas/rules.save.request.json",
+      "response_schema": "schemas/rules.save.response.json",
+      "ui_route": "/proxy/rules"
+    },
+    {
+      "name": "tls.certs.available",
+      "api_version": "v1",
+      "permission": "proxy.advanced:read",
+      "mode": "invoke",
+      "effect": "read",
+      "risk": "low",
+      "idempotent": true,
+      "timeout_ms": 8000,
+      "summary": "查询面板证书管理插件已签发的 TLS 证书清单以供建节点下拉直选",
+      "capabilities": [
+        {
+          "name": "plugin.invoke",
+          "scope": "tls.certificates/certificates.list"
+        }
+      ],
+      "request_schema": "schemas/tls.certs.available.request.json",
+      "response_schema": "schemas/tls.certs.available.response.json",
+      "ui_route": "/proxy/nodes"
     }
   ],
   "ui": {
@@ -1140,6 +1353,12 @@
       {
         "path": "/proxy/plans",
         "title": "套餐管理",
+        "nav": false,
+        "permission": "proxy.advanced:read"
+      },
+      {
+        "path": "/proxy/rules",
+        "title": "订阅规则",
         "nav": false,
         "permission": "proxy.advanced:read"
       },

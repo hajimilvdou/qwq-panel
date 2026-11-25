@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "保存订阅分流规则配置请求",
+  "description": "更新全局订阅分流预设、广告拦截开关与自定义直连/代理/拦截域名列表。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "preset"
+  ],
+  "properties": {
+    "preset": {
+      "type": "string",
+      "enum": ["global", "balanced", "ai_streaming", "minimal"],
+      "description": "订阅分流预设模式。"
+    },
+    "enable_ad_block": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否启用内置常见广告域名拦截规则。"
+    },
+    "enable_ai_group": {
+      "type": "boolean",
+      "default": true,
+      "description": "在 AI 与流媒体预设下是否独立拆分 AI 服务策略组。"
+    },
+    "enable_streaming_group": {
+      "type": "boolean",
+      "default": true,
+      "description": "在 AI 与流媒体预设下是否独立拆分流媒体策略组。"
+    },
+    "custom_direct_domains": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "type": "string", "maxLength": 128 },
+      "description": "自定义强制直连域名后缀列表。"
+    },
+    "custom_proxy_domains": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "type": "string", "maxLength": 128 },
+      "description": "自定义强制代理域名后缀列表。"
+    },
+    "custom_reject_domains": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "type": "string", "maxLength": 128 },
+      "description": "自定义拦截拒绝域名后缀列表。"
+    },
+    "updated_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "可选客户端回传时间戳（服务端保存时自动覆写）。"
+    }
+  }
+}

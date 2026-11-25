@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "查询面板可用 TLS 证书列表响应",
+  "description": "返回证书管理插件安装状态与已签发证书摘要列表。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "certs_installed",
+    "certificates"
+  ],
+  "properties": {
+    "certs_installed": {
+      "type": "boolean",
+      "description": "面板是否已安装并启用 tls.certificates 证书管理插件。"
+    },
+    "certificates": {
+      "type": "array",
+      "description": "可供代理节点直接下拉绑定的证书列表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "binding_ref",
+          "domains",
+          "issuer",
+          "not_after",
+          "status",
+          "is_wildcard"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "binding_ref": { "type": "string" },
+          "domains": { "type": "array", "items": { "type": "string" } },
+          "issuer": { "type": "string" },
+          "not_after": { "type": "string" },
+          "status": { "type": "string" },
+          "is_wildcard": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}
