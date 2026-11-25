@@ -124,15 +124,7 @@ func (c *JSONRPCConn) Call(ctx context.Context, method string, params any, out a
 		return err
 	}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-c.done:
-		if c.err != nil {
-			return c.err
-		}
-		return problem.New(problem.Unavailable, "External agent JSON-RPC stream closed unexpectedly.")
-	case resp := <-ch:
+	decodeResp := func(resp rpcEnvelope) error {
 		if resp.Error != nil {
 			return problem.New(problem.PluginError, "%s", resp.Error.Error())
 		}
@@ -142,6 +134,25 @@ func (c *JSONRPCConn) Call(ctx context.Context, method string, params any, out a
 			}
 		}
 		return nil
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case resp := <-ch:
+		return decodeResp(resp)
+	case <-c.done:
+		// readLoop delivers the response into the buffered channel before closing
+		// c.done; prefer an already-delivered response when both cases are ready.
+		select {
+		case resp := <-ch:
+			return decodeResp(resp)
+		default:
+		}
+		if c.err != nil {
+			return c.err
+		}
+		return problem.New(problem.Unavailable, "External agent JSON-RPC stream closed unexpectedly.")
 	}
 }
 
