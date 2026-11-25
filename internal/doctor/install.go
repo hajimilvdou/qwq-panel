@@ -171,17 +171,17 @@ func CheckPorts(ctx context.Context, env Env, listen string) Result {
 }
 
 // checkListen says what a listener outside loopback still needs before a
-// browser reaches it: neither the installer nor the panel opens firewall ports.
+// browser reaches it.
 func checkListen(h config.HTTP) Result {
 	if h.Loopback() {
 		return Result{ID: "listen", Status: OK, Detail: h.Listen + " is loopback only; reach it through an SSH tunnel or a reverse proxy on this host"}
 	}
 	_, port, _ := net.SplitHostPort(h.Listen)
 	return Result{ID: "listen", Status: Info,
-		Detail: h.Listen + " is reachable from the network only after the firewall allows TCP " + port + "; qwq never opens ports",
-		Fix: fmt.Sprintf("on a BaoTa host add the port on its Security page, otherwise `ufw allow %s/tcp` or "+
-			"`firewall-cmd --permanent --add-port=%s/tcp && firewall-cmd --reload`; allow it in the cloud security group too (%s)",
-			port, port, config.CoexistenceDoc)}
+		Detail: h.Listen + " listens on all/external interfaces; ensure TCP " + port + " is allowed in the host firewall and cloud security group",
+		Fix: fmt.Sprintf("if unreachable externally, allow TCP %s in the host firewall (`ufw allow %s/tcp`, "+
+			"`firewall-cmd --permanent --add-port=%s/tcp && firewall-cmd --reload`, or nftables/iptables) and in your cloud provider security group",
+			port, port, port)}
 }
 
 // listeningPorts parses /proc/net/tcp{,6} for sockets in state LISTEN (0A).

@@ -167,7 +167,7 @@ func TestDoctorListenReachability(t *testing.T) {
 		if r.Status != Info {
 			t.Errorf("%s = %+v", listen, r)
 		}
-		for _, want := range []string{"ufw allow " + port + "/tcp", "firewall-cmd --permanent --add-port=" + port + "/tcp", "BaoTa"} {
+		for _, want := range []string{"ufw allow " + port + "/tcp", "firewall-cmd --permanent --add-port=" + port + "/tcp", "security group"} {
 			if !strings.Contains(r.Fix, want) {
 				t.Errorf("%s: fix lacks %q: %s", listen, want, r.Fix)
 			}

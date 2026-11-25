@@ -4,8 +4,9 @@
 #  install.sh —— 安装或升级 qwq（随发布包分发，可重复幂等执行）
 # -----------------------------------------------------------------------------
 #  用法：
-#    sudo bash install.sh [--minimal | --plugins <csv|all>] [--version <vX.Y.Z|latest>] [--mirror URL] [--port N] [--entry-path PATH]
-#    sudo bash install.sh --offline qwq-vX.Y.Z-linux-amd64.tar.gz [--minimal | --plugins <csv|all> --plugin-dir <dir>] [--port N] [--entry-path PATH]
+#    curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash
+#    sudo bash install.sh [--minimal | --plugins <csv|all>] [--version <vX.Y.Z|latest>] [--listen HOST] [--port N] [--entry-path PATH]
+#    sudo bash install.sh --offline qwq-vX.Y.Z-linux-amd64.tar.gz [--minimal | --plugins <csv|all> --plugin-dir <dir>] [--listen HOST] [--port N] [--entry-path PATH]
 #
 #  默认必装范围（Track 10 架构）：
 #    初始强制必装且仅必装：原面板底座（qwq / qwq-privileged / qwq-capability）+ 基础安全插件（security.basic）。
@@ -13,8 +14,8 @@
 #    proxy.advanced / ai.relay / web.ingress / containers.docker / notify.hub）全部为独立可选 .qwqpkg 包：
 #    交互终端下可勾选安装（直接回车仅装必装底座），非交互可用 --plugins 按需选装。
 #
-#  与宿主共存（宝塔等）：不碰 nginx、ufw、firewalld；默认配置只监听 127.0.0.1。
-#  第二次执行同一版本不会改变任何东西，也不会重启服务。
+#  网络与防火墙：默认监听 0.0.0.0:<随机高位端口> + 随机安全密道，并自动识别系统防火墙（ufw/firewalld/nftables/iptables）放行面板端口；
+#  如需仅本机回环监听，可传 --listen 127.0.0.1。第二次执行同一版本幂等不重启服务。
 #  退出码：0 成功 / 1 失败 / 2 用法错误
 # =============================================================================
 set -euo pipefail
@@ -60,8 +61,8 @@ usage() {
   cat >&2 <<'EOF'
 用法：
   curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash
-  curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- [--minimal | --plugins <csv|all>] [--version <vX.Y.Z|latest>] [--port N] [--entry-path PATH]
-  sudo bash install.sh --offline qwq-vX.Y.Z-linux-amd64.tar.gz [--minimal | --plugins <csv|all> --plugin-dir <dir>] [--port N] [--entry-path PATH]
+  curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- [--minimal | --plugins <csv|all>] [--version <vX.Y.Z|latest>] [--listen 0.0.0.0|127.0.0.1] [--port N] [--entry-path PATH]
+  sudo bash install.sh --offline qwq-vX.Y.Z-linux-amd64.tar.gz [--minimal | --plugins <csv|all> --plugin-dir <dir>] [--listen 0.0.0.0|127.0.0.1] [--port N] [--entry-path PATH]
 EOF
   exit 2
 }
@@ -70,7 +71,7 @@ EOF
 offline='' version='' mirror=$DEFAULT_MIRROR
 mode_minimal=0 csv_plugins='' offline_plugin_dir=''
 compat_patch_file='' no_compat_patch=0
-custom_port='' custom_entry_path='' has_custom_entry_path=0
+custom_listen='' custom_port='' custom_entry_path='' has_custom_entry_path=0
 while (($#)); do
   case $1 in
     --offline)         offline=${2:?}; shift 2 ;;
@@ -81,6 +82,7 @@ while (($#)); do
     --plugin-dir)      offline_plugin_dir=${2:?}; shift 2 ;;
     --compat-patch)    compat_patch_file=${2:?}; shift 2 ;;
     --no-compat-patch) no_compat_patch=1; shift ;;
+    --listen)          custom_listen=${2:?}; shift 2 ;;
     --port)            custom_port=${2:?}; shift 2 ;;
     --entry-path)      custom_entry_path=${2:?}; has_custom_entry_path=1; shift 2 ;;
     -h|--help)         usage ;;
@@ -292,8 +294,18 @@ generate_random_entry_path() {
 }
 
 fresh_install=0
+init_listen_host="0.0.0.0"
 init_port=""
 init_entry_path=""
+if [[ -n $custom_listen ]]; then
+  init_listen_host=${custom_listen#[}
+  init_listen_host=${init_listen_host%]}
+  [[ $init_listen_host =~ ^[0-9A-Za-z.:-]+$ ]] || die "--listen 地址格式非法：$custom_listen"
+fi
+init_listen_addr="${init_listen_host}"
+if [[ $init_listen_addr == *:* ]]; then
+  init_listen_addr="[${init_listen_addr}]"
+fi
 if [[ ! -f $ETC/qwq.json ]]; then
   fresh_install=1
   if [[ -n $custom_port ]]; then
@@ -311,7 +323,7 @@ fi
 # ── 安装前检查（DEP-05：0 通过 / 1 警告 / 3 失败）──────────────────────────
 preinstall_args=(doctor --preinstall)
 if ((fresh_install)); then
-  preinstall_args+=(--listen "127.0.0.1:$init_port")
+  preinstall_args+=(--listen "${init_listen_addr}:${init_port}")
 fi
 rc=0; "$P/bin/qwq" "${preinstall_args[@]}" || rc=$?
 case $rc in
@@ -410,7 +422,7 @@ if [[ ! -f $ETC/qwq.json ]]; then
   "data_dir": "/var/lib/qwq",
   "run_dir": "/run/qwq",
   "http": {
-    "listen": "127.0.0.1:${init_port}",
+    "listen": "${init_listen_addr}:${init_port}",
     "entry_path": "${init_entry_path}",
     "disguise": "drop",
     "auto_disable_on_domain": true,
@@ -423,9 +435,9 @@ EOF
   install -m0640 -o root -g qwq "$T/qwq.json" "$ETC/qwq.json"
   changed=1
   if [[ -n $init_entry_path ]]; then
-    log "已生成随机高位端口 ${init_port} 与随机安全密道 /${init_entry_path}（伪装模式：drop 静默断开）"
+    log "已生成监听地址 ${init_listen_addr}:${init_port} 与随机安全密道 /${init_entry_path}（伪装模式：drop 静默断开）"
   else
-    log "已生成随机高位端口 ${init_port}（已关闭安全密道）"
+    log "已生成监听地址 ${init_listen_addr}:${init_port}（已关闭安全密道）"
   fi
 fi
 
@@ -671,30 +683,220 @@ if ((${#bootstrap_pkgs[@]} > 0)); then
   "$PREFIX/current/bin/qwq" plugin bootstrap --config "$ETC/qwq.json" "${bootstrap_pkgs[@]}"
 fi
 
-rc=0; "$PREFIX/current/bin/qwq" setup-token --config "$ETC/qwq.json" || rc=$?
+# ── 自动识别系统防火墙并放行面板端口（仅非回环监听时执行）──────────────────
+is_loopback_host() {
+  local h=${1#[}
+  h=${h%]}
+  [[ $h == "127.0.0.1" || $h == "::1" || $h == "localhost" ]]
+}
+
+is_public_ipv4() {
+  local ip=$1
+  [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  local a b c d
+  IFS='.' read -r a b c d <<<"$ip"
+  ((a <= 255 && b <= 255 && c <= 255 && d <= 255)) || return 1
+  ((a == 0 || a == 10 || a == 127)) && return 1
+  ((a == 100 && b >= 64 && b <= 127)) && return 1
+  ((a == 169 && b == 254)) && return 1
+  ((a == 172 && b >= 16 && b <= 31)) && return 1
+  ((a == 192 && b == 168)) && return 1
+  ((a >= 224)) && return 1
+  return 0
+}
+
+detect_public_ip() {
+  local ip=""
+  if command -v ip >/dev/null 2>&1; then
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)
+    if [[ -n $ip ]] && is_public_ipv4 "$ip"; then
+      printf '%s\n' "$ip"
+      return 0
+    fi
+  fi
+  if [[ -n $version ]] && command -v curl >/dev/null 2>&1; then
+    local url cand
+    for url in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
+      cand=$(curl -4 -fsS --connect-timeout 2 --max-time 3 "$url" 2>/dev/null | tr -d '[:space:]' || true)
+      if [[ -n $cand ]] && is_public_ipv4 "$cand"; then
+        printf '%s\n' "$cand"
+        return 0
+      fi
+    done
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    local ip6
+    ip6=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)
+    if [[ -n $ip6 && $ip6 != ::1 && $ip6 != fe80:* && $ip6 != fc* && $ip6 != fd* ]]; then
+      printf '%s\n' "$ip6"
+      return 0
+    fi
+  fi
+  if [[ -n $ip ]]; then
+    printf '%s\n' "$ip"
+    return 0
+  fi
+  return 1
+}
+
+FW_STATUS=""
+open_firewall_port() {
+  local port=$1
+  if is_loopback_host "$cfg_bind_host"; then
+    FW_STATUS="当前仅监听本机回环（${cfg_bind_host}），无需放行外部防火墙端口"
+    return 0
+  fi
+
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]*active'; then
+    if ufw allow "${port}/tcp" comment "qwq-panel" >/dev/null 2>&1; then
+      FW_STATUS="已自动识别 ufw 并放行 TCP ${port} 端口"
+      log "$FW_STATUS"
+      return 0
+    fi
+  fi
+
+  if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    if firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1; then
+      FW_STATUS="已自动识别 firewalld 并放行 TCP ${port} 端口"
+      log "$FW_STATUS"
+      return 0
+    fi
+  fi
+
+  if command -v nft >/dev/null 2>&1; then
+    local nft_targets
+    nft_targets=$(nft list ruleset 2>/dev/null | awk '
+      /^table[[:space:]]+/ { fam=$2; tbl=$3; ch=""; next }
+      /^[[:space:]]*chain[[:space:]]+/ { ch=$2; next }
+      /hook[[:space:]]+input/ && /policy[[:space:]]+(drop|reject)/ {
+        if (fam != "" && tbl != "" && ch != "") print fam " " tbl " " ch
+      }
+    ' || true)
+    if [[ -n $nft_targets ]]; then
+      local nft_opened=0 fam tbl ch
+      while read -r fam tbl ch; do
+        [[ -n $fam && -n $tbl && -n $ch ]] || continue
+        if nft list chain "$fam" "$tbl" "$ch" 2>/dev/null | grep -Eq "tcp dport (${port}|\{[^}]*\b${port}\b[^}]*\}) accept"; then
+          nft_opened=1
+        elif nft insert rule "$fam" "$tbl" "$ch" tcp dport "$port" accept 2>/dev/null; then
+          nft_opened=1
+        fi
+      done <<<"$nft_targets"
+      if ((nft_opened)); then
+        FW_STATUS="已自动识别 nftables 并放行 TCP ${port} 端口"
+        log "$FW_STATUS"
+        return 0
+      fi
+    fi
+  fi
+
+  if command -v iptables >/dev/null 2>&1; then
+    local ipt_blocking=0
+    if iptables -S INPUT 2>/dev/null | grep -Eq '^-P INPUT (DROP|REJECT)|^-A INPUT .*-j (DROP|REJECT)'; then
+      iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null ||
+        iptables -I INPUT 1 -p tcp --dport "$port" -j ACCEPT 2>/dev/null || true
+      ipt_blocking=1
+    fi
+    if command -v ip6tables >/dev/null 2>&1 && ip6tables -S INPUT 2>/dev/null | grep -Eq '^-P INPUT (DROP|REJECT)|^-A INPUT .*-j (DROP|REJECT)'; then
+      ip6tables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null ||
+        ip6tables -I INPUT 1 -p tcp --dport "$port" -j ACCEPT 2>/dev/null || true
+      ipt_blocking=1
+    fi
+    if ((ipt_blocking)); then
+      if command -v netfilter-persistent >/dev/null 2>&1; then
+        netfilter-persistent save >/dev/null 2>&1 || true
+      elif [[ -d /etc/iptables ]]; then
+        iptables-save >/etc/iptables/rules.v4 2>/dev/null || true
+      fi
+      FW_STATUS="已自动识别 iptables 并放行 TCP ${port} 端口"
+      log "$FW_STATUS"
+      return 0
+    fi
+  fi
+
+  FW_STATUS="未检测到拦截入站的本机防火墙（如云厂商控制台启用了安全组，请放行 TCP ${port}）"
+  log "$FW_STATUS"
+}
+
+open_firewall_port "$cfg_port"
+
+public_ip=""
+setup_origin_args=()
+access_host="$cfg_bind_host"
+if ! is_loopback_host "$cfg_bind_host"; then
+  if [[ -n $cfg_panel_domain ]]; then
+    access_host="$cfg_panel_domain"
+    setup_origin_args=(--origin "https://${cfg_panel_domain}")
+  else
+    if [[ $cfg_bind_host == "0.0.0.0" || $cfg_bind_host == "::" || $cfg_bind_host == "[::]" || -z $cfg_bind_host ]]; then
+      public_ip=$(detect_public_ip || true)
+      if [[ -n $public_ip ]]; then
+        access_host="$public_ip"
+      else
+        access_host="<服务器公网IP>"
+      fi
+    fi
+    if [[ $access_host != "<服务器公网IP>" ]]; then
+      origin_host="$access_host"
+      if [[ $origin_host == *:* && $origin_host != \[*\] ]]; then
+        origin_host="[${origin_host}]"
+      fi
+      setup_origin_args=(--origin "${cfg_scheme}://${origin_host}:${cfg_port}")
+    fi
+  fi
+fi
+
+rc=0; "$PREFIX/current/bin/qwq" setup-token --config "$ETC/qwq.json" "${setup_origin_args[@]}" || rc=$?
 case $rc in
   0) ;;
   3) log "已初始化；忘记密码请用 sudo qwq recover" ;;
   *) echo "获取初始化链接失败，可稍后执行 sudo qwq setup-token" >&2 ;;
 esac
+
+display_entry_path="（未启用）"
+if [[ -n $cfg_entry_path ]]; then
+  display_entry_path="/${cfg_entry_path}"
+fi
+display_access_host="$access_host"
+if [[ $display_access_host == *:* && $display_access_host != \[*\] ]]; then
+  display_access_host="[${display_access_host}]"
+fi
+if [[ -n $cfg_panel_domain ]]; then
+  display_url="https://${cfg_panel_domain}"
+elif [[ -n $cfg_entry_path ]]; then
+  display_url="${cfg_scheme}://${display_access_host}:${cfg_port}/${cfg_entry_path}"
+else
+  display_url="${cfg_scheme}://${display_access_host}:${cfg_port}"
+fi
+
 cat <<EOF
 
 ====================================================================
   qwq 面板接入信息（已启用随机高位端口 + 随机安全密道防扫描保护）
 ====================================================================
   监听地址：${cfg_listen}
-  安全密道：${cfg_entry_path:+/${cfg_entry_path}}${cfg_entry_path:-（未启用）}
+  安全密道：${display_entry_path}
   安全伪装：端口正确但密道错误时自动触发无服务伪装（默认 drop 静默断开）
-  本地 SSH 隧道访问：
+  防火墙  ：${FW_STATUS}
+EOF
+if is_loopback_host "$cfg_bind_host"; then
+  cat <<EOF
+  访问方式：当前仅监听本机回环，可通过 SSH 隧道访问：
     ssh -L ${cfg_port}:127.0.0.1:${cfg_port} root@<服务器>
-    建立隧道后，在浏览器打开上方打印的初始化链接即可。
+    如需直接通过公网 IP 访问，可执行：sudo qwq access reset --listen 0.0.0.0
+EOF
+else
+  cat <<EOF
+  访问地址：${display_url}
+  直接用浏览器打开上方初始化链接即可创建管理员账号（自签名证书请核对上方指纹）。
+EOF
+fi
+cat <<EOF
 
   提示：
-  1. 登录面板后可在「设置 → 系统 → 面板入口与安全伪装」随时修改端口、
-     安全密道与伪装页模式（修改端口支持热切换，无需重装）。
-  2. 若为面板配置反向代理域名，系统会自动关闭安全密道与伪装，
-     直接访问域名即可进入面板。
-  3. 如改为 0.0.0.0 直连（见 /opt/qwq/current/share/config/qwq.json.example.md），
-     请自行在宝塔「安全」页 / ufw / firewalld 放行 TCP ${cfg_port} 端口，并核对证书指纹。
+  1. 登录面板后可在「设置 → 系统 → 面板入口与安全伪装」随时修改监听地址、
+     端口、安全密道与伪装页模式（支持热切换，无需重装）。
+  2. 若为面板配置反向代理域名，系统会自动关闭安全密道与伪装，直接访问域名即可。
+  3. 若你的云服务器在控制台侧单独配置了安全组 / 云防火墙，请确保已放行 TCP ${cfg_port}。
 ====================================================================
 EOF

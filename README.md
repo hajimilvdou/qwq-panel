@@ -29,7 +29,7 @@
 
 ## 快速安装
 
-> 系统要求：Linux（`amd64` / `arm64`）、`systemd >= 247`、`cgroup v2`、内存 `>= 1 GiB`。与其他面板共存不改动现有 Nginx / 防火墙配置。
+> 系统要求：Linux（`amd64` / `arm64`）、`systemd >= 247`、`cgroup v2`、内存 `>= 1 GiB`。
 
 ### 一键安装（自动获取最新正式版）
 
@@ -37,23 +37,19 @@
 curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash
 ```
 
-> 运行后会自动完成 Ed25519 与 SHA-256 验签，并在终端列出可选官方插件：**直接回车**仅安装面板底座 + `security.basic`，也可输入编号按需勾选。
+> 安装程序默认监听 `0.0.0.0:<随机高位端口>`、启用随机安全密道与静默伪装，并自动识别系统防火墙（`ufw` / `firewalld` / `nftables` / `iptables`）放行面板端口；交互终端中**直接回车**仅装面板底座 + `security.basic`，也可输入编号按需勾选插件。
 
 ### 便捷一键命令（非交互）
 
 ```bash
-# 极简底座（仅面板 + 必装安全插件，适合与其他面板共存）
+# 极简底座（仅面板 + 必装安全插件）
 curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- --minimal
 
 # 底座 + 指定官方插件（逗号分隔，或 --plugins all 安装全部）
 curl -fsSL https://github.com/hajimilvdou/qwq-panel/releases/latest/download/install.sh | sudo bash -s -- --plugins monitor.basic,web.ingress,tls.certificates,containers.docker
 ```
 
-**首次登录**：安装完成后终端会输出随机高位端口、入口密道与一次性初始化链接。通过本地 SSH 隧道打开链接即可创建管理员账号（2FA 为可选项，按需开启）；登录后可在 **「设置 → 系统 → 面板入口与安全伪装」** 中按需切换公网直连或反代域名：
-
-```bash
-ssh -L <随机端口>:127.0.0.1:<随机端口> root@<服务器IP>
-```
+**首次登录**：安装完成后直接在浏览器打开终端打印的公网初始化链接即可创建管理员账号（如云厂商控制台单独开启了安全组/云防火墙，请放行对应 TCP 端口；2FA 为可选项，按需开启）。如需仅本机回环监听，可追加 `--listen 127.0.0.1`；登录后也可随时在 **「设置 → 系统 → 面板入口与安全伪装」** 热切换监听地址、端口或反向代理域名。
 
 ---
 
