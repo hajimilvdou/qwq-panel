@@ -2650,10 +2650,19 @@ paths:
       operationId: getSystemMetrics
       tags: [system]
       summary: Read built-in real-time host CPU, memory, disk, and network metrics
-      description: Returns lightweight host resource telemetry and short in-memory sparkline history directly from the core panel framework without requiring external monitoring plugins.
+      description: Returns lightweight host resource telemetry and continuously recorded multi-resolution trend history (5m, 15m, 1h, 6h, 24h) directly from the core panel framework without requiring external monitoring plugins.
       security:
         - sessionCookie: []
         - serviceAccountToken: []
+      parameters:
+        - name: range
+          in: query
+          required: false
+          description: Trend history window to return from continuous background ring buffers (defaults to 15m).
+          schema:
+            type: string
+            enum: [5m, 15m, 1h, 6h, 24h]
+            default: 15m
       responses:
         '200':
           description: Current host resource metrics snapshot.
@@ -6683,6 +6692,8 @@ components:
       required: [collected_at, host, cpu, memory, disk, network]
       properties:
         collected_at: { type: string, format: date-time, maxLength: 64, description: RFC 3339 sample timestamp. }
+        range: { type: string, enum: [5m, 15m, 1h, 6h, 24h], description: Returned trend history window. }
+        sample_interval_seconds: { type: integer, format: int32, minimum: 1, maximum: 3600, description: Target spacing in seconds between returned trend points for the selected window. }
         host:
           type: object
           additionalProperties: false

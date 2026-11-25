@@ -14,10 +14,11 @@
     open?: boolean;
     title: string;
     side?: 'left' | 'right';
+    size?: 'sm' | 'md' | 'lg';
     onclose?: () => void;
     children: Snippet;
   }
-  let { open = $bindable(false), title, side = 'right', onclose, children }: Props = $props();
+  let { open = $bindable(false), title, side = 'right', size = 'sm', onclose, children }: Props = $props();
 
   const uid = $props.id();
   let dlg: HTMLDialogElement;
@@ -44,7 +45,7 @@
 
 <dialog
   bind:this={dlg}
-  class="drawer {side}"
+  class="drawer {side} sz-{size}"
   aria-labelledby="{uid}-t"
   onclose={() => {
     unregisterModalDialog(dlg);
@@ -65,7 +66,7 @@
 <style>
   .drawer {
     margin: 0;
-    width: min(360px, 88vw);
+    width: min(360px, 90vw);
     max-width: none;
     height: 100dvh;
     max-height: none;
@@ -74,6 +75,8 @@
     background: var(--surface);
     box-shadow: var(--shadow-3);
   }
+  .drawer.sz-md { width: min(500px, 92vw); }
+  .drawer.sz-lg { width: min(640px, 94vw); }
   .right {
     margin-left: auto;
   }

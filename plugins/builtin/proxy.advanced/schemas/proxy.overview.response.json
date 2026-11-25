@@ -30,6 +30,30 @@
     "sub": { "type": "string", "description": "副标题摘要说明。" },
     "level": { "type": "string", "enum": ["ok", "warn", "crit", "muted"], "description": "状态告警级别。" },
     "spark": { "type": "array", "description": "近期活跃用户趋势序列。", "items": { "type": "number" } },
+    "headline": {
+      "type": "object",
+      "description": "首页摘要主标题。",
+      "additionalProperties": false,
+      "required": ["value", "label"],
+      "properties": {
+        "value": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    },
+    "items": {
+      "type": "array",
+      "description": "首页状态检查明细列表。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "value", "level"],
+        "properties": {
+          "label": { "type": "string" },
+          "value": { "type": "string" },
+          "level": { "type": "string", "enum": ["ok", "warn", "bad"] }
+        }
+      }
+    },
     "total_plans": { "type": "integer", "minimum": 0, "description": "已配置套餐总数。" },
     "total_users": { "type": "integer", "minimum": 0, "description": "代理用户总数。" },
     "active_users": { "type": "integer", "minimum": 0, "description": "当前活跃用户数。" },

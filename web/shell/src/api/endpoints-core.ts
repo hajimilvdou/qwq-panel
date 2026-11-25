@@ -10,6 +10,7 @@ import type {
   SystemBackupList,
   SystemHostMetrics,
   SystemInfo,
+  SystemMetricsRange,
 } from './additions';
 
 const enc = encodeURIComponent;
@@ -51,7 +52,11 @@ export const system = {
   health: () => http.get<{ status: string }>('/healthz'),
   ready: () => http.get<{ status: string }>('/readyz'),
   info: () => http.get<SystemInfo>('/api/v1/system').then((r) => r.data),
-  metrics: (opts?: RequestOptions) => http.get<SystemHostMetrics>('/api/v1/system/metrics', opts).then((r) => r.data),
+  metrics: (opts?: RequestOptions & { range?: SystemMetricsRange }) => {
+    const { range, ...rest } = opts ?? {};
+    const query = range ? { ...rest.query, range } : rest.query;
+    return http.get<SystemHostMetrics>('/api/v1/system/metrics', { ...rest, query }).then((r) => r.data);
+  },
   securityTakeoverStatus: () => http.get<SecurityTakeoverStatus>('/api/v1/system/security/takeover').then((r) => r.data),
   securityTakeover: (manager: 'ufw' | 'firewalld' | 'fail2ban') =>
     http.post<SecurityTakeoverStatus>('/api/v1/system/security/takeover', { manager }).then((r) => r.data),

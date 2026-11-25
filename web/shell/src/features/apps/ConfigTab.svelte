@@ -13,7 +13,7 @@
 
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { Alert, Button, Card, EmptyState, ErrorState, Input, SchemaForm, Skeleton } from '$ui';
+  import { Alert, Button, Card, ErrorState, Input, SchemaForm, Skeleton } from '$ui';
   import { draftOf, fieldsOf, hotApply, initialValues, toPayload, validate, type FormValues, type SchemaField } from '$ui';
   import { plugins } from '$api/endpoints';
   import type { Plugin } from '$api/types';
@@ -206,49 +206,20 @@
 </script>
 
 <div class="cfg-grid">
-  <!-- 资源占用配额（所有插件统一可编辑） -->
-  <Card
-    title="资源占用上限"
-    subtitle="限制该插件可使用的最大内存、CPU 与进程数；保存后自动更新 cgroup 并立即生效"
-    icon="memory"
-    color="violet"
-  >
-    <form class="res-form" onsubmit={saveResources} novalidate>
-      <div class="res-fields">
-        <Input label="内存上限 (MB)" type="number" min="16" max="65536" mono bind:value={memMb} disabled={!canEdit || resSaving} />
-        <Input label="CPU 配额 (%)" type="number" min="1" max="100000" mono bind:value={cpuPct} disabled={!canEdit || resSaving} hint="100% 表示单核满载" />
-        <Input label="最大进程数" type="number" min="1" max="4096" mono bind:value={pidsMax} disabled={!canEdit || resSaving} />
-        <Input label="最大文件句柄" type="number" min="16" max="65536" mono bind:value={fdsMax} disabled={!canEdit || resSaving} />
-        <Input label="磁盘建议上限 (MB)" type="number" min="1" max="1048576" mono bind:value={diskMb} disabled={!canEdit || resSaving} />
-      </div>
-      {#if resErr}<Alert tone="bad">{resErr}</Alert>{/if}
-      {#if canEdit}
-        <div class="actions">
-          <Button type="button" variant="ghost" size="sm" loading={resResetting} disabled={resSaving} onclick={resetResources}>
-            恢复默认值
-          </Button>
-          <Button type="submit" variant="primary" size="sm" loading={resSaving} disabled={resResetting}>
-            保存资源上限
-          </Button>
-        </div>
-      {/if}
-    </form>
-  </Card>
-
-  <!-- 插件运行参数 -->
-  <Card title="插件参数设置" icon="settings" color="slate">
-    {#if status === 'loading'}
-      <Skeleton lines={4} height={36} />
-    {:else if status === 'error'}
-      {@const v = describeError(loadErr)}
-      {#if v.code === 'NOT_FOUND'}
-        <EmptyState compact title="该插件暂无额外可调参数" />
-      {:else}
+  <!-- 1. 插件业务参数（有参数才突出展示，无参数时仅简洁提示，不喧宾夺主） -->
+  {#if status === 'loading'}
+    <Card title="运行参数" icon="settings" color="slate">
+      <Skeleton lines={3} height={36} />
+    </Card>
+  {:else if status === 'error'}
+    {@const v = describeError(loadErr)}
+    {#if v.code !== 'NOT_FOUND'}
+      <Card title="运行参数" icon="settings" color="slate">
         <ErrorState compact message={v.message} requestId={v.requestId} onretry={() => void load(false)} />
-      {/if}
-    {:else if !fields.length}
-      <EmptyState compact title="该插件暂无额外可调参数" description="核心功能可在「工作台」标签内直接配置。" />
-    {:else}
+      </Card>
+    {/if}
+  {:else if fields.length > 0}
+    <Card title="运行参数" subtitle="修改该应用的基础配置" icon="settings" color="slate">
       <form class="stack" onsubmit={save} novalidate>
         {#if conflict}
           <Alert tone="warn" title="设置已在别处修改">
@@ -272,22 +243,92 @@
           </div>
         {/if}
       </form>
-    {/if}
-  </Card>
+    </Card>
+  {:else}
+    <p class="no-param-note">该应用的功能设置均已在主界面中直接管理，此处无需额外配置参数。</p>
+  {/if}
+
+  <!-- 2. 高级资源限额默认折叠收纳，避免将一堆底层 cgroup 数值塞在显眼处 -->
+  <details class="adv-res">
+    <summary>
+      <span>高级 · 容器资源上限</span>
+      <span class="adv-hint num">内存 {memMb} MB · CPU {cpuPct}%</span>
+    </summary>
+    <form class="res-form" onsubmit={saveResources} novalidate>
+      <p class="res-desc">仅在内存紧张或需要限制单插件资源时调整；保存后自动同步 systemd 限额。</p>
+      <div class="res-fields">
+        <Input label="内存上限 (MB)" type="number" min="16" max="65536" mono bind:value={memMb} disabled={!canEdit || resSaving} />
+        <Input label="CPU 配额 (%)" type="number" min="1" max="100000" mono bind:value={cpuPct} disabled={!canEdit || resSaving} hint="100% 表示单核" />
+        <Input label="最大进程数" type="number" min="1" max="4096" mono bind:value={pidsMax} disabled={!canEdit || resSaving} />
+        <Input label="最大文件句柄" type="number" min="16" max="65536" mono bind:value={fdsMax} disabled={!canEdit || resSaving} />
+        <Input label="磁盘上限 (MB)" type="number" min="1" max="1048576" mono bind:value={diskMb} disabled={!canEdit || resSaving} />
+      </div>
+      {#if resErr}<Alert tone="bad">{resErr}</Alert>{/if}
+      {#if canEdit}
+        <div class="actions">
+          <Button type="button" variant="ghost" size="sm" loading={resResetting} disabled={resSaving} onclick={resetResources}>
+            恢复默认
+          </Button>
+          <Button type="submit" variant="primary" size="sm" loading={resSaving} disabled={resResetting}>
+            保存限额
+          </Button>
+        </div>
+      {/if}
+    </form>
+  </details>
 </div>
 
 <style>
   .cfg-grid {
     display: grid;
-    gap: var(--s-5);
+    gap: var(--s-4);
+  }
+  .no-param-note {
+    padding: 12px 14px;
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+  }
+  .adv-res {
+    border-radius: var(--r-lg);
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    padding: 12px 14px;
+  }
+  .adv-res summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semibold);
+    color: var(--text);
+    list-style: none;
+  }
+  .adv-res summary::-webkit-details-marker {
+    display: none;
+  }
+  .adv-hint {
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-regular);
+    color: var(--text-3);
+  }
+  .res-desc {
+    color: var(--text-3);
+    font-size: var(--fs-xs);
   }
   .res-form {
     display: grid;
-    gap: var(--s-4);
+    gap: var(--s-3);
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
   }
   .res-fields {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
     gap: var(--s-3);
   }
   .stack {

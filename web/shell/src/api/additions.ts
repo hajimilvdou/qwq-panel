@@ -188,8 +188,12 @@ export interface SystemHostMetricsPoint {
   tx_bps: number;
 }
 
+export type SystemMetricsRange = '5m' | '15m' | '1h' | '6h' | '24h';
+
 export interface SystemHostMetrics {
   collected_at: string;
+  range?: SystemMetricsRange;
+  sample_interval_seconds?: number;
   host: {
     hostname: string;
     os: string;

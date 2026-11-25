@@ -285,7 +285,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 
 	// Routes are registered before the listener exists: a duplicate or invalid
 	// route must fail startup, not the first request that hits it.
-	routes, err := registerPublicRoutesWithAccess(c, pluginAPI, uploads, trustStore, accessMgr, *configPath, *privSocket, logger)
+	routes, err := registerPublicRoutesWithAccess(life, c, pluginAPI, uploads, trustStore, accessMgr, *configPath, *privSocket, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "qwq serve-controller: %v\n", err)
 		return 1
@@ -709,10 +709,12 @@ func newPrivilegedHelper(socket string, euid int, logger *slog.Logger) (*sandbox
 // controller's gateway and returns the number of routes. It must run before the
 // listener starts. plugins and uploads are nil on a host without an updater.
 func registerPublicRoutes(c *controller.Controller, plugins api.PluginManager, uploads *api.PluginUploads, logger *slog.Logger) (int, error) {
-	return registerPublicRoutesWithAccess(c, plugins, uploads, nil, nil, "", "", logger)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return registerPublicRoutesWithAccess(ctx, c, plugins, uploads, nil, nil, "", "", logger)
 }
 
-func registerPublicRoutesWithAccess(c *controller.Controller, plugins api.PluginManager, uploads *api.PluginUploads, trustStore *trust.CompositeTrustStore, accessMgr *panelaccess.Manager, configPath, privSocket string, logger *slog.Logger) (int, error) {
+func registerPublicRoutesWithAccess(life context.Context, c *controller.Controller, plugins api.PluginManager, uploads *api.PluginUploads, trustStore *trust.CompositeTrustStore, accessMgr *panelaccess.Manager, configPath, privSocket string, logger *slog.Logger) (int, error) {
 	if c == nil || c.Gateway() == nil {
 		return 0, errors.New("the controller has no gateway")
 	}
@@ -745,6 +747,7 @@ func registerPublicRoutesWithAccess(c *controller.Controller, plugins api.Plugin
 		ConfigPath:          configPath,
 		PrivilegedSocket:    privSocket,
 		OnPluginCatalogFunc: c.SetPluginCatalogFn,
+		Life:                life,
 	}); err != nil {
 		return 0, fmt.Errorf("register the public API: %w", err)
 	}

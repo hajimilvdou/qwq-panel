@@ -32,13 +32,18 @@
     }
   }
 
-  const VALID_ROUTES = ['/proxy', '/proxy/nodes', '/proxy/chains', '/proxy/tuning'];
-  const ROUTE_TITLES = {
-    '/proxy': '代理与订阅中心',
-    '/proxy/nodes': '代理与订阅中心 · 节点管理',
-    '/proxy/chains': '代理与订阅中心 · 链式与 WARP',
-    '/proxy/tuning': '代理与订阅中心 · 网络调优与 Brutal',
-  };
+  const VALID_ROUTES = [
+    '/proxy',
+    '/proxy/nodes',
+    '/proxy/users',
+    '/proxy/plans',
+    '/proxy/chains',
+    '/proxy/tuning',
+  ];
+
+  const userFilters = { search: '', status: '' };
+  let chainsSubTab = 'warp';
+  let tuningSubTab = 'tcpfit';
 
   function detectInitialRoute() {
     const r = hash.get('path') || hash.get('route') || '';
@@ -72,7 +77,7 @@
   const userCreateModal = { open: false };
   const userSubModal = { open: false, token: '', baseUrl: '' };
   const userHistoryModal = { open: false, userId: '', displayName: '', hours: 24 };
-  const planEditModal = { open: false, editingId: '' };
+  const planEditModal = { open: false, editingId: '', tab: 'basic' };
   let xrayStatusLoaded = false;
 
   const send = (msg) => {
@@ -232,19 +237,60 @@
     }
   }
 
+  function updateContextPrimaryBtn(route) {
+    const btn = $('btn-ctx-primary');
+    if (!btn) return;
+    if (route === '/proxy' || route === '/proxy/nodes') {
+      btn.textContent = '+ 添加节点';
+      btn.classList.remove('hidden');
+    } else if (route === '/proxy/users') {
+      btn.textContent = '+ 新建用户';
+      btn.classList.remove('hidden');
+    } else if (route === '/proxy/plans') {
+      btn.textContent = '+ 新建套餐';
+      btn.classList.remove('hidden');
+    } else {
+      btn.classList.add('hidden');
+    }
+  }
+
+  function setChainsSubTab(tab) {
+    chainsSubTab = tab === 'hops' ? 'hops' : 'warp';
+    for (const btn of document.querySelectorAll('#chains-subtabs button[data-sub]')) {
+      const act = btn.dataset.sub === chainsSubTab;
+      btn.classList.toggle('active', act);
+      btn.setAttribute('aria-selected', act ? 'true' : 'false');
+    }
+    for (const pane of document.querySelectorAll('[data-chains-pane]')) {
+      pane.classList.toggle('hidden', pane.dataset.chainsPane !== chainsSubTab);
+    }
+    requestAnimationFrame(() => notifyResize());
+  }
+
+  function setTuningSubTab(tab) {
+    tuningSubTab = tab === 'brutal' ? 'brutal' : 'tcpfit';
+    for (const btn of document.querySelectorAll('#tuning-subtabs button[data-sub]')) {
+      const act = btn.dataset.sub === tuningSubTab;
+      btn.classList.toggle('active', act);
+      btn.setAttribute('aria-selected', act ? 'true' : 'false');
+    }
+    for (const pane of document.querySelectorAll('[data-tuning-pane]')) {
+      pane.classList.toggle('hidden', pane.dataset.tuningPane !== tuningSubTab);
+    }
+    requestAnimationFrame(() => notifyResize());
+  }
+
   function switchRoute(route, notifyHost = true) {
     if (!VALID_ROUTES.includes(route)) return;
     activeRoute = route;
-    $('page-title').textContent = ROUTE_TITLES[route] || '高级代理管理';
-    for (const btn of document.querySelectorAll('#nav-tabs button')) {
-      btn.classList.toggle('active', btn.dataset.route === route);
-    }
+    updateContextPrimaryBtn(route);
     for (const sec of document.querySelectorAll('section[data-view]')) {
       sec.classList.toggle('hidden', sec.dataset.view !== route);
     }
     if (notifyHost && port) {
       send({ t: 'ui.navigate', path: route });
     }
+    requestAnimationFrame(() => notifyResize());
     if (port) {
       void refreshActiveView();
     }
@@ -355,7 +401,34 @@
     }
   }
 
-  // ==================== 视图 1: 套餐卡片与多用户渲染 ====================
+  // ==================== 视图 1/3/4: 概览、套餐卡片与多用户渲染 ====================
+
+  function setPlanEditTab(tab) {
+    planEditModal.tab = ['basic', 'cycle', 'limits'].includes(tab) ? tab : 'basic';
+    for (const btn of document.querySelectorAll('#pe-nav button[data-pe-tab]')) {
+      btn.classList.toggle('active', btn.dataset.peTab === planEditModal.tab);
+    }
+    for (const pane of document.querySelectorAll('#plan-edit-modal [data-pe-pane]')) {
+      pane.classList.toggle('hidden', pane.dataset.pePane !== planEditModal.tab);
+    }
+  }
+
+  function updatePlanModalNavSubs() {
+    const idVal = ($('p-id')?.value || '').trim();
+    const quota = Math.max(0, Number($('p-quota-gb')?.value) || 0);
+    const resetDay = Math.min(28, Math.max(0, Math.floor(Number($('p-reset-day')?.value) || 0)));
+    const validity = Math.min(3650, Math.max(0, Math.floor(Number($('p-validity')?.value) || 0)));
+    const down = Math.max(0, Number($('p-down')?.value) || 0);
+    const up = Math.max(0, Number($('p-up')?.value) || 0);
+    const conns = Math.max(0, Number($('p-max-conns')?.value) || 0);
+
+    const basicSub = $('pe-nav-basic-sub');
+    if (basicSub) basicSub.textContent = `${idVal || '未命名'} · ${quota > 0 ? `${quota} GiB` : '不限流量'}`;
+    const cycleSub = $('pe-nav-cycle-sub');
+    if (cycleSub) cycleSub.textContent = `${resetDay > 0 ? `每月 ${resetDay} 日` : '不重置'} · ${validity > 0 ? `${validity} 天` : '长期'}`;
+    const limitsSub = $('pe-nav-limits-sub');
+    if (limitsSub) limitsSub.textContent = `${formatRate(down)}/${formatRate(up)} · ${formatLimit(conns)}连接`;
+  }
 
   function openPlanEditModal(plan = null) {
     planEditModal.open = true;
@@ -374,6 +447,8 @@
     $('p-max-conns').value = plan ? String(plan.max_connections ?? 0) : '64';
     $('p-max-ips').value = plan ? String(plan.max_ips ?? 0) : '4';
     $('p-validity').value = plan ? String(plan.validity_days ?? 0) : '30';
+    setPlanEditTab('basic');
+    updatePlanModalNavSubs();
     $('plan-edit-modal').classList.remove('hidden');
   }
 
@@ -388,14 +463,19 @@
     renderPlanSelects();
     const grid = $('plans-cards');
     if (grid) clearNode(grid);
-    $('plans-summary').textContent = `${plans.length} 个套餐`;
+    const sumEl = $('plans-summary');
+    if (sumEl) sumEl.textContent = `${plans.length} 个模板`;
     if (!grid) return;
     if (!plans.length) {
       const empty = document.createElement('div');
       empty.className = 'empty-card muted';
-      empty.textContent = '暂无套餐模板，点击右上角「+ 新建套餐」创建后即可供多用户复用。';
+      empty.textContent = '暂无套餐模板，点击右上角「+ 新建套餐模板」创建后即可供多用户复用。';
       grid.appendChild(empty);
       return;
+    }
+    const usageCount = new Map();
+    for (const u of cachedUsers) {
+      if (u.plan_id) usageCount.set(u.plan_id, (usageCount.get(u.plan_id) || 0) + 1);
     }
     for (const p of plans) {
       const card = document.createElement('article');
@@ -412,20 +492,18 @@
       subId.textContent = p.id;
       titleBox.append(title, subId);
 
-      const editBtn = document.createElement('button');
-      editBtn.type = 'button';
-      editBtn.className = 'btn xs ghost';
-      editBtn.textContent = '编辑';
-      editBtn.addEventListener('click', () => openPlanEditModal(p));
-      head.append(titleBox, editBtn);
+      const quotaBadge = document.createElement('span');
+      quotaBadge.className = p.quota_bytes > 0 ? 'badge cocoa' : 'badge ok';
+      quotaBadge.textContent = p.quota_bytes > 0 ? formatBytes(p.quota_bytes) : '不限流量';
+      head.append(titleBox, quotaBadge);
 
       const kv = document.createElement('div');
       kv.className = 'plan-kv';
       const rows = [
-        ['周期流量', p.quota_bytes > 0 ? formatBytes(p.quota_bytes) : '不限流量'],
         ['下 / 上行限速', `${formatRate(p.down_limit_kbps)} / ${formatRate(p.up_limit_kbps)}`],
         ['并发 / IP 上限', `${formatLimit(p.max_connections)} 连接 · ${formatLimit(p.max_ips)} IP`],
-        ['周期与重置', `${p.billing_reset_day > 0 ? `每月 ${p.billing_reset_day} 日` : '不重置'} · ${p.validity_days > 0 ? `${p.validity_days} 天` : '长期'}`],
+        ['账单重置日', p.billing_reset_day > 0 ? `每月 ${p.billing_reset_day} 日` : '不自动重置'],
+        ['订阅有效期', p.validity_days > 0 ? `${p.validity_days} 天` : '长期有效'],
       ];
       for (const [k, v] of rows) {
         const item = document.createElement('div');
@@ -438,7 +516,20 @@
         kv.appendChild(item);
       }
 
-      card.append(head, kv);
+      const foot = document.createElement('div');
+      foot.className = 'plan-card-foot';
+      const boundEl = document.createElement('span');
+      boundEl.className = 'muted';
+      const cnt = usageCount.get(p.id) || 0;
+      boundEl.textContent = cnt > 0 ? `${cnt} 位用户绑定` : '暂未绑定用户';
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'btn xs ghost';
+      editBtn.textContent = '编辑套餐';
+      editBtn.addEventListener('click', () => openPlanEditModal(p));
+      foot.append(boundEl, editBtn);
+
+      card.append(head, kv, foot);
       grid.appendChild(card);
     }
   }
@@ -739,22 +830,198 @@
     }
   }
 
+  function renderUserStats(users) {
+    const active = users.filter((u) => u.status === 'active').length;
+    const quota = users.filter((u) => u.status === 'suspended_quota').length;
+    const expired = users.filter((u) => u.status === 'expired').length;
+    const disabled = users.filter((u) => u.status === 'disabled').length;
+    let totalUp = 0;
+    let totalDown = 0;
+    let totalConns = 0;
+    let totalIPs = 0;
+    for (const u of users) {
+      totalUp += Number(u.period_up_bytes || 0);
+      totalDown += Number(u.period_down_bytes || 0);
+      totalConns += Number(u.active_connections || 0);
+      totalIPs += Number(u.active_ips || 0);
+    }
+    const set = (id, text) => {
+      const el = $(id);
+      if (el) el.textContent = text;
+    };
+    set('u-stat-total', `${users.length} 人`);
+    set('u-stat-active-sub', `活跃 ${active} 人`);
+    set('u-stat-warn', `${quota + expired + disabled} 人`);
+    set('u-stat-disabled-sub', `超额 ${quota} · 到期 ${expired} · 停用 ${disabled}`);
+    set('u-stat-usage', formatBytes(totalUp + totalDown));
+    set('u-stat-usage-sub', `↑ ${formatBytes(totalUp)} · ↓ ${formatBytes(totalDown)}`);
+    set('u-stat-conns', `${totalConns} 连接`);
+    set('u-stat-ips-sub', `当前在线 ${totalIPs} 个来源 IP`);
+
+    // 同步状态筛选按钮数量与激活态
+    const counts = { '': users.length, active, suspended_quota: quota, expired, disabled };
+    const labels = { '': '全部', active: '活跃', suspended_quota: '超额暂停', expired: '已到期', disabled: '已停用' };
+    for (const btn of document.querySelectorAll('#u-status-filters button[data-ustatus]')) {
+      const st = btn.dataset.ustatus || '';
+      btn.classList.toggle('active', st === userFilters.status);
+      btn.textContent = `${labels[st] || st} (${counts[st] ?? 0})`;
+    }
+  }
+
+  function renderOverviewWidgets(users, nodes) {
+    let totalUp = 0;
+    let totalDown = 0;
+    for (const u of users) {
+      totalUp += Number(u.period_up_bytes || 0);
+      totalDown += Number(u.period_down_bytes || 0);
+    }
+    const trafficVal = $('ov-total-traffic');
+    if (trafficVal) trafficVal.textContent = formatBytes(totalUp + totalDown);
+    const trafficSub = $('ov-total-traffic-sub');
+    if (trafficSub) trafficSub.textContent = `↑ ${formatBytes(totalUp)} / ↓ ${formatBytes(totalDown)}`;
+
+    const managed = nodes.filter((n) => n.source === 'managed').length;
+    const external = nodes.length - managed;
+    const enabledNodes = nodes.filter((n) => n.enabled).length;
+    const nodesVal = $('ov-nodes-val');
+    if (nodesVal) nodesVal.textContent = `${enabledNodes} / ${nodes.length}`;
+    const nodesSub = $('ov-nodes-sub');
+    if (nodesSub) nodesSub.textContent = `托管 ${managed} · 外部导入 ${external}`;
+
+    // 用户用量排行
+    const rankBox = $('ov-user-ranking');
+    if (rankBox) {
+      clearNode(rankBox);
+      if (!users.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-card muted';
+        empty.textContent = '暂无订阅用户，点击右上角「全部用户」创建用户并签发订阅链接。';
+        rankBox.appendChild(empty);
+      } else {
+        const sorted = users
+          .slice()
+          .sort((a, b) => ((b.period_up_bytes || 0) + (b.period_down_bytes || 0)) - ((a.period_up_bytes || 0) + (a.period_down_bytes || 0)))
+          .slice(0, 6);
+        const maxUsed = Math.max(1, ...sorted.map((u) => (u.period_up_bytes || 0) + (u.period_down_bytes || 0)));
+        for (const u of sorted) {
+          const up = Number(u.period_up_bytes || 0);
+          const down = Number(u.period_down_bytes || 0);
+          const used = up + down;
+          const quota = Number(u.quota_bytes || 0);
+          const pct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : Math.round((used / maxUsed) * 100);
+
+          const row = document.createElement('div');
+          row.className = 'rank-item';
+          const top = document.createElement('div');
+          top.className = 'rank-top';
+          const userCol = document.createElement('div');
+          userCol.className = 'rank-user';
+          const nm = document.createElement('span');
+          nm.textContent = u.display_name || u.id;
+          const pl = document.createElement('span');
+          pl.className = 'badge';
+          pl.textContent = u.plan_id || '默认';
+          userCol.append(nm, pl);
+
+          const val = document.createElement('span');
+          val.className = 'rank-val mono';
+          val.textContent = quota > 0 ? `${formatBytes(used)} / ${formatBytes(quota)}` : formatBytes(used);
+          top.append(userCol, val);
+
+          const prog = document.createElement('progress');
+          prog.className = 'quota-progress';
+          prog.max = 100;
+          prog.value = pct;
+
+          const meta = document.createElement('div');
+          meta.className = 'rank-meta';
+          const split = document.createElement('span');
+          split.textContent = `↑ ${formatBytes(up)} · ↓ ${formatBytes(down)}`;
+          const conn = document.createElement('span');
+          conn.textContent = `${u.active_connections || 0} 活跃连接`;
+          meta.append(split, conn);
+
+          row.append(top, prog, meta);
+          rankBox.appendChild(row);
+        }
+      }
+    }
+
+    // 节点状态一览
+    const nodeBox = $('ov-node-list');
+    if (nodeBox) {
+      clearNode(nodeBox);
+      if (!nodes.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-card muted';
+        empty.textContent = '尚未创建代理节点，点击右上角「+ 添加节点」一键生成 VLESS Reality / Hysteria2 / AnyTLS 节点。';
+        nodeBox.appendChild(empty);
+      } else {
+        for (const n of nodes.slice(0, 6)) {
+          const row = document.createElement('div');
+          row.className = 'ov-node-row';
+
+          const left = document.createElement('div');
+          left.className = 'ov-node-left';
+          const dot = document.createElement('span');
+          dot.className = (n.enabled && (n.source !== 'managed' || n.listening)) ? 'dot-live' : 'dot-off';
+          const pb = document.createElement('span');
+          pb.className = `proto-badge proto-${n.protocol}`;
+          pb.textContent = n.protocol.toUpperCase();
+          const nm = document.createElement('span');
+          nm.className = 'ov-node-name';
+          nm.textContent = n.name || n.id;
+          left.append(dot, pb, nm);
+
+          const right = document.createElement('div');
+          right.className = 'ov-node-right';
+          const addr = document.createElement('span');
+          addr.className = 'muted mono';
+          addr.textContent = `:${n.port}`;
+          const st = document.createElement('span');
+          if (typeof n.last_latency_ms === 'number' && n.last_latency_ms > 0) {
+            st.className = n.last_latency_ms < 120 ? 'badge ok' : n.last_latency_ms < 300 ? 'badge warn' : 'badge err';
+            st.textContent = `${n.last_latency_ms} ms`;
+          } else {
+            st.className = `badge ${n.enabled ? 'ok' : 'warn'}`;
+            st.textContent = n.enabled ? '启用' : '停用';
+          }
+          right.append(addr, st);
+
+          row.append(left, right);
+          nodeBox.appendChild(row);
+        }
+      }
+    }
+  }
+
   function renderUsers(users) {
     cachedUsers = users;
     renderUserSelects();
+    renderUserStats(users);
     const tbody = $('users-body');
+    if (!tbody) return;
     clearNode(tbody);
-    if (!users.length) {
+    const q = userFilters.search.trim().toLowerCase();
+    const filtered = users.filter((u) => {
+      if (userFilters.status && u.status !== userFilters.status) return false;
+      if (q) {
+        const hay = `${u.id} ${u.display_name || ''} ${u.plan_id || ''} ${u.chain_id || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    if (!filtered.length) {
       const tr = document.createElement('tr');
       const td = document.createElement('td');
       td.colSpan = 9;
       td.className = 'muted';
-      td.textContent = '暂无代理用户';
+      td.textContent = users.length ? '当前筛选条件下无匹配用户' : '暂无代理用户，点击右上角「+ 新建订阅用户」创建';
       tr.appendChild(td);
       tbody.appendChild(tr);
       return;
     }
-    for (const u of users) {
+    for (const u of filtered) {
       const tr = document.createElement('tr');
 
       const tdName = document.createElement('td');
@@ -837,7 +1104,7 @@
           }));
         if (r) {
           showBanner(`用户 ${u.id} 状态已更新为 ${r.user?.status || nextStatus}`, 'ok');
-          void refreshProxyHome();
+          void refreshActiveView();
         }
       });
       actWrap.appendChild(btnToggle);
@@ -867,7 +1134,7 @@
             path: r.subscription_path,
             subtitle: `新订阅修订号 rev ${r.revision || '-'}，旧链接已失效`,
           });
-          void refreshProxyHome();
+          void refreshActiveView();
         }
       });
       actWrap.appendChild(btnRotate);
@@ -1607,7 +1874,7 @@
     for (const p of MANAGED_PROTOCOLS) {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = `pill${builder.protocol === p.id ? ' active' : ''}`;
+      btn.className = `pill pill-proto-${p.id}${builder.protocol === p.id ? ' active' : ''}`;
       btn.dataset.proto = p.id;
       btn.textContent = p.label;
       protoBox.appendChild(btn);
@@ -2519,7 +2786,12 @@
 
     const bindings = data.bindings || [];
     const metrics = data.live_listeners || [];
-    $('brutal-mini-count').textContent = `${metrics.filter((m) => m.running).length} / ${bindings.length} 运行`;
+    const brutalMini = $('brutal-mini-count');
+    if (brutalMini) {
+      brutalMini.textContent = bindings.length
+        ? ` · Brutal ${metrics.filter((m) => m.running).length}/${bindings.length} 运行`
+        : '';
+    }
 
     const bBody = $('b-bindings-body');
     clearNode(bBody);
@@ -2600,31 +2872,61 @@
     }
   }
 
-  // ==================== 数据拉取调度 ====================
+  // ==================== 数据拉取调度（按 6 个独立功能视图按需拉取） ====================
 
-  async function refreshProxyHome() {
-    const [overview, plansResp, usersResp, trafficResp, chainsResp, brutalResp] = await Promise.all([
+  async function refreshOverview() {
+    const [overview, plansResp, usersResp, nodesResp, trafficResp, brutalResp] = await Promise.all([
       invoke('proxy.overview', { include_traffic_status: false }),
       invoke('plans.list', { limit: 100 }),
       invoke('users.list', { limit: 256 }),
+      invoke('nodes.list', {}),
       invoke('traffic.status', { include_classes: true }),
-      invoke('chains.list', {}),
       invoke('brutal.status', {}),
     ]);
     applyOverviewCapabilities(overview);
-    $('overview-value').textContent = `${overview.active_users ?? 0} / ${overview.total_users ?? 0} 活跃`;
-    $('overview-sub').textContent = overview.sub || '运行正常';
+    cachedPlans = plansResp.plans || [];
+    cachedUsers = usersResp.users || [];
+    cachedNodes = Array.isArray(nodesResp.nodes) ? nodesResp.nodes : [];
+    const ovVal = $('overview-value');
+    if (ovVal) ovVal.textContent = `${overview.active_users ?? 0} / ${overview.total_users ?? 0} 活跃`;
+    const ovSub = $('overview-sub');
+    if (ovSub) ovSub.textContent = overview.sub || '运行正常';
+    const ps = $('plans-summary');
+    if (ps) ps.textContent = `${cachedPlans.length} 个模板`;
     if (trafficResp.supported) {
-      $('traffic-status').textContent = `已启用 (${trafficResp.egress_interface || '默认'})`;
-      $('traffic-detail').textContent = `当前下发 ${(trafficResp.classes || []).length} 条规则${trafficResp.uplink_ifb_supported ? '，支持上行 IFB' : '，仅下行整形'}`;
+      $('traffic-status').textContent = `HTB 正常`;
+      $('traffic-detail').textContent = `${trafficResp.egress_interface || '默认'} · ${(trafficResp.classes || []).length} 条规则`;
     } else {
       $('traffic-status').textContent = 'HTB 已降级';
-      $('traffic-detail').textContent = trafficResp.degraded_reason || '当前内核不支持 HTB 流量整形';
+      $('traffic-detail').textContent = trafficResp.degraded_reason || '不支持 HTB';
     }
-    cachedChains = chainsResp.chains || [];
-    renderPlans(plansResp.plans || []);
-    renderUsers(usersResp.users || []);
     renderBrutalStatus(brutalResp);
+    renderOverviewWidgets(cachedUsers, cachedNodes);
+  }
+
+  async function refreshUsers() {
+    const [overview, plansResp, usersResp, chainsResp] = await Promise.all([
+      invoke('proxy.overview', { include_traffic_status: false }),
+      invoke('plans.list', { limit: 100 }),
+      invoke('users.list', { limit: 256 }),
+      invoke('chains.list', {}),
+    ]);
+    applyOverviewCapabilities(overview);
+    cachedChains = chainsResp.chains || [];
+    cachedPlans = plansResp.plans || [];
+    renderPlanSelects();
+    renderUsers(usersResp.users || []);
+  }
+
+  async function refreshPlans() {
+    const [overview, plansResp, usersResp] = await Promise.all([
+      invoke('proxy.overview', { include_traffic_status: false }).catch(() => null),
+      invoke('plans.list', { limit: 100 }),
+      invoke('users.list', { limit: 256 }).catch(() => ({ users: cachedUsers })),
+    ]);
+    applyOverviewCapabilities(overview);
+    cachedUsers = usersResp.users || [];
+    renderPlans(plansResp.plans || []);
   }
 
   async function refreshChains() {
@@ -2655,8 +2957,10 @@
     if (!port) return;
     setStatus('正在同步状态…');
     try {
-      if (activeRoute === '/proxy') await refreshProxyHome();
+      if (activeRoute === '/proxy') await refreshOverview();
       else if (activeRoute === '/proxy/nodes') await refreshNodes();
+      else if (activeRoute === '/proxy/users') await refreshUsers();
+      else if (activeRoute === '/proxy/plans') await refreshPlans();
       else if (activeRoute === '/proxy/chains') await refreshChains();
       else if (activeRoute === '/proxy/tuning') await refreshTuningAndBrutal();
       setStatus('已连接');
@@ -2665,15 +2969,51 @@
     }
   }
 
-  // ==================== 事件绑定：全局与视图 1 ====================
+  // ==================== 事件绑定：全局与 6 视图 ====================
 
-  for (const btn of document.querySelectorAll('#nav-tabs button')) {
-    btn.addEventListener('click', () => switchRoute(btn.dataset.route, true));
-  }
-  $('btn-quick-add-node')?.addEventListener('click', () => {
-    if (activeRoute !== '/proxy/nodes') switchRoute('/proxy/nodes', true);
-    openNodeBuilder(null);
+  $('btn-ctx-primary')?.addEventListener('click', () => {
+    if (activeRoute === '/proxy/users') {
+      openUserCreateModal();
+    } else if (activeRoute === '/proxy/plans') {
+      openPlanEditModal(null);
+    } else {
+      if (activeRoute !== '/proxy/nodes') switchRoute('/proxy/nodes', true);
+      openNodeBuilder(null);
+    }
   });
+
+  for (const btn of document.querySelectorAll('[data-go-route]')) {
+    btn.addEventListener('click', () => switchRoute(btn.dataset.goRoute, true));
+  }
+
+  $('chains-subtabs')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-sub]');
+    if (btn) setChainsSubTab(btn.dataset.sub);
+  });
+
+  $('tuning-subtabs')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-sub]');
+    if (btn) setTuningSubTab(btn.dataset.sub);
+  });
+
+  $('u-search')?.addEventListener('input', () => {
+    userFilters.search = $('u-search').value;
+    renderUsers(cachedUsers);
+  });
+
+  $('u-status-filters')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-ustatus]');
+    if (!btn) return;
+    userFilters.status = btn.dataset.ustatus || '';
+    renderUsers(cachedUsers);
+  });
+
+  $('pe-nav')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-pe-tab]');
+    if (btn) setPlanEditTab(btn.dataset.peTab);
+  });
+  $('plan-edit-modal')?.addEventListener('input', updatePlanModalNavSubs);
+
   $('refresh').addEventListener('click', () => {
     void refreshActiveView();
   });
@@ -2689,6 +3029,7 @@
     const id = $('p-id').value.trim();
     const name = $('p-name').value.trim();
     if (!id || !name) {
+      setPlanEditTab('basic');
       showBanner('请填写套餐 ID 与套餐名称', 'warn');
       return;
     }
@@ -2710,7 +3051,7 @@
     if (r) {
       closePlanEditModal();
       showBanner(`套餐 ${r.plan?.name || name} (${r.plan?.id || id}) 已保存`, 'ok');
-      void refreshProxyHome();
+      void refreshActiveView();
     }
   });
 
@@ -2729,7 +3070,7 @@
     const r = await runAction(`更新用户 ${userId} 连接与链式策略`, () => invoke('users.set_limits', payload));
     if (r) {
       showBanner(`用户 ${userId} 生效上限：${formatLimit(r.user?.effective_max_connections || 0)} 连接 / ${formatLimit(r.user?.effective_max_ips || 0)} IP`, 'ok');
-      void refreshProxyHome();
+      void refreshActiveView();
     }
   });
 
@@ -2808,7 +3149,7 @@
     } else {
       showBanner(`用户 ${id} 已创建`, 'ok');
     }
-    void refreshProxyHome();
+    void refreshActiveView();
   });
 
   // 一次性订阅令牌弹窗事件

@@ -369,6 +369,17 @@ type overviewRequest struct {
 	IncludeTrafficStatus bool `json:"include_traffic_status"`
 }
 
+type overviewHeadline struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+type overviewCheckItem struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+	Level string `json:"level"`
+}
+
 type overviewResponse struct {
 	Value                 float64             `json:"value"`
 	Unit                  string              `json:"unit"`
@@ -376,6 +387,8 @@ type overviewResponse struct {
 	Sub                   string              `json:"sub"`
 	Level                 string              `json:"level"`
 	Spark                 []float64           `json:"spark"`
+	Headline              *overviewHeadline   `json:"headline,omitempty"`
+	Items                 []overviewCheckItem `json:"items,omitempty"`
 	TotalPlans            int                 `json:"total_plans"`
 	TotalUsers            int                 `json:"total_users"`
 	ActiveUsers           int                 `json:"active_users"`
@@ -603,6 +616,58 @@ func (i *instance) handleOverview(ctx context.Context, req pluginsdk.Request) (p
 		}
 	}
 	detectedHost := detectPrimaryPublicHost(i.configSnapshot().PublicHost, "")
+	allNodes, _ := i.store.ListNodes(ctx, "", "", "", "", false)
+	managedCount := 0
+	for _, n := range allNodes {
+		if n.Source == "managed" && n.Enabled {
+			managedCount++
+		}
+	}
+
+	engineVal := "已就绪"
+	engineLevel := "ok"
+	if xraySt != nil {
+		if xraySt.State == "RUNNING" {
+			engineVal = "运行中"
+			if xraySt.CoreVersion != "" {
+				engineVal += " · " + xraySt.CoreVersion
+			}
+		} else if xraySt.State == "ERROR" {
+			engineVal = "异常"
+			engineLevel = "bad"
+		} else {
+			engineVal = "待机中（添加节点后自动拉起）"
+		}
+	}
+
+	totalTraffic := stats.PeriodUpBytes + stats.PeriodDownBytes
+	headlineVal := fmt.Sprintf("%d 个节点", len(allNodes))
+	headlineLabel := fmt.Sprintf("活跃用户 %d / %d · 本周期 %s", stats.ActiveUsers, stats.TotalUsers, formatCompactBytes(totalTraffic))
+	if len(allNodes) == 0 && stats.TotalUsers == 0 {
+		headlineVal = "已就绪"
+		headlineLabel = "内置 Xray 引擎待命 · 点击进入创建节点与订阅"
+	}
+
+	userLevel := "ok"
+	userText := fmt.Sprintf("%d / %d 活跃", stats.ActiveUsers, stats.TotalUsers)
+	if stats.SuspendedQuotaUsers > 0 || stats.ExpiredUsers > 0 {
+		userLevel = "warn"
+		userText = fmt.Sprintf("%d 活跃 · %d 超额/到期", stats.ActiveUsers, stats.SuspendedQuotaUsers+stats.ExpiredUsers)
+	}
+	shapingText := "内核 HTB 已就绪"
+	shapingLevel := "ok"
+	if !shapingOK {
+		shapingText = "已降级"
+		shapingLevel = "warn"
+	}
+
+	checkItems := []overviewCheckItem{
+		{Label: "内置 Xray 引擎", Value: engineVal, Level: engineLevel},
+		{Label: "代理节点", Value: fmt.Sprintf("%d 托管 / 共 %d 个", managedCount, len(allNodes)), Level: "ok"},
+		{Label: "订阅用户", Value: userText, Level: userLevel},
+		{Label: "本周期流量", Value: fmt.Sprintf("↓%s · ↑%s", formatCompactBytes(stats.PeriodDownBytes), formatCompactBytes(stats.PeriodUpBytes)), Level: "ok"},
+		{Label: "带宽限速", Value: shapingText, Level: shapingLevel},
+	}
 
 	return marshalResponse(overviewResponse{
 		Value:                 float64(stats.ActiveUsers),
@@ -611,6 +676,8 @@ func (i *instance) handleOverview(ctx context.Context, req pluginsdk.Request) (p
 		Sub:                   sub,
 		Level:                 level,
 		Spark:                 sparkCopy,
+		Headline:              &overviewHeadline{Value: headlineVal, Label: headlineLabel},
+		Items:                 checkItems,
 		TotalPlans:            stats.TotalPlans,
 		TotalUsers:            stats.TotalUsers,
 		ActiveUsers:           stats.ActiveUsers,
@@ -626,6 +693,31 @@ func (i *instance) handleOverview(ctx context.Context, req pluginsdk.Request) (p
 		CoreObfsAvailable:     obfsAvail,
 		XrayEngine:            xraySt,
 	})
+}
+
+func formatCompactBytes(n int64) string {
+	if n <= 0 {
+		return "0 B"
+	}
+	const (
+		kb = 1024.0
+		mb = kb * 1024
+		gb = mb * 1024
+		tb = gb * 1024
+	)
+	v := float64(n)
+	switch {
+	case v >= tb:
+		return fmt.Sprintf("%.2f TB", v/tb)
+	case v >= gb:
+		return fmt.Sprintf("%.2f GB", v/gb)
+	case v >= mb:
+		return fmt.Sprintf("%.1f MB", v/mb)
+	case v >= kb:
+		return fmt.Sprintf("%.1f KB", v/kb)
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
 
 func (i *instance) handlePlansList(ctx context.Context, req pluginsdk.Request) (pluginsdk.Response, error) {

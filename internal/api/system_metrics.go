@@ -16,24 +16,31 @@ import (
 	"time"
 
 	"github.com/qwq-panel/qwq/internal/capability/metrics"
+	"github.com/qwq-panel/qwq/internal/platform/clock"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 	metricsv1 "github.com/qwq-panel/qwq/sdk/gen/qwq/capability/metrics/v1"
 )
 
 const (
-	hostMetricsSampleFloor = 2 * time.Second
-	hostMetricsHistoryCap  = 40
-	hostMetricsPointCap    = 120
+	hostMetricsSampleFloor  = 2 * time.Second
+	hostMetricsBgInterval   = 5 * time.Second
+	hostMetricsHistoryCap   = 40
+	hostMetricsFineCap      = 720  // 1 hour @ 5s resolution
+	hostMetricsCoarseCap    = 1440 // 24 hours @ 1m resolution
+	hostMetricsMaxReturnPts = 120
+	hostMetricsDefaultRange = "15m"
 )
 
 type systemMetricsDTO struct {
-	CollectedAt   string                  `json:"collected_at"`
-	Host          systemMetricsHostDTO    `json:"host"`
-	CPU           systemMetricsCPUDTO     `json:"cpu"`
-	Memory        systemMetricsMemDTO     `json:"memory"`
-	Disk          systemMetricsDiskDTO    `json:"disk"`
-	Network       systemMetricsNetDTO     `json:"network"`
-	HistoryPoints []systemMetricsPointDTO `json:"history_points,omitempty"`
+	CollectedAt           string                  `json:"collected_at"`
+	Range                 string                  `json:"range,omitempty"`
+	SampleIntervalSeconds int                     `json:"sample_interval_seconds,omitempty"`
+	Host                  systemMetricsHostDTO    `json:"host"`
+	CPU                   systemMetricsCPUDTO     `json:"cpu"`
+	Memory                systemMetricsMemDTO     `json:"memory"`
+	Disk                  systemMetricsDiskDTO    `json:"disk"`
+	Network               systemMetricsNetDTO     `json:"network"`
+	HistoryPoints         []systemMetricsPointDTO `json:"history_points,omitempty"`
 }
 
 type systemMetricsPointDTO struct {
@@ -130,6 +137,15 @@ type diskIOSample struct {
 	at           time.Time
 }
 
+type coarseBucket struct {
+	minute int64
+	count  int
+	cpuSum float64
+	memSum float64
+	rxSum  float64
+	txSum  float64
+}
+
 type hostMetricsTracker struct {
 	mu            sync.Mutex
 	collector     *metrics.Collector
@@ -140,13 +156,16 @@ type hostMetricsTracker struct {
 	memHistory    []float64
 	rxHistory     []float64
 	txHistory     []float64
-	historyPoints []systemMetricsPointDTO
+	finePoints    []systemMetricsPointDTO
+	coarsePoints  []systemMetricsPointDTO
+	activeBucket  *coarseBucket
 	prevProcTicks map[int32]uint64
 	prevDiskIO    *diskIOSample
 	hostname      string
 	osPretty      string
 	kernel        string
 	cpuModel      string
+	bgOnce        sync.Once
 }
 
 func newHostMetricsTracker() *hostMetricsTracker {
@@ -410,12 +429,193 @@ func appendHistoryPoint(hist []float64, v float64) []float64 {
 	return hist
 }
 
-func appendMetricsPoint(pts []systemMetricsPointDTO, pt systemMetricsPointDTO) []systemMetricsPointDTO {
+// Start launches a lightweight 24/7 background sampler goroutine so host trend
+// history is recorded continuously even when no browser is viewing the Home page.
+func (t *hostMetricsTracker) Start(ctx context.Context, clk clock.Clock) {
+	if ctx == nil || ctx.Err() != nil {
+		return
+	}
+	if clk == nil {
+		clk = clock.System{}
+	}
+	t.bgOnce.Do(func() {
+		go func() {
+			// Take an initial baseline sample right at startup.
+			_, _ = t.sample(ctx, clk.Now().UTC(), hostMetricsDefaultRange)
+			ticker := time.NewTicker(hostMetricsBgInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					_, _ = t.sample(ctx, clk.Now().UTC(), hostMetricsDefaultRange)
+				}
+			}
+		}()
+	})
+}
+
+func parseMetricsRange(raw string) (string, time.Duration, int, bool) {
+	switch strings.TrimSpace(raw) {
+	case "", "15m":
+		return "15m", 15 * time.Minute, 5, true
+	case "5m":
+		return "5m", 5 * time.Minute, 5, true
+	case "1h":
+		return "1h", time.Hour, 30, true
+	case "6h":
+		return "6h", 6 * time.Hour, 180, true
+	case "24h":
+		return "24h", 24 * time.Hour, 720, true
+	default:
+		return "", 0, 0, false
+	}
+}
+
+func appendCappedPoint(pts []systemMetricsPointDTO, pt systemMetricsPointDTO, capN int) []systemMetricsPointDTO {
+	if n := len(pts); n > 0 && pts[n-1].Ts == pt.Ts {
+		pts[n-1] = pt
+		return pts
+	}
 	pts = append(pts, pt)
-	if len(pts) > hostMetricsPointCap {
-		pts = append([]systemMetricsPointDTO(nil), pts[len(pts)-hostMetricsPointCap:]...)
+	if len(pts) > capN {
+		pts = append([]systemMetricsPointDTO(nil), pts[len(pts)-capN:]...)
 	}
 	return pts
+}
+
+func (t *hostMetricsTracker) recordPointLocked(pt systemMetricsPointDTO) {
+	t.finePoints = appendCappedPoint(t.finePoints, pt, hostMetricsFineCap)
+
+	minute := pt.Ts - (pt.Ts % 60)
+	if t.activeBucket == nil {
+		t.activeBucket = &coarseBucket{
+			minute: minute,
+			count:  1,
+			cpuSum: pt.CPU,
+			memSum: pt.Mem,
+			rxSum:  pt.RxBps,
+			txSum:  pt.TxBps,
+		}
+		return
+	}
+	if minute == t.activeBucket.minute {
+		t.activeBucket.count++
+		t.activeBucket.cpuSum += pt.CPU
+		t.activeBucket.memSum += pt.Mem
+		t.activeBucket.rxSum += pt.RxBps
+		t.activeBucket.txSum += pt.TxBps
+		return
+	}
+	if minute > t.activeBucket.minute {
+		b := t.activeBucket
+		c := float64(b.count)
+		if c > 0 {
+			t.coarsePoints = appendCappedPoint(t.coarsePoints, systemMetricsPointDTO{
+				Ts:    b.minute + 30,
+				CPU:   clampPct(b.cpuSum / c),
+				Mem:   clampPct(b.memSum / c),
+				RxBps: math.Round(b.rxSum / c),
+				TxBps: math.Round(b.txSum / c),
+			}, hostMetricsCoarseCap)
+		}
+		t.activeBucket = &coarseBucket{
+			minute: minute,
+			count:  1,
+			cpuSum: pt.CPU,
+			memSum: pt.Mem,
+			rxSum:  pt.RxBps,
+			txSum:  pt.TxBps,
+		}
+	}
+}
+
+func downsampleMetricsPoints(pts []systemMetricsPointDTO, maxPts int) []systemMetricsPointDTO {
+	if len(pts) <= maxPts || maxPts < 2 {
+		return append([]systemMetricsPointDTO(nil), pts...)
+	}
+	out := make([]systemMetricsPointDTO, 0, maxPts)
+	bucketSize := float64(len(pts)) / float64(maxPts)
+	for i := 0; i < maxPts; i++ {
+		start := int(math.Floor(float64(i) * bucketSize))
+		end := int(math.Floor(float64(i+1) * bucketSize))
+		if i == maxPts-1 || end > len(pts) {
+			end = len(pts)
+		}
+		if start >= len(pts) {
+			break
+		}
+		if end <= start {
+			end = start + 1
+		}
+		var cpuSum, memSum, rxSum, txSum float64
+		count := float64(end - start)
+		for k := start; k < end; k++ {
+			cpuSum += pts[k].CPU
+			memSum += pts[k].Mem
+			rxSum += pts[k].RxBps
+			txSum += pts[k].TxBps
+		}
+		// Keep last point's exact timestamp on the final bucket so X-axis reaches "now".
+		ts := pts[(start+end-1)/2].Ts
+		if i == maxPts-1 {
+			ts = pts[end-1].Ts
+		}
+		out = append(out, systemMetricsPointDTO{
+			Ts:    ts,
+			CPU:   clampPct(cpuSum / count),
+			Mem:   clampPct(memSum / count),
+			RxBps: math.Round(rxSum / count),
+			TxBps: math.Round(txSum / count),
+		})
+	}
+	return out
+}
+
+func (t *hostMetricsTracker) pointsForRangeLocked(rng string, now time.Time) []systemMetricsPointDTO {
+	_, dur, _, ok := parseMetricsRange(rng)
+	if !ok {
+		dur = 15 * time.Minute
+	}
+	cutoff := now.Unix() - int64(dur.Seconds())
+
+	var src []systemMetricsPointDTO
+	if dur <= time.Hour {
+		src = t.finePoints
+	} else {
+		// Combine coarse 1m history with current in-progress fine tail so the rightmost point is always live.
+		src = make([]systemMetricsPointDTO, 0, len(t.coarsePoints)+len(t.finePoints))
+		var lastCoarseTs int64
+		for _, p := range t.coarsePoints {
+			if p.Ts >= cutoff {
+				src = append(src, p)
+				lastCoarseTs = p.Ts
+			}
+		}
+		for _, p := range t.finePoints {
+			if p.Ts >= cutoff && p.Ts > lastCoarseTs {
+				src = append(src, p)
+			}
+		}
+	}
+
+	filtered := make([]systemMetricsPointDTO, 0, len(src))
+	for _, p := range src {
+		if p.Ts >= cutoff {
+			if n := len(filtered); n > 0 && filtered[n-1].Ts >= p.Ts {
+				if filtered[n-1].Ts == p.Ts {
+					filtered[n-1] = p
+				}
+				continue
+			}
+			filtered = append(filtered, p)
+		}
+	}
+	if len(filtered) == 0 && len(t.finePoints) > 0 {
+		filtered = append(filtered, t.finePoints[len(t.finePoints)-1])
+	}
+	return downsampleMetricsPoints(filtered, hostMetricsMaxReturnPts)
 }
 
 func isRelevantNetIf(name string) bool {
@@ -492,12 +692,22 @@ func clampPct(v float64) float64 {
 	return math.Min(100, math.Max(0, math.Round(v*10)/10))
 }
 
-func (t *hostMetricsTracker) sample(ctx context.Context, now time.Time) (systemMetricsDTO, error) {
+func (t *hostMetricsTracker) sample(ctx context.Context, now time.Time, rng string) (systemMetricsDTO, error) {
+	normRange, _, intervalSec, ok := parseMetricsRange(rng)
+	if !ok {
+		normRange = hostMetricsDefaultRange
+		intervalSec = 5
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if t.lastDTO != nil && now.Sub(t.lastSampled) < hostMetricsSampleFloor {
-		return cloneMetricsDTO(*t.lastDTO), nil
+		out := cloneMetricsDTO(*t.lastDTO)
+		out.Range = normRange
+		out.SampleIntervalSeconds = intervalSec
+		out.HistoryPoints = t.pointsForRangeLocked(normRange, now)
+		return out, nil
 	}
 	if t.collector == nil {
 		return systemMetricsDTO{}, problem.New(problem.Unavailable, "Host metrics collector is unavailable on this platform.")
@@ -506,10 +716,16 @@ func (t *hostMetricsTracker) sample(ctx context.Context, now time.Time) (systemM
 	snap, err := t.collector.Collect(ctx)
 	if err != nil {
 		if t.lastDTO != nil {
-			return cloneMetricsDTO(*t.lastDTO), nil
+			out := cloneMetricsDTO(*t.lastDTO)
+			out.Range = normRange
+			out.SampleIntervalSeconds = intervalSec
+			out.HistoryPoints = t.pointsForRangeLocked(normRange, now)
+			return out, nil
 		}
 		dto := systemMetricsDTO{
-			CollectedAt: now.UTC().Format(time.RFC3339),
+			CollectedAt:           now.UTC().Format(time.RFC3339),
+			Range:                 normRange,
+			SampleIntervalSeconds: intervalSec,
 			Host: systemMetricsHostDTO{
 				Hostname: t.hostname,
 				OS:       t.osPretty,
@@ -682,7 +898,7 @@ func (t *hostMetricsTracker) sample(ctx context.Context, now time.Time) (systemM
 	t.memHistory = appendHistoryPoint(t.memHistory, memPct)
 	t.rxHistory = appendHistoryPoint(t.rxHistory, rxRate)
 	t.txHistory = appendHistoryPoint(t.txHistory, txRate)
-	t.historyPoints = appendMetricsPoint(t.historyPoints, systemMetricsPointDTO{
+	t.recordPointLocked(systemMetricsPointDTO{
 		Ts:    now.Unix(),
 		CPU:   cpuPct,
 		Mem:   memPct,
@@ -693,7 +909,9 @@ func (t *hostMetricsTracker) sample(ctx context.Context, now time.Time) (systemM
 	t.lastSampled = now
 
 	dto := systemMetricsDTO{
-		CollectedAt: now.UTC().Format(time.RFC3339),
+		CollectedAt:           now.UTC().Format(time.RFC3339),
+		Range:                 normRange,
+		SampleIntervalSeconds: intervalSec,
 		Host: systemMetricsHostDTO{
 			Hostname:      t.hostname,
 			OS:            t.osPretty,
@@ -745,7 +963,7 @@ func (t *hostMetricsTracker) sample(ctx context.Context, now time.Time) (systemM
 			TxHistory:      append([]float64(nil), t.txHistory...),
 			Interfaces:     netIfs,
 		},
-		HistoryPoints: append([]systemMetricsPointDTO(nil), t.historyPoints...),
+		HistoryPoints: t.pointsForRangeLocked(normRange, now),
 	}
 	t.lastDTO = &dto
 	return cloneMetricsDTO(dto), nil
@@ -764,9 +982,9 @@ func cloneMetricsDTO(in systemMetricsDTO) systemMetricsDTO {
 	return in
 }
 
-// getSystemMetrics implements GET /api/v1/system/metrics.
-// Provides built-in lightweight host CPU/Memory/Disk/Network telemetry for the
-// Home dashboard without requiring any external monitoring plugin.
+// getSystemMetrics implements GET /api/v1/system/metrics?range=5m|15m|1h|6h|24h.
+// Provides built-in lightweight host CPU/Memory/Disk/Network telemetry backed by
+// continuous 24/7 background ring buffers without requiring any external plugin.
 func (a *api) getSystemMetrics(w http.ResponseWriter, r *http.Request) {
 	act, err := a.caller(r)
 	if err != nil {
@@ -777,7 +995,13 @@ func (a *api) getSystemMetrics(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	dto, err := a.hostMetrics.sample(r.Context(), a.d.Clock.Now().UTC())
+	rawRange := r.URL.Query().Get("range")
+	normRange, _, _, ok := parseMetricsRange(rawRange)
+	if !ok {
+		a.fail(w, r, problem.New(problem.ValidationFailed, "range must be one of 5m, 15m, 1h, 6h, 24h."))
+		return
+	}
+	dto, err := a.hostMetrics.sample(r.Context(), a.d.Clock.Now().UTC(), normRange)
 	if err != nil {
 		a.fail(w, r, err)
 		return

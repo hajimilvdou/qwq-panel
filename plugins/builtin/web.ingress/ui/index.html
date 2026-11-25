@@ -10,16 +10,13 @@
 <body>
   <main id="ingress-root">
     <div class="topbar">
-      <div>
-        <h2 class="title">轻量反向代理与站点托管</h2>
-        <div class="sub">零依赖内置 Go 反代（支持多路径、SNI TLS 热重载、防重绑定 SSRF）+ Caddy/Nginx 渲染 · <span id="bridge-status">连接中…</span></div>
-      </div>
       <div class="tabs" id="nav-tabs">
         <button data-tab="sites" class="active" type="button">反代站点</button>
         <button data-tab="sni" type="button">:443 SNI 透传</button>
         <button data-tab="preview" type="button">配置预览与热重载</button>
         <button data-tab="snapshots" type="button">快照回滚</button>
       </div>
+      <div class="sub">内置 Go 反代 + Caddy/Nginx 渲染 · <span id="bridge-status">连接中…</span></div>
     </div>
 
     <div id="listen-alert" class="listen-alert" hidden role="status" aria-live="polite"></div>

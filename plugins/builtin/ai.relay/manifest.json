@@ -47,7 +47,7 @@
     "schemas/relay.users.create.response.json": "sha256:db791ddad6abd7d2f5de0109f5b24f128a93a41af5a8ae110532ee47f0ccd63b",
     "schemas/relay.users.list.request.json": "sha256:1c7603b39dccd443ebb27ada12c2e70ab4902abfab9a2a2a710d9aaf45a6d579",
     "schemas/relay.users.list.response.json": "sha256:8c02e068c4bd7ba3c171e24257d2ee4336194ac3490037b8ff89e57aa8665a18",
-    "ui/index.html": "sha256:c28fb0a00518c1bc40a7b85019094355dcc6c469e986eb875ae22ddaadad9af4",
+    "ui/index.html": "sha256:d1ec8becbb03c5521955d9d64993fad969963d21991402a381a5c0a7129c9aa1",
     "ui/plugin.css": "sha256:c3de0eb436a87bc851ded01f53e624684a12e72dff76ff90cbf45d0d929a014b",
     "ui/plugin.js": "sha256:2c6208660866b07225bc52f1d15621e256a16da1537d08fe3bb47fdbbcbe0ed0"
   },

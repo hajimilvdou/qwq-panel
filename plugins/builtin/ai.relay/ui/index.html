@@ -10,17 +10,14 @@
 <body>
   <main id="ai-relay-root">
     <div class="topbar">
-      <div>
-        <h2 class="title-flush">AI API 聚合中转与团体分发控制台</h2>
-        <span class="meta-line">分发门户：<code id="portal-url">/p/ai.relay/portal/</code> · 统一网关：<code id="gateway-url">/p/ai.relay/v1</code> · <span id="bridge-status">连接中…</span></span>
-      </div>
       <div class="tabs" id="nav-tabs">
-        <button data-tab="channels" class="active" type="button">上游渠道与 Sub2API 池</button>
-        <button data-tab="pricings" type="button">模型倍率配置</button>
-        <button data-tab="auth" type="button">注册开关与 SMTP / LinuxDo</button>
-        <button data-tab="codes" type="button">邀请码与福利兑换码</button>
-        <button data-tab="users" type="button">团体成员与配额</button>
+        <button data-tab="channels" class="active" type="button">上游渠道</button>
+        <button data-tab="pricings" type="button">模型倍率</button>
+        <button data-tab="auth" type="button">注册与登录</button>
+        <button data-tab="codes" type="button">邀请与兑换码</button>
+        <button data-tab="users" type="button">成员与配额</button>
       </div>
+      <span class="meta-line">门户 <code id="portal-url">/p/ai.relay/portal/</code> · 网关 <code id="gateway-url">/p/ai.relay/v1</code> · <span id="bridge-status">连接中…</span></span>
     </div>
 
     <section data-pane="channels" class="card">

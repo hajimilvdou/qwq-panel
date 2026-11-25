@@ -43,27 +43,45 @@ export function wire(): void {
 /** 最近 50 条未捕获错误（内存环），便于排查；不上报任何外部服务 */
 export const crashLog: { at: string; message: string }[] = [];
 
+const CRASH_TOAST_TEXT = '页面出了点意外，部分功能可能不正常';
+const IGNORED_REJECTION_NAMES = new Set(['AbortError', 'TimeoutError', 'ApiError', 'NetworkError']);
+
+function isBenignBrowserError(message: string, err: unknown): boolean {
+  const lower = message.trim().toLowerCase();
+  if (!lower && !err) return true;
+  if (lower.includes('resizeobserver loop')) return true;
+  /* 跨源脚本或浏览器扩展注入的无堆栈泛化提示，并非面板自身崩溃 */
+  if ((lower === 'script error.' || lower === 'script error') && !err) return true;
+  return false;
+}
+
 function installCrashReporter() {
   let lastToast = 0;
-  const record = (message: string) => {
-    crashLog.push({ at: new Date().toISOString(), message });
+  const record = (message: string, detail?: unknown) => {
+    const clean = message.trim() || 'Unknown runtime error';
+    crashLog.push({ at: new Date().toISOString(), message: clean });
     if (crashLog.length > 50) crashLog.shift();
-    /* 同一时间的连环错误只提示一次 */
-    if (Date.now() - lastToast > 5000) {
+    if (typeof console !== 'undefined' && typeof console.error === 'function') {
+      console.error('[qwq-runtime]', clean, detail ?? '');
+    }
+    /* 同一时间的连环错误不重复堆叠 */
+    const alreadyShowing = toasts.items.some((t) => t.kind === 'error' && t.text === CRASH_TOAST_TEXT);
+    if (!alreadyShowing && Date.now() - lastToast > 8000) {
       lastToast = Date.now();
-      toasts.error('页面出了点意外，部分功能可能不正常', undefined, { label: '刷新', run: () => location.reload() });
+      toasts.error(CRASH_TOAST_TEXT, undefined, { label: '刷新', run: () => location.reload() });
     }
   };
   addEventListener('error', (e) => {
-    const msg = String(e.message ?? '');
-    /* 浏览器 ResizeObserver 循环节流提示属于无害告警，绝不能弹全局崩溃红条 */
-    if (msg.includes('ResizeObserver loop')) return;
-    record(msg);
+    const msg = String(e.message ?? (e.error as Error | undefined)?.message ?? '');
+    if (isBenignBrowserError(msg, e.error)) return;
+    record(msg, e.error);
   });
   addEventListener('unhandledrejection', (e) => {
-    const r = e.reason as { name?: string } | undefined;
-    /* 取消与已由业务处理的 API 错误不算崩溃 */
-    if (r?.name === 'AbortError' || r?.name === 'ApiError' || r?.name === 'NetworkError') return;
-    record(String((e.reason as Error | undefined)?.message ?? e.reason));
+    const r = e.reason as { name?: string; message?: string } | undefined;
+    /* 取消、超时与已由业务处理的 API / 网络错误不算崩溃 */
+    if (r?.name && IGNORED_REJECTION_NAMES.has(r.name)) return;
+    const msg = String(r?.message ?? e.reason ?? '');
+    if (isBenignBrowserError(msg, e.reason)) return;
+    record(msg, e.reason);
   });
 }

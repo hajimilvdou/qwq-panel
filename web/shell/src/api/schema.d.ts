@@ -1514,7 +1514,7 @@ export type paths = {
         };
         /**
          * Read built-in real-time host CPU, memory, disk, and network metrics
-         * @description Returns lightweight host resource telemetry and short in-memory sparkline history directly from the core panel framework without requiring external monitoring plugins.
+         * @description Returns lightweight host resource telemetry and continuously recorded multi-resolution trend history (5m, 15m, 1h, 6h, 24h) directly from the core panel framework without requiring external monitoring plugins.
          */
         get: operations["getSystemMetrics"];
         put?: never;
@@ -4515,6 +4515,16 @@ export type components = {
              * @description RFC 3339 sample timestamp.
              */
             collected_at: string;
+            /**
+             * @description Returned trend history window.
+             * @enum {string}
+             */
+            range?: "5m" | "15m" | "1h" | "6h" | "24h";
+            /**
+             * Format: int32
+             * @description Target spacing in seconds between returned trend points for the selected window.
+             */
+            sample_interval_seconds?: number;
             /** @description Basic host identity and uptime. */
             host: {
                 /** @description Hostname. */
@@ -8866,7 +8876,10 @@ export interface operations {
     };
     getSystemMetrics: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Trend history window to return from continuous background ring buffers (defaults to 15m). */
+                range?: "5m" | "15m" | "1h" | "6h" | "24h";
+            };
             header?: never;
             path?: never;
             cookie?: never;

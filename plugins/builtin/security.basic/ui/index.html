@@ -10,18 +10,15 @@
 <body>
   <main id="security-root">
     <header class="topbar">
-      <div>
-        <h1 class="title">基础安全工作台</h1>
-        <div class="sub">防火墙基线 · SSH 零断连改端口 · 密钥与口令 · 轻量防爆破 · <span id="status">正在连接宿主…</span></div>
-      </div>
+      <nav class="tabs" id="nav-tabs" aria-label="安全模块导航">
+        <button type="button" data-tab="overview" class="active">概览与冲突</button>
+        <button type="button" data-tab="firewall">防火墙规则</button>
+        <button type="button" data-tab="sshd">SSH 与改端口</button>
+        <button type="button" data-tab="keys">密钥与密码</button>
+        <button type="button" data-tab="bans">防爆破封禁</button>
+      </nav>
       <div class="topbar-actions">
-        <nav class="tabs" id="nav-tabs" aria-label="安全模块导航">
-          <button type="button" data-tab="overview" class="active">概览与冲突</button>
-          <button type="button" data-tab="firewall">防火墙规则</button>
-          <button type="button" data-tab="sshd">SSH 与改端口</button>
-          <button type="button" data-tab="keys">密钥与密码</button>
-          <button type="button" data-tab="bans">防爆破封禁</button>
-        </nav>
+        <span class="sub" id="status">正在连接宿主…</span>
         <button id="refresh" class="btn ghost" type="button">刷新状态</button>
       </div>
     </header>

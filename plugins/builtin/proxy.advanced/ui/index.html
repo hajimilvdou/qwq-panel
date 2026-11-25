@@ -9,126 +9,87 @@
 </head>
 <body>
   <main id="proxy-root">
-    <div class="topbar">
-      <div class="topbar-id">
-        <div class="title-row">
-          <h2 class="title" id="page-title">代理与订阅中心</h2>
-          <span id="xray-engine-pill" class="engine-pill">
-            <i class="engine-dot" aria-hidden="true"></i>
-            <span id="xray-engine-text">内置 Xray 引擎检测中…</span>
-          </span>
-        </div>
-        <div class="sub">深度内置 Xray v26.11.9 与 AnyTLS 数据面 · 全协议一键建节点 · 多用户配额与订阅分发 · <span id="status">连接宿主中…</span></div>
+    <div class="view-bar">
+      <div class="view-bar-left">
+        <span id="xray-engine-pill" class="engine-pill">
+          <i class="engine-dot" aria-hidden="true"></i>
+          <span id="xray-engine-text">内置 Xray 引擎检测中…</span>
+        </span>
+        <span class="view-status" id="status">连接宿主中…</span>
       </div>
-      <div class="actions actions-tight">
-        <div class="tabs" id="nav-tabs">
-          <button data-route="/proxy" class="active" type="button">用户与订阅</button>
-          <button data-route="/proxy/nodes" type="button">节点管理</button>
-          <button data-route="/proxy/chains" type="button">链式与 WARP</button>
-          <button data-route="/proxy/tuning" type="button">网络调优 &amp; Brutal</button>
-        </div>
-        <button id="btn-quick-add-node" class="btn sm" type="button">+ 建节点</button>
+      <div class="view-bar-right">
+        <button id="btn-ctx-primary" class="btn sm" type="button">+ 添加节点</button>
         <button id="refresh" class="btn sm ghost" type="button">刷新</button>
       </div>
     </div>
 
     <div id="action-banner" class="banner" role="status" aria-live="polite"></div>
 
-    <!-- ==================== 视图 1: /proxy 用户、套餐、限速与连接数控制 ==================== -->
+    <!-- ==================== 视图 1: /proxy 仪表盘概览 ==================== -->
     <section data-view="/proxy">
-      <section class="stats">
+      <section class="stats stats-6">
         <div class="stat">
-          <div class="k">活跃 / 总用户</div>
-          <div class="v" id="overview-value">—</div>
-          <div class="d" id="overview-sub">等待同步</div>
+          <div class="k">本周期总流量</div>
+          <div class="v" id="ov-total-traffic">—</div>
+          <div class="d" id="ov-total-traffic-sub">等待同步</div>
         </div>
         <div class="stat">
-          <div class="k">内置 Xray / AnyTLS 引擎</div>
+          <div class="k">内置 Xray / AnyTLS</div>
           <div class="v" id="xray-stat-val">—</div>
-          <div class="d" id="xray-stat-sub">无需额外核心，开机自动拉起</div>
+          <div class="d" id="xray-stat-sub">深度内置，开机自启</div>
         </div>
         <div class="stat">
-          <div class="k">内核带宽限速 (HTB)</div>
-          <div class="v" id="traffic-status">—</div>
-          <div class="d" id="traffic-detail"></div>
+          <div class="k">代理节点</div>
+          <div class="v" id="ov-nodes-val">—</div>
+          <div class="d" id="ov-nodes-sub">托管 / 外部导入</div>
         </div>
         <div class="stat">
-          <div class="k">套餐模板 / Brutal 监听</div>
+          <div class="k">订阅用户</div>
+          <div class="v" id="overview-value">—</div>
+          <div class="d" id="overview-sub">活跃 / 总数</div>
+        </div>
+        <div class="stat">
+          <div class="k">套餐模板</div>
           <div class="v" id="plans-summary">—</div>
-          <div class="d" id="brutal-mini-count">0 / 0 Brutal 接管</div>
+          <div class="d" id="ov-plans-sub">配额与速率模板</div>
+        </div>
+        <div class="stat">
+          <div class="k">内核限速 / Brutal</div>
+          <div class="v" id="traffic-status">—</div>
+          <div class="d"><span id="traffic-detail"></span><span id="brutal-mini-count"></span></div>
         </div>
       </section>
 
-      <section class="card">
-        <div class="card-head">
-          <div>
-            <h3>套餐模板与限速策略</h3>
-            <p class="card-desc">以卡片统一管理流量配额、上下行速率限制、最大并发连接与在线 IP 上限，新建用户时可直接复用。</p>
-          </div>
-          <button id="btn-plan-create-open" class="btn" type="button">+ 新建套餐</button>
-        </div>
-        <div id="plans-cards" class="plans-grid">
-          <div class="empty-card muted">等待加载套餐…</div>
-        </div>
-      </section>
-
-      <section class="card">
-        <div class="card-head">
-          <div>
-            <h3>多用户与订阅分发</h3>
-            <p class="card-desc">管理全部订阅用户配额、在线连接与状态，支持一键签发 Clash / sing-box / Base64 订阅链接与小时级用量追踪。</p>
-          </div>
-          <button id="btn-user-create-open" class="btn" type="button">+ 新建订阅用户</button>
-        </div>
-        <div id="copy-feedback" class="muted" aria-live="polite"></div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>用户</th>
-                <th>套餐</th>
-                <th>状态</th>
-                <th>当期用量 / 配额</th>
-                <th>活跃连接 / 上限</th>
-                <th>活跃 IP / 上限</th>
-                <th>绑定链式落地</th>
-                <th>流量标记</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="users-body">
-              <tr><td colspan="9" class="muted">等待加载…</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <details id="user-limits-details" class="sub-drawer mt-14">
-          <summary>
-            <span>单用户连接数 / IP / 链式落地覆盖（高级）</span>
-            <span class="summary-hint">-1 继承套餐默认 · 0 表示不限制 · 点击表格「调整限额」自动填充</span>
-          </summary>
-          <div class="sub-drawer-body">
-            <div class="form-grid">
-              <label>目标用户
-                <select id="ul-user"><option value="">请先加载用户</option></select>
-              </label>
-              <label>最大连接覆盖 (-1 继承 / 0 不限) <input id="ul-conns" type="number" min="-1" max="65535" value="-1" /></label>
-              <label>最大 IP 覆盖 (-1 继承 / 0 不限) <input id="ul-ips" type="number" min="-1" max="1024" value="-1" /></label>
-              <label>指定链式落地节点（留空=默认/直连）
-                <select id="ul-chain"><option value="">（跟随默认 / 直连）</option></select>
-              </label>
+      <div class="ov-grid">
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h3>用户用量排行</h3>
+              <p class="card-desc">按本周期累计上下行流量排序，快速掌握配额使用情况。</p>
             </div>
-            <div class="actions">
-              <button id="btn-user-limits" class="btn" type="button">保存用户限制与链式绑定</button>
-              <button id="btn-nft-preview" class="btn ghost" type="button">预览 nftables 连接限流规则</button>
-            </div>
-            <pre id="nft-preview" class="hidden"></pre>
+            <button class="btn xs ghost" type="button" data-go-route="/proxy/users">全部用户 →</button>
           </div>
-        </details>
-      </section>
+          <div id="ov-user-ranking" class="rank-list">
+            <div class="empty-card muted">等待加载用户用量…</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h3>节点运行状态</h3>
+              <p class="card-desc">当前已托管入站与外部导入节点一览，支持一键测速与编辑。</p>
+            </div>
+            <button class="btn xs ghost" type="button" data-go-route="/proxy/nodes">管理节点 →</button>
+          </div>
+          <div id="ov-node-list" class="ov-node-list">
+            <div class="empty-card muted">等待加载节点状态…</div>
+          </div>
+        </section>
+      </div>
     </section>
 
-    <!-- ==================== 视图 2: /proxy/nodes 全协议代理节点管理与双模式构建器 ==================== -->
+    <!-- ==================== 视图 2: /proxy/nodes 全协议代理节点管理 ==================== -->
     <section data-view="/proxy/nodes" class="hidden">
       <section class="stats">
         <div class="stat">
@@ -181,10 +142,10 @@
       <!-- 节点列表卡片 -->
       <section class="card">
         <div class="card-head">
-          <h3>代理节点列表（托管入站 &amp; 外部导入）</h3>
+          <h3>代理节点列表</h3>
           <div class="actions actions-tight">
-            <button id="btn-node-add" class="btn" type="button">+ 添加节点</button>
-            <button id="btn-nodes-refresh" class="btn ghost" type="button">刷新</button>
+            <button id="btn-node-add" class="btn sm" type="button">+ 添加节点</button>
+            <button id="btn-nodes-refresh" class="btn sm ghost" type="button">刷新</button>
           </div>
         </div>
 
@@ -224,159 +185,280 @@
       </section>
     </section>
 
-    <!-- ==================== 视图 3: /proxy/chains 链式代理与 Cloudflare WARP 解锁页 ==================== -->
-    <section data-view="/proxy/chains" class="hidden">
-      <!-- Cloudflare WARP 服务端 WireGuard 链式出口解锁 -->
-      <section class="card">
-        <h3>Cloudflare WARP 出口解锁（服务端 WireGuard 链式代理）</h3>
-        <p class="card-desc">当 VPS 原生 IP 较脏（触发 Cloudflare 人机验证、ChatGPT/Claude 拒访或流媒体受限）时，通过 <strong>Xray 内置用户态 WireGuard</strong> 将选定入站端口或解锁域名走 WARP 出口转发：不改宿主机路由表、不影响 SSH/面板、零额外常驻进程，1C1G/LXC 容器原生可用。</p>
-
-        <section class="stats stats-compact">
-          <div class="stat">
-            <div class="k">WARP 账号状态</div>
-            <div class="v" id="w-state">未注册</div>
-            <div class="d" id="w-account">点击下方「一键注册」自动申请</div>
-          </div>
-          <div class="stat">
-            <div class="k">分配内网地址</div>
-            <div class="v v-sm mono" id="w-addrs">—</div>
-            <div class="d mono" id="w-reserved">reserved: —</div>
-          </div>
-          <div class="stat">
-            <div class="k">当前端点 / 分流模式</div>
-            <div class="v v-sm mono" id="w-ep-summary">—</div>
-            <div class="d" id="w-mode-summary">—</div>
-          </div>
-          <div class="stat">
-            <div class="k">Xray 同步状态</div>
-            <div class="v" id="w-sync-state">—</div>
-            <div class="d" id="w-sync-rev">—</div>
-          </div>
-        </section>
-
-        <div class="form-grid">
-          <label>可选 WARP+ License Key（留空注册免费版）
-            <input id="w-license" type="password" placeholder="留空直接免费注册，或填 26 位 WARP+ 密钥" />
-          </label>
-          <label>WARP 端点（Endpoint）
-            <input id="w-endpoint" class="mono" value="engage.cloudflareclient.com:2408" placeholder="engage.cloudflareclient.com:2408" />
-          </label>
-          <label>分流模式
-            <select id="w-mode">
-              <option value="bound_ports">指定代理端口全流量走 WARP（推荐：按端口隔离）</option>
-              <option value="domains">仅解锁域名走 WARP，其余直连（AI / 流媒体分流）</option>
-              <option value="all">全部代理端口全局走 WARP</option>
-            </select>
-          </label>
-          <label>MTU（1200–1500）
-            <input id="w-mtu" type="number" min="1200" max="1500" value="1280" />
-          </label>
-          <label class="check"><input id="w-enabled" type="checkbox" checked /> 启用 WARP 出口并立即同步到 Xray</label>
+    <!-- ==================== 视图 3: /proxy/users 订阅用户管理 ==================== -->
+    <section data-view="/proxy/users" class="hidden">
+      <section class="stats">
+        <div class="stat">
+          <div class="k">用户总数</div>
+          <div class="v" id="u-stat-total">—</div>
+          <div class="d" id="u-stat-active-sub">等待加载</div>
         </div>
-
-        <div class="mt-14">
-          <div class="muted mb-6">绑定代理入站端口（勾选需要套 WARP 的端口；“仅解锁域名”模式下留空=全部端口生效）：</div>
-          <div id="w-ports-box" class="actions actions-gap-10"></div>
+        <div class="stat">
+          <div class="k">受限 / 异常用户</div>
+          <div class="v" id="u-stat-warn">—</div>
+          <div class="d" id="u-stat-disabled-sub">超额 · 到期 · 停用</div>
         </div>
-
-        <div id="w-domains-wrap" class="mt-14">
-          <div class="actions actions-mb-6">
-            <span class="muted">解锁域名列表（每行或逗号分隔，支持 <code>openai.com</code> / <code>geosite:netflix</code>）：</span>
-            <button id="btn-w-preset-ai" class="btn sm ghost" type="button">+ AI 全家桶</button>
-            <button id="btn-w-preset-stream" class="btn sm ghost" type="button">+ 流媒体解锁</button>
-            <button id="btn-w-preset-google" class="btn sm ghost" type="button">+ Google 防验证</button>
-          </div>
-          <textarea id="w-domains" class="code-area" rows="3" placeholder="openai.com, chatgpt.com, claude.ai, netflix.com"></textarea>
+        <div class="stat">
+          <div class="k">本周期总用量</div>
+          <div class="v" id="u-stat-usage">—</div>
+          <div class="d" id="u-stat-usage-sub">↑ 0 B / ↓ 0 B</div>
         </div>
-
-        <details class="mt-12">
-          <summary class="details-summary">手动导入已有 WireGuard / WARP+ / Zero Trust 密钥（若 VPS 无法访问注册接口时使用）</summary>
-          <div class="form-grid mt-10">
-            <label>WireGuard PrivateKey <input id="w-manual-priv" type="password" class="mono" placeholder="44 位 Base64 私钥" /></label>
-            <label>Peer PublicKey <input id="w-manual-pub" class="mono" value="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=" /></label>
-            <label>WARP IPv4 地址 <input id="w-manual-v4" class="mono" value="172.16.0.2/32" /></label>
-            <label>WARP IPv6 地址（可选） <input id="w-manual-v6" class="mono" placeholder="2606:4700:110:...::2/128" /></label>
-            <label>Client ID / Reserved（可选，如 VYX7 或 12,34,56） <input id="w-manual-cid" class="mono" placeholder="可选" /></label>
-          </div>
-        </details>
-
-        <div class="actions">
-          <button id="btn-warp-register" class="btn" type="button">一键注册 Cloudflare WARP</button>
-          <button id="btn-warp-save" class="btn" type="button">保存端口绑定并同步生效</button>
-          <button id="btn-warp-probe" class="btn ghost" type="button">探测优选端点与本机 IP</button>
-          <button id="btn-warp-preview" class="btn ghost" type="button">预览 Xray WireGuard 配置</button>
-          <button id="btn-warp-delete" class="btn danger" type="button">注销清除 WARP</button>
-        </div>
-        <pre id="warp-output" class="hidden"></pre>
-      </section>
-
-      <section class="card">
-        <h3>新增 / 更新链式代理落地节点</h3>
-        <p class="card-desc">默认采用完整闭环的 <strong>客户端订阅链式导出</strong>（Clash <code>dialer-proxy</code> / sing-box <code>detour</code>），同时保留服务端出口链预览。密码与 UUID 采用本地 AES-256-GCM 加密存储，列表与预览永不明文回显。</p>
-        <div class="form-grid">
-          <label>节点 ID <input id="c-id" placeholder="如 jp-home-socks" /></label>
-          <label>显示名称 <input id="c-name" placeholder="日本家宽落地" /></label>
-          <label>工作模式
-            <select id="c-mode">
-              <option value="client_dialer" selected>客户端订阅 dialer-proxy / detour（推荐 · 已闭环）</option>
-              <option value="both">客户端订阅 + 服务端出口预览 (both)</option>
-              <option value="server_forward">仅服务端出口预览 (server_forward)</option>
-            </select>
-          </label>
-          <label>落地协议
-            <select id="c-proto">
-              <option value="socks5">SOCKS5</option>
-              <option value="http">HTTP / HTTPS</option>
-              <option value="vless">VLESS</option>
-              <option value="trojan">Trojan</option>
-              <option value="shadowsocks">Shadowsocks</option>
-            </select>
-          </label>
-          <label>落地地址 (域名/IP) <input id="c-server" placeholder="landing.example.com" /></label>
-          <label>落地端口 <input id="c-port" type="number" min="1" max="65535" value="1080" /></label>
-          <label>用户名 (SOCKS5/HTTP) <input id="c-user" placeholder="可选" /></label>
-          <label>密码 / PSK (更新留空则保留原密文) <input id="c-pass" type="password" placeholder="加密保存" /></label>
-          <label>UUID (VLESS 必填) <input id="c-uuid" placeholder="可选" /></label>
-          <label>加密方式 (SS) <input id="c-method" placeholder="aes-256-gcm" /></label>
-          <label>TLS SNI <input id="c-sni" placeholder="可选" /></label>
-          <label>下一跳 ID (多跳级联，自动检环)
-            <select id="c-next"><option value="">（无，本节点即为最终落地）</option></select>
-          </label>
-          <label class="check"><input id="c-tls" type="checkbox" /> 启用 TLS</label>
-          <label class="check"><input id="c-default" type="checkbox" /> 设为全局默认落地</label>
-          <label class="check"><input id="c-enabled" type="checkbox" checked /> 启用该链式节点</label>
-        </div>
-        <div class="actions">
-          <button id="btn-chain-save" class="btn" type="button">保存链式代理节点</button>
-          <button id="btn-chain-preview" class="btn ghost" type="button">预览 Xray 服务端链式出口 JSON</button>
+        <div class="stat">
+          <div class="k">活跃连接 / 在线 IP</div>
+          <div class="v" id="u-stat-conns">—</div>
+          <div class="d" id="u-stat-ips-sub">实时统计</div>
         </div>
       </section>
 
       <section class="card">
-        <h3>已配置链式代理节点</h3>
+        <div class="card-head">
+          <div>
+            <h3>全部订阅用户</h3>
+            <p class="card-desc">管理用户配额、在线连接与状态，支持一键签发 Clash / sing-box / Base64 订阅链接与小时级用量追踪。</p>
+          </div>
+          <button id="btn-user-create-open" class="btn sm" type="button">+ 新建订阅用户</button>
+        </div>
+
+        <div class="filter-toolbar">
+          <div class="filter-row">
+            <input id="u-search" class="search-box" type="search" placeholder="搜索用户名、ID、套餐或链式落地…" />
+            <div class="pill-group" id="u-status-filters" aria-label="按用户状态筛选">
+              <button type="button" class="pill active" data-ustatus="">全部</button>
+              <button type="button" class="pill" data-ustatus="active">活跃</button>
+              <button type="button" class="pill" data-ustatus="suspended_quota">超额暂停</button>
+              <button type="button" class="pill" data-ustatus="expired">已到期</button>
+              <button type="button" class="pill" data-ustatus="disabled">已停用</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="copy-feedback" class="muted" aria-live="polite"></div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>ID / 名称</th>
-                <th>模式</th>
-                <th>协议与落地地址</th>
-                <th>多跳 / 默认</th>
-                <th>凭据脱敏摘要</th>
+                <th>用户</th>
+                <th>套餐</th>
                 <th>状态</th>
+                <th>当期用量 / 配额</th>
+                <th>活跃连接 / 上限</th>
+                <th>活跃 IP / 上限</th>
+                <th>绑定链式落地</th>
+                <th>流量标记</th>
                 <th>操作</th>
               </tr>
             </thead>
-            <tbody id="chains-body">
-              <tr><td colspan="7" class="muted">暂无链式代理节点</td></tr>
+            <tbody id="users-body">
+              <tr><td colspan="9" class="muted">等待加载…</td></tr>
             </tbody>
           </table>
         </div>
-        <pre id="chain-xray-preview" class="hidden"></pre>
+
+        <details id="user-limits-details" class="sub-drawer mt-14">
+          <summary>
+            <span>单用户连接数 / IP / 链式落地覆盖（高级）</span>
+            <span class="summary-hint">-1 继承套餐默认 · 0 表示不限制 · 点击表格「调整限额」自动填充</span>
+          </summary>
+          <div class="sub-drawer-body">
+            <div class="form-grid">
+              <label>目标用户
+                <select id="ul-user"><option value="">请先加载用户</option></select>
+              </label>
+              <label>最大连接覆盖 (-1 继承 / 0 不限) <input id="ul-conns" type="number" min="-1" max="65535" value="-1" /></label>
+              <label>最大 IP 覆盖 (-1 继承 / 0 不限) <input id="ul-ips" type="number" min="-1" max="1024" value="-1" /></label>
+              <label>指定链式落地节点（留空=默认/直连）
+                <select id="ul-chain"><option value="">（跟随默认 / 直连）</option></select>
+              </label>
+            </div>
+            <div class="actions">
+              <button id="btn-user-limits" class="btn" type="button">保存用户限制与链式绑定</button>
+              <button id="btn-nft-preview" class="btn ghost" type="button">预览 nftables 连接限流规则</button>
+            </div>
+            <pre id="nft-preview" class="hidden"></pre>
+          </div>
+        </details>
       </section>
     </section>
 
-    <!-- ==================== 视图 4: /proxy/tuning tcpfit 调优 + TCP Brutal 接管 ==================== -->
+    <!-- ==================== 视图 4: /proxy/plans 套餐模板管理 ==================== -->
+    <section data-view="/proxy/plans" class="hidden">
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h3>套餐模板管理</h3>
+            <p class="card-desc">定义可复用的流量配额、重置周期、上下行限速与并发连接策略，新建用户时可直接套用。</p>
+          </div>
+          <button id="btn-plan-create-open" class="btn sm" type="button">+ 新建套餐模板</button>
+        </div>
+        <div id="plans-cards" class="plans-grid">
+          <div class="empty-card muted">等待加载套餐…</div>
+        </div>
+      </section>
+    </section>
+
+    <!-- ==================== 视图 5: /proxy/chains 链式代理与 Cloudflare WARP 解锁 ==================== -->
+    <section data-view="/proxy/chains" class="hidden">
+      <div class="sub-tabs" id="chains-subtabs" role="tablist" aria-label="出口策略切换">
+        <button type="button" class="active" data-sub="warp" role="tab" aria-selected="true">Cloudflare WARP 出口解锁</button>
+        <button type="button" data-sub="hops" role="tab" aria-selected="false">多跳链式落地节点</button>
+      </div>
+
+      <!-- 子面板 A: Cloudflare WARP 服务端 WireGuard 链式出口解锁 -->
+      <div data-chains-pane="warp">
+        <section class="card">
+          <h3>Cloudflare WARP 出口解锁（服务端 WireGuard 链式代理）</h3>
+          <p class="card-desc">当 VPS 原生 IP 较脏（触发 Cloudflare 人机验证、ChatGPT/Claude 拒访或流媒体受限）时，通过 <strong>Xray 内置用户态 WireGuard</strong> 将选定入站端口或解锁域名走 WARP 出口转发：不改宿主机路由表、不影响 SSH/面板、零额外常驻进程，1C1G/LXC 容器原生可用。</p>
+
+          <section class="stats stats-compact">
+            <div class="stat">
+              <div class="k">WARP 账号状态</div>
+              <div class="v" id="w-state">未注册</div>
+              <div class="d" id="w-account">点击下方「一键注册」自动申请</div>
+            </div>
+            <div class="stat">
+              <div class="k">分配内网地址</div>
+              <div class="v v-sm mono" id="w-addrs">—</div>
+              <div class="d mono" id="w-reserved">reserved: —</div>
+            </div>
+            <div class="stat">
+              <div class="k">当前端点 / 分流模式</div>
+              <div class="v v-sm mono" id="w-ep-summary">—</div>
+              <div class="d" id="w-mode-summary">—</div>
+            </div>
+            <div class="stat">
+              <div class="k">Xray 同步状态</div>
+              <div class="v" id="w-sync-state">—</div>
+              <div class="d" id="w-sync-rev">—</div>
+            </div>
+          </section>
+
+          <div class="form-grid">
+            <label>可选 WARP+ License Key（留空注册免费版）
+              <input id="w-license" type="password" placeholder="留空直接免费注册，或填 26 位 WARP+ 密钥" />
+            </label>
+            <label>WARP 端点（Endpoint）
+              <input id="w-endpoint" class="mono" value="engage.cloudflareclient.com:2408" placeholder="engage.cloudflareclient.com:2408" />
+            </label>
+            <label>分流模式
+              <select id="w-mode">
+                <option value="bound_ports">指定代理端口全流量走 WARP（推荐：按端口隔离）</option>
+                <option value="domains">仅解锁域名走 WARP，其余直连（AI / 流媒体分流）</option>
+                <option value="all">全部代理端口全局走 WARP</option>
+              </select>
+            </label>
+            <label>MTU（1200–1500）
+              <input id="w-mtu" type="number" min="1200" max="1500" value="1280" />
+            </label>
+            <label class="check"><input id="w-enabled" type="checkbox" checked /> 启用 WARP 出口并立即同步到 Xray</label>
+          </div>
+
+          <div class="mt-14">
+            <div class="muted mb-6">绑定代理入站端口（勾选需要套 WARP 的端口；“仅解锁域名”模式下留空=全部端口生效）：</div>
+            <div id="w-ports-box" class="actions actions-gap-10"></div>
+          </div>
+
+          <div id="w-domains-wrap" class="mt-14">
+            <div class="actions actions-mb-6">
+              <span class="muted">解锁域名列表（每行或逗号分隔，支持 <code>openai.com</code> / <code>geosite:netflix</code>）：</span>
+              <button id="btn-w-preset-ai" class="btn sm ghost" type="button">+ AI 全家桶</button>
+              <button id="btn-w-preset-stream" class="btn sm ghost" type="button">+ 流媒体解锁</button>
+              <button id="btn-w-preset-google" class="btn sm ghost" type="button">+ Google 防验证</button>
+            </div>
+            <textarea id="w-domains" class="code-area" rows="3" placeholder="openai.com, chatgpt.com, claude.ai, netflix.com"></textarea>
+          </div>
+
+          <details class="mt-12">
+            <summary class="details-summary">手动导入已有 WireGuard / WARP+ / Zero Trust 密钥（若 VPS 无法访问注册接口时使用）</summary>
+            <div class="form-grid mt-10">
+              <label>WireGuard PrivateKey <input id="w-manual-priv" type="password" class="mono" placeholder="44 位 Base64 私钥" /></label>
+              <label>Peer PublicKey <input id="w-manual-pub" class="mono" value="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=" /></label>
+              <label>WARP IPv4 地址 <input id="w-manual-v4" class="mono" value="172.16.0.2/32" /></label>
+              <label>WARP IPv6 地址（可选） <input id="w-manual-v6" class="mono" placeholder="2606:4700:110:...::2/128" /></label>
+              <label>Client ID / Reserved（可选，如 VYX7 或 12,34,56） <input id="w-manual-cid" class="mono" placeholder="可选" /></label>
+            </div>
+          </details>
+
+          <div class="actions">
+            <button id="btn-warp-register" class="btn" type="button">一键注册 Cloudflare WARP</button>
+            <button id="btn-warp-save" class="btn" type="button">保存端口绑定并同步生效</button>
+            <button id="btn-warp-probe" class="btn ghost" type="button">探测优选端点与本机 IP</button>
+            <button id="btn-warp-preview" class="btn ghost" type="button">预览 Xray WireGuard 配置</button>
+            <button id="btn-warp-delete" class="btn danger" type="button">注销清除 WARP</button>
+          </div>
+          <pre id="warp-output" class="hidden"></pre>
+        </section>
+      </div>
+
+      <!-- 子面板 B: 多跳链式落地节点 -->
+      <div data-chains-pane="hops" class="hidden">
+        <section class="card">
+          <h3>新增 / 更新链式代理落地节点</h3>
+          <p class="card-desc">默认采用完整闭环的 <strong>客户端订阅链式导出</strong>（Clash <code>dialer-proxy</code> / sing-box <code>detour</code>），同时保留服务端出口链预览。密码与 UUID 采用本地 AES-256-GCM 加密存储，列表与预览永不明文回显。</p>
+          <div class="form-grid">
+            <label>节点 ID <input id="c-id" placeholder="如 jp-home-socks" /></label>
+            <label>显示名称 <input id="c-name" placeholder="日本家宽落地" /></label>
+            <label>工作模式
+              <select id="c-mode">
+                <option value="client_dialer" selected>客户端订阅 dialer-proxy / detour（推荐 · 已闭环）</option>
+                <option value="both">客户端订阅 + 服务端出口预览 (both)</option>
+                <option value="server_forward">仅服务端出口预览 (server_forward)</option>
+              </select>
+            </label>
+            <label>落地协议
+              <select id="c-proto">
+                <option value="socks5">SOCKS5</option>
+                <option value="http">HTTP / HTTPS</option>
+                <option value="vless">VLESS</option>
+                <option value="trojan">Trojan</option>
+                <option value="shadowsocks">Shadowsocks</option>
+              </select>
+            </label>
+            <label>落地地址 (域名/IP) <input id="c-server" placeholder="landing.example.com" /></label>
+            <label>落地端口 <input id="c-port" type="number" min="1" max="65535" value="1080" /></label>
+            <label>用户名 (SOCKS5/HTTP) <input id="c-user" placeholder="可选" /></label>
+            <label>密码 / PSK (更新留空则保留原密文) <input id="c-pass" type="password" placeholder="加密保存" /></label>
+            <label>UUID (VLESS 必填) <input id="c-uuid" placeholder="可选" /></label>
+            <label>加密方式 (SS) <input id="c-method" placeholder="aes-256-gcm" /></label>
+            <label>TLS SNI <input id="c-sni" placeholder="可选" /></label>
+            <label>下一跳 ID (多跳级联，自动检环)
+              <select id="c-next"><option value="">（无，本节点即为最终落地）</option></select>
+            </label>
+            <label class="check"><input id="c-tls" type="checkbox" /> 启用 TLS</label>
+            <label class="check"><input id="c-default" type="checkbox" /> 设为全局默认落地</label>
+            <label class="check"><input id="c-enabled" type="checkbox" checked /> 启用该链式节点</label>
+          </div>
+          <div class="actions">
+            <button id="btn-chain-save" class="btn" type="button">保存链式代理节点</button>
+            <button id="btn-chain-preview" class="btn ghost" type="button">预览 Xray 服务端链式出口 JSON</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <h3>已配置链式代理节点</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID / 名称</th>
+                  <th>模式</th>
+                  <th>协议与落地地址</th>
+                  <th>多跳 / 默认</th>
+                  <th>凭据脱敏摘要</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="chains-body">
+                <tr><td colspan="7" class="muted">暂无链式代理节点</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <pre id="chain-xray-preview" class="hidden"></pre>
+        </section>
+      </div>
+    </section>
+
+    <!-- ==================== 视图 6: /proxy/tuning tcpfit 调优 + TCP Brutal 接管 ==================== -->
     <section data-view="/proxy/tuning" class="hidden">
       <section class="stats">
         <div class="stat">
@@ -401,166 +483,175 @@
         </div>
       </section>
 
-      <!-- Section A: tcpfit 动态网络调优 -->
-      <section class="card">
-        <h3>tcpfit 动态网络栈调优（BDP + 1C1G 内存防 OOM + 一键快照回滚）</h3>
-        <p class="card-desc">参考 <code>Kylin010/tcpfit</code> 架构：结合宿主机实时物理内存、带宽与 RTT 自动计算 BDP 与安全的 <code>rmem/wmem</code> 缓冲区上限，应用前自动留存基线快照并生成 <code>/etc/sysctl.d/99-qwq-tcpfit.conf</code>。</p>
-        <div class="form-grid">
-          <label>节点角色
-            <select id="t-role">
-              <option value="proxy">代理出口节点 (proxy)</option>
-              <option value="relay">中转转发节点 (relay)</option>
-              <option value="web">Web / 建站节点 (web)</option>
-            </select>
-          </label>
-          <label>标称/实测带宽 (Mbps) <input id="t-bw" type="number" min="1" max="100000" value="200" /></label>
-          <label>典型 RTT (ms) <input id="t-rtt" type="number" min="1" max="2000" value="150" /></label>
-          <label>TCP 内存预算上限 (5%–30%) <input id="t-mem-pct" type="number" min="5" max="30" value="12" /></label>
-          <label>偏好拥塞算法
-            <select id="t-prefer-cc">
-              <option value="auto">自动选择 (优先 BBR)</option>
-              <option value="bbr">BBR</option>
-              <option value="brutal">Brutal (需内核模块)</option>
-              <option value="cubic">CUBIC</option>
-            </select>
-          </label>
-        </div>
-        <div class="actions">
-          <button id="btn-tuning-plan" class="btn" type="button">推导动态调优方案</button>
-          <button id="btn-tuning-dry" class="btn ghost" type="button">演练保存基线 (Dry-Run)</button>
-          <button id="btn-tuning-apply" class="btn danger" type="button">应用到宿主机内核</button>
-        </div>
-        <div id="t-plan-summary" class="muted mt-10"></div>
-        <div id="t-swap-warn" class="banner warn mt-10"></div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>sysctl 参数</th>
-                <th>当前值</th>
-                <th>推荐值</th>
-                <th>推导依据</th>
-              </tr>
-            </thead>
-            <tbody id="t-diff-body">
-              <tr><td colspan="4" class="muted">点击“推导动态调优方案”生成差异表</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <pre id="t-conf-preview" class="hidden"></pre>
+      <div class="sub-tabs" id="tuning-subtabs" role="tablist" aria-label="调优工具切换">
+        <button type="button" class="active" data-sub="tcpfit" role="tab" aria-selected="true">tcpfit 内核网络调优</button>
+        <button type="button" data-sub="brutal" role="tab" aria-selected="false">TCP Brutal 端口接管</button>
+      </div>
 
-        <h3 class="section-heading">iperf3 限速器拐点探测（可选）</h3>
-        <div class="form-grid">
-          <label>对端主机 (IP/域名) <input id="sw-host" placeholder="如 iperf.example.com" /></label>
-          <label>端口 <input id="sw-port" type="number" min="1" max="65535" value="5201" /></label>
-          <label>时长 (1–15s) <input id="sw-dur" type="number" min="1" max="15" value="5" /></label>
-        </div>
-        <div class="actions">
-          <button id="btn-tuning-sweep" class="btn ghost" type="button">运行 iperf3 探测</button>
-        </div>
-        <pre id="t-sweep-out" class="hidden"></pre>
+      <!-- 子面板 A: tcpfit 动态网络调优 -->
+      <div data-tuning-pane="tcpfit">
+        <section class="card">
+          <h3>tcpfit 动态网络栈调优（BDP + 1C1G 内存防 OOM + 一键快照回滚）</h3>
+          <p class="card-desc">结合宿主机实时物理内存、带宽与 RTT 自动计算 BDP 与安全的 <code>rmem/wmem</code> 缓冲区上限，应用前自动留存基线快照并生成 <code>/etc/sysctl.d/99-qwq-tcpfit.conf</code>。</p>
+          <div class="form-grid">
+            <label>节点角色
+              <select id="t-role">
+                <option value="proxy">代理出口节点 (proxy)</option>
+                <option value="relay">中转转发节点 (relay)</option>
+                <option value="web">Web / 建站节点 (web)</option>
+              </select>
+            </label>
+            <label>标称/实测带宽 (Mbps) <input id="t-bw" type="number" min="1" max="100000" value="200" /></label>
+            <label>典型 RTT (ms) <input id="t-rtt" type="number" min="1" max="2000" value="150" /></label>
+            <label>TCP 内存预算上限 (5%–30%) <input id="t-mem-pct" type="number" min="5" max="30" value="12" /></label>
+            <label>偏好拥塞算法
+              <select id="t-prefer-cc">
+                <option value="auto">自动选择 (优先 BBR)</option>
+                <option value="bbr">BBR</option>
+                <option value="brutal">Brutal (需内核模块)</option>
+                <option value="cubic">CUBIC</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="btn-tuning-plan" class="btn" type="button">推导动态调优方案</button>
+            <button id="btn-tuning-dry" class="btn ghost" type="button">演练保存基线 (Dry-Run)</button>
+            <button id="btn-tuning-apply" class="btn danger" type="button">应用到宿主机内核</button>
+          </div>
+          <div id="t-plan-summary" class="muted mt-10"></div>
+          <div id="t-swap-warn" class="banner warn mt-10"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>sysctl 参数</th>
+                  <th>当前值</th>
+                  <th>推荐值</th>
+                  <th>推导依据</th>
+                </tr>
+              </thead>
+              <tbody id="t-diff-body">
+                <tr><td colspan="4" class="muted">点击“推导动态调优方案”生成差异表</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <pre id="t-conf-preview" class="hidden"></pre>
 
-        <h3 class="section-heading">调优历史快照与一键回滚</h3>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>版本</th>
-                <th>说明</th>
-                <th>参数 (角色 / 带宽 / RTT)</th>
-                <th>是否落盘生效</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="t-snaps-body">
-              <tr><td colspan="5" class="muted">暂无快照</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+          <h3 class="section-heading">iperf3 限速器拐点探测（可选）</h3>
+          <div class="form-grid">
+            <label>对端主机 (IP/域名) <input id="sw-host" placeholder="如 iperf.example.com" /></label>
+            <label>端口 <input id="sw-port" type="number" min="1" max="65535" value="5201" /></label>
+            <label>时长 (1–15s) <input id="sw-dur" type="number" min="1" max="15" value="5" /></label>
+          </div>
+          <div class="actions">
+            <button id="btn-tuning-sweep" class="btn ghost" type="button">运行 iperf3 探测</button>
+          </div>
+          <pre id="t-sweep-out" class="hidden"></pre>
 
-      <!-- Section B: TCP Brutal + Brutal Custom 端口透明接管 -->
-      <section class="card">
-        <h3>TCP Brutal + Brutal Custom 端口透明接管（按 TCP 订阅独立开启 + 手调超发倍率）</h3>
-        <p class="card-desc">在母机网络被恶意抢占带宽且无法使用 UDP 的场景下，通过纯 Go 透明 TCP 接管层为选定的单个 TCP 入站端口设置 <code>TCP_CONGESTION=brutal</code> 与 <code>TCP_BRUTAL_PARAMS(23301)</code>；未选中的其他 TCP 订阅保持原端口直连。支持手动调节超发包倍率（原始默认 <strong>125%</strong>，范围 100%–250%）。</p>
-        <div id="b-guidance" class="banner warn"></div>
+          <h3 class="section-heading">调优历史快照与一键回滚</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>版本</th>
+                  <th>说明</th>
+                  <th>参数 (角色 / 带宽 / RTT)</th>
+                  <th>是否落盘生效</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="t-snaps-body">
+                <tr><td colspan="5" class="muted">暂无快照</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
 
-        <div class="form-grid">
-          <label>绑定 ID <input id="b-id" placeholder="如 brutal-vless" /></label>
-          <label>快捷选择 TCP 订阅入站
-            <select id="b-inbound-preset"><option value="">手动填写</option></select>
-          </label>
-          <label>入站标识 (inbound_tag) <input id="b-tag" placeholder="vless-tcp" /></label>
-          <label>协议类型
-            <select id="b-proto">
-              <option value="vless">VLESS (TCP)</option>
-              <option value="shadowsocks">Shadowsocks-2022 (TCP)</option>
-              <option value="trojan">Trojan (TCP)</option>
-              <option value="tcp">通用 TCP</option>
-            </select>
-          </label>
-          <label>对外接管端口 (listen_port) <input id="b-listen" type="number" min="1" max="65535" value="2443" /></label>
-          <label>本机后端端口 (target_port) <input id="b-target" type="number" min="1" max="65535" value="443" /></label>
-          <label>基准带宽 (Mbps) <input id="b-bw" type="number" min="1" max="10000" value="100" /></label>
-          <label>超发包倍率 %（推荐 125%，范围 100–250）
-            <div class="oversend-box">
-              <div class="preset-pills" id="b-oversend-presets" role="group" aria-label="超发倍率快捷档位">
-                <button type="button" class="pill" data-oversend="100">100%</button>
-                <button type="button" class="pill active" data-oversend="125">125% 推荐</button>
-                <button type="button" class="pill" data-oversend="150">150%</button>
-                <button type="button" class="pill" data-oversend="200">200%</button>
+      <!-- 子面板 B: TCP Brutal + Brutal Custom 端口透明接管 -->
+      <div data-tuning-pane="brutal" class="hidden">
+        <section class="card">
+          <h3>TCP Brutal + Brutal Custom 端口透明接管（按 TCP 订阅独立开启 + 手调超发倍率）</h3>
+          <p class="card-desc">在母机网络被恶意抢占带宽且无法使用 UDP 的场景下，通过纯 Go 透明 TCP 接管层为选定的单个 TCP 入站端口设置 <code>TCP_CONGESTION=brutal</code> 与 <code>TCP_BRUTAL_PARAMS(23301)</code>；未选中的其他 TCP 订阅保持原端口直连。支持手动调节超发包倍率（原始默认 <strong>125%</strong>，范围 100%–250%）。</p>
+          <div id="b-guidance" class="banner warn"></div>
+
+          <div class="form-grid">
+            <label>绑定 ID <input id="b-id" placeholder="如 brutal-vless" /></label>
+            <label>快捷选择 TCP 订阅入站
+              <select id="b-inbound-preset"><option value="">手动填写</option></select>
+            </label>
+            <label>入站标识 (inbound_tag) <input id="b-tag" placeholder="vless-tcp" /></label>
+            <label>协议类型
+              <select id="b-proto">
+                <option value="vless">VLESS (TCP)</option>
+                <option value="shadowsocks">Shadowsocks-2022 (TCP)</option>
+                <option value="trojan">Trojan (TCP)</option>
+                <option value="tcp">通用 TCP</option>
+              </select>
+            </label>
+            <label>对外接管端口 (listen_port) <input id="b-listen" type="number" min="1" max="65535" value="2443" /></label>
+            <label>本机后端端口 (target_port) <input id="b-target" type="number" min="1" max="65535" value="443" /></label>
+            <label>基准带宽 (Mbps) <input id="b-bw" type="number" min="1" max="10000" value="100" /></label>
+            <label>超发包倍率 %（推荐 125%，范围 100–250）
+              <div class="oversend-box">
+                <div class="preset-pills" id="b-oversend-presets" role="group" aria-label="超发倍率快捷档位">
+                  <button type="button" class="pill" data-oversend="100">100%</button>
+                  <button type="button" class="pill active" data-oversend="125">125% 推荐</button>
+                  <button type="button" class="pill" data-oversend="150">150%</button>
+                  <button type="button" class="pill" data-oversend="200">200%</button>
+                </div>
+                <input id="b-oversend" type="number" min="100" max="250" value="125" />
               </div>
-              <input id="b-oversend" type="number" min="100" max="250" value="125" />
-            </div>
-            <span id="b-eff-preview" class="muted">折算等效发包速率：125.0 Mbps</span>
-          </label>
-          <label>拥塞窗口增益 cwnd_gain (10–50, 20=2.0x) <input id="b-gain" type="number" min="10" max="50" value="20" /></label>
-          <label class="check"><input id="b-sub" type="checkbox" checked /> 自动切换该 TCP 订阅节点端口到此接管端口</label>
-          <label class="check"><input id="b-enabled" type="checkbox" checked /> 启用该 Brutal 接管绑定</label>
-        </div>
-        <div class="actions">
-          <button id="btn-brutal-save" class="btn" type="button">保存接管绑定</button>
-          <button id="btn-brutal-apply" class="btn ghost" type="button">立即应用 / 热重载所有接管端口</button>
-        </div>
+              <span id="b-eff-preview" class="muted">折算等效发包速率：125.0 Mbps</span>
+            </label>
+            <label>拥塞窗口增益 cwnd_gain (10–50, 20=2.0x) <input id="b-gain" type="number" min="10" max="50" value="20" /></label>
+            <label class="check"><input id="b-sub" type="checkbox" checked /> 自动切换该 TCP 订阅节点端口到此接管端口</label>
+            <label class="check"><input id="b-enabled" type="checkbox" checked /> 启用该 Brutal 接管绑定</label>
+          </div>
+          <div class="actions">
+            <button id="btn-brutal-save" class="btn" type="button">保存接管绑定</button>
+            <button id="btn-brutal-apply" class="btn ghost" type="button">立即应用 / 热重载所有接管端口</button>
+          </div>
 
-        <h3 class="section-heading-sm">已配置的 TCP 接管绑定</h3>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID / 入站</th>
-                <th>接管端口 -&gt; 后端端口</th>
-                <th>基准 × 超发倍率 = 有效速率</th>
-                <th>cwnd_gain</th>
-                <th>订阅重写 / 状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="b-bindings-body">
-              <tr><td colspan="6" class="muted">暂无 Brutal 接管绑定</td></tr>
-            </tbody>
-          </table>
-        </div>
+          <h3 class="section-heading-sm">已配置的 TCP 接管绑定</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID / 入站</th>
+                  <th>接管端口 -&gt; 后端端口</th>
+                  <th>基准 × 超发倍率 = 有效速率</th>
+                  <th>cwnd_gain</th>
+                  <th>订阅重写 / 状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="b-bindings-body">
+                <tr><td colspan="6" class="muted">暂无 Brutal 接管绑定</td></tr>
+              </tbody>
+            </table>
+          </div>
 
-        <h3 class="section-heading-sm">透明接管端口实时遥测</h3>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>绑定 ID</th>
-                <th>监听地址</th>
-                <th>活跃 / 累计连接</th>
-                <th>Brutal 生效 / 回退</th>
-                <th>上行 / 下行字节</th>
-                <th>最近 sockopt 信息</th>
-              </tr>
-            </thead>
-            <tbody id="b-metrics-body">
-              <tr><td colspan="6" class="muted">当前无运行中的接管监听器</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+          <h3 class="section-heading-sm">透明接管端口实时遥测</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>绑定 ID</th>
+                  <th>监听地址</th>
+                  <th>活跃 / 累计连接</th>
+                  <th>Brutal 生效 / 回退</th>
+                  <th>上行 / 下行字节</th>
+                  <th>最近 sockopt 信息</th>
+                </tr>
+              </thead>
+              <tbody id="b-metrics-body">
+                <tr><td colspan="6" class="muted">当前无运行中的接管监听器</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
     </section>
   </main>
 
@@ -1128,42 +1219,88 @@
     </div>
   </div>
 
-  <!-- ==================== 弹窗 6: 创建 / 编辑套餐模板 ==================== -->
+  <!-- ==================== 弹窗 6: 创建 / 编辑套餐模板（左栏分步导航） ==================== -->
   <div id="plan-edit-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pe-modal-title">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-plan">
       <div class="modal-header">
         <h3 class="modal-title" id="pe-modal-title">新建套餐模板</h3>
         <button id="pe-close" class="modal-close" type="button" aria-label="关闭">×</button>
       </div>
-      <div class="modal-body">
-        <div class="form-grid-2">
-          <label>套餐 ID（小写字母开头，如 starter）
-            <input id="p-id" class="mono" maxlength="32" placeholder="如 starter" />
-          </label>
-          <label>套餐名称
-            <input id="p-name" maxlength="64" placeholder="如 标准月付套餐" />
-          </label>
-          <label>周期流量配额 (GiB，0 = 不限流量)
-            <input id="p-quota-gb" type="number" min="0" value="100" />
-          </label>
-          <label>月度重置日 (0 = 不重置，1–28)
-            <input id="p-reset-day" type="number" min="0" max="28" value="1" />
-          </label>
-          <label>下行限速 (Kbps，0 = 不限；换算 8000 Kbps = 1 MB/s)
-            <input id="p-down" type="number" min="0" value="50000" />
-          </label>
-          <label>上行限速 (Kbps，0 = 不限；换算 8000 Kbps = 1 MB/s)
-            <input id="p-up" type="number" min="0" value="20000" />
-          </label>
-          <label>默认最大并发连接数 (0 = 不限)
-            <input id="p-max-conns" type="number" min="0" max="65535" value="64" />
-          </label>
-          <label>默认最大同时在线 IP (0 = 不限)
-            <input id="p-max-ips" type="number" min="0" max="1024" value="4" />
-          </label>
-          <label class="form-span-full">有效期天数 (0 = 长期有效)
-            <input id="p-validity" type="number" min="0" max="3650" value="30" />
-          </label>
+      <div class="modal-body modal-body-flush">
+        <div class="plan-modal-grid">
+          <nav class="plan-nav" id="pe-nav" aria-label="套餐配置分组">
+            <button type="button" class="plan-nav-btn active" data-pe-tab="basic">
+              <span class="plan-nav-t">基本信息</span>
+              <span class="plan-nav-d" id="pe-nav-basic-sub">名称 · 流量配额</span>
+            </button>
+            <button type="button" class="plan-nav-btn" data-pe-tab="cycle">
+              <span class="plan-nav-t">周期与重置</span>
+              <span class="plan-nav-d" id="pe-nav-cycle-sub">每月 1 日 · 30 天</span>
+            </button>
+            <button type="button" class="plan-nav-btn" data-pe-tab="limits">
+              <span class="plan-nav-t">限速与连接</span>
+              <span class="plan-nav-d" id="pe-nav-limits-sub">带宽 · 并发 · IP</span>
+            </button>
+          </nav>
+
+          <div class="plan-pane">
+            <div data-pe-pane="basic">
+              <div class="plan-pane-head">
+                <h4>基本信息与流量配额</h4>
+                <p class="card-desc">为套餐设定唯一标识、展示名称以及每周期允许消耗的总流量额度。</p>
+              </div>
+              <div class="form-grid-2">
+                <label>套餐 ID（小写字母开头，如 starter）
+                  <input id="p-id" class="mono" maxlength="32" placeholder="如 starter" />
+                </label>
+                <label>套餐名称
+                  <input id="p-name" maxlength="64" placeholder="如 标准月付套餐" />
+                </label>
+                <label class="form-span-full">周期流量配额 (GiB，0 = 不限流量)
+                  <input id="p-quota-gb" type="number" min="0" value="100" />
+                  <span class="field-hint">统计上下行双向合计；达到额度后自动暂停用户并在下个重置日自动恢复。</span>
+                </label>
+              </div>
+            </div>
+
+            <div data-pe-pane="cycle" class="hidden">
+              <div class="plan-pane-head">
+                <h4>账单周期与到期规则</h4>
+                <p class="card-desc">控制流量清零重置日与订阅有效期，留 0 表示不自动重置或长期有效。</p>
+              </div>
+              <div class="form-grid-2">
+                <label>月度重置日 (0 = 不重置，1–28)
+                  <input id="p-reset-day" type="number" min="0" max="28" value="1" />
+                  <span class="field-hint">每月到达该日期 00:00 自动归零周期用量。</span>
+                </label>
+                <label>有效期天数 (0 = 长期有效)
+                  <input id="p-validity" type="number" min="0" max="3650" value="30" />
+                  <span class="field-hint">从创建用户起计算到期日，0 表示永不过期。</span>
+                </label>
+              </div>
+            </div>
+
+            <div data-pe-pane="limits" class="hidden">
+              <div class="plan-pane-head">
+                <h4>带宽限速与并发保护</h4>
+                <p class="card-desc">由内核 HTB 与连接追踪模块执行，0 表示不限制。</p>
+              </div>
+              <div class="form-grid-2">
+                <label>下行限速 (Kbps，8000 Kbps = 1 MB/s)
+                  <input id="p-down" type="number" min="0" value="50000" />
+                </label>
+                <label>上行限速 (Kbps，8000 Kbps = 1 MB/s)
+                  <input id="p-up" type="number" min="0" value="20000" />
+                </label>
+                <label>默认最大并发连接数 (0 = 不限)
+                  <input id="p-max-conns" type="number" min="0" max="65535" value="64" />
+                </label>
+                <label>默认最大同时在线 IP (0 = 不限)
+                  <input id="p-max-ips" type="number" min="0" max="1024" value="4" />
+                </label>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="modal-footer">

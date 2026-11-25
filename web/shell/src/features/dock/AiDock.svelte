@@ -7,7 +7,7 @@
   - 独立置顶审批区，审批卡片绝不闪退
 -->
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { Icon, IconButton, Menu, Orb, registerModalDialog, unregisterModalDialog } from '$ui';
   import type { OrbState } from '$ui/Orb.svelte';
   import { approvals } from '$lib/ai/approvals.svelte';
@@ -83,12 +83,14 @@
 
   $effect(() => {
     const want = chat && (dock.expanded || current?.status === 'running');
-    if (want) dockSession.attach();
-    else dockSession.detach();
+    untrack(() => {
+      if (want) dockSession.attach();
+      else dockSession.detach();
+    });
   });
 
   $effect(() => {
-    if (stream?.phase === 'gone') dockSession.forgetIfGone();
+    if (stream?.phase === 'gone') untrack(() => dockSession.forgetIfGone());
   });
 
   $effect(() => () => dockSession.reset());

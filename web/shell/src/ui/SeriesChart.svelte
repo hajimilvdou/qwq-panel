@@ -60,7 +60,13 @@
       const mm = String(d.getMinutes()).padStart(2, '0');
       const ss = String(d.getSeconds()).padStart(2, '0');
       const spanSec = (geo.t1 - geo.t0) / (timeUnit === 'ms' ? 1000 : 1);
-      return spanSec < 300 ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`;
+      if (spanSec <= 900) return `${hh}:${mm}:${ss}`;
+      if (spanSec >= 43200) {
+        const mo = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${mo}-${dd} ${hh}:${mm}`;
+      }
+      return `${hh}:${mm}`;
     }
     const sec = (geo.t1 - t) / (timeUnit === 'ms' ? 1000 : 1);
     if (sec < 90) return `${Math.round(sec)} 秒前`;

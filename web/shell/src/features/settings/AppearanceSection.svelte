@@ -23,8 +23,8 @@
     { value: 'compact', label: '紧凑' },
   ] as const satisfies readonly { value: Density; label: string }[];
   const LAYOUT_OPTS = [
-    { value: 'side', label: '悬浮侧栏' },
-    { value: 'top', label: '悬浮顶栏' },
+    { value: 'top', label: '顶部横向栏（默认）' },
+    { value: 'side', label: '左侧折叠栏' },
   ] as const satisfies readonly { value: LayoutPref; label: string }[];
   const ACCENT_NAMES: Record<Accent, string> = { rose: '莓果可可', sky: '晴空', violet: '紫罗兰', teal: '青碧', coral: '珊瑚', green: '草木' };
 </script>
@@ -55,7 +55,7 @@
   <Segmented label="动效" options={MOTION_OPTS} value={prefs.motion} onchange={(v) => prefs.set('motion', v)} />
 </Card>
 
-<Card title="导航布局" icon="menu" color="teal" subtitle="桌面端可在圆角悬浮侧栏与悬浮胶囊顶栏之间切换">
+<Card title="导航布局" icon="sidebar" color="teal" subtitle="默认采用简洁顶部横向栏；切为左侧折叠栏时自动隐藏顶栏并支持收起展开">
   <Segmented label="导航布局" options={LAYOUT_OPTS} value={prefs.layout} onchange={(v) => prefs.set('layout', v)} />
 </Card>
 

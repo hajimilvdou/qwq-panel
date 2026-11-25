@@ -91,6 +91,9 @@ type Deps struct {
 	// OnPluginCatalogFunc optionally receives the live official plugin catalog
 	// provider function so host AI read tools share the HTTP catalog cache.
 	OnPluginCatalogFunc func(func(ctx context.Context, refresh bool) (any, error))
+	// Life optionally bounds continuous background host metrics sampling (5s fine /
+	// 1m coarse 24h rings). Nil keeps sampling on-demand (used in unit tests).
+	Life context.Context
 }
 
 // withDefaults validates the required services and fills the optional ones.
@@ -229,6 +232,9 @@ func Register(g *gateway.Gateway, d Deps) error {
 		trustedProxies: panelaccess.ParseTrustedProxies(d.Config.HTTP.TrustedProxies),
 		totpRebinds:    make(map[string]time.Time)}
 	a.registerHostActions()
+	if d.Life != nil {
+		a.hostMetrics.Start(d.Life, d.Clock)
+	}
 	if d.OnPluginCatalogFunc != nil {
 		d.OnPluginCatalogFunc(a.pluginCatalogSnapshot)
 	}

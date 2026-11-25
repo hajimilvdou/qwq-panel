@@ -9,50 +9,29 @@
   · 模块级 + sessionStorage 快照缓冲保证换页/刷新 0ms 瞬显，零白屏闪烁。
 -->
 <script module lang="ts">
-  import type { SystemHostMetrics, SystemHostMetricsPoint } from '$api/additions';
-
-  const STORAGE_KEY = 'qwq.host.metrics.pts.v1';
-  const MAX_LOCAL_PTS = 180;
+  import type { SystemHostMetrics, SystemHostMetricsPoint, SystemMetricsRange } from '$api/additions';
 
   let cachedMetrics: SystemHostMetrics | null = null;
   let cachedAt = 0;
-  let localPoints: SystemHostMetricsPoint[] = loadStoredPoints();
+  let cachedRange: SystemMetricsRange = '15m';
+  const pointsByRange = new Map<SystemMetricsRange, SystemHostMetricsPoint[]>();
 
-  function loadStoredPoints(): SystemHostMetricsPoint[] {
-    try {
-      const raw = sessionStorage.getItem(STORAGE_KEY);
-      if (!raw) return [];
-      const arr = JSON.parse(raw) as SystemHostMetricsPoint[];
-      if (!Array.isArray(arr)) return [];
-      const cutoff = Math.floor(Date.now() / 1000) - 3600;
-      return arr
-        .filter((p) => p && typeof p.ts === 'number' && p.ts >= cutoff)
-        .slice(-MAX_LOCAL_PTS);
-    } catch {
-      return [];
-    }
-  }
-
-  function mergeHistoryPoints(res: SystemHostMetrics): SystemHostMetricsPoint[] {
+  function normalizePoints(res: SystemHostMetrics): SystemHostMetricsPoint[] {
     const byTs = new Map<number, SystemHostMetricsPoint>();
-    for (const p of localPoints) byTs.set(p.ts, p);
-    for (const p of res.history_points ?? []) byTs.set(p.ts, p);
-    const ts = Math.floor(Date.parse(res.collected_at) / 1000) || Math.floor(Date.now() / 1000);
-    byTs.set(ts, {
-      ts,
-      cpu: res.cpu.usage_percent,
-      mem: res.memory.usage_percent,
-      rx_bps: res.network.rx_bytes_per_sec,
-      tx_bps: res.network.tx_bytes_per_sec,
-    });
-    const merged = [...byTs.values()].sort((a, b) => a.ts - b.ts).slice(-MAX_LOCAL_PTS);
-    localPoints = merged;
-    try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-    } catch {
-      /* 忽略存储受限 */
+    for (const p of res.history_points ?? []) {
+      if (p && typeof p.ts === 'number' && Number.isFinite(p.ts)) byTs.set(p.ts, p);
     }
-    return merged;
+    const ts = Math.floor(Date.parse(res.collected_at) / 1000) || Math.floor(Date.now() / 1000);
+    if (!byTs.has(ts)) {
+      byTs.set(ts, {
+        ts,
+        cpu: res.cpu.usage_percent,
+        mem: res.memory.usage_percent,
+        rx_bps: res.network.rx_bytes_per_sec,
+        tx_bps: res.network.tx_bytes_per_sec,
+      });
+    }
+    return [...byTs.values()].sort((a, b) => a.ts - b.ts);
   }
 </script>
 
@@ -70,14 +49,22 @@
   }
   let { onlevel }: Props = $props();
 
+  const RANGE_OPTS = [
+    { value: '5m', label: '5 分钟' },
+    { value: '15m', label: '15 分钟' },
+    { value: '1h', label: '1 小时' },
+    { value: '6h', label: '6 小时' },
+    { value: '24h', label: '24 小时' },
+  ] as const satisfies readonly { value: SystemMetricsRange; label: string }[];
+
+  let range = $state<SystemMetricsRange>(cachedRange);
   let data = $state<SystemHostMetrics | null>(cachedMetrics);
-  let points = $state<SystemHostMetricsPoint[]>(localPoints);
+  let points = $state<SystemHostMetricsPoint[]>(pointsByRange.get(cachedRange) ?? []);
   let errText = $state('');
   let openCard = $state<'cpu' | 'mem' | 'disk' | 'net' | null>(null);
   let pinnedCard = $state<'cpu' | 'mem' | 'disk' | 'net' | null>(null);
-  let range = $state<'5m' | '15m' | 'all'>('5m');
 
-  const POLL_MS = 3000;
+  const POLL_MS = 5000;
 
   function computeLevel(m: SystemHostMetrics | null): Level {
     if (!m) return 'ok';
@@ -124,26 +111,16 @@
     }
   }
 
-  const visiblePoints = $derived.by(() => {
-    if (!points.length) return [];
-    if (range === 'all') return points;
-    const winSec = range === '5m' ? 300 : 900;
-    const latestTs = points[points.length - 1]!.ts;
-    const cut = latestTs - winSec;
-    const filtered = points.filter((p) => p.ts >= cut);
-    return filtered.length >= 2 ? filtered : points.slice(-2);
-  });
-
   const cpuMemSeries = $derived([
     {
       name: 'CPU 使用率',
       color: 'blue' as const,
-      points: visiblePoints.map((p) => [p.ts, p.cpu] as const),
+      points: points.map((p) => [p.ts, p.cpu] as const),
     },
     {
       name: '内存占用率',
       color: 'violet' as const,
-      points: visiblePoints.map((p) => [p.ts, p.mem] as const),
+      points: points.map((p) => [p.ts, p.mem] as const),
     },
   ]);
 
@@ -151,12 +128,12 @@
     {
       name: '入站下载',
       color: 'teal' as const,
-      points: visiblePoints.map((p) => [p.ts, p.rx_bps] as const),
+      points: points.map((p) => [p.ts, p.rx_bps] as const),
     },
     {
       name: '出站上传',
       color: 'orange' as const,
-      points: visiblePoints.map((p) => [p.ts, p.tx_bps] as const),
+      points: points.map((p) => [p.ts, p.tx_bps] as const),
     },
   ]);
 
@@ -165,6 +142,11 @@
   });
 
   $effect(() => {
+    const activeRange = range;
+    cachedRange = activeRange;
+    const hit = pointsByRange.get(activeRange);
+    if (hit) points = hit;
+
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let ctrl: AbortController | null = null;
@@ -175,12 +157,14 @@
       if (disposed || paused()) return;
       ctrl = new AbortController();
       try {
-        const res = await system.metrics({ signal: ctrl.signal });
+        const res = await system.metrics({ range: activeRange, signal: ctrl.signal });
         if (disposed) return;
+        const pts = normalizePoints(res);
         cachedMetrics = res;
         cachedAt = Date.now();
+        pointsByRange.set(activeRange, pts);
         data = res;
-        points = mergeHistoryPoints(res);
+        points = pts;
         errText = '';
       } catch (e) {
         if (!ctrl.signal.aborted && !data) {
@@ -189,7 +173,7 @@
       } finally {
         ctrl = null;
         if (!disposed) {
-          const nextDelay = points.length < 2 ? 1500 : POLL_MS;
+          const nextDelay = points.length < 2 ? 2000 : POLL_MS;
           timer = setTimeout(poll, nextDelay);
         }
       }
@@ -201,8 +185,8 @@
     document.addEventListener('visibilitychange', onVis);
 
     const age = Date.now() - cachedAt;
-    if (cachedMetrics && age < POLL_MS) {
-      timer = setTimeout(poll, Math.max(300, POLL_MS - age));
+    if (cachedMetrics && hit && age < POLL_MS) {
+      timer = setTimeout(poll, Math.max(400, POLL_MS - age));
     } else {
       untrack(() => void poll());
     }
@@ -472,24 +456,25 @@
       </article>
     </div>
 
-    <!-- 内置两栏平滑曲线趋势图（替代旧独立监控插件） -->
+    <!-- 内置两栏平滑曲线趋势图（后台 24h 持续采样，切页不中断） -->
+    <div class="charts-bar">
+      <div class="charts-meta">
+        <span class="charts-ttl">实时与历史趋势</span>
+        <span class="ch-sub">后台 24 小时持续采集 · 切页不中断</span>
+      </div>
+      <Segmented size="sm" label="趋势时间窗" options={RANGE_OPTS} bind:value={range} />
+    </div>
+
     <div class="charts-grid">
       <section class="chart-card" aria-label="CPU 与内存实时负载曲线">
         <header class="ch-head">
           <div>
             <h3>CPU 与内存负载趋势</h3>
-            <p class="ch-sub">每 3 秒自动采样 · 纵轴为资源使用率（0%–100%）</p>
+            <p class="ch-sub">纵轴 0%–100% · 悬停查看任意时间点读数</p>
           </div>
-          <Segmented
-            size="sm"
-            label="趋势时间窗"
-            options={[
-              { value: '5m', label: '5 分钟' },
-              { value: '15m', label: '15 分钟' },
-              { value: 'all', label: '全部' },
-            ]}
-            bind:value={range}
-          />
+          <span class="rate-chip num">
+            CPU {data.cpu.usage_percent.toFixed(1)}% · 内存 {data.memory.usage_percent.toFixed(1)}%
+          </span>
         </header>
         <SeriesChart
           label="CPU 与内存实时负载趋势"
@@ -504,7 +489,7 @@
         <header class="ch-head">
           <div>
             <h3>网络实时网速趋势</h3>
-            <p class="ch-sub">非回环物理网卡汇总 · 悬停查看任意时间点上下行速率</p>
+            <p class="ch-sub">物理网卡实时汇总 · 悬停查看上下行速率</p>
           </div>
           <span class="rate-chip num">
             ↓ {fmtRate(data.network.rx_bytes_per_sec)} · ↑ {fmtRate(data.network.tx_bytes_per_sec)}
@@ -793,6 +778,23 @@
   }
 
   /* ---------------------------------------------------------------- 内置两栏平滑趋势图 */
+  .charts-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .charts-meta {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .charts-ttl {
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semibold);
+  }
   .charts-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

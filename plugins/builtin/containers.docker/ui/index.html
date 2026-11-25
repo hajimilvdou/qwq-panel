@@ -10,15 +10,12 @@
 <body>
   <main id="docker-root">
     <div class="topbar">
-      <div>
-        <h2 class="title">轻量容器与 Compose 管理</h2>
-        <div class="sub">受控宿主 Docker 能力代理（严格端点白名单、结构化 Compose 安全扫描与有界日志）· <span id="bridge-status">连接中…</span></div>
-      </div>
       <div class="tabs" id="nav-tabs">
-        <button data-tab="containers" class="active" type="button">容器与资源限额</button>
-        <button data-tab="compose" type="button">Compose 编排栈</button>
-        <button data-tab="images" type="button">镜像、存储卷与日志</button>
+        <button data-tab="containers" class="active" type="button">容器管理</button>
+        <button data-tab="compose" type="button">Compose 编排</button>
+        <button data-tab="images" type="button">镜像与存储卷</button>
       </div>
+      <div class="sub"><span id="bridge-status">连接中…</span></div>
     </div>
 
     <section id="docker-install-guide" class="card install-guide-card" hidden>

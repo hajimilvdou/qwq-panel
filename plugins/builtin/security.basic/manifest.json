@@ -48,7 +48,7 @@
     "schemas/sshd.set_login_policy.response.json": "sha256:24a128ac1dafb289eca8f383ea39773af8109347d98ef4f640b0c64656bd665e",
     "schemas/sshd.status.request.json": "sha256:8797461339fd07222572571dff7c67658ad403cd5df23c515dfd2923e10428a9",
     "schemas/sshd.status.response.json": "sha256:514d8c4c63524c8c02b51ebcf2395b2b9ec1f0f1d994d6148b4b74360e328c19",
-    "ui/index.html": "sha256:cbec98b6aad8862ecbc1a14d115eb990285c70ce20163abcd1baee3d6ade945c",
+    "ui/index.html": "sha256:a9b790d768f01eb773f715e52039dd8a258174597fbdb78a81d9cfa15d4bc6e3",
     "ui/plugin.css": "sha256:cd76cdf24728cd240f7d56f49eb8f67c8b8f0cc9a4423cca269bdbd9692cd520",
     "ui/security.js": "sha256:2acc3eb34201573e1a739865329b3f6891b3111438b5f2c8b3be6979298fdf0a"
   },

@@ -31,7 +31,12 @@ class PluginFramePool {
     const idx = this.entries.findIndex((e) => e.key === key);
     if (idx >= 0) {
       const existing = this.entries[idx]!;
-      const updated: PooledPluginFrame = { ...existing, plugin, path };
+      const sameEntry = existing.plugin === plugin && existing.path === path;
+      if (sameEntry && idx === this.entries.length - 1) {
+        if (this.activeKey !== key) this.activeKey = key;
+        return key;
+      }
+      const updated: PooledPluginFrame = sameEntry ? existing : { ...existing, plugin, path };
       if (idx === this.entries.length - 1) {
         this.entries = [...this.entries.slice(0, idx), updated];
       } else {
@@ -41,11 +46,12 @@ class PluginFramePool {
       const next = [...this.entries, { key, plugin, path, reloadTick: 0 }];
       this.entries = next.length > MAX_POOLED ? next.slice(next.length - MAX_POOLED) : next;
     }
-    this.activeKey = key;
+    if (this.activeKey !== key) this.activeKey = key;
     return key;
   }
 
   deactivate(key?: string): void {
+    if (!this.activeKey) return;
     if (!key || this.activeKey === key) {
       this.activeKey = null;
     }

@@ -62,7 +62,7 @@
     "schemas/empty.request.json": "sha256:91e1556fb053be7728bab4ce7b2823ca64807c5ffa117a3e8fbba79c683a2344",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
     "ui/container-drawer.js": "sha256:a3bc8eb418ac8c99f7427002d4588c3aaf99f216a30ab319998ba7894afac6b5",
-    "ui/index.html": "sha256:9cd350f140cc16ac3924e2763b2f8df9d79d0cb9839c7b49e2c58c4204cf0294",
+    "ui/index.html": "sha256:457c44c0f08bd51c2ba8eb2fb70880513f0dbefa116f83fbfe01d310d483c169",
     "ui/plugin.css": "sha256:f69f57ec5fae9d754d6d555fef55fb5488c4358b8b8ab88310496a5e4e4e1df9",
     "ui/plugin.js": "sha256:a3445e544625fe24025e39903e1dc7bf57b4d6b2a121e07626e2421ed0dc0a9b"
   },

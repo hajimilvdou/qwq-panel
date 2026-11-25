@@ -58,7 +58,7 @@
     "schemas/plans.upsert.request.json": "sha256:fb448ec813273eeb7a12316d485ddf8589c4b5244e4dd58f690053bf451e5a9b",
     "schemas/plans.upsert.response.json": "sha256:e82cfc9a05526968f6c85389b241f4e1a744ee6af7726005fa49aceaae220ce2",
     "schemas/proxy.overview.request.json": "sha256:d085279016004f0be2a6964cfd4eb04af6e69017a27cd2e1e0ee6e207f133c77",
-    "schemas/proxy.overview.response.json": "sha256:f804f06370fdc565446bd194649a6caaf01652bbac212f1b898ed5a282a6d491",
+    "schemas/proxy.overview.response.json": "sha256:25d24f9d87acc0b7241173375715740d6e8762d955c1bbb95f9942d8a82ac19f",
     "schemas/tls.inspect.request.json": "sha256:86d0568e3680cf519c1c9e22d070652e5c332833dc59314b7a18ed2d803fe2ef",
     "schemas/tls.inspect.response.json": "sha256:78d1474bfaeb02729f1d86fba933ee697f08b67badfe406cb67090eec39e07cc",
     "schemas/tls.reload.request.json": "sha256:527b2bff790b429bf532b486830d6f2d18f0c090f6fc8ecfb4a2a68f1ced3779",
@@ -101,9 +101,9 @@
     "schemas/warp.status.response.json": "sha256:ca1da9258a97ab1f47ea5f48657025b16fc3582cf49699b713b36115aa78857b",
     "schemas/xray.status.request.json": "sha256:2656294ca60aa23acaa3e6e1b688fa8b754196e6636657eb146a559936511803",
     "schemas/xray.status.response.json": "sha256:d373163dd75afcb140bf5c1872123193499ebb58e0b68ec0723b5b22f0bc14a6",
-    "ui/index.html": "sha256:9e08eb2e6c3e218897a23ae0f5055d9e39f230c950057f024a4f402832eb3aba",
-    "ui/proxy.css": "sha256:414bd133cc5b57c34aa03e162f1d261791049fba4633359e298bf0c49f1bccea",
-    "ui/proxy.js": "sha256:8eb0f891b903b8c6b54e4cbed2591b85e2f52da1e86441ca1e3e91ecb387b654"
+    "ui/index.html": "sha256:0a019131d1c3af2f31f189a956162074751825fca792d65c6b5529e988da186d",
+    "ui/proxy.css": "sha256:87e0c89025457a9212ef9352b7d0037b1b8fa04e0864520a2a8206f1ebd895df",
+    "ui/proxy.js": "sha256:0da743f59e366f45fac3a7f1358ab02c9ee2e233faa8abe15fa591ef5ca71469"
   },
   "provenance": {
     "sbom": "attestations/sbom.spdx.json"
@@ -1121,7 +1121,7 @@
     "routes": [
       {
         "path": "/proxy",
-        "title": "代理与订阅",
+        "title": "概览",
         "nav": true,
         "permission": "proxy.advanced:read"
       },
@@ -1132,8 +1132,20 @@
         "permission": "proxy.advanced:read"
       },
       {
+        "path": "/proxy/users",
+        "title": "用户管理",
+        "nav": false,
+        "permission": "proxy.advanced:read"
+      },
+      {
+        "path": "/proxy/plans",
+        "title": "套餐管理",
+        "nav": false,
+        "permission": "proxy.advanced:read"
+      },
+      {
         "path": "/proxy/chains",
-        "title": "链式代理",
+        "title": "链式与 WARP",
         "nav": false,
         "permission": "proxy.advanced:read"
       },
@@ -1147,11 +1159,11 @@
     "widgets": [
       {
         "id": "proxy-overview",
-        "kind": "stat",
+        "kind": "checks",
         "operation": "proxy.overview",
         "refresh_seconds": 15,
-        "size": "s",
-        "title": "代理与订阅",
+        "size": "m",
+        "title": "代理与订阅中心",
         "color": "orange",
         "icon": "net"
       }

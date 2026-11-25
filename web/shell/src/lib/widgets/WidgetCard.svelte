@@ -26,13 +26,10 @@
     EmptyState,
     ErrorState,
     Icon,
-    Ring,
     Segmented,
     Skeleton,
     Sparkline,
     CATEGORY_COLORS,
-    registerModalDialog,
-    unregisterModalDialog,
     type CategoryColor,
   } from '$ui';
   import { ICONS, type IconName } from '$ui/icons';
@@ -53,33 +50,18 @@
   const color = $derived<CategoryColor | undefined>(
     w.color && (CATEGORY_COLORS as readonly string[]).includes(w.color) ? (w.color as CategoryColor) : undefined,
   );
+  const pluginHref = $derived.by(() => {
+    const routes = slot.plugin.ui?.routes ?? [];
+    const primary = routes.find((r) => r.nav) ?? routes[0];
+    const sub = primary ? primary.path.replace(/^\/+/, '') : '';
+    return `/plugins/${encodeURIComponent(slot.plugin.plugin_id)}${sub ? '/' + sub : ''}`;
+  });
 
   /* ---------------------------------------------------------------- 状态 */
   const initialHit = untrack(() => widgetCache.get(slot.key));
   let data = $state<WidgetData | null>(initialHit?.data ?? null);
   let failure = $state<{ message: string; fromPlugin?: string; requestId?: string } | null>(null);
   let retryNow = $state(0);
-  let detailDlg = $state<HTMLDialogElement>();
-  let detailOpen = $state(false);
-
-  $effect(() => {
-    const el = detailDlg;
-    if (!el) return;
-    if (detailOpen && !el.open) {
-      el.showModal();
-      registerModalDialog(el);
-    } else if (!detailOpen && el.open) {
-      unregisterModalDialog(el);
-      el.close();
-    }
-  });
-
-  $effect(() => {
-    const el = detailDlg;
-    return () => {
-      if (el) unregisterModalDialog(el);
-    };
-  });
 
   function toFailure(err: unknown) {
     if (err instanceof WidgetShapeError) return { message: err.message };
@@ -184,7 +166,6 @@
     };
   });
 
-  const ringTone = (l: Level | undefined) => (l === 'warn' || l === 'bad' ? l : 'accent');
   const LEVEL_TEXT: Record<Level, string> = { ok: '正常', warn: '需留意', bad: '有问题' };
 </script>
 
@@ -192,6 +173,8 @@
   {#snippet actions()}
     {#if seriesView?.options.length}
       <Segmented size="sm" label="时间范围" options={seriesView.options} bind:value={win} />
+    {:else}
+      <a class="open-link" href={pluginHref}>进入管理</a>
     {/if}
   {/snippet}
 
@@ -208,62 +191,21 @@
 
     {#if data.kind === 'stat'}
       {@const d = data.data}
-      {#if d.percent !== undefined}
-        <button type="button" class="stat stat-btn" onclick={() => (detailOpen = true)} aria-haspopup="dialog">
-          <div>
-            <p class="value num">{d.value}{#if d.unit}<small>{d.unit}</small>{/if}</p>
-            {#if d.sub}<p class="sub">{d.sub}</p>{/if}
-            {#if d.level && d.level !== 'ok'}<p class="sub lv-{d.level}">{LEVEL_TEXT[d.level]}</p>{/if}
-          </div>
-          <Ring value={d.percent} label="{w.title} {d.percent}%" tone={ringTone(d.level)} />
-        </button>
-        <dialog
-          bind:this={detailDlg}
-          class="m-dlg"
-          aria-label="{w.title} 占用详情"
-          onclose={() => {
-            unregisterModalDialog(detailDlg);
-            detailOpen = false;
-          }}
-          onclick={(e) => {
-            if (e.target === detailDlg) detailOpen = false;
-          }}
-        >
-          {#if detailOpen}
-            <div class="m-box">
-              <header class="m-head">
-                <h3>{w.title} · 实时占用详情</h3>
-                <button type="button" class="m-x" aria-label="关闭" onclick={() => (detailOpen = false)}>
-                  <Icon name="x" size={16} />
-                </button>
-              </header>
-              <div class="m-hero">
-                <Ring value={d.percent} label="{w.title} {d.percent}%" tone={ringTone(d.level)} size={96} />
-                <div>
-                  <p class="value num">{d.value}{#if d.unit}<small>{d.unit}</small>{/if}</p>
-                  {#if d.sub}<p class="sub">{d.sub}</p>{/if}
-                  <p class="sub">当前状态：{LEVEL_TEXT[d.level ?? 'ok']} · 来源插件 {slot.plugin.plugin_id}</p>
-                </div>
-              </div>
-              <footer class="m-foot">
-                <a class="m-link" href="/plugins/{encodeURIComponent(slot.plugin.plugin_id)}" onclick={() => (detailOpen = false)}>查看插件详情</a>
-                <button type="button" class="m-ok" onclick={() => (detailOpen = false)}>关闭</button>
-              </footer>
+      <div class="stat">
+        <div class="stat-main">
+          <p class="value num">{d.value}{#if d.unit}<small>{d.unit}</small>{/if}</p>
+          {#if d.sub}<p class="sub">{d.sub}</p>{/if}
+          {#if d.level && d.level !== 'ok'}<p class="sub lv-{d.level}">{LEVEL_TEXT[d.level]}</p>{/if}
+          {#if d.percent !== undefined && d.percent > 0}
+            <div class="stat-bar" role="meter" aria-label="{w.title} {d.percent}%" aria-valuemin={0} aria-valuemax={100} aria-valuenow={d.percent}>
+              <span class="stat-fill lv-{d.level ?? 'ok'}" style:width="{Math.min(100, Math.max(2, d.percent))}%"></span>
             </div>
           {/if}
-        </dialog>
-      {:else}
-        <div class="stat">
-          <div>
-            <p class="value num">{d.value}{#if d.unit}<small>{d.unit}</small>{/if}</p>
-            {#if d.sub}<p class="sub">{d.sub}</p>{/if}
-            {#if d.level && d.level !== 'ok'}<p class="sub lv-{d.level}">{LEVEL_TEXT[d.level]}</p>{/if}
-          </div>
-          {#if d.spark && d.spark.length > 1}
-            <Sparkline points={d.spark} tone={color ?? 'accent'} />
-          {/if}
         </div>
-      {/if}
+        {#if d.spark && d.spark.length > 1}
+          <Sparkline points={d.spark} tone={color ?? 'accent'} />
+        {/if}
+      </div>
     {:else if data.kind === 'series' && seriesView}
       {#await loadSeriesChart()}
         <Skeleton lines={4} label="{w.title}图表加载中" />
@@ -311,6 +253,16 @@
 </Card>
 
 <style>
+  .open-link {
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-medium);
+    color: var(--accent-text);
+    padding: 4px 10px;
+    border-radius: var(--r-pill);
+  }
+  .open-link:hover {
+    background: var(--accent-soft);
+  }
   .stale {
     display: flex;
     align-items: center;
@@ -327,88 +279,29 @@
     justify-content: space-between;
     gap: var(--s-3);
   }
-  .stat-btn {
-    width: 100%;
-    text-align: left;
-    border-radius: var(--r-md);
-    padding: 4px;
-    margin: -4px;
-    transition: background var(--dur-1) var(--ease);
+  .stat-main {
+    flex: 1;
+    min-width: 0;
   }
-  .stat-btn:hover {
-    background: var(--surface-2);
-  }
-  .m-dlg {
-    padding: 0;
-    border: 0;
-    border-radius: var(--r-xl);
-    background: transparent;
-    max-width: min(440px, calc(100vw - 32px));
-    width: 100%;
-  }
-  .m-dlg::backdrop {
-    background: var(--scrim);
-    backdrop-filter: blur(2px);
-  }
-  .m-box {
-    display: grid;
-    gap: var(--s-4);
-    padding: var(--s-5);
-    border-radius: var(--r-xl);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    box-shadow: var(--shadow-3);
-  }
-  .m-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .m-head h3 {
-    font-size: var(--fs-lg);
-  }
-  .m-x {
-    display: inline-grid;
-    place-items: center;
-    width: 30px;
-    height: 30px;
+  .stat-bar {
+    height: 6px;
+    margin-top: var(--s-3);
     border-radius: var(--r-pill);
-    color: var(--text-3);
+    background: var(--surface-3);
+    overflow: hidden;
   }
-  .m-x:hover {
-    background: var(--surface-2);
-    color: var(--text);
-  }
-  .m-hero {
-    display: flex;
-    align-items: center;
-    gap: var(--s-4);
-  }
-  .m-foot {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding-top: var(--s-3);
-    border-top: 1px solid var(--line);
-  }
-  .m-link {
-    color: var(--accent-text);
-    font-size: var(--fs-sm);
-    font-weight: var(--fw-medium);
-  }
-  .m-ok {
-    height: 32px;
-    padding: 0 14px;
+  .stat-fill {
+    display: block;
+    height: 100%;
     border-radius: var(--r-pill);
-    background: var(--accent-strong);
-    color: var(--on-accent);
-    font-size: var(--fs-sm);
-    font-weight: var(--fw-semibold);
+    background: var(--accent);
   }
+  .stat-fill.lv-warn { background: var(--warn); }
+  .stat-fill.lv-bad { background: var(--bad); }
   .value {
-    font-size: var(--fs-4xl);
+    font-size: var(--fs-3xl);
     font-weight: var(--fw-semibold);
-    line-height: 1;
+    line-height: 1.1;
   }
   .value small {
     margin-left: 3px;

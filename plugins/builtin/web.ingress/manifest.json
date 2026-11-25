@@ -44,7 +44,7 @@
     "schemas/ingress.tls.reload.request.json": "sha256:c061616ede3019520ea5d52ab2e12d54322edf4de860749d00c729b1f5128750",
     "schemas/ingress.tls.reload.response.json": "sha256:eceedced80fbbcb25df8fa534bc2f7117a0eeeea8ef2a8e1ba9600bd44c09171",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
-    "ui/index.html": "sha256:7474d7bd04edc0e35036561f85a63160cbad3cc873c6bdc0d02253c49e8cd72c",
+    "ui/index.html": "sha256:63e68d3291e5fcaf7f88ec1f0276e012605797f0cc98bad2fada66f36ea3fc9a",
     "ui/plugin.css": "sha256:1039d418caa4ef803284d4142ee8140aa9d39e3941096bf837bcb13953b56178",
     "ui/plugin.js": "sha256:a0c2fb7fc26a4c2e9c904a7ac09ee67f5086d639e6bb15f3db627afa1d1c3021"
   },

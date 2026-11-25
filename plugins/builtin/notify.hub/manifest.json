@@ -36,7 +36,7 @@
     "schemas/notify.rule.upsert.request.json": "sha256:677383e5088e5c675612671a0599ebdbab66b348047de5538cab096e1974442a",
     "schemas/notify.rule.upsert.response.json": "sha256:81b9b6d31807b67ad8f4c2584b5b71b53668431bd73b0ed3cf7e98771775775f",
     "schemas/stat.response.json": "sha256:3c1827800ca69d083441719bb82ef1e2914249c315d342ef8e4d1d7098119985",
-    "ui/index.html": "sha256:8ab34bdccce7ba49d6779855ea3ed5f7345bb451f9702d0c92dee10fd6bba64c",
+    "ui/index.html": "sha256:69e06b8a222f61e29d589b69b039cce00f8aed25d20643e1476ff56b8fa9beb1",
     "ui/plugin.css": "sha256:481eb484e91ad93879e1e27981eab8a098071a180d348394e2336c85a762f15c",
     "ui/plugin.js": "sha256:cbdc20ae1e13648651fa13a2c7234b514b41e8c699e98ed55256247512fbe865"
   },

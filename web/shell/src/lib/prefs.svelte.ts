@@ -15,7 +15,7 @@ export const THEMES = ['light', 'dark', 'system'] as const;
 export const ACCENTS = ['sky', 'violet', 'teal', 'coral', 'rose', 'green'] as const;
 export const MOTIONS = ['full', 'reduced', 'off', 'system'] as const;
 export const DENSITIES = ['comfortable', 'compact'] as const;
-export const LAYOUTS = ['side', 'top'] as const;
+export const LAYOUTS = ['top', 'side'] as const;
 
 export type ThemePref = (typeof THEMES)[number];
 export type Accent = (typeof ACCENTS)[number];
@@ -31,8 +31,9 @@ interface Prefs {
   layout: LayoutPref;
 }
 
-const DEFAULTS: Prefs = { theme: 'system', accent: 'rose', motion: 'system', density: 'comfortable', layout: 'side' };
+const DEFAULTS: Prefs = { theme: 'system', accent: 'rose', motion: 'system', density: 'comfortable', layout: 'top' };
 const KEY = (k: keyof Prefs) => `qwq.${k}`;
+const SIDE_COLLAPSED_KEY = 'qwq.sideCollapsed';
 
 function read<K extends keyof Prefs>(k: K, allowed: readonly Prefs[K][]): Prefs[K] {
   try {
@@ -40,6 +41,14 @@ function read<K extends keyof Prefs>(k: K, allowed: readonly Prefs[K][]): Prefs[
     return v && allowed.includes(v) ? v : DEFAULTS[k];
   } catch {
     return DEFAULTS[k];
+  }
+}
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDE_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
   }
 }
 
@@ -51,6 +60,7 @@ class PrefsStore {
   motion = $state<MotionPref>(DEFAULTS.motion);
   density = $state<Density>(DEFAULTS.density);
   layout = $state<LayoutPref>(DEFAULTS.layout);
+  sideCollapsed = $state(false);
 
   /** 系统偏好（跟随系统时生效），由媒体查询驱动 */
   #systemDark = $state(false);
@@ -71,6 +81,7 @@ class PrefsStore {
     this.motion = read('motion', MOTIONS);
     this.density = read('density', DENSITIES);
     this.layout = read('layout', LAYOUTS);
+    this.sideCollapsed = readCollapsed();
     const dark = media('(prefers-color-scheme: dark)');
     const reduced = media('(prefers-reduced-motion: reduce)');
     this.#systemDark = dark?.matches ?? false;
@@ -96,6 +107,15 @@ class PrefsStore {
     this.set('layout', this.layout === 'top' ? 'side' : 'top');
   }
 
+  toggleSidebarCollapsed(): void {
+    this.sideCollapsed = !this.sideCollapsed;
+    try {
+      localStorage.setItem(SIDE_COLLAPSED_KEY, this.sideCollapsed ? '1' : '0');
+    } catch {
+      /* 隐私模式 */
+    }
+  }
+
   /** 把当前值写到 <html>；由根组件的 $effect 驱动 */
   apply(root: HTMLElement = document.documentElement): void {
     root.dataset.theme = this.resolvedTheme;
@@ -103,6 +123,7 @@ class PrefsStore {
     root.dataset.motion = this.resolvedMotion;
     root.dataset.density = this.density;
     root.dataset.layout = this.layout;
+    root.dataset.sideCollapsed = this.sideCollapsed ? '1' : '0';
   }
 }
 

@@ -443,8 +443,8 @@ func TestProxyAdvancedManifestAndPackageDigests(t *testing.T) {
 	if len(parsed.Dependencies) != 0 {
 		t.Fatalf("深度合并 Xray 核心后 proxy.advanced 不应再依赖独立插件，实际: %+v", parsed.Dependencies)
 	}
-	if parsed.UI == nil || len(parsed.UI.Routes) != 4 {
-		t.Fatalf("UI 路由数量应为 4（/proxy, /proxy/nodes, /proxy/chains, /proxy/tuning），实际: %+v", parsed.UI)
+	if parsed.UI == nil || len(parsed.UI.Routes) != 6 {
+		t.Fatalf("UI 路由数量应为 6（/proxy, /proxy/nodes, /proxy/users, /proxy/plans, /proxy/chains, /proxy/tuning），实际: %+v", parsed.UI)
 	}
 	for name, digest := range parsed.Files {
 		if name == parsed.Entrypoint {

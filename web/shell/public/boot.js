@@ -20,5 +20,6 @@
   d.dataset.motion = motion === 'system' ? (mq('(prefers-reduced-motion: reduce)') ? 'reduced' : 'full') : motion;
   d.dataset.accent = get('accent', ['sky', 'violet', 'teal', 'coral', 'rose', 'green'], 'rose');
   d.dataset.density = get('density', ['comfortable', 'compact'], 'comfortable');
-  d.dataset.layout = get('layout', ['side', 'top'], 'side');
+  d.dataset.layout = get('layout', ['top', 'side'], 'top');
+  d.dataset.sideCollapsed = get('sideCollapsed', ['0', '1'], '0');
 })();
