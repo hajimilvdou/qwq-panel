@@ -62,7 +62,7 @@ const (
 	maxProviderModel         = 128
 	maxProviderURL           = 2048
 	maxProviderModels        = 500
-	maxProviderContextTokens = 4_000_000
+	maxProviderContextTokens = 10_000_000
 	minProviderContextTokens = 1024
 )
 

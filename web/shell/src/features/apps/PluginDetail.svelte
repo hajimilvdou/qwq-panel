@@ -7,12 +7,13 @@
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { Button, Card, Checkbox, Chip, ConfirmDialog, ErrorState, Skeleton, Tabs } from '$ui';
+  import { Button, Card, Checkbox, Chip, ConfirmDialog, ErrorState, OtpInput, Skeleton, Tabs } from '$ui';
+  import { ApiError } from '$api/client';
   import { plugins } from '$api/endpoints';
   import { isPluginActiveReady } from '$api/endpoints-plugins';
   import type { Plugin } from '$api/types';
   import { describeError, reportError } from '$lib/errors';
-  import { createIntent, runIntent, type Intent } from '$lib/ops';
+  import { createFormIntent, createIntent, runIntent } from '$lib/ops';
   import { page } from '$lib/page.svelte';
   import { useResource } from '$lib/resource.svelte';
   import { navigate, router } from '$lib/router.svelte';
@@ -101,27 +102,51 @@
   const dependents = $derived((all.data ?? []).filter((x) => x.dependencies?.includes(pid)).map((x) => x.name));
   let removeOpen = $state(false);
   let purge = $state(false);
+  let removeMfa = $state('');
+  let removeMfaNeed = $state(false);
+  let removeMfaErr = $state<string>();
   let removeErr = $state('');
-  let removeIntent: Intent = createIntent();
+  const removeIntent = createFormIntent();
+  const showRemoveOtp = $derived(purge && (Boolean(session.user?.mfa_enabled) || removeMfaNeed));
 
   function openRemove() {
     purge = false;
+    removeMfa = '';
+    removeMfaNeed = false;
+    removeMfaErr = undefined;
     removeErr = '';
-    removeIntent = createIntent();
+    removeIntent.reset();
     removeOpen = true;
   }
 
   async function submitRemove() {
     const cur = p!;
+    removeErr = '';
+    removeMfaErr = undefined;
+    if (showRemoveOtp && removeMfa.length !== 6) {
+      removeMfaErr = '请输入 6 位两步验证码';
+      throw new Error(removeMfaErr);
+    }
+    const key = removeIntent.keyFor({ id: cur.plugin_id, rev: cur.revision, purge });
     try {
-      const r = await runIntent(removeIntent, (key) => plugins.uninstall(cur.plugin_id, cur.revision, key, purge), {
-        label: `卸载 ${cur.name}`,
-      });
+      const r = await runIntent(
+        { key },
+        (k) => plugins.uninstall(cur.plugin_id, cur.revision, k, purge, showRemoveOtp ? removeMfa : undefined),
+        { label: `卸载 ${cur.name}` },
+      );
+      removeIntent.reset();
       if (r.kind !== 'awaiting') navigate('/apps', { replace: true });
     } catch (err) {
+      removeIntent.onError(err instanceof ApiError ? err.status : undefined);
       const v = describeError(err);
-      /* 被依赖时 409 STATE_CONFLICT：优先用本地算出的依赖方列表说人话 */
-      removeErr = v.code === 'STATE_CONFLICT' && dependents.length ? `这些应用依赖它：${dependents.join('、')}` : v.message;
+      if (v.code === 'MFA_REQUIRED') {
+        removeMfaNeed = true;
+        removeMfa = '';
+        removeMfaErr = '请输入有效的 6 位两步验证码';
+      } else {
+        /* 被依赖时 409 STATE_CONFLICT：优先用本地算出的依赖方列表说人话 */
+        removeErr = v.code === 'STATE_CONFLICT' && dependents.length ? `这些应用依赖它：${dependents.join('、')}` : v.message;
+      }
       throw err;
     }
   }
@@ -154,7 +179,9 @@
         <Button variant={stopped ? 'soft' : 'ghost'} icon={stopped ? 'play' : 'pause'} loading={toggling} onclick={toggleEnabled}>
           {stopped ? '启用' : '停用'}
         </Button>
-        <Button variant="ghost" icon="refresh" loading={restarting} onclick={restart}>重启</Button>
+        {#if !stopped}
+          <Button variant="ghost" icon="refresh" loading={restarting} onclick={restart}>重启</Button>
+        {/if}
       {/if}
       {#if canUninstall}<Button variant="ghost" icon="trash" onclick={openRemove}>卸载</Button>{/if}
     </div>
@@ -184,7 +211,12 @@
     errorText={removeErr}
     onconfirm={submitRemove}
   >
-    <Checkbox label="同时删除它的数据" hint="不可恢复；可能需要两步验证" bind:checked={purge} />
+    <div class="rm-opts">
+      <Checkbox label="同时删除它的数据" hint="不可恢复；仅在已开启两步验证时需验证" bind:checked={purge} />
+      {#if showRemoveOtp}
+        <OtpInput bind:value={removeMfa} label="两步验证码" error={removeMfaErr} />
+      {/if}
+    </div>
   </ConfirmDialog>
 {/if}
 
@@ -216,5 +248,9 @@
   .ops {
     display: flex;
     gap: 8px;
+  }
+  .rm-opts {
+    display: grid;
+    gap: var(--s-3);
   }
 </style>

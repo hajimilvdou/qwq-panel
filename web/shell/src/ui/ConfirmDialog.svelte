@@ -52,7 +52,7 @@
 
   let busy = $state(false);
   let typed = $state('');
-  const ready = $derived(!confirmText || typed.trim() === confirmText);
+  const ready = $derived(!confirmText || typed.trim() === confirmText.trim());
 
   $effect(() => {
     if (open) typed = '';

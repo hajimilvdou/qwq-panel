@@ -1747,6 +1747,29 @@ export type paths = {
         patch: operations["updateAgentSession"];
         trace?: never;
     };
+    "/api/v1/agent-sessions/{session_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent session identifier. */
+                session_id: components["parameters"]["AgentSessionIdPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Export a session transcript as Markdown or JSON
+         * @description Downloads the full retained transcript and metadata of the caller's agent session as a Markdown (.md) or JSON (.json) file.
+         */
+        get: operations["exportAgentSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent-sessions/{session_id}/messages": {
         parameters: {
             query?: never;
@@ -1954,6 +1977,166 @@ export type paths = {
          * @description Cancels any in-flight login process and removes persisted official OAuth/token credentials for the specified external CLI core. Administrators only.
          */
         delete: operations["logoutAgentCore"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-exchange/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List folders and files in the agent interactive exchange folder
+         * @description Lists subfolders and files inside the shared agent interactive file exchange directory.
+         */
+        get: operations["listAgentExchangeEntries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-exchange/mkdir": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a subfolder inside the agent interactive exchange folder
+         * @description Creates a new subfolder (including nested paths) inside the shared agent interactive exchange folder.
+         */
+        post: operations["mkdirAgentExchange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-exchange/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload one or more files into the agent interactive exchange folder
+         * @description Accepts multipart/form-data file uploads into the root or a target subfolder of the agent interactive exchange folder.
+         */
+        post: operations["uploadAgentExchange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-exchange/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download a file or zipped subfolder from the agent interactive exchange folder
+         * @description Streams a single file (or a .zip archive when targeting a folder) from the interactive exchange folder.
+         */
+        get: operations["downloadAgentExchange"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-exchange/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview a file inside the agent interactive exchange folder
+         * @description Returns bounded inline text content or metadata for a file in the interactive exchange folder.
+         */
+        get: operations["previewAgentExchange"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-exchange/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Create or update a text file inside the agent interactive exchange folder
+         * @description Atomically writes UTF-8 text content to a relative file path inside the interactive exchange folder.
+         */
+        put: operations["putAgentExchangeFile"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-exchange/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rename or move a file or folder inside the agent interactive exchange folder
+         * @description Renames or moves a file or subfolder strictly within the interactive exchange folder.
+         */
+        post: operations["renameAgentExchange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-exchange/entry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a file or subfolder from the agent interactive exchange folder
+         * @description Deletes a file or subfolder recursively inside the interactive exchange folder.
+         */
+        delete: operations["deleteAgentExchangeEntry"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3324,7 +3507,7 @@ export type components = {
             reasoning_effort?: string;
             /**
              * Format: int64
-             * @description Default context window size in tokens (0 uses core default).
+             * @description Default context window size in tokens (0 auto-matches the model catalog).
              */
             max_context_tokens?: number;
             /** @description Whether an API key is stored. The key is write-only and never returned. */
@@ -3359,7 +3542,7 @@ export type components = {
             reasoning_effort?: string;
             /**
              * Format: int64
-             * @description Default context window size in tokens (0 uses core default).
+             * @description Default context window size in tokens (0 auto-matches the model catalog).
              */
             max_context_tokens?: number;
             /** @description Make this the provider sessions without their own endpoint use; clears the previous default. */
@@ -3385,7 +3568,7 @@ export type components = {
             reasoning_effort?: string;
             /**
              * Format: int64
-             * @description New default context window size in tokens.
+             * @description New default context window size in tokens (0 restores automatic model matching).
              */
             max_context_tokens?: number;
             /** @description Whether this provider is the default; setting it clears the previous default. */
@@ -3512,6 +3695,112 @@ export type components = {
             /** @description Whether the file can be edited inline as UTF-8 text. */
             is_text: boolean;
             updated_at: components["schemas"]["Timestamp"];
+        };
+        /** @description One file or subfolder in the agent interactive exchange folder. */
+        AgentExchangeEntry: {
+            /** @description Entry basename. */
+            name: string;
+            /** @description Relative path inside the exchange folder. */
+            path: string;
+            /** @description Whether the entry is a subfolder. */
+            is_dir: boolean;
+            /**
+             * Format: int64
+             * @description File size in bytes (0 for directories).
+             */
+            size: number;
+            /**
+             * Format: int32
+             * @description Direct child count when is_dir is true.
+             */
+            child_count?: number;
+            /** @description Whether the file is previewable/editable as UTF-8 text. */
+            is_text: boolean;
+            /** @description Whether the file is a previewable image. */
+            is_image: boolean;
+            /** @description Detected MIME type when known. */
+            mime_type?: string;
+            updated_at: components["schemas"]["Timestamp"];
+        };
+        /** @description Directory listing of one path inside the agent interactive exchange folder. */
+        AgentExchangeListResult: {
+            /** @description Current relative directory path (empty for root). */
+            path: string;
+            /** @description Parent relative directory path. */
+            parent_path: string;
+            /** @description Absolute host directory path of the exchange root. */
+            root_hint: string;
+            /** @description Folders and files inside this directory. */
+            entries: components["schemas"]["AgentExchangeEntry"][];
+            /**
+             * Format: int32
+             * @description Number of subfolders in this directory.
+             */
+            total_dirs: number;
+            /**
+             * Format: int32
+             * @description Number of files in this directory.
+             */
+            total_files: number;
+            /**
+             * Format: int64
+             * @description Combined file bytes in this directory.
+             */
+            total_bytes: number;
+        };
+        /** @description Bounded preview of one file inside the agent interactive exchange folder. */
+        AgentExchangePreview: {
+            /** @description Relative file path. */
+            path: string;
+            /** @description File basename. */
+            name: string;
+            /**
+             * Format: int64
+             * @description File size in bytes.
+             */
+            size: number;
+            /** @description Whether inline text content is returned. */
+            is_text: boolean;
+            /** @description Whether the file is a previewable image. */
+            is_image: boolean;
+            /** @description Detected MIME type. */
+            mime_type?: string;
+            /** @description True when inline text was truncated to the preview cap. */
+            truncated?: boolean;
+            /** @description UTF-8 text preview content. */
+            content?: string;
+            updated_at: components["schemas"]["Timestamp"];
+        };
+        /** @description Request to create a subfolder inside the exchange folder. */
+        AgentExchangeMkdirRequest: {
+            /** @description Relative subfolder path to create. */
+            path: string;
+        };
+        /** @description Request to create or update a text file inside the exchange folder. */
+        AgentExchangeWriteRequest: {
+            /** @description Relative file path. */
+            path: string;
+            /** @description UTF-8 text content. */
+            content: string;
+        };
+        /** @description Request to rename or move a file or subfolder inside the exchange folder. */
+        AgentExchangeRenameRequest: {
+            /** @description Current relative path. */
+            from: string;
+            /** @description Target relative path. */
+            to: string;
+        };
+        /** @description Summary of files uploaded into the interactive exchange folder. */
+        AgentExchangeUploadResult: {
+            /** @description Target subfolder path. */
+            dir: string;
+            /** @description Uploaded file entries. */
+            items: components["schemas"]["AgentExchangeEntry"][];
+            /**
+             * Format: int32
+             * @description Count of uploaded files.
+             */
+            total: number;
         };
         /** @description Listed files for one separated agent workspace directory. */
         AgentWorkspaceListResult: {
@@ -8729,6 +9018,41 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    exportAgentSession: {
+        parameters: {
+            query?: {
+                /** @description Export file format (markdown or json). */
+                format?: "markdown" | "md" | "json";
+            };
+            header?: never;
+            path: {
+                /** @description Agent session identifier. */
+                session_id: components["parameters"]["AgentSessionIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Downloadable transcript attachment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/markdown": string;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
     listAgentMessages: {
         parameters: {
             query?: {
@@ -9089,6 +9413,271 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AgentCoreAuthStatus"];
                 };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listAgentExchangeEntries: {
+        parameters: {
+            query?: {
+                /** @description Relative subfolder path inside the exchange folder (empty for root). */
+                path?: string;
+                /**
+                 * @description Field projection: comma-separated RFC 6901 JSON Pointers relative to the resource (for lists:
+                 *     relative to each item), at most `fields_max`. Example: `fields=/name,/status/state`.
+                 *     The result keeps the original nesting and contains only the selected members plus the
+                 *     identifier and `revision`. Pointers traverse objects only: selecting an array returns it
+                 *     whole, and index segments are rejected. Commas inside keys are not supported here (use the
+                 *     agent `read` tool). An unknown pointer returns `400 VALIDATION_FAILED` at `/fields`.
+                 */
+                fields?: components["parameters"]["Fields"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Listed exchange directory entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentExchangeListResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    mkdirAgentExchange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Subfolder path to create. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentExchangeMkdirRequest"];
+            };
+        };
+        responses: {
+            /** @description Created folder metadata. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentExchangeEntry"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    uploadAgentExchange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Multipart upload containing target dir and files parts. */
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** @description Optional target subfolder path. */
+                    dir?: string;
+                    /** @description One or more files to upload. */
+                    files?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Uploaded file entries. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentExchangeUploadResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    downloadAgentExchange: {
+        parameters: {
+            query?: {
+                /** @description Relative file or folder path (empty downloads the entire exchange folder as a zip). */
+                path?: string;
+                /** @description Set to 1 to render safe image files inline. */
+                inline?: "0" | "1";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description File or zip archive stream. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    previewAgentExchange: {
+        parameters: {
+            query: {
+                /** @description Relative file path inside the exchange folder. */
+                path: string;
+                /**
+                 * @description Field projection: comma-separated RFC 6901 JSON Pointers relative to the resource (for lists:
+                 *     relative to each item), at most `fields_max`. Example: `fields=/name,/status/state`.
+                 *     The result keeps the original nesting and contains only the selected members plus the
+                 *     identifier and `revision`. Pointers traverse objects only: selecting an array returns it
+                 *     whole, and index segments are rejected. Commas inside keys are not supported here (use the
+                 *     agent `read` tool). An unknown pointer returns `400 VALIDATION_FAILED` at `/fields`.
+                 */
+                fields?: components["parameters"]["Fields"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description File preview content and metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentExchangePreview"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putAgentExchangeFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Target relative path and UTF-8 content. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentExchangeWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved file metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentExchangeEntry"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    renameAgentExchange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Source and destination relative paths. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentExchangeRenameRequest"];
+            };
+        };
+        responses: {
+            /** @description Renamed entry metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentExchangeEntry"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["RateLimited"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteAgentExchangeEntry: {
+        parameters: {
+            query: {
+                /** @description Relative file or subfolder path to delete. */
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted successfully. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];

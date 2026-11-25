@@ -149,6 +149,7 @@ type Service struct {
 	secrets      *secrets.Store
 	cliAuth      *CLIAuthManager
 	workspace    *WorkspaceManager
+	exchange     *ExchangeManager
 	registry     *RegistryManager
 
 	cores map[string]Core
@@ -200,6 +201,7 @@ func New(opts Options) (*Service, error) {
 	base, cancel := context.WithCancel(context.Background())
 	cliAuth := NewCLIAuthManager(opts.DataDir)
 	ws := NewWorkspaceManager(opts.DataDir, cliAuth)
+	ex := NewExchangeManager(opts.DataDir)
 	reg := NewRegistryManager(ws, opts.HTTPClient)
 	s := &Service{
 		db:           opts.DB,
@@ -214,6 +216,7 @@ func New(opts Options) (*Service, error) {
 		secrets:      opts.Secrets,
 		cliAuth:      cliAuth,
 		workspace:    ws,
+		exchange:     ex,
 		registry:     reg,
 		cores:        map[string]Core{},
 		turnRate:     authz.NewRateLimiter(0, opts.Clock.Now),
@@ -280,6 +283,9 @@ func (s *Service) CLIAuth() *CLIAuthManager { return s.cliAuth }
 
 // Workspace returns the separated MCP/Skills/Prompts workspace manager.
 func (s *Service) Workspace() *WorkspaceManager { return s.workspace }
+
+// Exchange returns the interactive file exchange folder manager.
+func (s *Service) Exchange() *ExchangeManager { return s.exchange }
 
 // Registry returns the official Skills & MCP registry manager.
 func (s *Service) Registry() *RegistryManager { return s.registry }

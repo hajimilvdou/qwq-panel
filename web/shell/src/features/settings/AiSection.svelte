@@ -24,7 +24,8 @@
     ExternalCliCore,
     ReasoningEffort,
   } from '$api/additions';
-  import { CONTEXT_OPTIONS, effortLabel, formatContextSize } from '$lib/ai/agent-sessions.svelte';
+  import { effortLabel, formatContextSize } from '$lib/ai/agent-sessions.svelte';
+  import ContextField from '../ai/ContextField.svelte';
   import EffortField from '../ai/EffortField.svelte';
   import { describeError, reportError, type ErrorView } from '$lib/errors';
   import { createIntent, runIntent, type Intent } from '$lib/ops';
@@ -89,7 +90,7 @@
           model: '',
           models: [],
           reasoning_effort: '',
-          max_context_tokens: '128000',
+          max_context_tokens: '0',
           is_default: !(list.data ?? []).length,
           api_key: '',
         };
@@ -387,7 +388,7 @@
                 <span class="mono">{p.model}</span>
                 {#if (p.models?.length ?? 0) > 1}<span>· 共 {p.models?.length} 个模型</span>{/if}
                 <span>· 思考：{effortLabel(p.reasoning_effort)}</span>
-                <span>· 上下文：{formatContextSize(p.max_context_tokens)}</span>
+                <span>· 上下文：{formatContextSize(p.max_context_tokens, p.model)}</span>
                 {#if p.base_url}<span>·</span><span class="mono ellipsis">{p.base_url}</span>{/if}
               </div>
               {#if r}
@@ -522,7 +523,12 @@
       bind:value={form.reasoning_effort}
     />
 
-    <Select label="默认上下文窗口大小" options={[...CONTEXT_OPTIONS]} bind:value={form.max_context_tokens} />
+    <ContextField
+      label="默认上下文窗口大小（自动识别模型）"
+      model={form.model}
+      error={editErr?.fields['/max_context_tokens']}
+      bind:value={form.max_context_tokens}
+    />
 
     <Checkbox label="设为默认服务" bind:checked={form.is_default} disabled={editing?.is_default} />
     {#if editErr && !Object.keys(editErr.fields).length}<Alert>{editErr.message}</Alert>{/if}

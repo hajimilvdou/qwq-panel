@@ -4,6 +4,6 @@
  * ========================================================================== */
 export { events, nodes, sessions, system } from './endpoints-core';
 export { plugins } from './endpoints-plugins';
-export { agent, ai } from './endpoints-agent';
+export { agent, agentExchange, ai } from './endpoints-agent';
 export { account, actions, approvals, audit, delegations, operations, plans, users } from './endpoints-ops';
 export type { ActionMeta, Op, TargetInput } from './endpoints-ops';

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/qwq-panel/qwq/internal/actor"
 	"github.com/qwq-panel/qwq/internal/agentsession"
@@ -424,6 +426,206 @@ func (a *api) listAgentMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.writeResource(w, r, http.StatusOK, agentMessageList{Items: newAgentMessageDTOs(msgs)}, nil)
+}
+
+// exportAgentSession implements GET /api/v1/agent-sessions/{session_id}/export?format=markdown|json.
+// Exports the full retained session metadata and transcript as a downloadable file.
+func (a *api) exportAgentSession(w http.ResponseWriter, r *http.Request) {
+	svc, err := a.agentSessions()
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	act, err := a.caller(r)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	id, err := agentSessionID(r)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	if format == "" || format == "md" {
+		format = "markdown"
+	}
+	if format != "markdown" && format != "json" {
+		a.fail(w, r, problem.Validation(problem.Violation{
+			In: "query", Pointer: "/format", Code: "INVALID", Message: "format must be markdown or json.",
+		}))
+		return
+	}
+	rec, err := svc.Get(r.Context(), act, id)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	// Collect all retained messages via backward pagination (200 per page).
+	var allMsgs []agentsession.Message
+	var before int64
+	for page := 0; page < 50; page++ {
+		chunk, merr := svc.MessagesBefore(r.Context(), act, id, before, 200)
+		if merr != nil {
+			a.fail(w, r, merr)
+			return
+		}
+		if len(chunk) == 0 {
+			break
+		}
+		allMsgs = append(chunk, allMsgs...)
+		if len(chunk) < 200 || chunk[0].Seq <= 1 {
+			break
+		}
+		before = chunk[0].Seq
+	}
+
+	now := a.d.Clock.Now().UTC()
+	safeTitle := sanitizeExportTitle(rec.Title)
+	shortID := rec.ID
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
+	if format == "json" {
+		filename := fmt.Sprintf("qwq-session-%s-%s.json", safeTitle, shortID)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", buildContentDisposition("attachment", filename))
+		payload := map[string]any{
+			"exported_at": ts(now),
+			"session":     newAgentSessionDTO(rec),
+			"messages":    newAgentMessageDTOs(allMsgs),
+		}
+		raw, merr := json.MarshalIndent(payload, "", "  ")
+		if merr != nil {
+			a.fail(w, r, problem.Wrap(merr))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(append(raw, '\n'))
+		return
+	}
+
+	filename := fmt.Sprintf("qwq-session-%s-%s.md", safeTitle, shortID)
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", buildContentDisposition("attachment", filename))
+	md := renderSessionMarkdown(rec, allMsgs, now)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(md))
+}
+
+func sanitizeExportTitle(title string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(title) {
+		switch {
+		case unicode.IsControl(r), r == '/', r == '\\', r == ':', r == '*', r == '?', r == '"', r == '<', r == '>', r == '|':
+			b.WriteByte('-')
+		case unicode.IsSpace(r):
+			b.WriteByte('-')
+		default:
+			b.WriteRune(r)
+		}
+		if b.Len() >= 48 {
+			break
+		}
+	}
+	out := strings.Trim(b.String(), "-.")
+	if out == "" {
+		return "chat"
+	}
+	return out
+}
+
+func renderSessionMarkdown(rec *agentsession.Session, msgs []agentsession.Message, exportedAt time.Time) string {
+	var b strings.Builder
+	title := strings.TrimSpace(rec.Title)
+	if title == "" {
+		title = "未命名会话"
+	}
+	fmt.Fprintf(&b, "# %s\n\n", title)
+	fmt.Fprintf(&b, "- **会话 ID**：`%s`\n", rec.ID)
+	fmt.Fprintf(&b, "- **Agent 核心**：`%s`\n", rec.Core)
+	fmt.Fprintf(&b, "- **权限模式**：`%s`\n", rec.PermissionMode)
+	fmt.Fprintf(&b, "- **创建时间**：%s\n", ts(rec.CreatedAt))
+	fmt.Fprintf(&b, "- **导出时间**：%s\n", ts(exportedAt))
+	fmt.Fprintf(&b, "- **消息条数**：%d\n\n---\n\n", len(msgs))
+
+	for _, m := range msgs {
+		tsStr := ts(m.CreatedAt)
+		switch m.Role {
+		case agentsession.RoleUser:
+			fmt.Fprintf(&b, "## 用户（%s）\n\n%s\n\n", tsStr, strings.TrimSpace(m.Content))
+		case agentsession.RoleAssistant:
+			fmt.Fprintf(&b, "## AI 助手（%s）\n\n", tsStr)
+			var ac struct {
+				ReasoningContent string `json:"reasoning_content"`
+				ToolCalls        []struct {
+					Action    string          `json:"action"`
+					Arguments json.RawMessage `json:"arguments"`
+				} `json:"tool_calls"`
+			}
+			if len(m.ContentJSON) > 0 {
+				_ = json.Unmarshal(m.ContentJSON, &ac)
+			}
+			if strings.TrimSpace(ac.ReasoningContent) != "" {
+				fmt.Fprintf(&b, "<details>\n<summary>思考过程</summary>\n\n%s\n\n</details>\n\n", strings.TrimSpace(ac.ReasoningContent))
+			}
+			if strings.TrimSpace(m.Content) != "" {
+				fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(m.Content))
+			}
+			if len(ac.ToolCalls) > 0 {
+				b.WriteString("**调用工具**：\n")
+				for _, tc := range ac.ToolCalls {
+					args := strings.TrimSpace(string(secrets.RedactArguments(tc.Arguments)))
+					if len(args) > 500 {
+						args = args[:500] + "…"
+					}
+					fmt.Fprintf(&b, "- `%s` `%s`\n", tc.Action, args)
+				}
+				b.WriteString("\n")
+			}
+		case agentsession.RoleTool:
+			var tc struct {
+				Action string          `json:"action"`
+				Status string          `json:"status"`
+				Result json.RawMessage `json:"result"`
+				Error  *struct {
+					Code   string `json:"code"`
+					Detail string `json:"detail"`
+				} `json:"error"`
+			}
+			if len(m.ContentJSON) > 0 {
+				_ = json.Unmarshal(m.ContentJSON, &tc)
+			}
+			action := tc.Action
+			if action == "" {
+				action = "tool"
+			}
+			status := tc.Status
+			if status == "" {
+				status = "done"
+			}
+			fmt.Fprintf(&b, "### 工具结果：`%s`（%s · %s）\n\n", action, status, tsStr)
+			if tc.Error != nil && tc.Error.Detail != "" {
+				fmt.Fprintf(&b, "> 错误（%s）：%s\n\n", tc.Error.Code, tc.Error.Detail)
+			} else if len(tc.Result) > 0 && string(tc.Result) != "null" {
+				resText := strings.TrimSpace(string(tc.Result))
+				if len(resText) > 4000 {
+					resText = resText[:4000] + "\n...(truncated)"
+				}
+				fmt.Fprintf(&b, "```json\n%s\n```\n\n", resText)
+			} else if strings.TrimSpace(m.Content) != "" {
+				fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(m.Content))
+			}
+		default:
+			if strings.TrimSpace(m.Content) != "" {
+				fmt.Fprintf(&b, "> [系统 · %s] %s\n\n", tsStr, strings.TrimSpace(m.Content))
+			}
+		}
+	}
+	return b.String()
 }
 
 // beforeSeq parses the before_seq query parameter of the transcript page.

@@ -135,7 +135,7 @@ func (d *Deps) withDefaults() error {
 		idSvc := d.Identity
 		azSvc := d.Authz
 		svc, err := agentsession.New(agentsession.Options{
-			DB: d.DB, Clock: d.Clock, IDs: d.IDs, Logger: d.Logger, Secrets: d.Secrets,
+			DB: d.DB, Clock: d.Clock, IDs: d.IDs, Logger: d.Logger, Secrets: d.Secrets, DataDir: d.Config.DataDir,
 			RoleResolver: func(rctx context.Context, owner actor.Actor) (string, error) {
 				switch owner.Kind {
 				case actor.System:
@@ -354,9 +354,19 @@ func (a *api) routes() []gateway.Route {
 		{Method: http.MethodDelete, Pattern: "/api/v1/agent-sessions/{session_id}/api-key", Access: sessionOrService, Handler: a.agentSessionRoute(a.deleteAgentSessionAPIKey)},
 		{Method: http.MethodPost, Pattern: "/api/v1/agent-sessions/{session_id}/messages", Access: sessionOrService, Body: gateway.BodyJSON, Handler: a.agentSessionRoute(a.sendAgentMessage)},
 		{Method: http.MethodGet, Pattern: "/api/v1/agent-sessions/{session_id}/messages", Access: sessionOrService, Handler: a.agentSessionRoute(a.listAgentMessages)},
+		{Method: http.MethodGet, Pattern: "/api/v1/agent-sessions/{session_id}/export", Access: sessionOrService, Handler: a.agentSessionRoute(a.exportAgentSession)},
 		{Method: http.MethodPost, Pattern: "/api/v1/agent-sessions/{session_id}/cancel", Access: sessionOrService, Handler: a.agentSessionRoute(a.cancelAgentSession)},
 		{Method: http.MethodGet, Pattern: "/api/v1/agent-sessions/{session_id}/events", Access: sessionOrService, Handler: a.agentSessionRoute(a.streamAgentSession)},
 		{Method: http.MethodGet, Pattern: "/api/v1/agent-sessions/{session_id}/approvals", Access: sessionOrService, Handler: a.agentSessionRoute(a.listAgentApprovals)},
+		// agent interactive file exchange folder
+		{Method: http.MethodGet, Pattern: "/api/v1/agent-exchange/entries", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.listAgentExchangeEntries)},
+		{Method: http.MethodPost, Pattern: "/api/v1/agent-exchange/mkdir", Access: gateway.AccessSession, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.mkdirAgentExchange)},
+		{Method: http.MethodPost, Pattern: "/api/v1/agent-exchange/upload", Access: gateway.AccessSession, Body: gateway.BodyPackage, Handler: http.HandlerFunc(a.uploadAgentExchange)},
+		{Method: http.MethodGet, Pattern: "/api/v1/agent-exchange/download", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.downloadAgentExchange)},
+		{Method: http.MethodGet, Pattern: "/api/v1/agent-exchange/preview", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.previewAgentExchange)},
+		{Method: http.MethodPut, Pattern: "/api/v1/agent-exchange/file", Access: gateway.AccessSession, Body: gateway.BodyPluginJSON, Handler: http.HandlerFunc(a.putAgentExchangeFile)},
+		{Method: http.MethodPost, Pattern: "/api/v1/agent-exchange/rename", Access: gateway.AccessSession, Body: gateway.BodyJSON, Handler: http.HandlerFunc(a.renameAgentExchange)},
+		{Method: http.MethodDelete, Pattern: "/api/v1/agent-exchange/entry", Access: gateway.AccessSession, Handler: http.HandlerFunc(a.deleteAgentExchangeEntry)},
 		// AI providers & external CLI auth (GAP-2, ADR-0017, ADR-0028)
 		{Method: http.MethodGet, Pattern: "/api/v1/agent-cores", Access: sessionOrService, Handler: http.HandlerFunc(a.listAgentCores)},
 		{Method: http.MethodGet, Pattern: "/api/v1/agent-cores/auth", Access: sessionOrService, Handler: http.HandlerFunc(a.listAgentCoreAuth)},

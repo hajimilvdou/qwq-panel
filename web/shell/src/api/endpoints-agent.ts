@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /* Agent 会话与 AI 服务提供方端点 */
 import { http, toOpResult, type OpResult } from './client';
+import { upload } from './upload';
 import type {
   AgentCore,
   AgentSession,
@@ -16,6 +17,10 @@ import type {
   AgentCoreAuthStatus,
   AgentCoreInfo,
   AgentCoreLoginRequest,
+  AgentExchangeEntry,
+  AgentExchangeListResult,
+  AgentExchangePreview,
+  AgentExchangeUploadResult,
   AgentRegistryInstallResult,
   AgentRegistrySearchResult,
   AgentWorkspaceFileContent,
@@ -84,6 +89,46 @@ export const agent = {
   approvals: (id: string) =>
     http.get<{ items: AgentSessionApproval[] }>(`/api/v1/agent-sessions/${enc(id)}/approvals`).then((r) => r.data),
   eventsUrl: (id: string) => `/api/v1/agent-sessions/${enc(id)}/events`,
+  exportUrl: (id: string, format: 'markdown' | 'json' = 'markdown') =>
+    `/api/v1/agent-sessions/${enc(id)}/export?format=${enc(format)}`,
+};
+
+export const agentExchange = {
+  entries: (path = '') =>
+    http.get<AgentExchangeListResult>('/api/v1/agent-exchange/entries', path ? { query: { path } } : undefined).then((r) => r.data),
+  mkdir: (path: string) =>
+    http.post<AgentExchangeEntry>('/api/v1/agent-exchange/mkdir', { path }).then((r) => r.data),
+  upload: (
+    dir: string,
+    files: readonly File[],
+    relativePaths?: readonly string[],
+    onProgress?: (loaded: number, total: number) => void,
+    signal?: AbortSignal,
+  ) => {
+    const form = new FormData();
+    if (dir) form.append('dir', dir);
+    files.forEach((f, idx) => {
+      form.append('files', f, f.name);
+      const rel = relativePaths?.[idx];
+      if (rel) form.append('relative_paths', rel);
+    });
+    return upload<AgentExchangeUploadResult>('/api/v1/agent-exchange/upload', form, onProgress, signal).then((r) => r.data);
+  },
+  preview: (path: string) =>
+    http.get<AgentExchangePreview>('/api/v1/agent-exchange/preview', { query: { path } }).then((r) => r.data),
+  writeFile: (path: string, content: string) =>
+    http.put<AgentExchangeEntry>('/api/v1/agent-exchange/file', { path, content }).then((r) => r.data),
+  rename: (from: string, to: string) =>
+    http.post<AgentExchangeEntry>('/api/v1/agent-exchange/rename', { from, to }).then((r) => r.data),
+  remove: (path: string) =>
+    http.del<void>('/api/v1/agent-exchange/entry', { query: { path } }),
+  downloadUrl: (path = '', inline = false) => {
+    const qs = new URLSearchParams();
+    if (path) qs.set('path', path);
+    if (inline) qs.set('inline', '1');
+    const s = qs.toString();
+    return s ? `/api/v1/agent-exchange/download?${s}` : '/api/v1/agent-exchange/download';
+  },
 };
 
 export const ai = {

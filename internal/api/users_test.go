@@ -208,8 +208,9 @@ func TestUsersAndApprovals(t *testing.T) {
 		t.Fatalf("display_name = %v", bob["display_name"])
 	}
 
-	// Delete is destructive: the approval demands a second factor, which this
-	// session never passed.
+	// Delete is destructive: once the administrator enables optional 2FA,
+	// approving it demands a fresh second factor.
+	e.enableTOTP(a.userID)
 	deleteReq := a.sign(http.MethodDelete,
 		"/api/v1/users/"+bobID+"?expected_revision="+mustString(t, bob, "revision"), "")
 	deleteReq.Header.Set("Idempotency-Key", idempotencyKey(6))
@@ -454,15 +455,16 @@ func TestEnrollmentTokenRequiresFreshMFA(t *testing.T) {
 	a := e.setupAdmin(adminUser)
 	bob := e.insertUser("bob", identity.RoleOperator, "")
 
-	// The account has no second factor yet: nothing can be fresh.
-	e.issueEnrollment(a, bob, `{}`, 1).expectProblem(t, http.StatusForbidden, problem.MFARequired)
-	e.issueEnrollment(a, bob, `{"mfa_code":"123456"}`, 2).expectProblem(t, http.StatusForbidden, problem.MFARequired)
+	// 2FA is optional: an account without 2FA enabled can issue enrollment links
+	// without being forced to set up TOTP, while malformed mfa_code is still validated.
 	malformed := e.issueEnrollment(a, bob, `{"mfa_code":"12345"}`, 3).
 		expectProblem(t, http.StatusBadRequest, problem.ValidationFailed)
 	if len(malformed.Violations) == 0 || malformed.Violations[0].Pointer != "/mfa_code" {
 		t.Fatalf("violations = %+v", malformed.Violations)
 	}
+	e.issueEnrollment(a, bob, `{}`, 1).expect(t, http.StatusOK)
 
+	// Once 2FA is enabled on the account, issuing enrollment links enforces fresh MFA.
 	secret, recovery := e.enableTOTP(a.userID)
 	e.issueEnrollment(a, bob, fmt.Sprintf(`{"mfa_code":%q}`, wrongTOTP(secret)), 4).
 		expectProblem(t, http.StatusForbidden, problem.MFARequired)

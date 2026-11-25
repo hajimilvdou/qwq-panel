@@ -31,14 +31,47 @@ const (
 //   - OpenCode: permission.asked
 //   - DSH/ACP:  session/request_permission
 type ExternalApprovalRequest struct {
-	CallID      string
-	Kind        ExternalApprovalKind
-	Action      string
-	Summary     string
-	Description string
-	Risk        string
-	Args        json.RawMessage
-	Destructive bool
+	CallID         string
+	PreserveCallID bool
+	Kind           ExternalApprovalKind
+	Action         string
+	Summary        string
+	Description    string
+	Risk           string
+	Args           json.RawMessage
+	Destructive    bool
+}
+
+type inlineApprovedCtxKey struct{}
+
+// WithInlineApproved marks ctx as having already satisfied interactive human
+// approval (or full-mode non-destructive policy) via ApprovalRouter.
+func WithInlineApproved(ctx context.Context) context.Context {
+	return context.WithValue(ctx, inlineApprovedCtxKey{}, true)
+}
+
+// IsInlineApproved reports whether ctx carries an inline approval grant.
+func IsInlineApproved(ctx context.Context) bool {
+	v, _ := ctx.Value(inlineApprovedCtxKey{}).(bool)
+	return v
+}
+
+// IsDangerousShellCommand reports whether a shell command or arguments touch
+// obvious lockout/destructive targets so even full mode requires human approval.
+func IsDangerousShellCommand(command string) bool {
+	return isDangerousShellRequest(ExternalApprovalRequest{
+		Kind:    ApprovalKindShell,
+		Summary: command,
+	})
+}
+
+// IsDangerousFilePath reports whether a file path targets SSH/auth/qwq host
+// state so even full mode requires human approval.
+func IsDangerousFilePath(targetPath string) bool {
+	return isDangerousPatchRequest(ExternalApprovalRequest{
+		Kind:    ApprovalKindPatch,
+		Summary: targetPath,
+	})
 }
 
 // ExternalApprovalVerdict is returned back to the child agent.
@@ -97,9 +130,10 @@ func NewApprovalRouter(turn Turn, planMode bool, emit Emit, minter HostApprovalM
 //  3. safe / custom ALWAYS asks a human through HostApprovalMinter + ApprovalBridge.
 //  4. Missing minter or bridge fails closed (VerdictDecline), never self-approves.
 func (r *ApprovalRouter) Decide(ctx context.Context, req ExternalApprovalRequest) ExternalApprovalOutcome {
-	// Always mint a host-unique call ID when supplied by Service so untrusted
-	// child CLIs cannot trigger PK collisions in agent_tool_calls.
-	if r.turn.NextCallID != nil {
+	// Always mint a host-unique call ID when supplied by Service for untrusted
+	// child CLIs; native core calls already hold a host-minted CallID and set
+	// PreserveCallID so EventToolCall/EventApprovalRequired/EventToolResult pair.
+	if r.turn.NextCallID != nil && (!req.PreserveCallID || req.CallID == "") {
 		req.CallID = r.turn.NextCallID()
 	}
 	if req.Action == "" {
@@ -199,7 +233,7 @@ func (r *ApprovalRouter) Decide(ctx context.Context, req ExternalApprovalRequest
 	dec, err := r.bridge.Wait(ctx, aprID)
 	if err != nil {
 		cancelMinted("External agent turn ended before approval decision.")
-		if r.emit != nil {
+		if r.emit != nil && !req.PreserveCallID {
 			_ = r.emit(Event{
 				Type:        EventToolResult,
 				SessionID:   r.turn.SessionID,
@@ -231,7 +265,7 @@ func (r *ApprovalRouter) Decide(ctx context.Context, req ExternalApprovalRequest
 }
 
 func (r *ApprovalRouter) emitDenied(req ExternalApprovalRequest, reason string) {
-	if r.emit == nil {
+	if r.emit == nil || req.PreserveCallID {
 		return
 	}
 	_ = r.emit(Event{

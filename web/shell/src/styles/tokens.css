@@ -102,12 +102,12 @@
   --c-pink: #ec4f8b;
   --c-slate: #7d879c;
 
-  /* AI 莓果可可暖色（定稿 v4 qwq X，去除冷蓝紫光晕） */
-  --ai-1: #b83b6a;
-  --ai-2: #6b4c3b;
-  --ai-3: #d2648b;
-  --ai-gradient: linear-gradient(135deg, #b83b6a, #6b4c3b 78%);
-  --ai-btn: linear-gradient(135deg, #6b4c3b, #4e3629);
+  /* AI 灵动渐变色（替代旧棕色调） */
+  --ai-1: #ec4899;
+  --ai-2: #6366f1;
+  --ai-3: #f472b6;
+  --ai-gradient: linear-gradient(135deg, #f43f5e, #6366f1 82%);
+  --ai-btn: linear-gradient(135deg, #e11d48, #4f46e5);
 
   /* 状态实底（两主题同值） */
   --ok-strong: #178072;
@@ -153,7 +153,7 @@
 :root,
 [data-accent="rose"] {
   --accent: #b83b6a;
-  --accent-strong: #6b4c3b;
+  --accent-strong: #8f2852;
   --accent-2: #d66d94;
 }
 [data-accent="green"] {

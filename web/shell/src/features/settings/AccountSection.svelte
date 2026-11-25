@@ -120,10 +120,10 @@
 </script>
 
 {#if welcome && !user.mfa_enabled}
-  <Card color="accent" icon="shield" title="面板准备好了" subtitle="建议现在开启两步验证：密码泄露时，别人也登不进来。">
+  <Card color="accent" icon="shield" title="面板准备好了" subtitle="两步验证为可选增强保护，随时可以在这里按需开启，不开启也不影响正常使用。">
     <div class="row">
       <Button variant="primary" icon="shield" onclick={() => (totpOpen = true)}>开启两步验证</Button>
-      <Button variant="plain" onclick={dismissWelcome}>以后再说</Button>
+      <Button variant="plain" onclick={dismissWelcome}>暂不开启</Button>
     </div>
   </Card>
 {/if}

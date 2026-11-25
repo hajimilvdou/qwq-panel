@@ -3167,6 +3167,36 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '429': { $ref: '#/components/responses/RateLimited' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-sessions/{session_id}/export:
+    parameters:
+      - $ref: '#/components/parameters/AgentSessionIdPath'
+    get:
+      operationId: exportAgentSession
+      tags: [agent-sessions]
+      summary: Export a session transcript as Markdown or JSON
+      description: Downloads the full retained transcript and metadata of the caller's agent session as a Markdown (.md) or JSON (.json) file.
+      security:
+        - sessionCookie: []
+        - serviceAccountToken: []
+      parameters:
+        - name: format
+          in: query
+          description: Export file format (markdown or json).
+          schema: { type: string, enum: [markdown, md, json] }
+      responses:
+        '200':
+          description: Downloadable transcript attachment.
+          content:
+            text/markdown:
+              schema: { type: string, maxLength: 10485760 }
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/agent-sessions/{session_id}/messages:
     parameters:
       - $ref: '#/components/parameters/AgentSessionIdPath'
@@ -3521,6 +3551,247 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentCoreAuthStatus' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-exchange/entries:
+    get:
+      operationId: listAgentExchangeEntries
+      tags: [agent-sessions]
+      summary: List folders and files in the agent interactive exchange folder
+      description: Lists subfolders and files inside the shared agent interactive file exchange directory.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: path
+          in: query
+          description: Relative subfolder path inside the exchange folder (empty for root).
+          schema: { type: string, maxLength: 320 }
+        - $ref: '#/components/parameters/Fields'
+      responses:
+        '200':
+          description: Listed exchange directory entries.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentExchangeListResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-exchange/mkdir:
+    post:
+      operationId: mkdirAgentExchange
+      tags: [agent-sessions]
+      summary: Create a subfolder inside the agent interactive exchange folder
+      description: Creates a new subfolder (including nested paths) inside the shared agent interactive exchange folder.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Creating an already-existing folder returns it idempotently.
+      x-qwq-action-exempt: Direct file-exchange subfolder creation scoped to the agent exchange folder.
+      requestBody:
+        description: Subfolder path to create.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentExchangeMkdirRequest' }
+      responses:
+        '201':
+          description: Created folder metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentExchangeEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-exchange/upload:
+    post:
+      operationId: uploadAgentExchange
+      tags: [agent-sessions]
+      summary: Upload one or more files into the agent interactive exchange folder
+      description: Accepts multipart/form-data file uploads into the root or a target subfolder of the agent interactive exchange folder.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Multipart binary upload into the interactive exchange folder; overwriting an existing file replaces it atomically.
+      x-qwq-action-exempt: Direct interactive file-exchange upload scoped to the exchange folder.
+      requestBody:
+        description: Multipart upload containing target dir and files parts.
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              description: Multipart upload payload.
+              properties:
+                dir: { type: string, maxLength: 320, description: Optional target subfolder path. }
+                files:
+                  type: array
+                  maxItems: 100
+                  description: One or more files to upload.
+                  items: { type: string, format: binary, maxLength: 52428800 }
+      responses:
+        '201':
+          description: Uploaded file entries.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentExchangeUploadResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-exchange/download:
+    get:
+      operationId: downloadAgentExchange
+      tags: [agent-sessions]
+      summary: Download a file or zipped subfolder from the agent interactive exchange folder
+      description: Streams a single file (or a .zip archive when targeting a folder) from the interactive exchange folder.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: path
+          in: query
+          description: Relative file or folder path (empty downloads the entire exchange folder as a zip).
+          schema: { type: string, maxLength: 320 }
+        - name: inline
+          in: query
+          description: Set to 1 to render safe image files inline.
+          schema: { type: string, enum: ['0', '1'] }
+      responses:
+        '200':
+          description: File or zip archive stream.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-exchange/preview:
+    get:
+      operationId: previewAgentExchange
+      tags: [agent-sessions]
+      summary: Preview a file inside the agent interactive exchange folder
+      description: Returns bounded inline text content or metadata for a file in the interactive exchange folder.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Relative file path inside the exchange folder.
+          schema: { type: string, minLength: 1, maxLength: 320 }
+        - $ref: '#/components/parameters/Fields'
+      responses:
+        '200':
+          description: File preview content and metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentExchangePreview' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-exchange/file:
+    put:
+      operationId: putAgentExchangeFile
+      tags: [agent-sessions]
+      summary: Create or update a text file inside the agent interactive exchange folder
+      description: Atomically writes UTF-8 text content to a relative file path inside the interactive exchange folder.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Idempotent PUT text write inside the interactive exchange folder.
+      x-qwq-action-exempt: Direct text file editing inside the interactive exchange folder.
+      requestBody:
+        description: Target relative path and UTF-8 content.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentExchangeWriteRequest' }
+      responses:
+        '200':
+          description: Saved file metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentExchangeEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-exchange/rename:
+    post:
+      operationId: renameAgentExchange
+      tags: [agent-sessions]
+      summary: Rename or move a file or folder inside the agent interactive exchange folder
+      description: Renames or moves a file or subfolder strictly within the interactive exchange folder.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Direct rename within the interactive exchange folder; destination collision returns 409.
+      x-qwq-action-exempt: Direct file-exchange rename scoped to the exchange folder.
+      requestBody:
+        description: Source and destination relative paths.
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentExchangeRenameRequest' }
+      responses:
+        '200':
+          description: Renamed entry metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentExchangeEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/agent-exchange/entry:
+    delete:
+      operationId: deleteAgentExchangeEntry
+      tags: [agent-sessions]
+      summary: Delete a file or subfolder from the agent interactive exchange folder
+      description: Deletes a file or subfolder recursively inside the interactive exchange folder.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-qwq-idempotency: exempt
+      x-qwq-idempotency-reason: Idempotent DELETE removing an exchange file or subfolder.
+      x-qwq-action-exempt: Direct file-exchange deletion scoped to the exchange folder.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Relative file or subfolder path to delete.
+          schema: { type: string, minLength: 1, maxLength: 320 }
+      responses:
+        '204':
+          description: Deleted successfully.
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5546,7 +5817,7 @@ components:
           description: Cached list of available model identifiers discovered from or configured for this provider.
           items: { type: string, maxLength: 128 }
         reasoning_effort: { type: string, maxLength: 48, pattern: '^[a-zA-Z0-9._:/-]{0,48}$', description: Custom reasoning/thinking effort code (e.g. minimal, low, medium, high, xhigh, max, none, or numeric budget); empty auto-matches the built-in model catalog and falls back to high. }
-        max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 4000000, description: Default context window size in tokens (0 uses core default). }
+        max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 10000000, description: Default context window size in tokens (0 auto-matches the model catalog). }
         has_api_key: { type: boolean, description: Whether an API key is stored. The key is write-only and never returned. }
         is_default: { type: boolean, description: 'Whether sessions without their own endpoint use this provider; at most one provider is the default.' }
         created_at: { $ref: '#/components/schemas/Timestamp' }
@@ -5575,7 +5846,7 @@ components:
           description: Optional cached model list available on this provider.
           items: { type: string, maxLength: 128 }
         reasoning_effort: { type: string, maxLength: 48, pattern: '^[a-zA-Z0-9._:/-]{0,48}$', description: Custom reasoning/thinking effort code (e.g. minimal, low, medium, high, xhigh, max, none, or numeric budget); empty auto-matches the built-in model catalog and falls back to high. }
-        max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 4000000, description: Default context window size in tokens (0 uses core default). }
+        max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 10000000, description: Default context window size in tokens (0 auto-matches the model catalog). }
         is_default: { type: boolean, description: Make this the provider sessions without their own endpoint use; clears the previous default. }
     AiProviderUpdateRequest:
       type: object
@@ -5595,7 +5866,7 @@ components:
           description: Updated cached model list available on this provider.
           items: { type: string, maxLength: 128 }
         reasoning_effort: { type: string, maxLength: 48, pattern: '^[a-zA-Z0-9._:/-]{0,48}$', description: New custom reasoning/thinking effort code; empty restores auto-matching against the built-in model catalog with fallback to high. }
-        max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 4000000, description: New default context window size in tokens. }
+        max_context_tokens: { type: integer, format: int64, minimum: 0, maximum: 10000000, description: New default context window size in tokens (0 restores automatic model matching). }
         is_default: { type: boolean, description: 'Whether this provider is the default; setting it clears the previous default.' }
     AiProviderFetchModelsRequest:
       type: object
@@ -5690,6 +5961,89 @@ components:
         size: { type: integer, format: int64, minimum: 0, maximum: 10485760, description: File size in bytes. }
         is_text: { type: boolean, description: Whether the file can be edited inline as UTF-8 text. }
         updated_at: { $ref: '#/components/schemas/Timestamp' }
+    AgentExchangeEntry:
+      type: object
+      additionalProperties: false
+      description: One file or subfolder in the agent interactive exchange folder.
+      required: [name, path, is_dir, size, is_text, is_image, updated_at]
+      properties:
+        name: { type: string, maxLength: 256, description: Entry basename. }
+        path: { type: string, maxLength: 320, description: Relative path inside the exchange folder. }
+        is_dir: { type: boolean, description: Whether the entry is a subfolder. }
+        size: { type: integer, format: int64, minimum: 0, maximum: 1073741824, description: File size in bytes (0 for directories). }
+        child_count: { type: integer, format: int32, minimum: 0, maximum: 100000, description: Direct child count when is_dir is true. }
+        is_text: { type: boolean, description: Whether the file is previewable/editable as UTF-8 text. }
+        is_image: { type: boolean, description: Whether the file is a previewable image. }
+        mime_type: { type: string, maxLength: 128, description: Detected MIME type when known. }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+    AgentExchangeListResult:
+      type: object
+      additionalProperties: false
+      description: Directory listing of one path inside the agent interactive exchange folder.
+      required: [path, parent_path, root_hint, entries, total_dirs, total_files, total_bytes]
+      properties:
+        path: { type: string, maxLength: 320, description: Current relative directory path (empty for root). }
+        parent_path: { type: string, maxLength: 320, description: Parent relative directory path. }
+        root_hint: { type: string, maxLength: 512, description: Absolute host directory path of the exchange root. }
+        entries:
+          type: array
+          maxItems: 1000
+          description: Folders and files inside this directory.
+          items: { $ref: '#/components/schemas/AgentExchangeEntry' }
+        total_dirs: { type: integer, format: int32, minimum: 0, maximum: 100000, description: Number of subfolders in this directory. }
+        total_files: { type: integer, format: int32, minimum: 0, maximum: 100000, description: Number of files in this directory. }
+        total_bytes: { type: integer, format: int64, minimum: 0, maximum: 1099511627776, description: Combined file bytes in this directory. }
+    AgentExchangePreview:
+      type: object
+      additionalProperties: false
+      description: Bounded preview of one file inside the agent interactive exchange folder.
+      required: [path, name, size, is_text, is_image, updated_at]
+      properties:
+        path: { type: string, maxLength: 320, description: Relative file path. }
+        name: { type: string, maxLength: 256, description: File basename. }
+        size: { type: integer, format: int64, minimum: 0, maximum: 1073741824, description: File size in bytes. }
+        is_text: { type: boolean, description: Whether inline text content is returned. }
+        is_image: { type: boolean, description: Whether the file is a previewable image. }
+        mime_type: { type: string, maxLength: 128, description: Detected MIME type. }
+        truncated: { type: boolean, description: True when inline text was truncated to the preview cap. }
+        content: { type: string, maxLength: 524288, description: UTF-8 text preview content. }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+    AgentExchangeMkdirRequest:
+      type: object
+      additionalProperties: false
+      description: Request to create a subfolder inside the exchange folder.
+      required: [path]
+      properties:
+        path: { type: string, minLength: 1, maxLength: 320, description: Relative subfolder path to create. }
+    AgentExchangeWriteRequest:
+      type: object
+      additionalProperties: false
+      description: Request to create or update a text file inside the exchange folder.
+      required: [path, content]
+      properties:
+        path: { type: string, minLength: 1, maxLength: 320, description: Relative file path. }
+        content: { type: string, maxLength: 2097152, description: UTF-8 text content. }
+    AgentExchangeRenameRequest:
+      type: object
+      additionalProperties: false
+      description: Request to rename or move a file or subfolder inside the exchange folder.
+      required: [from, to]
+      properties:
+        from: { type: string, minLength: 1, maxLength: 320, description: Current relative path. }
+        to: { type: string, minLength: 1, maxLength: 320, description: Target relative path. }
+    AgentExchangeUploadResult:
+      type: object
+      additionalProperties: false
+      description: Summary of files uploaded into the interactive exchange folder.
+      required: [dir, items, total]
+      properties:
+        dir: { type: string, maxLength: 320, description: Target subfolder path. }
+        items:
+          type: array
+          maxItems: 100
+          description: Uploaded file entries.
+          items: { $ref: '#/components/schemas/AgentExchangeEntry' }
+        total: { type: integer, format: int32, minimum: 0, maximum: 100, description: Count of uploaded files. }
     AgentWorkspaceListResult:
       type: object
       additionalProperties: false

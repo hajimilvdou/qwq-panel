@@ -43,9 +43,19 @@ func TestPluginUninstallJob(t *testing.T) {
 		t.Fatalf("uninstall is risk high, so it needs an approval: %s", resp.body)
 	}
 
-	// purge_data is destructive: without a recent second factor it is refused.
-	del("acme.demo", "?expected_revision=7&purge_data=true", idempotencyKey(4)).
+	// 2FA is optional: an administrator without 2FA enabled can uninstall with
+	// purge_data=true without being forced to enroll in TOTP.
+	del("acme.demo", "?expected_revision=7&purge_data=true", idempotencyKey(4)).expect(t, http.StatusAccepted)
+
+	// Once the administrator opts into 2FA, purge_data=true requires fresh MFA
+	// or a current X-QWQ-MFA-Code header.
+	secret, _ := e.enableTOTP(a.userID)
+	del("acme.demo", "?expected_revision=7&purge_data=true", idempotencyKey(8)).
 		expectProblem(t, http.StatusForbidden, problem.MFARequired)
+	withCode := a.sign(http.MethodDelete, "/api/v1/plugins/acme.demo?expected_revision=7&purge_data=true", "")
+	withCode.Header.Set("Idempotency-Key", idempotencyKey(9))
+	withCode.Header.Set("X-QWQ-MFA-Code", totpAt(secret, 1))
+	e.do(withCode).expect(t, http.StatusAccepted)
 
 	// A plugin another one depends on cannot be removed.
 	mgr.dependents = []string{"acme.other"}

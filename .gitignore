@@ -1,11 +1,10 @@
-# 项目内工具链与缓存（IMPLEMENTATION-PLAN.md §2）
+# Local toolchain and cache
 /.tools/
 /.cache/
 /.claude/
 /go.work.sum
 
-# 服务器登录信息与密钥，绝不提交
-/服务器/
+# Private keys and local remote env files
 *.key
 id_rsa*
 id_ed25519*
@@ -13,14 +12,7 @@ id_ed25519*
 *_id_rsa
 /scripts/remote*.env
 
-# 审查会话的工作文件夹与本机临时文件夹，不进版本库
-/审查与改进/
-/新建文件夹/
-
-# ======================== 本地协作交接 ========================
-/协作共享/
-
-# 构建产物
+# Build artifacts
 /dist/
 /bin/
 *.test
@@ -34,7 +26,7 @@ __pycache__/
 # Node
 node_modules/
 
-# 编辑器与系统
+# Editors and OS
 .idea/
 .vscode/
 *.swp

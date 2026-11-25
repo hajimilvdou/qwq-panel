@@ -46,8 +46,8 @@ func TestRegisterPublicRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("registerPublicRoutes: %v", err)
 	}
-	if count != 123 {
-		t.Fatalf("route count = %d, want 123", count)
+	if count != 132 {
+		t.Fatalf("route count = %d, want 132", count)
 	}
 	routes := c.Gateway().Routes()
 	if len(routes) != count {
@@ -99,6 +99,15 @@ func TestRegisterPublicRoutes(t *testing.T) {
 		"POST /api/v1/agent/execute",
 		"POST /api/v1/agent/wait",
 		"POST /api/v1/agent/cancel",
+		"GET /api/v1/agent-sessions/{session_id}/export",
+		"GET /api/v1/agent-exchange/entries",
+		"POST /api/v1/agent-exchange/mkdir",
+		"POST /api/v1/agent-exchange/upload",
+		"GET /api/v1/agent-exchange/download",
+		"GET /api/v1/agent-exchange/preview",
+		"PUT /api/v1/agent-exchange/file",
+		"POST /api/v1/agent-exchange/rename",
+		"DELETE /api/v1/agent-exchange/entry",
 	}
 	for _, key := range required {
 		if !seen[key] {

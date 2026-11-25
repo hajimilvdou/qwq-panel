@@ -3,7 +3,9 @@
 package api
 
 import (
+	"context"
 	"net/http"
+	"strings"
 
 	"github.com/qwq-panel/qwq/internal/actor"
 	"github.com/qwq-panel/qwq/internal/gateway"
@@ -139,11 +141,24 @@ func (a *api) decideApproval(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	// A destructive approval asks for a fresh second factor; a code verified
-	// here counts for this decision only.
-	if act, err = a.secondFactor(r, act, req.MFACode); err != nil {
+	// Two-factor authentication is opt-in: destructive approvals only demand a
+	// second factor when the deciding user has enabled 2FA on their account.
+	mfaEnabled, err := a.userMFAEnabled(r.Context(), act)
+	if err != nil {
 		a.fail(w, r, err)
 		return
+	}
+	if !mfaEnabled && req.MFACode == "" {
+		act.MFA = true
+	} else {
+		code := req.MFACode
+		if code == "" {
+			code = strings.TrimSpace(r.Header.Get(mfaCodeHeader))
+		}
+		if act, err = a.secondFactor(r, act, code); err != nil {
+			a.fail(w, r, err)
+			return
+		}
 	}
 	idem, err := a.idempotency(r, req)
 	if err != nil {
@@ -167,6 +182,51 @@ func (a *api) decideApproval(w http.ResponseWriter, r *http.Request) {
 	a.writeOperationResponse(w, resp)
 }
 
+// userMFAEnabled reports whether a human caller has opted into two-factor
+// authentication. Accounts without 2FA enabled are not blocked by MFA gates.
+func (a *api) userMFAEnabled(ctx context.Context, act actor.Actor) (bool, error) {
+	if a.d.Identity == nil || act.Kind != actor.Human {
+		return false, nil
+	}
+	u, err := a.d.Identity.User(ctx, act.ID)
+	if err != nil {
+		return false, err
+	}
+	return u.MFAEnabled, nil
+}
+
+// requireOptionalMFA enforces a fresh second factor ONLY when the caller has
+// opted into 2FA. When 2FA is enabled and the session is not MFA-fresh, it
+// accepts either bodyCode or the X-QWQ-MFA-Code request header.
+func (a *api) requireOptionalMFA(r *http.Request, act actor.Actor, bodyCode, detail string) (actor.Actor, error) {
+	if err := checkMFACode(bodyCode); err != nil {
+		return act, err
+	}
+	enabled, err := a.userMFAEnabled(r.Context(), act)
+	if err != nil {
+		return act, err
+	}
+	if !enabled {
+		act.MFA = true
+		return act, nil
+	}
+	if act.MFA {
+		return act, nil
+	}
+	code := strings.TrimSpace(bodyCode)
+	if code == "" {
+		code = strings.TrimSpace(r.Header.Get(mfaCodeHeader))
+	}
+	if code == "" {
+		return act, problem.New(problem.MFARequired, "%s", detail)
+	}
+	act, err = a.secondFactor(r, act, code)
+	if problem.HasCode(err, problem.Unauthenticated) {
+		return act, problem.New(problem.MFARequired, "%s", detail)
+	}
+	return act, err
+}
+
 // secondFactor marks act as holding a fresh second factor for this request
 // when code is a current TOTP code of the user; an empty code leaves act as it
 // is. identity consumes the code, so it cannot be replayed. The session itself
@@ -178,6 +238,9 @@ func (a *api) secondFactor(r *http.Request, act actor.Actor, code string) (actor
 		return act, err
 	}
 	if err := a.d.Identity.VerifySecondFactor(r.Context(), act.ID, code, gateway.ClientIP(r.Context())); err != nil {
+		if problem.HasCode(err, problem.Unauthenticated) {
+			return act, problem.New(problem.MFARequired, "The second-factor code is invalid or expired.")
+		}
 		return act, err
 	}
 	act.MFA = true

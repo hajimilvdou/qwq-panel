@@ -1029,11 +1029,14 @@ func (a *api) uninstallPlugin(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	// Purging data is destructive: it needs a recent second factor. The session
-	// stays valid, so this is 403 MFA_REQUIRED, never 401.
-	if purge && !act.MFA {
-		a.fail(w, r, problem.New(problem.MFARequired, "Deleting a plugin's data requires a fresh second factor."))
-		return
+	// Purging data is destructive: when the caller has enabled 2FA, require a
+	// fresh second factor (session MFA or X-QWQ-MFA-Code). Accounts without 2FA
+	// enabled are not forced to enroll.
+	if purge {
+		if act, err = a.requireOptionalMFA(r, act, "", "Deleting a plugin's data requires a fresh second factor."); err != nil {
+			a.fail(w, r, err)
+			return
+		}
 	}
 	p, err := a.d.Plugins.Get(r.Context(), pluginID)
 	if err != nil {

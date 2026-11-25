@@ -90,10 +90,10 @@ func decodeNativeConfig(raw json.RawMessage) (*nativeConfig, error) {
 			Message: "timeout_seconds must be between 1 and 300.",
 		})
 	}
-	if cfg.MaxSteps < 0 || cfg.MaxSteps > defaultMaxSteps {
+	if cfg.MaxSteps < 0 || cfg.MaxSteps > maxEnhancedSteps {
 		return nil, problem.Validation(problem.Violation{
 			Pointer: "/config/max_steps", Code: "OUT_OF_RANGE",
-			Message: "max_steps must be between 1 and 8.",
+			Message: "max_steps must be between 1 and 48.",
 		})
 	}
 	if cfg.Temperature != nil && (*cfg.Temperature < 0 || *cfg.Temperature > 2) {

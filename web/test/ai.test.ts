@@ -7,7 +7,8 @@ import { ApiError } from '../shell/src/api/client';
 import type { AgentSessionEvent, Approval } from '../shell/src/api/types';
 import { addLocalUser, fromMessages, reduce, settleLocalUser, turnProgress, type TranscriptState } from '../shell/src/lib/ai/transcript';
 import { parseSessionFrame, byteLength } from '../shell/src/lib/ai/session-stream.svelte';
-import { decideApproval, nextFocus, requesterOf, reachText } from '../shell/src/lib/ai/decide';
+import { approvalTitle, decideApproval, nextFocus, requesterOf, reachText, whyAsk } from '../shell/src/lib/ai/decide';
+import { formatContextTokens, resolveModelContext } from '../shell/src/lib/ai/model-context-catalog';
 import { clampSize, loadSize, saveSize, sizeFromPointer } from '../shell/src/lib/ai/dock-layout';
 import { createMarkdownCache, parseInline, parseInlineLinear, parseMarkdown, safeHref } from '../shell/src/ui/markdown';
 
@@ -252,12 +253,22 @@ describe('审批决定', () => {
     });
     expect((await decideApproval(approval(), { decision: 'approve' }, 'k', fail('INTERNAL', 500))).kind).toBe('error');
   });
-  it('发起者与胶囊文案', () => {
+  it('发起者、标题本地化与胶囊文案', () => {
     const f = approval().facts;
     expect(requesterOf(f, 'usr_a').text).toBe('AI 助手代你发起');
     expect(requesterOf({ ...f, requested_by: { kind: 'ai_agent', id: 'dlg_1', display_name: 'Claude' } }, 'u').text).toContain('外部 AI「Claude」');
     expect(requesterOf({ ...f, requested_by: { kind: 'human', id: 'usr_a' } }, 'usr_a').text).toBe('你发起');
     expect(reachText(approval())).toBe('AI 想创建用户');
+    const enableFacts = {
+      ...f,
+      action: { ...f.action, id: 'host.plugins.enable', summary: 'Enable a plugin', source: 'host' as const },
+      args: { plugin_id: 'core.xray' },
+      requested_by: { kind: 'human' as const, id: 'usr_a' },
+      permission_mode: 'safe' as const,
+      effective_risk: 'high' as const,
+    };
+    expect(approvalTitle(enableFacts)).toBe('启用插件 core.xray');
+    expect(whyAsk(enableFacts)).toBe('高风险操作，需要再次确认');
   });
   it('批完一张后聚焦：后一张 → 前一张 → 无', () => {
     expect(nextFocus(['a', 'b', 'c'], 'b')).toBe('c');
@@ -367,5 +378,27 @@ describe('悬浮窗模式优先级：open > reach > working > rest', () => {
     expect(dock.mode).toBe('working');
     dock.busy = false;
     expect(dock.mode).toBe('rest');
+  });
+});
+
+describe('主流 AI 模型上下文窗口自动识别', () => {
+  it('按模型名精准匹配官方上下文窗口，支持后缀识别与自定义覆盖', () => {
+    expect(resolveModelContext('gpt-5.4', '0')).toMatchObject({ tokens: 1_000_000, label: '1M', source: 'catalog' });
+    expect(resolveModelContext('openai/gpt-5-mini', 0)).toMatchObject({ tokens: 400_000, label: '400K', source: 'catalog' });
+    expect(resolveModelContext('gpt-4.1', 0)).toMatchObject({ tokens: 1_000_000, label: '1M', source: 'catalog' });
+    expect(resolveModelContext('claude-opus-4-6', 0)).toMatchObject({ tokens: 1_000_000, label: '1M', source: 'catalog' });
+    expect(resolveModelContext('claude-sonnet-4-5', 0)).toMatchObject({ tokens: 200_000, label: '200K', source: 'catalog' });
+    expect(resolveModelContext('claude-sonnet-4-5[1m]', 0)).toMatchObject({ tokens: 1_000_000, label: '1M', source: 'catalog' });
+    expect(resolveModelContext('gemini-2.5-pro', 0)).toMatchObject({ tokens: 1_000_000, label: '1M', source: 'catalog' });
+    expect(resolveModelContext('deepseek-reasoner', 0)).toMatchObject({ tokens: 128_000, label: '128K', source: 'catalog' });
+    expect(resolveModelContext('qwen3-coder-plus', 0)).toMatchObject({ tokens: 262_144, label: '256K', source: 'catalog' });
+    expect(resolveModelContext('grok-4.20', 0)).toMatchObject({ tokens: 2_000_000, label: '2M', source: 'catalog' });
+    expect(resolveModelContext('glm-5', 0)).toMatchObject({ tokens: 200_000, label: '200K', source: 'catalog' });
+    expect(resolveModelContext('kimi-k2.5', 0)).toMatchObject({ tokens: 262_144, label: '256K', source: 'catalog' });
+    expect(resolveModelContext('meta-llama/llama-4-scout', 0)).toMatchObject({ tokens: 10_000_000, label: '10M', source: 'catalog' });
+    expect(resolveModelContext('my-local-64k', 0)).toMatchObject({ tokens: 64_000, label: '64K', source: 'catalog' });
+    expect(resolveModelContext('unknown-model', 0)).toMatchObject({ tokens: 128_000, label: '128K', source: 'fallback' });
+    expect(resolveModelContext('gpt-5.4', '200000')).toMatchObject({ tokens: 200_000, label: '200K', source: 'custom' });
+    expect(formatContextTokens(262_144)).toBe('256K');
   });
 });

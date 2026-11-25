@@ -11,13 +11,13 @@
   import { approvals } from '$lib/ai/approvals.svelte';
   import { nextFocus } from '$lib/ai/decide';
 
-  let { focusId = null }: { focusId?: string | null } = $props();
+  let { focusId = null, active = true }: { focusId?: string | null; active?: boolean } = $props();
 
   let root = $state<HTMLElement>();
   const list = $derived(approvals.pending);
 
   async function focusCard(id: string | null) {
-    if (!id) return;
+    if (!id || !active) return;
     await tick();
     const card = root?.querySelector<HTMLElement>(`[data-approval="${CSS.escape(id)}"]`);
     card?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -28,8 +28,9 @@
     void focusCard(focusId);
   });
 
-  /* 展开即看到：全部标记已看过 */
+  /* 仅当审批区真正展开可见时才标记已看过 */
   $effect(() => {
+    if (!active) return;
     for (const a of list) approvals.markSeen(a.approval_id);
   });
 

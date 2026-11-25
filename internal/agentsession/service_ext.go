@@ -39,6 +39,8 @@ func (s *Service) registerDefaultAdapterCores(opts Options) {
 	}
 	nativeCore := NewEnhancedNativeCore(nativeOpts, skills)
 	nativeCore.SetWorkspace(s.workspace)
+	nativeCore.SetExchange(s.exchange)
+	nativeCore.SetApprovalWiring(minter, opts.Approvals, opts.RoleResolver)
 	s.cores[string(CoreNative)] = nativeCore
 	s.cores[string(CoreClaudeCode)] = NewClaudeCodeCore(ClaudeCodeOptions{
 		Bridge:    opts.Approvals,
@@ -125,7 +127,14 @@ func (s *Service) tryHandleSlashCommand(ctx context.Context, rt *sessionRuntime,
 			extra += " · 思考 " + cfg.ReasoningEffort
 		}
 		if cfg.MaxContextTokens > 0 {
-			extra += fmt.Sprintf(" · 上下文 %dk", cfg.MaxContextTokens/1000)
+			extra += " · 上下文 " + FormatContextTokensLabel(cfg.MaxContextTokens)
+		} else {
+			ctxTok, matched, prof := ResolveContextWindow(cfg.Model, 0)
+			if matched {
+				extra += fmt.Sprintf(" · 上下文 %s（自动匹配 %s）", FormatContextTokensLabel(ctxTok), prof.Family)
+			} else {
+				extra += " · 上下文 " + FormatContextTokensLabel(ctxTok) + "（自动默认）"
+			}
 		}
 		if cfg.PlanMode {
 			extra += " · 计划模式开"
@@ -237,9 +246,15 @@ func (s *Service) tryHandleSlashCommand(ctx context.Context, rt *sessionRuntime,
 		} else {
 			resolved, matched, prof := ResolveReasoningEffort(fields[0], "")
 			if matched {
-				summary += fmt.Sprintf("（已自动匹配 %s → %s）", prof.Family, resolved)
+				summary += fmt.Sprintf("（思考自动匹配 %s → %s", prof.Family, resolved)
 			} else {
-				summary += fmt.Sprintf("（未命中清单，默认思考挡位：%s）", resolved)
+				summary += fmt.Sprintf("（思考默认 %s", resolved)
+			}
+			ctxTok, ctxMatched, _ := ResolveContextWindow(fields[0], 0)
+			if ctxMatched {
+				summary += " · 上下文自动 " + FormatContextTokensLabel(ctxTok) + "）"
+			} else {
+				summary += " · 上下文默认 " + FormatContextTokensLabel(ctxTok) + "）"
 			}
 		}
 		_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/model", OK: true, Summary: summary})
@@ -274,30 +289,44 @@ func (s *Service) tryHandleSlashCommand(ctx context.Context, rt *sessionRuntime,
 
 	case "context":
 		raw := strings.ToLower(strings.TrimSpace(args))
-		mult := int64(1)
-		if strings.HasSuffix(raw, "k") {
-			mult = 1000
-			raw = strings.TrimSuffix(raw, "k")
-		} else if strings.HasSuffix(raw, "m") {
-			mult = 1_000_000
-			raw = strings.TrimSuffix(raw, "m")
-		}
-		n, perr := strconv.ParseInt(raw, 10, 64)
-		if perr != nil {
-			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: false, Summary: "用法：/context <tokens>，例如 /context 128k 或 /context 200000"})
+		if raw == "" {
+			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: false, Summary: "用法：/context <tokens|auto>，例如 /context auto、/context 200k、/context 1m"})
 			return true
 		}
-		val, verr := ValidateMaxContextTokens(n*mult, "/config/max_context_tokens")
-		if verr != nil {
-			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: false, Summary: "上下文大小需为 0 或 1024 ~ 4000000 之间"})
-			return true
+		var val int64
+		if raw == "auto" || raw == "reset" || raw == "0" {
+			val = 0
+		} else {
+			mult := int64(1)
+			if strings.HasSuffix(raw, "k") {
+				mult = 1000
+				raw = strings.TrimSuffix(raw, "k")
+			} else if strings.HasSuffix(raw, "m") {
+				mult = 1_000_000
+				raw = strings.TrimSuffix(raw, "m")
+			}
+			n, perr := strconv.ParseInt(raw, 10, 64)
+			if perr != nil {
+				_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: false, Summary: "用法：/context <tokens|auto>，例如 /context auto、/context 128k 或 /context 1m"})
+				return true
+			}
+			var verr error
+			val, verr = ValidateMaxContextTokens(n*mult, "/config/max_context_tokens")
+			if verr != nil {
+				_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: false, Summary: "上下文大小需为 0（自动）或 1024 ~ 10000000 之间"})
+				return true
+			}
 		}
 		patch, _ := json.Marshal(map[string]any{"max_context_tokens": val})
 		if _, err := s.Update(ctx, owner, sess.ID, UpdateRequest{Config: patch}); err != nil {
 			_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: false, Summary: "设置上下文窗口失败：" + err.Error()})
 			return true
 		}
-		_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: true, Summary: fmt.Sprintf("已将上下文窗口大小设为 %d tokens", val)})
+		msg := fmt.Sprintf("已将上下文窗口大小设为 %s（%d tokens）", FormatContextTokensLabel(val), val)
+		if val == 0 {
+			msg = "已恢复自动匹配上下文窗口（识别模型名自动选择，未命中默认 128K）"
+		}
+		_ = emitExtended(emit, EventCommandResult, CommandResult{Command: "/context", OK: true, Summary: msg})
 		return true
 
 	case "skills":

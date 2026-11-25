@@ -2,11 +2,19 @@
 <!--
   DockBall · 悬浮窗收起态（SPEC §4）
   ───────────────────────────────────────────────────────────────
-  rest 呼吸球 / working 环形转动 + "第 n/m 步" / reach 向左伸出胶囊 / 离线置灰。
-  open 时只隐藏（visibility），保持布局与焦点还原目标稳定。
+  不同 AI 状态对应不同表情球与提示文案：
+    idle      常驻微笑 (^‿^)
+    thinking  思考推演 (•̀ᴗ•́) + 外环转动 + "第 n/m 步"
+    streaming 正在流式输出 (◕‿◕)
+    tool      工具执行中 (>‿<)
+    approval  待人工确认 (⊙_⊙)? + 红色数量徽标（所有未处理审批始终显示角标）
+    error     API / 对话出错 (×_×)
+    offline   连接中断 (-_- )z
+    paused    已暂停 (・_・)
 -->
 <script lang="ts">
   import { Orb } from '$ui';
+  import type { OrbState } from '$ui/Orb.svelte';
   import { approvals } from '$lib/ai/approvals.svelte';
   import { dock } from '$lib/ai/dock.svelte';
   import { reachText } from '$lib/ai/decide';
@@ -15,29 +23,55 @@
   interface Props {
     /** 当前对话进度（turnProgress） */
     progress: { done: number; total: number };
+    /** 当前实时 AI 表情态 */
+    aiState?: OrbState;
     onopen: () => void;
   }
-  let { progress, onopen }: Props = $props();
+  let { progress, aiState = 'idle', onopen }: Props = $props();
 
   const mode = $derived(dock.mode);
+  const pendingCount = $derived(approvals.pending.length);
   const firstUnseen = $derived(approvals.unseen[0]);
   const openFromBall = () => onopen();
+
+  const effectiveOrbState = $derived.by<OrbState>(() => {
+    if (events.offline) return 'offline';
+    if (pendingCount > 0) return 'approval';
+    if (aiState === 'error') return 'error';
+    if (aiState === 'tool') return 'tool';
+    if (aiState === 'streaming') return 'streaming';
+    if (aiState === 'thinking' || aiState === 'working' || mode === 'working') return 'thinking';
+    if (aiState === 'paused') return 'paused';
+    if (aiState === 'done') return 'done';
+    return 'rest';
+  });
+
   const ballLabel = $derived(
-    mode === 'reach'
-      ? `有 ${approvals.unseen.length} 项等你确认，打开 AI 助手`
-      : mode === 'working'
-        ? `AI 正在处理${progress.total ? `，第 ${Math.min(progress.done + 1, progress.total)}/${progress.total} 步` : ''}，打开 AI 助手`
-        : '打开 AI 助手',
+    pendingCount > 0
+      ? `有 ${pendingCount} 项待确认操作，打开 AI 助手`
+      : effectiveOrbState === 'error'
+        ? 'AI 上一轮接口或执行出错，点击查看'
+        : effectiveOrbState === 'tool'
+          ? 'AI 正在调用工具，打开 AI 助手'
+          : effectiveOrbState === 'streaming'
+            ? 'AI 正在回复，打开 AI 助手'
+            : effectiveOrbState === 'thinking'
+              ? `AI 正在思考${progress.total ? `，第 ${Math.min(progress.done + 1, progress.total)}/${progress.total} 步` : ''}，打开 AI 助手`
+              : '打开 AI 助手',
   );
-  const tip = $derived(
-    events.offline
-      ? '连接中断，正在重连'
-      : mode === 'working'
-        ? progress.total
-          ? `第 ${Math.min(progress.done + 1, progress.total)}/${progress.total} 步`
-          : 'AI 正在处理'
-        : '',
-  );
+
+  const tip = $derived.by(() => {
+    if (events.offline) return '连接中断，正在重连';
+    if (pendingCount > 0) return `${pendingCount} 项操作待你确认`;
+    if (effectiveOrbState === 'error') return 'AI 请求出错，点击查看详情';
+    if (effectiveOrbState === 'tool') return progress.total ? `工具执行中 · 第 ${Math.min(progress.done + 1, progress.total)}/${progress.total} 步` : '正在调用工具';
+    if (effectiveOrbState === 'streaming') return '正在输出回复…';
+    if (effectiveOrbState === 'thinking') {
+      return progress.total ? `思考中 · 第 ${Math.min(progress.done + 1, progress.total)}/${progress.total} 步` : 'AI 正在思考…';
+    }
+    if (effectiveOrbState === 'paused') return '对话已暂停';
+    return 'AI 助手';
+  });
 </script>
 
 <div class="dock" class:hidden={mode === 'open'} class:offline={events.offline}>
@@ -49,8 +83,8 @@
     </button>
   {/if}
   <button type="button" class="ball {mode}" onclick={openFromBall} aria-label={ballLabel} aria-haspopup="dialog">
-    <Orb size={56} state={mode === 'working' ? 'working' : mode === 'reach' ? 'still' : 'rest'} />
-    {#if mode === 'reach'}<span class="badge" aria-hidden="true">{approvals.unseen.length}</span>{/if}
+    <Orb size={56} state={effectiveOrbState} />
+    {#if pendingCount > 0}<span class="badge" aria-hidden="true">{pendingCount}</span>{/if}
   </button>
   {#if tip}<span class="tip" role="status">{tip}</span>{/if}
 </div>
@@ -93,8 +127,7 @@
     transform: scale(0.96);
   }
   .offline .ball {
-    filter: grayscale(0.7);
-    opacity: 0.75;
+    opacity: 0.85;
   }
   .badge {
     position: absolute;

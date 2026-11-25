@@ -67,8 +67,51 @@ export function requesterOf(f: ApprovalFacts, myUserId: string | undefined): Req
   return { kind: 'system', text: `${a.display_name ?? '系统'}发起` };
 }
 
+const HOST_ACTION_LABELS: Record<string, string> = {
+  'host.plugins.enable': '启用插件',
+  'host.plugins.disable': '停用插件',
+  'host.plugins.uninstall': '卸载插件',
+  'host.plugins.restart': '重启插件',
+  'host.users.create': '创建用户',
+  'host.users.update': '更新用户',
+  'host.users.delete': '删除用户',
+  'host.account.update': '更新账户资料',
+  'host.ai_providers.create': '添加 AI 服务',
+  'host.ai_providers.update': '修改 AI 服务',
+  'host.ai_providers.delete': '删除 AI 服务',
+  'host.service_accounts.create': '创建服务账号',
+  'host.service_accounts.delete': '删除服务账号',
+  'host.nodes.revoke': '吊销节点',
+};
+
+/** 审批卡片标题：把宿主机原始英文摘要转为易读中文并附带目标标识，插件与自定义摘要保持原样 */
+export function approvalTitle(f: ApprovalFacts): string {
+  if (f.approval_summary) return f.approval_summary;
+  const raw = f.action.summary || f.action.id;
+  if (f.action.source === 'host') {
+    const zh = HOST_ACTION_LABELS[f.action.id];
+    if (zh && /^[A-Za-z0-9\s._:-]+$/.test(raw)) {
+      const args = (f.args ?? {}) as Record<string, unknown>;
+      const target =
+        (typeof args.plugin_id === 'string' && args.plugin_id) ||
+        (typeof args.username === 'string' && args.username) ||
+        (typeof args.name === 'string' && args.name) ||
+        (typeof f.target?.plugin_id === 'string' && f.target.plugin_id) ||
+        (typeof f.target?.subject === 'string' && f.target.subject.split('/').at(-1)) ||
+        '';
+      return target ? `${zh} ${target}` : zh;
+    }
+  }
+  return raw;
+}
+
 export function whyAsk(f: ApprovalFacts): string {
   const level = f.action.approval;
+  if (f.requested_by.kind === 'human') {
+    if (f.effect === 'destructive') return '破坏性操作，需要再次确认';
+    if (f.effective_risk === 'high') return '高风险操作，需要再次确认';
+    return '这项操作需要你确认后才会执行';
+  }
   if (f.permission_mode === 'safe') return '你设置了"重要操作先问我"';
   if (level === 'confirm') return '这项操作每次都要人来确认';
   if (level === 'ai_confirm' && f.requested_by.kind === 'ai_agent') return 'AI 发起的这类操作需要你确认';
@@ -99,7 +142,7 @@ export function nextFocus(ids: readonly string[], decided: string): string | nul
 
 /** 悬浮窗胶囊文案："AI 想开启防火墙" / "有一项操作等你确认：…" */
 export function reachText(a: Approval): string {
-  const what = a.facts.approval_summary || a.facts.action.summary;
+  const what = approvalTitle(a.facts);
   const r = a.facts.requested_by;
   if (r.id.startsWith('dlg_')) return `${r.display_name ?? '外部 AI'}想${what}`;
   if (r.kind === 'ai_agent') return `AI 想${what}`;

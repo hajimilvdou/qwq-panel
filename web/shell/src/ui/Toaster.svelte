@@ -136,7 +136,7 @@
 <style>
   .toaster {
     position: fixed;
-    inset: 16px auto auto 50%;
+    inset: 68px auto auto 50%;
     margin: 0;
     padding: 0;
     border: 0;

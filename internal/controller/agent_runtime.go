@@ -185,6 +185,9 @@ func (r *AgentRunner) RunTool(ctx context.Context, call agentsession.ToolCall) (
 	if spec, ok := builtinHostReadToolByAction(call.Action); ok {
 		return r.runHostReadTool(ctx, call, spec), nil
 	}
+	if spec, ok := builtinAgentSystemToolByAction(call.Action); ok {
+		return r.runBuiltinSystemTool(ctx, call, spec), nil
+	}
 	// The service puts the mode on the context of every call; a direct caller
 	// that only filled ToolCall.PermissionMode still gets the same policy. The
 	// mode is host data (the session row), never a request body value.
@@ -618,6 +621,13 @@ func (a AgentToolCatalog) Actions(context.Context) []agentsession.ToolSpec {
 			Parameters:  json.RawMessage(spec.SchemaJSON),
 		})
 	}
+	for _, spec := range BuiltinAgentSystemTools() {
+		if seen[spec.Action] || authz.IsHumanOnly(spec.Permission) {
+			continue
+		}
+		seen[spec.Action] = true
+		out = append(out, spec)
+	}
 	return out
 }
 
@@ -689,9 +699,14 @@ func (r *AgentRunner) runHostReadTool(ctx context.Context, call agentsession.Too
 		}
 		payload, err = r.readOperationsList(ctx, scopeActor, call.Args)
 	case "host.approvals.list":
-		// Always scope pending approval visibility to the session's own AI actor so
-		// prompt injection in one session cannot scrape arguments from other sessions.
-		payload, err = r.readApprovalsList(ctx, sessionAI)
+		// Admin owners see all pending host approvals (with redacted args), matching
+		// host.operations.list so operations and approvals stay consistent; non-admin
+		// sessions stay scoped to their own session actor.
+		scopeActor := sessionAI
+		if r.isOwnerAdmin(ctx, call.Actor) {
+			scopeActor = call.Actor
+		}
+		payload, err = r.readApprovalsList(ctx, scopeActor)
 	default:
 		return agentToolFailure(problem.New(problem.NotFound, "Unknown host read tool %q.", spec.Action))
 	}

@@ -264,7 +264,7 @@ rules['qwq-expected-revision'] = rule(
 // ---- Request bodies are closed so that misspelled arguments fail instead of being ignored.
 // The package upload is the only multipart operation: its form schema is closed too, but it has
 // no application/json representation for the rule above to inspect.
-const MULTIPART_UPLOADS = new Set(['/api/v1/plugin-packages']);
+const MULTIPART_UPLOADS = new Set(['/api/v1/plugin-packages', '/api/v1/agent-exchange/upload']);
 rules['qwq-request-closed'] = rule(
   'Every JSON request body schema sets additionalProperties: false; multipart uploads use one closed form schema.',
   doc => {

@@ -92,7 +92,7 @@
       </li>
     {:else if m.kind === 'assistant'}
       <li class="ai">
-        <Orb size={22} state={m.streaming ? 'working' : 'still'} />
+        <Orb size={24} state={m.streaming ? 'streaming' : 'idle'} />
         <div class="text">
           <Markdown source={m.text} />
           {#if !m.streaming && m.text}
@@ -111,15 +111,15 @@
       </li>
     {:else}
       <li class="err" role="alert">
-        <Icon name="alert" size={16} />
-        {ERROR_TEXT[m.code] ?? '这一轮出错了'}{m.detail ? `：${m.detail}` : ''}
+        <Orb size={22} state="error" />
+        <span>{ERROR_TEXT[m.code] ?? '这一轮出错了'}{m.detail ? `：${m.detail}` : ''}</span>
       </li>
     {/if}
   {/each}
 
   {#if thinking}
     <li class="ai thinking" aria-live="polite">
-      <Orb size={22} state="working" />
+      <Orb size={24} state="thinking" />
       <span class="dots" aria-label="AI 正在思考"><i></i><i></i><i></i></span>
     </li>
   {/if}

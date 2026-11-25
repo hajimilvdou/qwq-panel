@@ -55,6 +55,46 @@ export type AgentRegistryItem = S['AgentRegistryItem'];
 export type AgentRegistrySearchResult = S['AgentRegistrySearchResult'];
 export type AgentRegistryInstallResult = S['AgentRegistryInstallResult'];
 
+export interface AgentExchangeEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  child_count?: number;
+  is_text: boolean;
+  is_image: boolean;
+  mime_type?: string;
+  updated_at: string;
+}
+
+export interface AgentExchangeListResult {
+  path: string;
+  parent_path: string;
+  root_hint: string;
+  entries: AgentExchangeEntry[];
+  total_dirs: number;
+  total_files: number;
+  total_bytes: number;
+}
+
+export interface AgentExchangePreview {
+  path: string;
+  name: string;
+  size: number;
+  is_text: boolean;
+  is_image: boolean;
+  mime_type?: string;
+  truncated?: boolean;
+  content?: string;
+  updated_at: string;
+}
+
+export interface AgentExchangeUploadResult {
+  dir: string;
+  items: AgentExchangeEntry[];
+  total: number;
+}
+
 /** GET /api/v1/agent-cores 的条目：available/reason */
 export type AgentCoreInfo = S['AgentCoreInfo'];
 

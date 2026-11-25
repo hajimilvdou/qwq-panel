@@ -17,8 +17,7 @@
   import { describeError } from '../errors';
   import { session } from '../session.svelte';
   import { approvals } from './approvals.svelte';
-  import { dock } from './dock.svelte';
-  import { decideApproval, isExpired, requesterOf, RISK_META, validityText, whyAsk } from './decide';
+  import { approvalTitle, decideApproval, isExpired, requesterOf, RISK_META, validityText, whyAsk } from './decide';
 
   interface Props {
     approval: Approval;
@@ -33,13 +32,14 @@
   const f = $derived(a.facts);
   const action = $derived(f.action as ActionMeta);
   const who = $derived(requesterOf(f, session.user?.user_id));
-  const title = $derived(f.approval_summary || action.summary);
+  const title = $derived(approvalTitle(f));
   const fromPlugin = $derived(action.source === 'plugin');
   const risk = $derived(RISK_META[f.effective_risk] ?? RISK_META.medium);
   const node = $derived(f.node_name ?? f.target.node_id);
   const expired = $derived(isExpired(a));
   const canDecide = $derived(session.can('host.approvals:approve') && (!action.permission || session.can(action.permission)));
-  const needsTotpSetup = $derived(a.requires_mfa && session.user?.mfa_enabled === false);
+  let mfaPrompted = $state(false);
+  const showOtp = $derived(a.requires_mfa && (Boolean(session.user?.mfa_enabled) || mfaPrompted));
 
   /* 一张卡一个意图：网络重试复用同一个幂等键 */
   let key = newIdempotencyKey();
@@ -67,13 +67,13 @@
 
   async function decide(decision: 'approve' | 'reject') {
     if (busy || !canDecide) return;
-    if (decision === 'approve' && a.requires_mfa && mfa.length !== 6) {
+    if (decision === 'approve' && showOtp && mfa.length !== 6) {
       mfaError = '请输入 6 位验证码';
       return;
     }
     busy = decision;
     mfaError = errorText = undefined;
-    const r = await decideApproval(a, { decision, mfaCode: decision === 'approve' ? mfa : undefined, comment }, key);
+    const r = await decideApproval(a, { decision, mfaCode: decision === 'approve' && mfa ? mfa : undefined, comment }, key);
     busy = null;
     switch (r.kind) {
       case 'ok':
@@ -87,6 +87,7 @@
         ondecided?.(a.approval_id);
         break;
       case 'mfa':
+        mfaPrompted = true;
         mfaError = r.message;
         mfa = '';
         break;
@@ -110,7 +111,7 @@
   <!-- 1 发起者 -->
   <header class="who">
     {#if who.kind === 'ai' || who.kind === 'external'}
-      <Orb size={20} />
+      <Orb size={20} state="approval" />
     {:else}
       <Avatar size="sm" kind={who.kind === 'human' ? 'human' : 'system'} name={f.requested_by.display_name} />
     {/if}
@@ -200,18 +201,11 @@
       <span class="valid">{validityText(a)}</span>
     </footer>
   {:else}
-    <!-- 8 验证码 -->
-    {#if a.requires_mfa}
-      {#if needsTotpSetup}
-        <p class="mfa-hint">
-          <Icon name="lock" size={16} /> 这是破坏性操作，批准需要两步验证。
-          <a href="/settings/account" onclick={() => dock.close()}>先去开启两步验证</a>
-        </p>
-      {:else}
-        <div class="mfa">
-          <OtpInput bind:value={mfa} label="两步验证码" error={mfaError} disabled={!!busy} />
-        </div>
-      {/if}
+    <!-- 8 验证码（仅在用户主动开启了两步验证时要求） -->
+    {#if showOtp}
+      <div class="mfa">
+        <OtpInput bind:value={mfa} label="两步验证码" error={mfaError} disabled={!!busy} />
+      </div>
     {/if}
 
     {#if showComment}
@@ -222,15 +216,13 @@
 
     <!-- 9 按钮 -->
     <footer class="actions">
-      {#if !needsTotpSetup}
-        <Button
-          data-primary
-          variant={f.effective_risk === 'high' ? 'danger' : 'primary'}
-          loading={busy === 'approve'}
-          disabled={!!busy}
-          onclick={() => decide('approve')}>批准</Button
-        >
-      {/if}
+      <Button
+        data-primary
+        variant={f.effective_risk === 'high' ? 'danger' : 'primary'}
+        loading={busy === 'approve'}
+        disabled={!!busy}
+        onclick={() => decide('approve')}>批准</Button
+      >
       <Button variant="ghost" loading={busy === 'reject'} disabled={!!busy} onclick={() => decide('reject')}>拒绝</Button>
       {#if !showComment}
         <Button variant="plain" size="sm" onclick={() => (showComment = true)}>加备注</Button>
@@ -414,19 +406,6 @@
   .cap {
     display: inline-block;
     margin: 0 6px 4px 0;
-  }
-  .mfa-hint {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    margin: 0;
-    font-size: var(--fs-sm);
-    color: var(--text-2);
-  }
-  .mfa-hint a {
-    color: var(--accent-text);
-    font-weight: var(--fw-medium);
   }
   .err {
     margin: 0;

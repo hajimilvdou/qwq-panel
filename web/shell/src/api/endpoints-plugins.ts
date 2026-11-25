@@ -86,10 +86,14 @@ export const plugins = {
         idempotency: key,
       })
       .then((r) => r.data),
-  /** job，202；purge_data=true 为 destructive（需 MFA）；被依赖时 409 STATE_CONFLICT */
-  uninstall: (id: string, expected_revision: string, key: string, purge_data = false): Promise<OpResult> =>
+  /** job，202；purge_data=true 为 destructive（开启两步验证时需 MFA）；被依赖时 409 STATE_CONFLICT */
+  uninstall: (id: string, expected_revision: string, key: string, purge_data = false, mfa?: string): Promise<OpResult> =>
     http
-      .del<Mutating>(`/api/v1/plugins/${enc(id)}`, { query: { expected_revision, purge_data }, idempotency: key })
+      .del<Mutating>(`/api/v1/plugins/${enc(id)}`, {
+        query: { expected_revision, purge_data },
+        idempotency: key,
+        ...(mfa ? { headers: { 'X-QWQ-MFA-Code': mfa } } : {}),
+      })
       .then(toOpResult),
   getConfig: (id: string) => http.get<PluginConfig>(`/api/v1/plugins/${enc(id)}/config`).then((r) => r.data),
   putConfig: (id: string, config: Record<string, unknown>, expected_revision: string, key: string) =>

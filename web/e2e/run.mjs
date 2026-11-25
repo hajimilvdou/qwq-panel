@@ -92,7 +92,7 @@ try {
   await page.goto(BASE + '/');
   await expect('待审批时球向左伸出胶囊', () => !!document.querySelector('.dock .reach'));
   await page.click('.dock .ball');
-  await expect('点球展开 dialog 并列出审批卡', () => document.querySelector('dialog.sheet')?.open && !!document.querySelector('dialog.sheet .chat-body [data-approval-id], dialog.sheet .chat-body article'));
+  await expect('点球展开 dialog 并列出审批卡', () => document.querySelector('dialog.sheet')?.open && !!document.querySelector('dialog.sheet .approval-tray [data-approval-id], dialog.sheet .approval-tray article, dialog.sheet .chat-body [data-approval-id]'));
   await expect('展开时有输入窗', () => !!document.querySelector('dialog.sheet .input textarea'));
   await page.keyboard.press('Escape');
   await expect('Esc 收回', () => !document.querySelector('dialog.sheet')?.open);

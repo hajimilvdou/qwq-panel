@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/qwq-panel/qwq/internal/actor"
 	"github.com/qwq-panel/qwq/internal/operations"
 	"github.com/qwq-panel/qwq/internal/platform/problem"
 )
@@ -39,7 +40,8 @@ import (
 const (
 	planToolActionName   = "host.agent.update_plan"
 	planToolFunctionName = "host_agent_update_plan"
-	maxEnhancedSteps     = 16
+	defaultEnhancedSteps = 24
+	maxEnhancedSteps     = 48
 )
 
 // enhancedNativeConfig extends nativeConfig with strictly additive optional fields.
@@ -90,9 +92,13 @@ func (c *enhancedNativeConfig) wantTelemetry() bool {
 
 // EnhancedNativeCore wraps NativeCore while preserving every security boundary.
 type EnhancedNativeCore struct {
-	base      *NativeCore
-	skills    *SkillRegistry
-	workspace *WorkspaceManager
+	base         *NativeCore
+	skills       *SkillRegistry
+	workspace    *WorkspaceManager
+	exchange     *ExchangeManager
+	minter       HostApprovalMinter
+	bridge       ApprovalBridge
+	roleResolver func(ctx context.Context, owner actor.Actor) (string, error)
 }
 
 // NewEnhancedNativeCore constructs the upgraded native core.
@@ -109,6 +115,20 @@ func NewEnhancedNativeCore(opts NativeOptions, skills *SkillRegistry) *EnhancedN
 // SetWorkspace attaches the separated workspace manager (SYSTEM.md + user skills).
 func (c *EnhancedNativeCore) SetWorkspace(ws *WorkspaceManager) {
 	c.workspace = ws
+}
+
+// SetExchange attaches the interactive exchange folder manager.
+func (c *EnhancedNativeCore) SetExchange(ex *ExchangeManager) {
+	c.exchange = ex
+}
+
+// SetApprovalWiring attaches the host approval minter, bridge, and role resolver
+// so built-in general-purpose tools (shell exec, file write/edit) honor
+// safe/full/read_only permission modes through real host approval cards.
+func (c *EnhancedNativeCore) SetApprovalWiring(minter HostApprovalMinter, bridge ApprovalBridge, roleResolver func(ctx context.Context, owner actor.Actor) (string, error)) {
+	c.minter = minter
+	c.bridge = bridge
+	c.roleResolver = roleResolver
 }
 
 func (c *EnhancedNativeCore) Name() string { return string(CoreNative) }
@@ -232,6 +252,15 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 
 	names := newToolNames(toolsWithPlan)
 	sys := systemText(&cfg.nativeConfig)
+	sys += "\n\n## Built-in Agent & Native Panel Capabilities\n" +
+		"You are a full-featured server engineering assistant natively integrated with the qwq VPS panel.\n" +
+		"Always invoke tools using the exact function names declared in the `tools` list (dots in action IDs become underscores, e.g. `host_shell_exec`, `host_fs_read`, `host_exchange_write`).\n" +
+		"- General server tools: `host_shell_exec`, `host_fs_list`, `host_fs_read`, `host_fs_search`, `host_fs_write`, `host_fs_edit` (admin sessions; governed by session permission mode: read_only omits/denies mutations, safe requests human approval cards, full runs non-destructive steps directly while still guarding dangerous commands).\n" +
+		"- Native panel & plugin tools: `host_system_info`, `host_network_facts`, `host_plugins_list`, `host_plugins_catalog`, `host_plugins_logs`, `host_plugins_config_read`, `host_operations_list`, `host_approvals_list`, plugin lifecycle actions (`host_plugins_enable` / `disable` / `restart` / `uninstall`), and all active plugin operations.\n" +
+		"- Interactive File Exchange Folder (`host_exchange_list`, `host_exchange_read`, `host_exchange_mkdir`, `host_exchange_write`, `host_exchange_delete`): the dedicated shared folder where the user uploads input files into subfolders and downloads your output files (reports, configs, scripts). Always organize deliverables in a clear task-specific subfolder to avoid clutter and cite exact relative paths."
+	if c.exchange != nil && c.exchange.RootDir() != "" {
+		sys += "\n- Interactive Exchange Folder host path: `" + c.exchange.RootDir() + "` (relative paths in `host.exchange.*` map directly under this root)."
+	}
 	if c.workspace != nil {
 		if customSys := c.workspace.ReadPromptForCore(CoreNative); customSys != "" {
 			sys += "\n\n## User Custom Instructions (SYSTEM.md)\n" + customSys
@@ -250,9 +279,11 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 	messages = append(messages, ModelMessage{Role: LoopRoleSystem, Content: sys})
 	messages = append(messages, ApplyCompactionCheckpoint(turn.Messages, cfg.CompactionCheckpoint, names)...)
 
+	// Resolve effective context window automatically from model catalog when max_context_tokens == 0.
+	resolvedCtx, _, _ := ResolveContextWindow(cfg.Model, cfg.MaxContextTokens)
 	// Step-boundary auto-compaction when context exceeds threshold.
 	compOpts := CompactionOptions{
-		MaxContextTokens: cfg.MaxContextTokens,
+		MaxContextTokens: resolvedCtx,
 		AutoTriggerPct:   cfg.AutoCompactPct,
 	}.normalized()
 	toolDefs := names.defs()
@@ -271,10 +302,18 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 	}
 
 	baseTools := &nativeTools{names: names, runner: effectiveTurn.Runner, turn: effectiveTurn}
+	var approvalRouter *ApprovalRouter
+	if c.minter != nil && c.bridge != nil {
+		approvalRouter = NewApprovalRouter(effectiveTurn, cfg.PlanMode, emit, c.minter, c.bridge)
+	}
 	wrappedTools := &enhancedTools{
-		inner:     baseTools,
-		emit:      emit,
-		telemetry: &telemetry,
+		inner:          baseTools,
+		emit:           emit,
+		telemetry:      &telemetry,
+		turn:           effectiveTurn,
+		planMode:       cfg.PlanMode,
+		approvalRouter: approvalRouter,
+		roleResolver:   c.roleResolver,
 	}
 	gate := c.base.gate
 	if gate == nil {
@@ -294,7 +333,14 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 		thinkingKeeper: NewAnthropicThinkingKeeper(),
 	}
 
-	maxSteps := cfg.steps(c.base.steps)
+	maxSteps := cfg.MaxSteps
+	if maxSteps <= 0 {
+		if c.base.steps > defaultMaxSteps {
+			maxSteps = c.base.steps
+		} else {
+			maxSteps = defaultEnhancedSteps
+		}
+	}
 	if maxSteps > maxEnhancedSteps {
 		maxSteps = maxEnhancedSteps
 	}
@@ -340,11 +386,18 @@ func (c *EnhancedNativeCore) Run(ctx context.Context, turn Turn, emit Emit) erro
 }
 
 // enhancedTools intercepts host.agent.update_plan locally (read-only metadata
-// update, zero host mutation) and measures exact tool latency for DSH telemetry.
+// update, zero host mutation), routes general-purpose mutating host tools
+// (host.shell.exec, host.fs.write, host.fs.edit, host.exchange.delete) through
+// ApprovalRouter under the session's permission mode, and measures exact tool
+// latency for DSH telemetry.
 type enhancedTools struct {
-	inner     *nativeTools
-	emit      Emit
-	telemetry *TelemetrySnapshot
+	inner          *nativeTools
+	emit           Emit
+	telemetry      *TelemetrySnapshot
+	turn           Turn
+	planMode       bool
+	approvalRouter *ApprovalRouter
+	roleResolver   func(ctx context.Context, owner actor.Actor) (string, error)
 }
 
 func (t *enhancedTools) Tools() []ToolDef                 { return t.inner.Tools() }
@@ -356,21 +409,164 @@ func (t *enhancedTools) Execute(ctx context.Context, call ModelToolCall) (ToolOu
 		t.telemetry.ToolMS += time.Since(start).Milliseconds()
 	}()
 
-	if spec, ok := t.inner.Spec(call.Name); ok && spec.Action == planToolActionName {
-		var payload struct {
-			Items []PlanItem `json:"items"`
+	if spec, ok := t.inner.Spec(call.Name); ok {
+		if spec.Action == planToolActionName {
+			var payload struct {
+				Items []PlanItem `json:"items"`
+			}
+			if err := json.Unmarshal(call.Arguments, &payload); err != nil {
+				return ToolOutcome{
+					Status: ToolFailed,
+					Error:  problem.New(problem.ValidationFailed, "update_plan requires a JSON object with an items array."),
+				}, nil
+			}
+			_ = emitExtended(t.emit, EventPlanUpdated, payload.Items)
+			return ToolOutcome{Status: ToolSucceeded, Result: json.RawMessage(`{"updated":true}`)}, nil
 		}
-		if err := json.Unmarshal(call.Arguments, &payload); err != nil {
-			return ToolOutcome{
-				Status: ToolFailed,
-				Error:  problem.New(problem.ValidationFailed, "update_plan requires a JSON object with an items array."),
-			}, nil
+
+		if req, needsInlineGate := buildNativeApprovalRequest(call.CallID, spec.Action, call.Arguments); needsInlineGate {
+			// Verify RBAC role BEFORE minting an approval card so non-admin
+			// sessions fail immediately instead of creating an unapprovable card.
+			if spec.Action != "host.exchange.delete" && t.roleResolver != nil {
+				role, rerr := t.roleResolver(ctx, t.turn.Owner)
+				if rerr != nil || role != "admin" {
+					return ToolOutcome{
+						Status: ToolFailed,
+						Error:  problem.New(problem.PermissionDenied, "Only administrator sessions may execute server shell or filesystem write tools."),
+					}, nil
+				}
+			}
+			if t.turn.PermissionMode == operations.PermissionReadOnly || t.planMode {
+				return ToolOutcome{
+					Status: ToolFailed,
+					Error:  problem.New(problem.PermissionDenied, "The session is in read-only or plan mode; mutating tools are disabled."),
+				}, nil
+			}
+			if t.approvalRouter != nil {
+				outcome := t.approvalRouter.Decide(ctx, req)
+				switch outcome.Verdict {
+				case VerdictAccept:
+					ctx = WithInlineApproved(ctx)
+				case VerdictCancel:
+					return ToolOutcome{
+						Status:     ToolCancelled,
+						ApprovalID: outcome.ApprovalID,
+						Error:      problem.New(problem.StateConflict, "The approval was cancelled before a decision."),
+					}, nil
+				default:
+					msg := "The user rejected this action."
+					if strings.TrimSpace(outcome.Comment) != "" {
+						msg = "The user rejected this action: " + strings.TrimSpace(outcome.Comment)
+					}
+					return ToolOutcome{
+						Status:     ToolRejected,
+						ApprovalID: outcome.ApprovalID,
+						Error:      problem.New(problem.PermissionDenied, "%s", msg),
+					}, nil
+				}
+			}
 		}
-		_ = emitExtended(t.emit, EventPlanUpdated, payload.Items)
-		return ToolOutcome{Status: ToolSucceeded, Result: json.RawMessage(`{"updated":true}`)}, nil
 	}
 
 	return t.inner.Execute(ctx, call)
+}
+
+func buildNativeApprovalRequest(callID, action string, rawArgs json.RawMessage) (ExternalApprovalRequest, bool) {
+	switch action {
+	case "host.shell.exec":
+		var a struct {
+			Command string `json:"command"`
+			Cwd     string `json:"cwd"`
+		}
+		_ = json.Unmarshal(rawArgs, &a)
+		cmdPreview := strings.TrimSpace(a.Command)
+		if len(cmdPreview) > 120 {
+			cmdPreview = cmdPreview[:120] + "…"
+		}
+		summary := "执行服务器命令"
+		if cmdPreview != "" {
+			summary = "执行命令: " + cmdPreview
+		}
+		desc := "内置 Agent 请求在宿主机执行 Shell 命令。"
+		if strings.TrimSpace(a.Cwd) != "" {
+			desc += " 工作目录: " + strings.TrimSpace(a.Cwd)
+		}
+		return ExternalApprovalRequest{
+			CallID:         callID,
+			PreserveCallID: true,
+			Kind:           ApprovalKindShell,
+			Action:         action,
+			Summary:        summary,
+			Description:    desc,
+			Risk:           "medium",
+			Args:           rawArgs,
+			Destructive:    IsDangerousShellCommand(a.Command),
+		}, true
+	case "host.fs.write":
+		var a struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal(rawArgs, &a)
+		p := strings.TrimSpace(a.Path)
+		summary := "写入服务器文件"
+		if p != "" {
+			summary = "写入文件: " + p
+		}
+		return ExternalApprovalRequest{
+			CallID:         callID,
+			PreserveCallID: true,
+			Kind:           ApprovalKindPatch,
+			Action:         action,
+			Summary:        summary,
+			Description:    "内置 Agent 请求创建或覆盖宿主机文件。",
+			Risk:           "medium",
+			Args:           rawArgs,
+			Destructive:    IsDangerousFilePath(p),
+		}, true
+	case "host.fs.edit":
+		var a struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal(rawArgs, &a)
+		p := strings.TrimSpace(a.Path)
+		summary := "修改服务器文件"
+		if p != "" {
+			summary = "修改文件: " + p
+		}
+		return ExternalApprovalRequest{
+			CallID:         callID,
+			PreserveCallID: true,
+			Kind:           ApprovalKindPatch,
+			Action:         action,
+			Summary:        summary,
+			Description:    "内置 Agent 请求按精确替换修改宿主机文件。",
+			Risk:           "medium",
+			Args:           rawArgs,
+			Destructive:    IsDangerousFilePath(p),
+		}, true
+	case "host.exchange.delete":
+		var a struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal(rawArgs, &a)
+		p := strings.TrimSpace(a.Path)
+		summary := "删除交互文件夹条目"
+		if p != "" {
+			summary = "删除交互文件: " + p
+		}
+		return ExternalApprovalRequest{
+			CallID:         callID,
+			PreserveCallID: true,
+			Kind:           ApprovalKindExternal,
+			Action:         action,
+			Summary:        summary,
+			Description:    "内置 Agent 请求删除交互文件夹中的指定文件或子文件夹。",
+			Risk:           "medium",
+			Args:           rawArgs,
+		}, true
+	default:
+		return ExternalApprovalRequest{}, false
+	}
 }
 
 // streamingOpenAIProvider executes OpenAI-compatible SSE streaming requests,

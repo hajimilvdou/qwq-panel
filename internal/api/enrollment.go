@@ -73,13 +73,7 @@ func (a *api) issueEnrollmentToken(w http.ResponseWriter, r *http.Request) {
 		a.writeCatalogResponse(w, r, replay)
 		return
 	}
-	act, err = a.secondFactor(r, act, req.MFACode)
-	if problem.HasCode(err, problem.Unauthenticated) || (err == nil && !act.MFA) {
-		// No recent second factor and no code, a wrong code, or an account
-		// without a second factor. The session itself stays valid, so this is a
-		// 403, never a 401 that would sign the Shell out.
-		err = problem.New(problem.MFARequired, "Issuing an enrollment link requires a fresh second factor.")
-	}
+	act, err = a.requireOptionalMFA(r, act, req.MFACode, "Issuing an enrollment link requires a fresh second factor.")
 	if err != nil {
 		a.fail(w, r, err)
 		return

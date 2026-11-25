@@ -10,13 +10,14 @@
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { Checkbox, Chip, Icon, Input, Segmented, Select, Skeleton } from '$ui';
+  import { Checkbox, Chip, Icon, Input, Orb, Segmented, Select, Skeleton } from '$ui';
   import type { Option } from '$ui';
   import { agent, ai } from '$api/endpoints';
   import { newIdempotencyKey } from '$api/client';
   import type { AgentCore, PermissionMode } from '$api/types';
   import type { ReasoningEffort } from '$api/additions';
-  import { CONTEXT_OPTIONS, coreLabel, MODE_META, MODES } from '$lib/ai/agent-sessions.svelte';
+  import { coreLabel, MODE_META, MODES } from '$lib/ai/agent-sessions.svelte';
+  import ContextField from '../ai/ContextField.svelte';
   import EffortField from '../ai/EffortField.svelte';
   import { useResource } from '$lib/resource.svelte';
   import { reportError } from '$lib/errors';
@@ -25,7 +26,15 @@
   import { session } from '$lib/session.svelte';
   import Composer from '../ai/Composer.svelte';
 
-  let { prompt = '' }: { prompt?: string } = $props();
+  let {
+    prompt = '',
+    pendingInsert = null,
+    ontoggleexchange,
+  }: {
+    prompt?: string;
+    pendingInsert?: { seq: number; text: string } | null;
+    ontoggleexchange?: () => void;
+  } = $props();
 
   const cores = useResource({ key: 'agent-cores', load: () => agent.cores().then((r) => r.items) });
   const coreAuth = useResource({ key: 'agent.core-auth', load: () => agent.coreAuth().then((r) => r.items) });
@@ -40,6 +49,14 @@
   let maxContext = $state('0');
   let planMode = $state(false);
   let text = $state(untrack(() => prompt));
+  let lastInsertSeq = 0;
+
+  $effect(() => {
+    if (!pendingInsert || pendingInsert.seq === lastInsertSeq) return;
+    lastInsertSeq = pendingInsert.seq;
+    const prefix = text.trim() ? `${text.trimEnd()}\n` : '';
+    text = `${prefix}${pendingInsert.text} `;
+  });
 
   const isAdmin = $derived(session.role === 'admin');
   const canWriteAgent = $derived(session.can('host.agent_sessions:write'));
@@ -129,9 +146,9 @@
 
 <div class="new">
   <header class="hero">
-    <span class="orb-big" aria-hidden="true"></span>
+    <div class="hero-orb"><Orb size={58} state="idle" /></div>
     <h2>你好{session.user?.display_name ? `，${session.user.display_name}` : ''}，想让我做点什么？</h2>
-    <p>我可以查看服务器状态、排查问题，也能在你允许的范围内动手处理。</p>
+    <p>我可以执行服务器命令、读写排查配置、原生管理面板插件，也能通过右侧「交互文件夹」和你双向交换文件。</p>
   </header>
 
   <section class="opts" aria-label="对话设置">
@@ -185,18 +202,20 @@
     <div class="row top">
       <span class="lbl">参数</span>
       <div class="params-stack">
-        <div class="params-grid">
-          {#if needsProvider && (activeProvider?.models?.length ?? 0) > 0}
-            <Select label="模型" options={modelOptions} bind:value={modelOverride} />
-          {:else}
-            <Input label="模型覆盖（可选）" placeholder={activeProvider ? `默认 ${activeProvider.model}` : '留空使用核心默认模型'} mono bind:value={modelOverride} />
-          {/if}
-          <Select label="上下文窗口大小" options={[...CONTEXT_OPTIONS]} bind:value={maxContext} />
-        </div>
+        {#if needsProvider && (activeProvider?.models?.length ?? 0) > 0}
+          <Select label="模型" options={modelOptions} bind:value={modelOverride} />
+        {:else}
+          <Input label="模型覆盖（可选）" placeholder={activeProvider ? `默认 ${activeProvider.model}` : '留空使用核心默认模型'} mono bind:value={modelOverride} />
+        {/if}
         <EffortField
           label="思考挡位（Effort，可自定义或自动匹配清单）"
           model={modelOverride.trim() || activeProvider?.model || ''}
           bind:value={effort}
+        />
+        <ContextField
+          label="上下文窗口大小（自动识别主流模型）"
+          model={modelOverride.trim() || activeProvider?.model || ''}
+          bind:value={maxContext}
         />
       </div>
     </div>
@@ -236,7 +255,15 @@
       onsend={start}
       disabled={!canWriteAgent || (needsProvider && noProvider) || !!unavailableReason}
       disabledReason={!canWriteAgent ? '当前角色仅支持只读查看，无法发起 AI 会话' : '先选一个可用的核心或 AI 服务'}
-    />
+    >
+      {#snippet tools()}
+        {#if ontoggleexchange}
+          <button type="button" class="pill" onclick={ontoggleexchange}>
+            <Icon name="folder" size={14} /> 交互文件夹（上传/查看文件）
+          </button>
+        {/if}
+      {/snippet}
+    </Composer>
   </div>
 </div>
 
@@ -255,15 +282,8 @@
     gap: var(--s-2);
     text-align: center;
   }
-  .orb-big {
-    width: 56px;
-    height: 56px;
+  .hero-orb {
     margin-bottom: var(--s-1);
-    border-radius: 50%;
-    background:
-      radial-gradient(circle at 32% 28%, rgb(255 255 255 / 0.55), transparent 44%),
-      var(--ai-gradient);
-    box-shadow: 0 10px 26px color-mix(in oklab, var(--ai-1) 28%, transparent);
     animation: qwq-rise-in var(--dur-3) var(--ease-out);
   }
   h2 {
@@ -332,11 +352,6 @@
     display: grid;
     gap: var(--s-3);
     min-width: 0;
-  }
-  .params-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--s-3);
   }
   .hint {
     margin: 0;
@@ -417,8 +432,7 @@
     margin-top: auto;
   }
   @media (max-width: 860px) {
-    .modes,
-    .params-grid {
+    .modes {
       grid-template-columns: 1fr;
     }
   }

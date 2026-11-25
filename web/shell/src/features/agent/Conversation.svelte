@@ -9,12 +9,11 @@
   import { onDestroy, untrack } from 'svelte';
   import { Button, Checkbox, Chip, ConfirmDialog, Dialog, EmptyState, ErrorState, IconButton, Input, Menu, Select, Skeleton, Icon } from '$ui';
   import type { Option } from '$ui';
-  import { ai } from '$api/endpoints';
+  import { agent, ai } from '$api/endpoints';
   import type { PermissionMode } from '$api/types';
   import type { AiProvider, ReasoningEffort } from '$api/additions';
   import {
     BUILTIN_SKILLS,
-    CONTEXT_OPTIONS,
     coreLabel,
     MODE_META,
     MODES,
@@ -22,6 +21,7 @@
     statusMeta,
     lastSession,
   } from '$lib/ai/agent-sessions.svelte';
+  import ContextField from '../ai/ContextField.svelte';
   import EffortField from '../ai/EffortField.svelte';
   import { changeMode, pauseSession, takeOver } from '$lib/ai/controls';
   import { SessionStream } from '$lib/ai/session-stream.svelte';
@@ -37,10 +37,22 @@
 
   interface Props {
     id: string;
+    exchangeOpen?: boolean;
+    pendingInsert?: { seq: number; text: string } | null;
     onmenu?: () => void;
     onopenworkspace?: (tab?: 'prompts' | 'skills' | 'mcp' | 'registry') => void;
+    ontoggleexchange?: () => void;
+    onturnsettled?: () => void;
   }
-  let { id, onmenu, onopenworkspace }: Props = $props();
+  let {
+    id,
+    exchangeOpen = false,
+    pendingInsert = null,
+    onmenu,
+    onopenworkspace,
+    ontoggleexchange,
+    onturnsettled,
+  }: Props = $props();
 
   /* 父组件以 {#key id} 重建本组件，id 在生命周期内不变 */
   const stream = new SessionStream(untrack(() => id));
@@ -177,6 +189,41 @@
     if (s?.title) page.setTitle(s.title);
   });
 
+  /* 接收来自交互文件夹的「引用到对话」文本 */
+  let lastInsertSeq = 0;
+  $effect(() => {
+    if (!pendingInsert || pendingInsert.seq === lastInsertSeq) return;
+    lastInsertSeq = pendingInsert.seq;
+    const prefix = text.trim() ? `${text.trimEnd()}\n` : '';
+    text = `${prefix}${pendingInsert.text} `;
+  });
+
+  /* AI 回合结束时通知父级刷新交互文件夹（立即可见 Agent 刚生成的文件） */
+  let wasRunning = false;
+  $effect(() => {
+    const curRunning = stream.transcript.status === 'running';
+    if (wasRunning && !curRunning) {
+      onturnsettled?.();
+    }
+    wasRunning = curRunning;
+  });
+
+  function exportTranscript(format: 'markdown' | 'json') {
+    const a = document.createElement('a');
+    a.href = agent.exportUrl(stream.id, format);
+    a.download = '';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toasts.info(`正在导出当前会话 (${format === 'json' ? 'JSON' : 'Markdown'})`);
+  }
+
+  const exportItems = [
+    { label: '导出 Markdown (.md)', icon: 'download' as const, onselect: () => exportTranscript('markdown') },
+    { label: '导出 JSON (.json)', icon: 'file' as const, onselect: () => exportTranscript('json') },
+  ];
+
   let savingOrCancelled = false;
   function startEdit() {
     if (!canWriteAgent) return;
@@ -292,11 +339,27 @@
 
       {#if s}
         <div class="acts">
+          {#if ontoggleexchange}
+            <Button
+              size="sm"
+              variant={exchangeOpen ? 'soft' : 'ghost'}
+              icon="folder"
+              onclick={ontoggleexchange}
+              title="打开交互文件夹（上传原始文件、查看和下载 Agent 输出）"
+            >
+              文件
+            </Button>
+          {/if}
           {#if onopenworkspace && canWriteAgent}
             <Button size="sm" variant="ghost" icon="apps" onclick={() => onopenworkspace('prompts')} title="管理 MCP、技能与提示词">
               资源
             </Button>
           {/if}
+          <Menu label="导出对话" items={exportItems} align="end">
+            {#snippet trigger(props)}
+              <IconButton icon="download" label="导出对话" variant="plain" {...props} />
+            {/snippet}
+          </Menu>
           {#if canWriteAgent}
             <Menu label="权限模式" items={modeItems}>
               {#snippet trigger(props)}
@@ -422,6 +485,18 @@
             <button type="button" class="c-pill" class:active={showSlash} onclick={() => (cmdOpen = !cmdOpen)}>
               / 快捷指令
             </button>
+            {#if ontoggleexchange}
+              <button
+                type="button"
+                class="c-pill"
+                class:active={exchangeOpen}
+                onclick={ontoggleexchange}
+                title="打开或收起交互文件夹"
+              >
+                <Icon name="folder" size={13} />
+                <span>交互文件夹</span>
+              </button>
+            {/if}
             {#if s}
               <button
                 type="button"
@@ -540,12 +615,16 @@
       model={cfgModel.trim() || effectiveModelName}
       bind:value={cfgEffort}
     />
-    <Select label="上下文窗口大小" options={CONTEXT_OPTIONS} bind:value={cfgMaxCtx} />
+    <ContextField
+      label="上下文窗口大小（自动识别主流模型）"
+      model={cfgModel.trim() || effectiveModelName}
+      bind:value={cfgMaxCtx}
+    />
     <Checkbox
       bind:checked={cfgPlan}
       label="计划模式（Plan Mode）：先列步骤再执行，适合高风险变更"
     />
-    <p class="cfg-tip">也可以直接在对话框输入 <code>/effort max</code>、<code>/effort 16384</code>、<code>/effort auto</code>、<code>/model 名称</code> 或 <code>/plan on</code> 快速生效。</p>
+    <p class="cfg-tip">也可以直接在对话框输入 <code>/effort max</code>、<code>/context auto</code>、<code>/context 200k</code>、<code>/model 名称</code> 或 <code>/plan on</code> 快速生效。</p>
   </div>
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (cfgOpen = false)}>取消</Button>

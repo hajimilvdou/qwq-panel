@@ -15,6 +15,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { Icon, IconButton, Menu, Orb, registerModalDialog, unregisterModalDialog } from '$ui';
+  import type { OrbState } from '$ui/Orb.svelte';
   import { approvals } from '$lib/ai/approvals.svelte';
   import { dock } from '$lib/ai/dock.svelte';
   import { dockSession } from '$lib/ai/dock-session.svelte';
@@ -43,6 +44,7 @@
   let inputEl = $state<HTMLTextAreaElement | null>(null);
   let returnFocus: HTMLElement | null = null;
   let size = $state<DockSize | null>(loadSize());
+  let approvalsOpen = $state(true);
 
   const canChat = $derived(session.can('host.agent_sessions:write'));
   const canApprove = $derived(session.can('host.approvals:approve'));
@@ -54,6 +56,30 @@
   const progress = $derived(stream ? turnProgress(stream.transcript) : { done: 0, total: 0 });
   const current = $derived(sessions.data?.find((s) => s.session_id === dockSession.id));
   const sessionBusy = $derived(stream?.busy ?? (current ? BUSY.has(current.status) : false));
+
+  /* 实时推导 AI 表情态（覆盖离线/待审批/API出错/工具调用/流式回复/思考/暂停/常驻） */
+  const liveAiState = $derived.by<OrbState>(() => {
+    if (events.offline) return 'offline';
+    if (pending.length > 0) return 'approval';
+    const items = stream?.transcript.items ?? [];
+    const last = items[items.length - 1];
+    const st = stream?.transcript.status ?? current?.status;
+    if (st === 'failed' || last?.kind === 'error' || sessions.data?.some((s) => s.status === 'failed' && s.session_id === dockSession.id)) {
+      return 'error';
+    }
+    if (items.some((x) => x.kind === 'tool' && x.status === 'running')) return 'tool';
+    if (items.some((x) => x.kind === 'assistant' && x.streaming)) return 'streaming';
+    if (st === 'running' || dock.busy) return 'thinking';
+    if (st === 'cancelled') return 'paused';
+    return 'idle';
+  });
+
+  /* 有新审批到来或带 focusApprovalId 打开时自动展开顶置审批区 */
+  $effect(() => {
+    if (dock.expanded && (dock.focusApprovalId || pending.length > 0)) {
+      approvalsOpen = true;
+    }
+  });
 
   /* working：任一会话在跑（全局流 agent.session.updated 刷新列表） */
   $effect(() => {
@@ -172,7 +198,7 @@
 
 <!-- ============================================================ 球 + 胶囊 -->
 {#if showDock}
-  <DockBall {progress} onopen={openFromBall} />
+  <DockBall {progress} aiState={liveAiState} onopen={openFromBall} />
 {/if}
 
 <!-- ============================================================ 展开 -->
@@ -190,9 +216,20 @@
   {#if dock.expanded}
     <section class="chat" bind:this={chatEl} aria-label="AI 对话">
       <header class="chat-head">
-        <Orb size={20} state={sessionBusy ? 'working' : 'still'} />
+        <Orb size={22} state={liveAiState} />
         <h2>{chat ? (current?.title ?? 'AI 助手') : '待确认'}</h2>
-        {#if pending.length}<span class="count">待确认 {pending.length}</span>{/if}
+        {#if pending.length}
+          <button
+            type="button"
+            class="count"
+            aria-expanded={approvalsOpen}
+            onclick={() => (approvalsOpen = !approvalsOpen)}
+            title={approvalsOpen ? '收起待确认面板' : '展开待确认面板'}
+          >
+            待确认 {pending.length}
+            <Icon name={approvalsOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+          </button>
+        {/if}
         <span class="grow"></span>
         {#if size}<IconButton icon="undo" label="恢复默认大小" size="sm" variant="plain" onclick={resetSize} />{/if}
         <IconButton icon="x" label="收起" size="sm" variant="plain" onclick={() => dock.close()} />
@@ -201,22 +238,37 @@
         </button>
       </header>
 
-      <div class="chat-body" bind:this={scroller}>
-        <ApprovalStack focusId={dock.focusApprovalId} />
-        {#if chat}
-          {#if stream && stream.phase !== 'loading'}
-            {#if pending.length && stream.transcript.items.length}<hr />{/if}
-            <Transcript {stream} {scroller} inlineApprovals={false} />
-          {:else if !dockSession.id && !pending.length}
-            <div class="hello">
-              <Orb size={40} />
-              <p>有什么可以帮你？我会先说明要做什么，重要操作会先问你。</p>
-            </div>
+      <!-- 独立置顶审批区：不与消息流共用滚动容器，彻底解决聊天加载滚底导致审批卡片闪现消失的问题 -->
+      {#if pending.length && approvalsOpen}
+        <section class="approval-tray" class:only={!chat} aria-label="待确认操作">
+          <div class="tray-bar">
+            <span class="tray-title">有 {pending.length} 项操作等待你确认</span>
+            {#if chat}
+              <button type="button" class="tray-toggle" onclick={() => (approvalsOpen = false)}>先看对话</button>
+            {/if}
+          </div>
+          <div class="tray-scroll">
+            <ApprovalStack focusId={dock.focusApprovalId} active={dock.expanded && approvalsOpen} />
+          </div>
+        </section>
+      {/if}
+
+      {#if chat || !pending.length}
+        <div class="chat-body" bind:this={scroller}>
+          {#if chat}
+            {#if stream && stream.phase !== 'loading'}
+              <Transcript {stream} {scroller} inlineApprovals={false} />
+            {:else if !dockSession.id && !pending.length}
+              <div class="hello">
+                <Orb size={44} state="idle" />
+                <p>有什么可以帮你？我会先说明要做什么，重要操作会先问你。</p>
+              </div>
+            {/if}
+          {:else if !pending.length}
+            <p class="quiet">没有需要确认的事。</p>
           {/if}
-        {:else if !pending.length}
-          <p class="quiet">没有需要确认的事。</p>
-        {/if}
-      </div>
+        </div>
+      {/if}
     </section>
 
     {#if chat}
@@ -356,12 +408,64 @@
   }
   .count {
     flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     padding: 2px 8px;
+    border: 0;
     border-radius: var(--r-pill);
     background: var(--warn-soft);
     color: var(--warn-text);
+    font: inherit;
     font-size: var(--fs-xs);
     font-weight: var(--fw-medium);
+    cursor: pointer;
+  }
+  .approval-tray {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    max-height: 54%;
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in oklab, var(--warn-soft) 22%, var(--surface-2));
+  }
+  .approval-tray.only {
+    flex: 1;
+    max-height: none;
+    border-bottom: 0;
+  }
+  .tray-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    padding: 8px var(--s-4);
+    border-bottom: 1px solid color-mix(in oklab, var(--line) 75%, transparent);
+    font-size: var(--fs-xs);
+  }
+  .tray-title {
+    font-weight: var(--fw-semibold);
+    color: var(--warn-text);
+  }
+  .tray-toggle {
+    border: 0;
+    background: none;
+    padding: 2px 6px;
+    border-radius: var(--r-sm);
+    color: var(--text-2);
+    font: inherit;
+    cursor: pointer;
+  }
+  .tray-toggle:hover {
+    background: var(--surface);
+    color: var(--text);
+  }
+  .tray-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--s-3) var(--s-4);
   }
   .grow {
     flex: 1;
@@ -393,12 +497,6 @@
     padding: var(--s-4);
     overflow-y: auto;
     overscroll-behavior: contain;
-  }
-  hr {
-    width: 100%;
-    margin: 0;
-    border: 0;
-    border-top: 1px dashed var(--line);
   }
   .hello {
     display: grid;
