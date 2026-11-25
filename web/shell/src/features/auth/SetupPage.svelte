@@ -28,7 +28,6 @@
   let err = $state<ErrorView | null>(null);
 
   const fingerprint = $derived(session.setup?.tls_fingerprint);
-  const currentPort = $derived(typeof location !== 'undefined' && location.port ? location.port : '8443');
   const canSubmit = $derived(!!token.trim() && !!username.trim() && valid && !busy);
 
   async function submit(e: SubmitEvent) {
@@ -52,7 +51,10 @@
       if (err.code === 'UNAUTHENTICATED') {
         clearFragmentToken(SETUP_TOKEN_KEY);
         showTokenInput = true;
-        err = { ...err, message: '初始化令牌不对或已过期，请重新打开安装链接或在下方手动粘贴新令牌' };
+        err = {
+          ...err,
+          message: '初始化令牌不对或已失效，请粘贴终端最新输出的「初始化令牌」或重新打开最新初始化链接（重复执行 sudo qwq setup-token 会使旧令牌作废）',
+        };
       }
     } finally {
       busy = false;
@@ -64,9 +66,9 @@
   <form class="stack" onsubmit={submit} novalidate>
     {#if showTokenInput}
       <div class="tip">
-        <p><strong>打开安装时打印的链接</strong>，令牌会自动填好。</p>
+        <p><strong>打开终端打印的「初始化链接」</strong>会自动填入令牌，也可直接粘贴终端中的<strong>「初始化令牌」</strong>。</p>
         <p class="faint">
-          面板默认只监听本机，可以用 SSH 隧道访问：<code class="mono">ssh -L {currentPort}:127.0.0.1:{currentPort} 你的服务器</code>
+          令牌过期或遗失时可在服务器执行 <code class="mono">sudo qwq setup-token</code> 重新获取（重跑会使旧令牌失效）。
         </p>
       </div>
       <Input label="初始化令牌" mono required autocomplete="off" bind:value={token} error={err?.fields['/setup_token']} />

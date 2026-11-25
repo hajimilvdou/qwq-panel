@@ -846,12 +846,17 @@ if ! is_loopback_host "$cfg_bind_host"; then
   fi
 fi
 
-rc=0; "$PREFIX/current/bin/qwq" setup-token --config "$ETC/qwq.json" "${setup_origin_args[@]}" || rc=$?
-case $rc in
-  0) ;;
-  3) log "已初始化；忘记密码请用 sudo qwq recover" ;;
-  *) echo "获取初始化链接失败，可稍后执行 sudo qwq setup-token" >&2 ;;
-esac
+setup_rc=0
+setup_out=$("$PREFIX/current/bin/qwq" setup-token --config "$ETC/qwq.json" "${setup_origin_args[@]}" 2>&1) || setup_rc=$?
+
+setup_link=""
+setup_token=""
+setup_fp=""
+if ((setup_rc == 0)); then
+  setup_link=$(printf '%s\n' "$setup_out" | grep -oE 'https?://[^[:space:]]+/setup#token=[^[:space:]]+' | head -n 1 || true)
+  setup_token=${setup_link#*#token=}
+  setup_fp=$(printf '%s\n' "$setup_out" | grep -oE 'SHA256:[0-9A-F:]+' | head -n 1 || true)
+fi
 
 display_entry_path="（未启用）"
 if [[ -n $cfg_entry_path ]]; then
@@ -872,31 +877,55 @@ fi
 cat <<EOF
 
 ====================================================================
-  qwq 面板接入信息（已启用随机高位端口 + 随机安全密道防扫描保护）
+  qwq 安装完成 · 面板接入信息
 ====================================================================
-  监听地址：${cfg_listen}
-  安全密道：${display_entry_path}
-  安全伪装：端口正确但密道错误时自动触发无服务伪装（默认 drop 静默断开）
-  防火墙  ：${FW_STATUS}
+  面板地址    ：${display_url}
 EOF
-if is_loopback_host "$cfg_bind_host"; then
+if ((setup_rc == 0)) && [[ -n $setup_link ]]; then
   cat <<EOF
-  访问方式：当前仅监听本机回环，可通过 SSH 隧道访问：
-    ssh -L ${cfg_port}:127.0.0.1:${cfg_port} root@<服务器>
-    如需直接通过公网 IP 访问，可执行：sudo qwq access reset --listen 0.0.0.0
+  初始化链接  ：${setup_link}
+  初始化令牌  ：${setup_token}
+EOF
+elif ((setup_rc == 3)); then
+  cat <<EOF
+  初始化状态  ：已完成初始化（忘记密码请执行 sudo qwq recover）
 EOF
 else
   cat <<EOF
-  访问地址：${display_url}
-  直接用浏览器打开上方初始化链接即可创建管理员账号（自签名证书请核对上方指纹）。
+  初始化状态  ：获取初始化令牌失败，请手动执行 sudo qwq setup-token
 EOF
 fi
 cat <<EOF
-
-  提示：
-  1. 登录面板后可在「设置 → 系统 → 面板入口与安全伪装」随时修改监听地址、
-     端口、安全密道与伪装页模式（支持热切换，无需重装）。
-  2. 若为面板配置反向代理域名，系统会自动关闭安全密道与伪装，直接访问域名即可。
-  3. 若你的云服务器在控制台侧单独配置了安全组 / 云防火墙，请确保已放行 TCP ${cfg_port}。
+  监听地址    ：${cfg_listen}
+  安全密道    ：${display_entry_path}（密道错误时静默断开防扫描）
+  防火墙状态  ：${FW_STATUS}
+EOF
+if [[ -n $setup_fp ]]; then
+  cat <<EOF
+  证书指纹    ：${setup_fp}
+EOF
+fi
+echo "===================================================================="
+if is_loopback_host "$cfg_bind_host"; then
+  cat <<EOF
+  当前仅监听本机回环，通过 SSH 隧道访问：
+    ssh -L ${cfg_port}:127.0.0.1:${cfg_port} root@<服务器IP>
+  如需改为公网直连：sudo qwq access reset --listen 0.0.0.0
+EOF
+elif ((setup_rc == 0)); then
+  cat <<EOF
+  1. 浏览器直接打开上方「初始化链接」即可自动填入令牌并创建管理员；
+     若手动粘贴，请复制上方「初始化令牌」（30 分钟内有效，仅用一次）。
+  2. 注意：重复执行 sudo qwq setup-token 会生成新令牌并使旧令牌立即作废。
+  3. 如云厂商控制台启用了安全组/云防火墙，请放行 TCP ${cfg_port} 端口。
+EOF
+else
+  cat <<EOF
+  1. 浏览器直接打开上方「面板地址」登录（可在 设置 → 系统 随时修改端口或绑定域名）。
+  2. 如云厂商控制台启用了安全组/云防火墙，请放行 TCP ${cfg_port} 端口。
+EOF
+fi
+cat <<EOF
+  常用命令    ：sudo qwq access show（查看入口） | sudo qwq setup-token（重发令牌）
 ====================================================================
 EOF

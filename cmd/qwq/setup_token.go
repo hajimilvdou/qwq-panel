@@ -68,7 +68,7 @@ previously issued, unused link. Exit status: 0 issued, 1 error, 2 usage,
 		if panelDomain != "" && bypassReason != "" {
 			*origin = "https://" + panelDomain
 		} else {
-			*origin = defaultOrigin(effectiveHTTP)
+			*origin = resolveSetupOrigin(effectiveHTTP)
 		}
 	}
 	*origin = strings.TrimRight(*origin, "/")
@@ -97,16 +97,79 @@ previously issued, unused link. Exit status: 0 issued, 1 error, 2 usage,
 	if effectiveEntryPath != "" {
 		setupBase += "/" + effectiveEntryPath
 	}
-	fmt.Fprintf(stdout, "初始化链接（30 分钟内有效，只能使用一次）：\n  %s/setup#token=%s\n", setupBase, token)
+	fmt.Fprintln(stdout, "====================================================================")
+	fmt.Fprintln(stdout, "  qwq 面板初始化信息（30 分钟内有效 · 仅用一次 · 重跑会作废旧令牌）")
+	fmt.Fprintln(stdout, "====================================================================")
+	fmt.Fprintf(stdout, "  初始化链接  ：%s/setup#token=%s\n", setupBase, token)
+	fmt.Fprintf(stdout, "  初始化令牌  ：%s\n", token)
 	if effectiveEntryPath != "" {
-		fmt.Fprintf(stdout, "面板安全密道：/%s（端口正确但密道不对时将自动触发无服务伪装）\n", effectiveEntryPath)
+		fmt.Fprintf(stdout, "  面板安全密道：/%s（密道不对时自动触发无服务伪装）\n", effectiveEntryPath)
 	}
 	if cfg.HTTP.TLS.Mode == config.TLSSelfSigned {
 		if fp, err := tlsmgr.SelfSignedFingerprint(cfg.DataDir); err == nil {
-			fmt.Fprintf(stdout, "证书指纹（自签名模式请核对）：SHA256:%s\n", fp)
+			fmt.Fprintf(stdout, "  证书指纹    ：SHA256:%s\n", fp)
 		}
 	}
+	fmt.Fprintln(stdout, "====================================================================")
 	return 0
+}
+
+// resolveSetupOrigin picks the most reachable browser origin when --origin is
+// omitted: explicit PublicOrigins first, then a detected global host IP when
+// listening on 0.0.0.0 / ::, falling back to defaultOrigin.
+func resolveSetupOrigin(h config.HTTP) string {
+	if len(h.PublicOrigins) > 0 {
+		return h.PublicOrigins[0]
+	}
+	host, port, err := net.SplitHostPort(h.Listen)
+	if err != nil {
+		return defaultOrigin(h)
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		if pub := detectLocalPublicIP(); pub != "" {
+			return "https://" + net.JoinHostPort(pub, port)
+		}
+	}
+	return defaultOrigin(h)
+}
+
+// detectLocalPublicIP inspects local outbound routes without network I/O to
+// find a global non-private IPv4 (preferred) or IPv6 address on this host.
+func detectLocalPublicIP() string {
+	for _, probe := range []struct {
+		network string
+		target  string
+	}{
+		{"udp4", "1.1.1.1:80"},
+		{"udp6", "[2606:4700:4700::1111]:80"},
+	} {
+		conn, err := net.DialTimeout(probe.network, probe.target, 200*time.Millisecond)
+		if err != nil {
+			continue
+		}
+		addr, _ := conn.LocalAddr().(*net.UDPAddr)
+		_ = conn.Close()
+		if addr == nil || addr.IP == nil {
+			continue
+		}
+		if isPublicUnicastIP(addr.IP) {
+			return addr.IP.String()
+		}
+	}
+	return ""
+}
+
+func isPublicUnicastIP(ip net.IP) bool {
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		// Exclude CGNAT 100.64.0.0/10
+		if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
+			return false
+		}
+	}
+	return true
 }
 
 // defaultOrigin 由配置推导浏览器访问面板的 origin。监听在通配地址时
