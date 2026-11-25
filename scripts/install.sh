@@ -140,23 +140,31 @@ fi
 INSTALLED_OPTIONAL_PLUGINS=()
 detect_installed_optional_plugins() {
   local -A seen=()
-  local db_checked=0 db_rows="" pid
+  local db_checked=0 db_rows="" pid subdirs=""
   if [[ -f /var/lib/qwq/qwq.db ]] && command -v sqlite3 >/dev/null 2>&1; then
     if db_rows=$(sqlite3 -readonly /var/lib/qwq/qwq.db "SELECT DISTINCT plugin_id FROM plugin_versions WHERE active = 1 AND install_status = 'INSTALLED';" 2>/dev/null); then
       db_checked=1
       while IFS= read -r pid; do
         pid=${pid//[[:space:]]/}
-        [[ -n $pid ]] && seen[$pid]=1
+        if [[ -n $pid ]]; then
+          seen[$pid]=1
+        fi
       done <<<"$db_rows"
     fi
   fi
   for pid in "${OPTIONAL_PLUGIN_IDS[@]}"; do
     if ((db_checked)); then
-      [[ -n ${seen[$pid]+x} ]] && INSTALLED_OPTIONAL_PLUGINS+=("$pid")
-    elif [[ -d "/var/lib/qwq-plugins/$pid" ]] && [[ -n $(find "/var/lib/qwq-plugins/$pid" -mindepth 1 -maxdepth 1 -type d 2>/dev/null) ]]; then
-      INSTALLED_OPTIONAL_PLUGINS+=("$pid")
+      if [[ -n ${seen[$pid]+x} ]]; then
+        INSTALLED_OPTIONAL_PLUGINS+=("$pid")
+      fi
+    elif [[ -d "/var/lib/qwq-plugins/$pid" ]]; then
+      subdirs=$(find "/var/lib/qwq-plugins/$pid" -mindepth 1 -maxdepth 1 -type d 2>/dev/null || true)
+      if [[ -n $subdirs ]]; then
+        INSTALLED_OPTIONAL_PLUGINS+=("$pid")
+      fi
     fi
   done
+  return 0
 }
 
 is_installed_optional_plugin() {
@@ -237,8 +245,12 @@ select_optional_plugins() {
 
   local has_certs=0 has_dns=0 p
   for p in "${SELECTED_PLUGINS[@]}" "${INSTALLED_OPTIONAL_PLUGINS[@]}"; do
-    [[ $p == "tls.certificates" ]] && has_certs=1
-    [[ $p == "domain.dns" ]] && has_dns=1
+    if [[ $p == "tls.certificates" ]]; then
+      has_certs=1
+    fi
+    if [[ $p == "domain.dns" ]]; then
+      has_dns=1
+    fi
   done
   if ((has_certs && !has_dns)); then
     echo "提示：已选择 tls.certificates 但未选 domain.dns；如需使用 DNS-01 自动签发证书，建议后续在面板内补装 domain.dns。" >&2
@@ -697,7 +709,10 @@ if ((${#SYNC_PLUGINS[@]} > 0)); then
   for pid in "${SYNC_PLUGINS[@]}"; do
     is_explicit=0
     for sp in "${SELECTED_PLUGINS[@]}"; do
-      [[ $sp == "$pid" ]] && is_explicit=1 && break
+      if [[ $sp == "$pid" ]]; then
+        is_explicit=1
+        break
+      fi
     done
     fname="${pid}-${rel_tag}-linux-${ARCH}.qwqpkg"
     alt_fname="${pid}-${V}-linux-${ARCH}.qwqpkg"
